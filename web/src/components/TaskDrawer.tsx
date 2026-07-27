@@ -8,10 +8,12 @@ export function TaskDrawer({
   task,
   onClose,
   onChanged,
+  onOpenTeamRoom,
 }: {
   task: Task;
   onClose: () => void;
   onChanged: () => void;
+  onOpenTeamRoom?: (runId: string) => void;
 }) {
   const events = useRunStream(task.runId);
   const [diff, setDiff] = useState<string | null>(null);
@@ -113,6 +115,15 @@ export function TaskDrawer({
       </div>
 
       <div className="flex gap-2 border-b border-line px-5 py-3">
+        {task.orgRunId && onOpenTeamRoom && (
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={() => onOpenTeamRoom(task.orgRunId!)}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
+          >
+            🏛 Open team room
+          </motion.button>
+        )}
         {task.runId && task.runStatus === "running" && (
           <button
             onClick={() => api.cancelRun(task.runId!)}

@@ -91,13 +91,125 @@ impl Orchestrator {
 
     /// `team_id` is already on the run row; the dispatcher passes it in only
     /// so the match arm reads clearly.
+    /// A board task assigned to a team. Organizations get an org run;
+    /// pipeline/debate/swarm teams are translated to a workflow and run
+    /// through the pipeline executor. Either way the run carries the
+    /// `task_id`, so it works in the task's worktree and lands on review.
+    pub(crate) async fn enqueue_task_for_team(
+        &self,
+        task_id: Uuid,
+        team_id: Uuid,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "SELECT t.prompt, t.title, t.project_id, tm.name AS team_name, tm.pattern, tm.definition
+             FROM tasks t JOIN teams tm ON tm.id = t.team_id WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let project_id: Uuid = row.get("project_id");
+        let goal: String = row.get("prompt");
+        let pattern: String = row.get("pattern");
+
+        if pattern == "org" {
+            let run = sqlx::query(
+                "INSERT INTO runs (task_id, team_id, project_id, goal, status, trigger, engine)
+                 VALUES ($1,$2,$3,$4,'queued','task','claude-code') RETURNING id",
+            )
+            .bind(task_id)
+            .bind(team_id)
+            .bind(project_id)
+            .bind(&goal)
+            .fetch_one(&self.db.pool)
+            .await?;
+            let run_id: Uuid = run.get("id");
+            sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 12)")
+                .bind(run_id)
+                .execute(&self.db.pool)
+                .await?;
+            return Ok(run_id);
+        }
+
+        // Non-org patterns become a workflow named after the task, so
+        // re-running the task overwrites its workflow rather than piling up.
+        let definition: serde_json::Value = row.get("definition");
+        let names = self.member_names(&definition).await?;
+        if names.is_empty() {
+            anyhow::bail!("this team has no members to assign work to");
+        }
+        let team_name: String = row.get("team_name");
+        let title: String = row.get("title");
+        let mut workflow =
+            aichip_shared::workflow::from_team(&team_name, &pattern, &names, &goal);
+        workflow.name = format!("{team_name} · {title}");
+        workflow.validate()?;
+        let yaml = serde_yaml::to_string(&workflow)?;
+
+        let wf = sqlx::query(
+            "INSERT INTO workflows (project_id, name, description, kind, source_yaml)
+             VALUES ($1,$2,$3,'team',$4)
+             ON CONFLICT (project_id, name) DO UPDATE SET source_yaml = EXCLUDED.source_yaml
+             RETURNING id",
+        )
+        .bind(project_id)
+        .bind(&workflow.name)
+        .bind(&workflow.description)
+        .bind(&yaml)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let workflow_id: Uuid = wf.get("id");
+
+        let run = sqlx::query(
+            "INSERT INTO runs (task_id, workflow_id, status, trigger, engine)
+             VALUES ($1,$2,'queued','task','claude-code') RETURNING id",
+        )
+        .bind(task_id)
+        .bind(workflow_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = run.get("id");
+        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 12)")
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
+    }
+
+    /// Member agent names, in the order the team author arranged them.
+    async fn member_names(&self, definition: &serde_json::Value) -> anyhow::Result<Vec<String>> {
+        let mut names = vec![];
+        for entry in definition
+            .get("members")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let Some(agent_id) = entry
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+            else {
+                continue;
+            };
+            if let Some(r) = sqlx::query("SELECT name FROM agents WHERE id = $1")
+                .bind(agent_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+            {
+                names.push(r.get::<String, _>("name"));
+            }
+        }
+        Ok(names)
+    }
+
     pub(crate) async fn execute_org_run(
         self: &Arc<Self>,
         run_id: Uuid,
         _team_id: Uuid,
     ) -> anyhow::Result<()> {
         let row = sqlx::query(
-            "SELECT t.name AS team_name, t.definition, r.goal, r.engine,
+            "SELECT t.name AS team_name, t.definition, r.goal, r.engine, r.task_id,
                     p.path AS project_path, p.default_branch, p.workspace_id
              FROM runs r JOIN teams t ON t.id = r.team_id
              JOIN projects p ON p.id = r.project_id
@@ -127,12 +239,13 @@ impl Orchestrator {
             anyhow::bail!("this organization has no specialists to delegate to");
         }
 
+        let task_id: Option<Uuid> = row.get("task_id");
         let worktree = self
-            .worktrees
-            .create(
+            .worktree_for_run(
+                run_id,
+                task_id,
                 &PathBuf::from(row.get::<String, _>("project_path")),
                 &row.get::<String, _>("default_branch"),
-                run_id,
                 &slugify(&team_name),
             )
             .await?;
@@ -332,10 +445,17 @@ impl Orchestrator {
             }
         }
 
-        match failed {
-            None => self.finish(run_id, RunStatus::Completed, None).await?,
-            Some(reason) => self.finish(run_id, RunStatus::Failed, Some(reason)).await?,
-        }
+        let status = match failed {
+            None => {
+                self.finish(run_id, RunStatus::Completed, None).await?;
+                RunStatus::Completed
+            }
+            Some(reason) => {
+                self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+                RunStatus::Failed
+            }
+        };
+        self.settle_task_for_run(task_id, status).await?;
         Ok(())
     }
 

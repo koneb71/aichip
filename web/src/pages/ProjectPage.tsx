@@ -8,6 +8,7 @@ import { NewTaskModal } from "../components/NewTaskModal";
 import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
 import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
+import { OrgRunView } from "../components/orgs/OrgRunView";
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -17,6 +18,7 @@ export default function ProjectPage() {
   const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState<Task | null>(null);
   const [tab, setTab] = useState<"board" | "workflows">("board");
+  const [teamRoom, setTeamRoom] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -95,7 +97,11 @@ export default function ProjectPage() {
             task={tasks.find((t) => t.id === selected.id) ?? selected}
             onClose={() => setSelected(null)}
             onChanged={refresh}
+            onOpenTeamRoom={setTeamRoom}
           />
+        )}
+        {teamRoom && (
+          <OrgRunView runId={teamRoom} onClose={() => setTeamRoom(null)} />
         )}
       </AnimatePresence>
     </div>

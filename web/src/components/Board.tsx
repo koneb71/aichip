@@ -52,6 +52,7 @@ function TaskCard({
   onSelect: (t: Task) => void;
 }) {
   const accent = task.agentColor ?? tierColor[task.modelTier];
+  const teamRun = !!task.teamName;
   const running = task.runStatus === "running" || task.runStatus === "starting";
   const waiting = task.runStatus === "waiting_permission";
 
@@ -85,18 +86,28 @@ function TaskCard({
       )}
       <div className="pr-5 text-sm font-medium leading-snug">{task.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">
-        <span
-          className="rounded-full px-2 py-0.5"
-          style={{ background: tierSoft[task.modelTier], color: tierColor[task.modelTier] }}
-        >
-          {tierModel[task.modelTier]}
-        </span>
+        {!teamRun && (
+          <span
+            className="rounded-full px-2 py-0.5"
+            style={{ background: tierSoft[task.modelTier], color: tierColor[task.modelTier] }}
+          >
+            {tierModel[task.modelTier]}
+          </span>
+        )}
         {task.agentName && (
           <span
             className="rounded-full px-2 py-0.5 text-white"
             style={{ background: task.agentColor ?? "#9ca3af" }}
           >
             {task.agentName}
+          </span>
+        )}
+        {task.teamName && (
+          <span
+            className="rounded-full bg-panel-2 px-2 py-0.5"
+            title={`Assigned to the ${task.teamName} ${task.teamPattern}`}
+          >
+            {task.teamPattern === "org" ? "🏛" : "👥"} {task.teamName}
           </span>
         )}
         {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
