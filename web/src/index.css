@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@theme {
+  /* light theme — obvious.ai-inspired */
+  --color-surface: #f7f7f8;
+  --color-panel: #ffffff;
+  --color-panel-2: #f1f1f3;
+  --color-line: #e7e7ea;
+  --color-ink: #191a1f;
+  --color-ink-dim: #6d7180;
+  --color-accent: #4f46e5;
+  --color-danger: #dc2626;
+  /* model-tier accents: sonnet / opus / fable (darkened for light bg) */
+  --color-tier-easy: #059669;
+  --color-tier-medium: #4f46e5;
+  --color-tier-complex: #c026d3;
+  --color-tier-easy-soft: #d1fae5;
+  --color-tier-medium-soft: #e0e7ff;
+  --color-tier-complex-soft: #fae8ff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.card-shadow {
+  box-shadow: 0 1px 2px rgba(16, 17, 20, 0.05);
+}
+
+/* compact markdown typography for chat bubbles and stream text */
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md table {
+  margin: 0.4em 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 0.6em 0 0.3em;
+  font-weight: 600;
+  font-size: 1em;
+}
+.md h1 {
+  font-size: 1.1em;
+}
+.md ul {
+  list-style: disc;
+  padding-left: 1.25em;
+}
+.md ol {
+  list-style: decimal;
+  padding-left: 1.25em;
+}
+.md li {
+  margin: 0.15em 0;
+}
+.md code {
+  background: rgba(16, 17, 20, 0.07);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+}
+.md pre {
+  background: rgba(16, 17, 20, 0.06);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.md blockquote {
+  border-left: 3px solid var(--color-line);
+  padding-left: 0.75em;
+  color: var(--color-ink-dim);
+}
+.md table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.md th,
+.md td {
+  border: 1px solid var(--color-line);
+  padding: 0.25em 0.6em;
+}
+.md hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 0.6em 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

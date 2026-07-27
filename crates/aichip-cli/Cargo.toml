@@ -1,0 +1,23 @@
+[package]
+name = "aichip-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aichip"
+path = "src/main.rs"
+
+[dependencies]
+aichip-shared = { workspace = true }
+aichip-core = { workspace = true }
+aichip-engines = { workspace = true }
+aichip-server = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+axum = { workspace = true }
+postgresql_embedded = "0.19"
+rand = { workspace = true }

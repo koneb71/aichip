@@ -1,0 +1,21 @@
+[package]
+name = "aichip-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aichip-shared = { workspace = true }
+aichip-core = { workspace = true }
+aichip-engines = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
+sqlx = { workspace = true }
+futures = "0.3"

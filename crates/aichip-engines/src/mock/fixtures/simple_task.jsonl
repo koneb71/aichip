@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","session_id":"mock-session-0001","model":"claude-opus-5","tools":["Bash","Read","Write","Edit"]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'll look at the repository structure first."}],"usage":{"input_tokens":120,"output_tokens":12}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_mock_1","name":"Bash","input":{"command":"ls -la"}}],"usage":{"input_tokens":140,"output_tokens":30}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mock_1","is_error":false,"content":"README.md\nsrc/\nCargo.toml"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_mock_2","name":"Write","input":{"file_path":"src/hello.rs","content":"pub fn hello() -> &'static str { \"hello\" }"}}],"usage":{"input_tokens":200,"output_tokens":55}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mock_2","is_error":false,"content":"File created successfully"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done — added src/hello.rs with the requested function."}],"usage":{"input_tokens":260,"output_tokens":18}}}
+{"type":"result","subtype":"success","is_error":false,"result":"Added src/hello.rs with the requested function.","session_id":"mock-session-0001","total_cost_usd":0.0312,"usage":{"input_tokens":260,"output_tokens":115}}
