@@ -30,14 +30,72 @@ These four invariants are contribution rules. PRs that violate them will not be 
 
 ## Status
 
-Early development (v0.1 scaffold). See `crates/` for the Rust workspace and `web/` for the
-React dashboard.
+Early development. Task board, agents, teams, chat, pipelines, and scheduling all work
+end to end; see the roadmap below.
+
+## Quick start
+
+```bash
+cargo run -p aichip-cli -- doctor   # checks git + the claude CLI are usable
+cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4820
+```
+
+The first run downloads and initializes a private Postgres under `~/.aichip/pgdata`,
+so there is nothing to install or configure.
+
+## Workflows
+
+A workflow is YAML — write it in the dashboard, or commit it to
+`.aichip/workflows/` in your repo and press **Sync from repo**.
+
+```yaml
+name: nightly-dep-audit
+on: { schedule: "0 3 * * *" }     # standard 5-field cron
+defaults: { permission_mode: auto_edit }
+steps:
+  - id: audit
+    model: easy                    # easy | medium | complex → Sonnet | Opus | Fable
+    prompt: "List outdated dependencies and flag any with security advisories."
+  - id: fix
+    needs: [audit]
+    model: medium
+    session: continue              # resume the previous step's session
+    prompt: "Upgrade the safe ones:\n{{ steps.audit.output }}"
+```
+
+Steps run in dependency order and outputs flow forward. Add
+`strategy: { parallel: 3, isolated_worktrees: true }` to a step and it fans out into
+independent attempts in separate worktrees — a step that `needs` it then sees every
+attempt via `{{ steps.<id>.outputs }}`, which is how debate-with-a-judge works.
+
+Scheduled workflows fire from the cron in `on.schedule`. If the machine was asleep past
+a scheduled time, the missed run is skipped by default rather than stampeding on wake;
+set `catch_up` to `run_once` on the workflow to run one catch-up instead.
+
+## Database
+
+`aichip serve` manages its own Postgres by default. To use your own instead:
+
+```bash
+docker compose up -d
+export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
+cargo run -p aichip-cli -- serve
+```
+
+See `.env.example` for the other knobs.
+
+### Why isn't the app containerized?
+
+aichip works by spawning *your* `claude` CLI under *your* login. That login lives on your
+machine, so the server runs on your machine too — containerizing it would mean mounting
+your credentials into a container for no benefit. The database is the part that gains
+from a container, so that's the part compose provides.
 
 ## Development
 
 ```bash
 cargo build            # build the Rust workspace
-cargo test             # run unit + fixture tests (uses the mock engine; no model usage)
+cargo test             # unit + fixture tests (mock engine; no model usage, no rate limits)
 cd web && pnpm install && pnpm dev   # dashboard dev server (proxies to the Rust API)
 ```
 

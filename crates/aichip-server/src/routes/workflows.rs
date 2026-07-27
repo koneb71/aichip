@@ -37,10 +37,33 @@ fn workflow_json(r: &sqlx::postgres::PgRow) -> Value {
         "sourceYaml": yaml,
         "cronExpr": r.get::<Option<String>, _>("cron_expr"),
         "enabled": r.get::<bool, _>("enabled"),
+        "catchUp": r.get::<String, _>("catch_up"),
         "lastRunAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_run_at"),
+        "nextRunAt": next_occurrence(
+            r.get::<Option<String>, _>("cron_expr").as_deref(),
+            r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_fired_at"),
+            r.get::<bool, _>("enabled"),
+        ),
         "stepCount": steps,
         "error": error,
     })
+}
+
+/// When the scheduler will fire this workflow next, for display.
+fn next_occurrence(
+    cron_expr: Option<&str>,
+    last_fired: Option<chrono::DateTime<chrono::Utc>>,
+    enabled: bool,
+) -> Option<String> {
+    use std::str::FromStr;
+    if !enabled {
+        return None;
+    }
+    let cron = croner::Cron::from_str(cron_expr?).ok()?;
+    let from = last_fired.unwrap_or_else(chrono::Utc::now);
+    cron.find_next_occurrence(&from, false)
+        .ok()
+        .map(|t| t.to_rfc3339())
 }
 
 #[derive(Deserialize)]
@@ -117,6 +140,7 @@ async fn upsert_workflow(
 struct UpdateWorkflow {
     source_yaml: Option<String>,
     enabled: Option<bool>,
+    catch_up: Option<String>,
 }
 
 async fn update(
@@ -124,17 +148,37 @@ async fn update(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateWorkflow>,
 ) -> Result<Json<Value>, ApiError> {
-    if let Some(yaml) = &body.source_yaml {
-        Workflow::from_yaml(yaml)
-            .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
-    }
+    // Editing the YAML can change the name, description, or schedule, so
+    // re-derive those rather than letting the row drift from its source.
+    let parsed = match &body.source_yaml {
+        Some(yaml) => Some(
+            Workflow::from_yaml(yaml)
+                .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?,
+        ),
+        None => None,
+    };
+    let cron = parsed
+        .as_ref()
+        .map(|wf| wf.on.as_ref().and_then(|t| t.schedule.clone()));
+
     let row = sqlx::query(
-        "UPDATE workflows SET source_yaml = COALESCE($1, source_yaml),
-                enabled = COALESCE($2, enabled)
-         WHERE id = $3 RETURNING *",
+        "UPDATE workflows SET
+             source_yaml = COALESCE($1, source_yaml),
+             name = COALESCE($2, name),
+             description = COALESCE($3, description),
+             -- $4 distinguishes 'no yaml supplied' from 'yaml removed the schedule'
+             cron_expr = CASE WHEN $5 THEN $4 ELSE cron_expr END,
+             enabled = COALESCE($6, enabled),
+             catch_up = COALESCE($7, catch_up)
+         WHERE id = $8 RETURNING *",
     )
     .bind(body.source_yaml)
+    .bind(parsed.as_ref().map(|wf| wf.name.clone()))
+    .bind(parsed.as_ref().map(|wf| wf.description.clone()))
+    .bind(cron.clone().flatten())
+    .bind(cron.is_some())
     .bind(body.enabled)
+    .bind(body.catch_up)
     .bind(id)
     .fetch_one(&state.db.pool)
     .await
