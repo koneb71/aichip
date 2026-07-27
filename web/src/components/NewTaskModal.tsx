@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Project, Tier, tierColor, tierModel, tierSoft } from "../lib/api";
+import { Agent, api, Project, Team, Tier, tierColor, tierModel, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
@@ -19,13 +19,20 @@ export function NewTaskModal({
   const [prompt, setPrompt] = useState("");
   const [tier, setTier] = useState<Tier>("medium");
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentId, setAgentId] = useState<string>("");
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [assignee, setAssignee] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!active) return;
     api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
+    api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
   }, [active]);
+
+  // One picker, two kinds of assignee — a task goes to a person or a team,
+  // never both.
+  const [kind, id] = assignee ? assignee.split(":") : ["", ""];
+  const assignedTeam = kind === "team" ? teams.find((t) => t.id === id) : undefined;
 
   const submit = async (start: boolean) => {
     if (!title.trim() || !prompt.trim() || busy) return;
@@ -36,7 +43,8 @@ export function NewTaskModal({
         title: title.trim(),
         prompt: prompt.trim(),
         model_tier: tier,
-        agent_id: agentId || null,
+        agent_id: kind === "agent" ? id : null,
+        team_id: kind === "team" ? id : null,
         start,
       });
       onCreated();
@@ -102,20 +110,40 @@ export function NewTaskModal({
           </div>
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
-              Agent (optional)
+              Assign to
             </div>
             <select
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
+              value={assignee}
+              onChange={(e) => setAssignee(e.target.value)}
               className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm"
             >
-              <option value="">No agent — plain run</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
+              <option value="">Nobody in particular</option>
+              {agents.length > 0 && (
+                <optgroup label="Agents">
+                  {agents.map((a) => (
+                    <option key={a.id} value={`agent:${a.id}`}>
+                      {a.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {teams.length > 0 && (
+                <optgroup label="Teams">
+                  {teams.map((t) => (
+                    <option key={t.id} value={`team:${t.id}`}>
+                      {t.name} ({t.pattern})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
+            {assignedTeam && (
+              <div className="mt-1 text-[11px] text-ink-dim">
+                {assignedTeam.pattern === "org"
+                  ? "The manager will split this up and delegate it."
+                  : `Runs as a ${assignedTeam.pattern}; the model tier above is ignored.`}
+              </div>
+            )}
           </div>
         </div>
 

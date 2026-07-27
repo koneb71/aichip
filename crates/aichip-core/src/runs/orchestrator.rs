@@ -117,8 +117,18 @@ impl Orchestrator {
         self.engines.get(id).cloned()
     }
 
-    /// Create a run for a board task and put it on the queue.
+    /// Create a run for a board task and put it on the queue. A task handed
+    /// to a team runs as that team instead of a single agent.
     pub async fn enqueue_task(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&self.db.pool)
+            .await?
+            .get("team_id");
+        if let Some(team_id) = assigned_team {
+            return self.enqueue_task_for_team(task_id, team_id).await;
+        }
+
         let row = sqlx::query(
             "INSERT INTO runs (task_id, status, trigger, engine)
              SELECT id, 'queued', 'manual', engine FROM tasks WHERE id = $1
@@ -133,6 +143,64 @@ impl Orchestrator {
             .execute(&self.db.pool)
             .await?;
         Ok(run_id)
+    }
+
+    /// The worktree a run should work in. Team runs launched from a board
+    /// task reuse that task's worktree, so the existing review-and-merge
+    /// flow keeps working no matter who did the work.
+    pub(crate) async fn worktree_for_run(
+        &self,
+        run_id: Uuid,
+        task_id: Option<Uuid>,
+        project_path: &std::path::Path,
+        default_branch: &str,
+        slug: &str,
+    ) -> anyhow::Result<crate::worktrees::manager::Worktree> {
+        if let Some(task_id) = task_id {
+            let row = sqlx::query("SELECT worktree_path, branch FROM tasks WHERE id = $1")
+                .bind(task_id)
+                .fetch_one(&self.db.pool)
+                .await?;
+            if let (Some(path), Some(branch)) = (
+                row.get::<Option<String>, _>("worktree_path"),
+                row.get::<Option<String>, _>("branch"),
+            ) {
+                return Ok(crate::worktrees::manager::Worktree {
+                    path: PathBuf::from(path),
+                    branch,
+                });
+            }
+            let worktree = self
+                .worktrees
+                .create(project_path, default_branch, task_id, slug)
+                .await?;
+            sqlx::query("UPDATE tasks SET worktree_path=$1, branch=$2 WHERE id=$3")
+                .bind(worktree.path.to_string_lossy().as_ref())
+                .bind(&worktree.branch)
+                .bind(task_id)
+                .execute(&self.db.pool)
+                .await?;
+            return Ok(worktree);
+        }
+        self.worktrees
+            .create(project_path, default_branch, run_id, slug)
+            .await
+    }
+
+    /// Move a team-run task onto the review column when its run lands.
+    pub(crate) async fn settle_task_for_run(
+        &self,
+        task_id: Option<Uuid>,
+        status: RunStatus,
+    ) -> anyhow::Result<()> {
+        let Some(task_id) = task_id else { return Ok(()) };
+        if status == RunStatus::Completed {
+            sqlx::query("UPDATE tasks SET board_column='review' WHERE id=$1")
+                .bind(task_id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Create a run for a chat turn. Chat runs outrank task runs in the
@@ -524,8 +592,9 @@ impl Orchestrator {
         workflow_id: Uuid,
     ) -> anyhow::Result<()> {
         let row = sqlx::query(
-            "SELECT w.source_yaml, w.name, r.engine, p.id AS project_id, p.workspace_id,
-                    p.path AS project_path, p.default_branch, p.full_auto_opt_in
+            "SELECT w.source_yaml, w.name, r.engine, r.task_id, p.id AS project_id,
+                    p.workspace_id, p.path AS project_path, p.default_branch,
+                    p.full_auto_opt_in
              FROM runs r JOIN workflows w ON w.id = r.workflow_id
              JOIN projects p ON p.id = w.project_id
              WHERE r.id = $1",
@@ -555,12 +624,13 @@ impl Orchestrator {
 
         // Shared worktree: sequential stages build on each other's work.
         // Fan-out steps that ask for isolation get their own.
+        let task_id: Option<Uuid> = row.get("task_id");
         let shared = self
-            .worktrees
-            .create(
+            .worktree_for_run(
+                run_id,
+                task_id,
                 &project_path,
                 &default_branch,
-                run_id,
                 &slugify(&workflow.name),
             )
             .await?;
@@ -689,21 +759,23 @@ impl Orchestrator {
             }
         }
 
-        match failure {
+        let status = match failure {
             None => {
                 self.finish(run_id, RunStatus::Completed, None).await?;
-                // Surface the pipeline's result the same way a task does.
-                sqlx::query(
-                    "UPDATE workflows SET last_run_at = now() WHERE id = $1",
-                )
-                .bind(workflow_id)
-                .execute(&self.db.pool)
-                .await?;
+                sqlx::query("UPDATE workflows SET last_run_at = now() WHERE id = $1")
+                    .bind(workflow_id)
+                    .execute(&self.db.pool)
+                    .await?;
+                RunStatus::Completed
             }
             Some(reason) => {
                 self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+                RunStatus::Failed
             }
-        }
+        };
+        // A pipeline launched from a board task lands on review like any
+        // other task run.
+        self.settle_task_for_run(task_id, status).await?;
         Ok(())
     }
 

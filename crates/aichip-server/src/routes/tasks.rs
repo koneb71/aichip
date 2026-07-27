@@ -35,10 +35,13 @@ async fn list(
     let rows = sqlx::query(
         "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch,
                 t.project_id, t.agent_id, a.name AS agent_name, a.color AS agent_color,
-                r.id AS run_id, r.status AS run_status, r.cost_usd, r.model
+                t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
+                r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
+                r.team_id AS run_team_id
          FROM tasks t
          JOIN projects p ON p.id = t.project_id
          LEFT JOIN agents a ON a.id = t.agent_id
+         LEFT JOIN teams tm ON tm.id = t.team_id
          LEFT JOIN LATERAL (
              SELECT * FROM runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
          ) r ON TRUE
@@ -64,6 +67,11 @@ async fn list(
                 "agentId": r.get::<Option<Uuid>, _>("agent_id"),
                 "agentName": r.get::<Option<String>, _>("agent_name"),
                 "agentColor": r.get::<Option<String>, _>("agent_color"),
+                "teamId": r.get::<Option<Uuid>, _>("team_id"),
+                "teamName": r.get::<Option<String>, _>("team_name"),
+                "teamPattern": r.get::<Option<String>, _>("team_pattern"),
+                "orgRunId": r.get::<Option<Uuid>, _>("run_team_id")
+                    .and(r.get::<Option<Uuid>, _>("run_id")),
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
                 "runStatus": r.get::<Option<String>, _>("run_status"),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
@@ -86,6 +94,8 @@ struct CreateTask {
     #[serde(default)]
     start: bool,
     agent_id: Option<Uuid>,
+    /// Hand the whole task to a team instead of a single agent.
+    team_id: Option<Uuid>,
     /// "claude-code" (default) or "mock" for demos/E2E.
     engine: Option<String>,
 }
@@ -97,8 +107,8 @@ async fn create(
     let tier = serde_json::to_value(body.model_tier).unwrap();
     let mode = serde_json::to_value(body.permission_mode).unwrap();
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, board_column)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'backlog') RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog') RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -107,6 +117,7 @@ async fn create(
     .bind(mode.as_str().unwrap())
     .bind(body.engine.as_deref().unwrap_or("claude-code"))
     .bind(body.agent_id)
+    .bind(body.team_id)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;

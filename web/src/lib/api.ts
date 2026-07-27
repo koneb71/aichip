@@ -25,6 +25,11 @@ export interface Task {
   agentId: string | null;
   agentName: string | null;
   agentColor: string | null;
+  teamId: string | null;
+  teamName: string | null;
+  teamPattern: string | null;
+  /** Set when the latest run was an organization run — opens the team room. */
+  orgRunId: string | null;
   runId: string | null;
   runStatus: string | null;
   costUsd: number | null;
@@ -236,6 +241,7 @@ export const api = {
     model_tier: Tier;
     start: boolean;
     agent_id?: string | null;
+    team_id?: string | null;
     engine?: string;
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
   startTask: (taskId: string) =>

@@ -97,6 +97,13 @@ it happens, and the assignment board filling in. Build one on the **Teams** page
 by choosing the Organization pattern, picking a manager, and giving each
 specialist a role.
 
+**Board tasks can be assigned to a team**, not just a single agent. Pick a team
+in the "Assign to" dropdown and the task runs as that team — an organization
+delegates it, a pipeline or debate team runs its pattern. Either way the work
+happens in the task's own worktree, so the card lands on Review and you diff
+and squash-merge it exactly like a solo task. Open the card and hit **Open team
+room** to watch or replay the conversation behind it.
+
 ## Database
 
 `aichip serve` manages its own Postgres by default. To use your own instead:
