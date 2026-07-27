@@ -58,8 +58,66 @@ export interface AgentDraft {
 export interface Team {
   id: string;
   name: string;
-  pattern: "pipeline" | "debate" | "swarm";
-  definition: { members?: { agent_id: string; role?: string }[] };
+  pattern: "pipeline" | "debate" | "swarm" | "org";
+  definition: {
+    manager?: string;
+    members?: { agent_id: string; role?: string }[];
+  };
+}
+
+export interface OrgMember {
+  name: string;
+  title: string;
+  color: string;
+  description: string;
+  isManager: boolean;
+}
+
+export interface OrgAssignment {
+  id: string;
+  key: string;
+  status: string;
+  assignee: string | null;
+  title: string | null;
+  brief: string | null;
+  output: string | null;
+  dependsOn: string[];
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface OrgMessage {
+  id: string;
+  seq: number;
+  from: string;
+  to: string | null;
+  kind: "assignment" | "message" | "question" | "answer" | "status" | "result";
+  content: string;
+  ts: string;
+}
+
+export interface OrgRunDetail {
+  id: string;
+  teamId: string;
+  teamName: string;
+  goal: string | null;
+  status: string;
+  costUsd: number | null;
+  error: string | null;
+  roster: OrgMember[];
+  assignments: OrgAssignment[];
+  messages: OrgMessage[];
+}
+
+export interface OrgRunSummary {
+  id: string;
+  teamId: string;
+  teamName: string;
+  goal: string | null;
+  status: string;
+  costUsd: number | null;
+  error: string | null;
+  createdAt: string;
 }
 
 export interface ChatMessage {
@@ -254,6 +312,22 @@ export const api = {
     post(`/api/teams/${teamId}/run`, { project_id: projectId, goal }).then((r) =>
       json<{ runId: string; workflowId: string; steps: number }>(r),
     ),
+
+  // organizations
+  runOrg: (teamId: string, projectId: string, goal: string) =>
+    post(`/api/teams/${teamId}/run-org`, { project_id: projectId, goal }).then((r) =>
+      json<{ runId: string }>(r),
+    ),
+  orgRuns: (opts: { projectId?: string; workspaceId?: string }) => {
+    const params = new URLSearchParams();
+    if (opts.projectId) params.set("project_id", opts.projectId);
+    if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
+    return fetch(`/api/org-runs?${params}`).then((r) =>
+      json<{ runs: OrgRunSummary[] }>(r),
+    );
+  },
+  orgRun: (runId: string) =>
+    fetch(`/api/org-runs/${runId}`).then((r) => json<OrgRunDetail>(r)),
 
   // chat
   openChat: (projectId: string) =>

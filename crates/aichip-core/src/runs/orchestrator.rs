@@ -52,39 +52,39 @@ pub struct Orchestrator {
     engines: HashMap<&'static str, Arc<dyn Engine>>,
     pub tiers: TierMapping,
     pub worktrees: Arc<WorktreeManager>,
-    semaphore: Arc<Semaphore>,
+    pub(crate) semaphore: Arc<Semaphore>,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
     /// None disables MCP wiring (mock engine / tests).
-    mcp_base_url: Option<String>,
+    pub(crate) mcp_base_url: Option<String>,
     cancels: Mutex<HashMap<Uuid, oneshot::Sender<()>>>,
 }
 
-struct StreamOutcome {
-    status: RunStatus,
-    reason: Option<String>,
+pub(crate) struct StreamOutcome {
+    pub status: RunStatus,
+    pub reason: Option<String>,
     /// Final assistant/result text, used to feed later pipeline steps.
-    output: String,
-    session_id: Option<String>,
+    pub output: String,
+    pub session_id: Option<String>,
 }
 
 /// An agent from the library, resolved for a step or task.
-struct BoundAgent {
-    system_prompt: String,
-    tier: ModelTier,
-    allowed_tools: Vec<String>,
-    permission_preset: String,
+pub(crate) struct BoundAgent {
+    pub system_prompt: String,
+    pub tier: ModelTier,
+    pub allowed_tools: Vec<String>,
+    pub permission_preset: String,
 }
 
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
-struct SeqAlloc(Arc<std::sync::atomic::AtomicI64>);
+pub(crate) struct SeqAlloc(Arc<std::sync::atomic::AtomicI64>);
 
 impl SeqAlloc {
-    fn starting_at(seq: i64) -> Self {
+    pub(crate) fn starting_at(seq: i64) -> Self {
         Self(Arc::new(std::sync::atomic::AtomicI64::new(seq)))
     }
-    fn next(&self) -> i64 {
+    pub(crate) fn next(&self) -> i64 {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 }
@@ -243,16 +243,18 @@ impl Orchestrator {
     /// Dispatcher: task runs and chat runs share the streaming machinery but
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
-        let row = sqlx::query("SELECT chat_id, workflow_id FROM runs WHERE id=$1")
+        let row = sqlx::query("SELECT chat_id, workflow_id, team_id FROM runs WHERE id=$1")
             .bind(run_id)
             .fetch_one(&self.db.pool)
             .await?;
         match (
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
+            row.get::<Option<Uuid>, _>("team_id"),
         ) {
-            (Some(chat_id), _) => self.execute_chat_run(run_id, chat_id).await,
-            (_, Some(workflow_id)) => self.execute_workflow_run(run_id, workflow_id).await,
+            (Some(chat_id), _, _) => self.execute_chat_run(run_id, chat_id).await,
+            (_, Some(workflow_id), _) => self.execute_workflow_run(run_id, workflow_id).await,
+            (_, _, Some(team_id)) => self.execute_org_run(run_id, team_id).await,
             _ => self.execute_task_run(run_id).await,
         }
     }
@@ -735,7 +737,7 @@ impl Orchestrator {
         Ok(())
     }
 
-    async fn load_agent(
+    pub(crate) async fn load_agent(
         &self,
         workspace_id: Uuid,
         name: Option<&str>,
@@ -787,7 +789,7 @@ impl Orchestrator {
     /// `step_id` tags events for pipeline steps. `finalize` is false for
     /// individual workflow steps — the workflow decides the run's final
     /// status once every step is done.
-    async fn stream_run(
+    pub(crate) async fn stream_run(
         self: &Arc<Self>,
         run_id: Uuid,
         step_id: Option<Uuid>,
@@ -899,7 +901,7 @@ impl Orchestrator {
         Ok(())
     }
 
-    async fn set_status(&self, run_id: Uuid, status: RunStatus) -> anyhow::Result<()> {
+    pub(crate) async fn set_status(&self, run_id: Uuid, status: RunStatus) -> anyhow::Result<()> {
         sqlx::query("UPDATE runs SET status=$1 WHERE id=$2")
             .bind(status.as_str())
             .bind(run_id)
@@ -908,7 +910,7 @@ impl Orchestrator {
         Ok(())
     }
 
-    async fn finish(
+    pub(crate) async fn finish(
         &self,
         run_id: Uuid,
         status: RunStatus,
@@ -960,7 +962,7 @@ impl Orchestrator {
     }
 }
 
-async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
+pub(crate) async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
     let row = sqlx::query("SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM events WHERE run_id=$1")
         .bind(run_id)
         .fetch_one(&db.pool)
@@ -970,7 +972,7 @@ async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
 
 /// Write a per-run MCP config pointing the engine at one of aichip's MCP
 /// endpoints. Lives under ~/.aichip/mcp/, keyed by run id.
-async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uuid) -> anyhow::Result<PathBuf> {
+pub(crate) async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uuid) -> anyhow::Result<PathBuf> {
     let dir = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -987,7 +989,7 @@ async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uuid) -> anyho
     Ok(path)
 }
 
-fn slugify(s: &str) -> String {
+pub(crate) fn slugify(s: &str) -> String {
     let slug: String = s
         .to_lowercase()
         .chars()
