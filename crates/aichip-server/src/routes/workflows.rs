@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workflows", get(list).post(create))
         .route("/workflows/{id}", patch(update).delete(remove))
+        .route("/workflows/{id}/layout", post(save_layout))
         .route("/workflows/{id}/run", post(run))
         .route("/projects/{id}/workflows/sync", post(sync_from_repo))
         .route("/runs/{id}/steps", get(run_steps))
@@ -46,6 +47,7 @@ fn workflow_json(r: &sqlx::postgres::PgRow) -> Value {
         ),
         "stepCount": steps,
         "error": error,
+        "uiLayout": r.get::<Value, _>("ui_layout"),
     })
 }
 
@@ -196,6 +198,22 @@ async fn remove(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "deleted": true })))
+}
+
+/// Canvas node positions, keyed by step id. Purely cosmetic, so this is a
+/// separate call — a failed layout save must never block saving the work.
+async fn save_layout(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(layout): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    sqlx::query("UPDATE workflows SET ui_layout = $1 WHERE id = $2")
+        .bind(&layout)
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "saved": true })))
 }
 
 async fn run(

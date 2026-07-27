@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { api, RunStep, WorkflowRun } from "../../lib/api";
+import { api, RunStep, WorkflowDef, WorkflowRun } from "../../lib/api";
+import { parseWorkflow } from "../../lib/workflowGraph";
 import { Markdown } from "../Markdown";
+import { WorkflowCanvas } from "./WorkflowCanvas";
 import { StatusDot } from "./WorkflowsPanel";
 
-/** Live view of a workflow run: every step, its state, and its output.
- *  Fan-out attempts (`step#1`, `step#2`) group under their step. */
+/** Live view of a workflow run: the same graph you authored, lit up with
+ *  each step's state. Fan-out attempts (`step#1`, `step#2`) collapse onto
+ *  the single node they came from. */
 export function RunGraphDrawer({
   run,
+  workflow,
   onClose,
 }: {
   run: WorkflowRun;
+  workflow?: WorkflowDef;
   onClose: () => void;
 }) {
   const [steps, setSteps] = useState<RunStep[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [view, setView] = useState<"graph" | "list">("graph");
 
   const refresh = useCallback(async () => {
     try {
@@ -37,13 +43,28 @@ export function RunGraphDrawer({
     return acc;
   }, {});
 
+  const graph = useMemo(
+    () => (workflow ? parseWorkflow(workflow.sourceYaml) : null),
+    [workflow],
+  );
+  const statuses = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(groups).map(([base, attempts]) => [
+          base,
+          { status: groupStatus(attempts), attempts: attempts.length },
+        ]),
+      ),
+    [groups],
+  );
+
   return (
     <motion.aside
-      initial={{ x: 560 }}
+      initial={{ x: 720 }}
       animate={{ x: 0 }}
-      exit={{ x: 560 }}
+      exit={{ x: 720 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[560px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[720px] flex-col border-l border-line bg-panel"
     >
       <div className="flex items-start gap-3 border-b border-line p-5">
         <div className="min-w-0 flex-1">
@@ -55,6 +76,21 @@ export function RunGraphDrawer({
             {run.costUsd != null && <span>· ${run.costUsd.toFixed(3)}</span>}
           </div>
         </div>
+        {graph && (
+          <div className="flex gap-1 rounded-lg bg-panel-2 p-0.5">
+            {(["graph", "list"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`rounded-md px-2.5 py-1 text-xs capitalize ${
+                  view === v ? "bg-panel font-medium shadow-sm" : "text-ink-dim"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
         <button onClick={onClose} className="text-ink-dim hover:text-ink">
           ✕
         </button>
@@ -66,7 +102,42 @@ export function RunGraphDrawer({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      {graph && view === "graph" && (
+        <div className="min-h-0 flex-1">
+          <WorkflowCanvas
+            steps={graph.steps}
+            positions={workflow?.uiLayout}
+            statuses={statuses}
+            readOnly
+            onSelect={(id) =>
+              setExpanded(id ? (groups[id]?.[0]?.id ?? null) : null)
+            }
+          />
+          {expanded && (
+            <motion.div
+              initial={{ y: 40, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="max-h-56 overflow-y-auto border-t border-line bg-panel p-4"
+            >
+              <div className="mb-1 font-mono text-xs text-ink-dim">
+                {steps.find((s) => s.id === expanded)?.stepKey}
+              </div>
+              <div className="text-sm">
+                {steps.find((s) => s.id === expanded)?.output ? (
+                  <Markdown>{steps.find((s) => s.id === expanded)!.output!}</Markdown>
+                ) : (
+                  <span className="text-xs text-ink-dim">No output yet.</span>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </div>
+      )}
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto p-5"
+        hidden={!!graph && view === "graph"}
+      >
         {Object.entries(groups).map(([base, attempts], groupIndex) => (
           <div key={base}>
             {groupIndex > 0 && (

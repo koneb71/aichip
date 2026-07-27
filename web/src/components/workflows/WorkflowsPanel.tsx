@@ -202,7 +202,11 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
           />
         )}
         {openRun && (
-          <RunGraphDrawer run={openRun} onClose={() => setOpenRun(null)} />
+          <RunGraphDrawer
+            run={openRun}
+            workflow={workflows.find((w) => w.id === openRun.workflowId)}
+            onClose={() => setOpenRun(null)}
+          />
         )}
       </AnimatePresence>
     </div>
