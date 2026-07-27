@@ -1,6 +1,7 @@
 /target
 node_modules/
 web/dist/
+*.tsbuildinfo
 .DS_Store
 *.log
 .env
