@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Project, Team } from "../lib/api";
+import { Agent, api, OrgRunSummary, Project, Team } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
+import { OrgRunView } from "../components/orgs/OrgRunView";
 
 const PATTERNS: { key: Team["pattern"]; label: string; blurb: string }[] = [
+  {
+    key: "org",
+    label: "Organization",
+    blurb: "A manager reads the goal, splits it up, and delegates to specialists",
+  },
   { key: "pipeline", label: "Pipeline", blurb: "Roles run in sequence — plan → build → review" },
   { key: "debate", label: "Debate", blurb: "Several solvers attempt in parallel; a judge picks" },
-  { key: "swarm", label: "Swarm", blurb: "A lead splits work across parallel agents" },
+  { key: "swarm", label: "Swarm", blurb: "Everyone works the same goal in parallel" },
 ];
 
 export default function TeamsPage() {
@@ -17,15 +23,26 @@ export default function TeamsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [editing, setEditing] = useState<Team | "new" | null>(null);
   const [running, setRunning] = useState<Team | null>(null);
+  const [openOrgRun, setOpenOrgRun] = useState<string | null>(null);
+
+  const [orgRuns, setOrgRuns] = useState<OrgRunSummary[]>([]);
 
   const refresh = useCallback(() => {
     if (!active) return;
     api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
     api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
     api.projects(active.id).then((r) => setProjects(r.projects)).catch(() => {});
+    api
+      .orgRuns({ workspaceId: active.id })
+      .then((r) => setOrgRuns(r.runs))
+      .catch(() => {});
   }, [active]);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(refresh, 4000);
+    return () => clearInterval(interval);
+  }, [refresh]);
 
   const agentById = (id: string) => agents.find((a) => a.id === id);
 
@@ -35,7 +52,8 @@ export default function TeamsPage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight">Teams</h1>
           <p className="mt-0.5 text-sm text-ink-dim">
-            Compose agents into coordination patterns. Team execution ships with pipelines.
+            Compose agents into coordination patterns — or build an organization with a
+            manager who plans the work and delegates it.
           </p>
         </div>
         <motion.button
@@ -61,32 +79,49 @@ export default function TeamsPage() {
                 {t.pattern}
               </span>
             </div>
-            <div className="mt-3 flex -space-x-1.5">
-              {(t.definition.members ?? []).map((m, i) => {
-                const a = agentById(m.agent_id);
-                return (
+            <div className="mt-3 flex items-center gap-2">
+              {t.pattern === "org" && t.definition.manager && (
+                <>
                   <span
-                    key={i}
-                    title={a?.name}
-                    className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-panel text-[11px] font-bold text-white"
-                    style={{ background: a?.color ?? "#9ca3af" }}
+                    title={`${agentById(t.definition.manager)?.name} — manager`}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white ring-2 ring-accent ring-offset-1"
+                    style={{ background: agentById(t.definition.manager)?.color ?? "#9ca3af" }}
                   >
-                    {(a?.name ?? "?").slice(0, 1).toUpperCase()}
+                    {(agentById(t.definition.manager)?.name ?? "?").slice(0, 1).toUpperCase()}
                   </span>
-                );
-              })}
-              {(t.definition.members ?? []).length === 0 && (
-                <span className="text-xs text-ink-dim">No members yet</span>
+                  <span className="text-ink-dim">→</span>
+                </>
               )}
+              <div className="flex -space-x-1.5">
+                {(t.definition.members ?? []).map((m, i) => {
+                  const a = agentById(m.agent_id);
+                  return (
+                    <span
+                      key={i}
+                      title={`${a?.name}${m.role ? ` — ${m.role}` : ""}`}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-panel text-[11px] font-bold text-white"
+                      style={{ background: a?.color ?? "#9ca3af" }}
+                    >
+                      {(a?.name ?? "?").slice(0, 1).toUpperCase()}
+                    </span>
+                  );
+                })}
+                {(t.definition.members ?? []).length === 0 && (
+                  <span className="text-xs text-ink-dim">No members yet</span>
+                )}
+              </div>
             </div>
             <div className="mt-4 flex gap-2">
               <motion.button
                 whileTap={{ scale: 0.96 }}
                 onClick={() => setRunning(t)}
-                disabled={(t.definition.members ?? []).length === 0}
+                disabled={
+                  (t.definition.members ?? []).length === 0 ||
+                  (t.pattern === "org" && !t.definition.manager)
+                }
                 className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
               >
-                ▶ Run team
+                {t.pattern === "org" ? "▶ Run organization" : "▶ Run team"}
               </motion.button>
               <button
                 onClick={() => setEditing(t)}
@@ -104,13 +139,70 @@ export default function TeamsPage() {
         )}
       </div>
 
+      {orgRuns.length > 0 && (
+        <>
+          <h2 className="mt-10 text-sm font-semibold">Organization runs</h2>
+          <div className="mt-3 flex max-w-4xl flex-col gap-1.5">
+            {orgRuns.map((r) => {
+              const live =
+                r.status === "running" || r.status === "starting" || r.status === "queued";
+              const color =
+                r.status === "completed"
+                  ? "var(--color-tier-easy)"
+                  : r.status === "failed"
+                    ? "var(--color-danger)"
+                    : "var(--color-tier-medium)";
+              return (
+                <motion.button
+                  layout
+                  key={r.id}
+                  onClick={() => setOpenOrgRun(r.id)}
+                  className="card-shadow flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2.5 text-left"
+                >
+                  {live ? (
+                    <motion.span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: color }}
+                      animate={{ opacity: [1, 0.3, 1] }}
+                      transition={{ repeat: Infinity, duration: 1.5 }}
+                    />
+                  ) : (
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: color }}
+                    />
+                  )}
+                  <span className="shrink-0 text-sm font-medium">{r.teamName}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-ink-dim">
+                    {r.goal}
+                  </span>
+                  {r.costUsd != null && (
+                    <span className="text-xs text-ink-dim">${r.costUsd.toFixed(3)}</span>
+                  )}
+                  <span className="text-xs text-ink-dim">
+                    {new Date(r.createdAt).toLocaleTimeString()}
+                  </span>
+                </motion.button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       <AnimatePresence>
         {running && (
           <RunTeamModal
             team={running}
             projects={projects}
             onClose={() => setRunning(null)}
+            onOrgStarted={(runId) => {
+              setRunning(null);
+              setOpenOrgRun(runId);
+            }}
           />
+        )}
+        {openOrgRun && (
+          <OrgRunView runId={openOrgRun} onClose={() => setOpenOrgRun(null)} />
         )}
         {editing && active && (
           <TeamEditor
@@ -133,10 +225,12 @@ function RunTeamModal({
   team,
   projects,
   onClose,
+  onOrgStarted,
 }: {
   team: Team;
   projects: Project[];
   onClose: () => void;
+  onOrgStarted: (runId: string) => void;
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [goal, setGoal] = useState("");
@@ -149,6 +243,12 @@ function RunTeamModal({
     setBusy(true);
     setError(null);
     try {
+      if (team.pattern === "org") {
+        // Orgs get their own live view — that's the whole point of watching.
+        const { runId } = await api.runOrg(team.id, projectId, goal.trim());
+        onOrgStarted(runId);
+        return;
+      }
       await api.runTeam(team.id, projectId, goal.trim());
       navigate(`/projects/${projectId}`);
     } catch (e) {
@@ -250,10 +350,15 @@ function TeamEditor({
   const [members, setMembers] = useState<{ agent_id: string; role?: string }[]>(
     team?.definition.members ?? [],
   );
+  const [manager, setManager] = useState<string>(team?.definition.manager ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const available = agents.filter((a) => !members.some((m) => m.agent_id === a.id));
+  // The manager delegates rather than doing the work, so keep them out of
+  // the specialist list.
+  const available = agents.filter(
+    (a) => !members.some((m) => m.agent_id === a.id) && a.id !== manager,
+  );
 
   const save = async () => {
     if (!name.trim() || busy) return;
@@ -263,7 +368,8 @@ function TeamEditor({
       workspace_id: workspaceId,
       name: name.trim(),
       pattern,
-      definition: { members },
+      definition:
+        pattern === "org" ? { manager: manager || undefined, members } : { members },
     };
     try {
       if (team) await api.updateTeam(team.id, body);
@@ -306,7 +412,7 @@ function TeamEditor({
           className="w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-accent"
         />
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {PATTERNS.map((p) => (
             <button
               key={p.key}
@@ -323,9 +429,37 @@ function TeamEditor({
           ))}
         </div>
 
+        {pattern === "org" && (
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+              Manager
+            </div>
+            <select
+              value={manager}
+              onChange={(e) => {
+                setManager(e.target.value);
+                setMembers((prev) => prev.filter((m) => m.agent_id !== e.target.value));
+              }}
+              className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm"
+            >
+              <option value="">Pick who runs this team…</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1 text-[11px] text-ink-dim">
+              Analyzes the goal, splits it into assignments, and answers questions while
+              the team works. Pick someone strong — this one thinks, it doesn't code.
+            </div>
+          </div>
+        )}
+
         <div>
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
-            Members {pattern === "pipeline" && "(in order)"}
+            {pattern === "org" ? "Specialists" : "Members"}
+            {pattern === "pipeline" && " (in order)"}
           </div>
           <div className="flex flex-col gap-1.5">
             {members.map((m, i) => {
@@ -338,7 +472,20 @@ function TeamEditor({
                   >
                     {(a?.name ?? "?").slice(0, 1).toUpperCase()}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-sm">{a?.name ?? "Unknown"}</span>
+                  <span className="min-w-0 shrink-0 truncate text-sm">{a?.name ?? "Unknown"}</span>
+                  {pattern === "org" && (
+                    <input
+                      value={m.role ?? ""}
+                      onChange={(e) =>
+                        setMembers((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)),
+                        )
+                      }
+                      placeholder="their role on this team"
+                      className="min-w-0 flex-1 rounded border border-line px-1.5 py-0.5 text-xs outline-none focus:border-accent"
+                    />
+                  )}
+                  {pattern !== "org" && <span className="flex-1" />}
                   <button onClick={() => move(i, -1)} className="px-1 text-ink-dim hover:text-ink">↑</button>
                   <button onClick={() => move(i, 1)} className="px-1 text-ink-dim hover:text-ink">↓</button>
                   <button

@@ -76,6 +76,27 @@ Scheduled workflows fire from the cron in `on.schedule`. If the machine was asle
 a scheduled time, the missed run is skipped by default rather than stampeding on wake;
 set `catch_up` to `run_once` on the workflow to run one catch-up instead.
 
+## Organizations
+
+An organization is a team with a manager. Give it a goal and the manager reads
+your repository, splits the work into briefed assignments, and delegates each to
+the specialist best suited to it. Specialists work one at a time in a shared
+worktree — like real teammates on one codebase, so you get a single coherent
+diff instead of branches to merge.
+
+They talk while they work, and you watch it happen:
+
+- `post_message` — tell the team what you're doing or what you found
+- `read_messages` — catch up on what teammates have said
+- `ask_manager` — escalate a decision; this blocks the specialist while the
+  manager answers from the context of the plan it wrote (capped per assignment,
+  so nobody stalls forever)
+
+The live view shows the roster with each teammate's state, the conversation as
+it happens, and the assignment board filling in. Build one on the **Teams** page
+by choosing the Organization pattern, picking a manager, and giving each
+specialist a role.
+
 ## Database
 
 `aichip serve` manages its own Postgres by default. To use your own instead:

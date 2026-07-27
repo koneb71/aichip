@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-const PATTERNS: &[&str] = &["pipeline", "debate", "swarm"];
+const PATTERNS: &[&str] = &["pipeline", "debate", "swarm", "org"];
 
 pub fn router() -> Router<AppState> {
     Router::new()

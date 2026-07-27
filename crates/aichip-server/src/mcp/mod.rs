@@ -5,6 +5,7 @@
 //! user answers in the dashboard (timeout → deny).
 
 pub mod chat_tools;
+pub mod org_tools;
 
 use crate::AppState;
 use axum::extract::{Path, State};
@@ -18,6 +19,7 @@ pub fn mcp_router() -> Router<AppState> {
     Router::new()
         .route("/run/{run_id}", post(rpc))
         .route("/chat/{chat_id}", post(chat_tools::rpc))
+        .route("/org/{run_id}/{step_id}", post(org_tools::rpc))
 }
 
 async fn rpc(
