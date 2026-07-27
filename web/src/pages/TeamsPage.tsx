@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Team } from "../lib/api";
+import { Agent, api, Project, Team } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 
 const PATTERNS: { key: Team["pattern"]; label: string; blurb: string }[] = [
@@ -13,12 +14,15 @@ export default function TeamsPage() {
   const { active } = useWorkspace();
   const [teams, setTeams] = useState<Team[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [editing, setEditing] = useState<Team | "new" | null>(null);
+  const [running, setRunning] = useState<Team | null>(null);
 
   const refresh = useCallback(() => {
     if (!active) return;
     api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
     api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
+    api.projects(active.id).then((r) => setProjects(r.projects)).catch(() => {});
   }, [active]);
 
   useEffect(refresh, [refresh]);
@@ -45,12 +49,11 @@ export default function TeamsPage() {
 
       <div className="mt-6 grid max-w-4xl grid-cols-2 gap-4">
         {teams.map((t) => (
-          <motion.button
+          <motion.div
             key={t.id}
             layout
             whileHover={{ y: -2 }}
-            onClick={() => setEditing(t)}
-            className="card-shadow rounded-xl border border-line bg-panel p-4 text-left"
+            className="card-shadow rounded-xl border border-line bg-panel p-4"
           >
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">{t.name}</div>
@@ -76,7 +79,23 @@ export default function TeamsPage() {
                 <span className="text-xs text-ink-dim">No members yet</span>
               )}
             </div>
-          </motion.button>
+            <div className="mt-4 flex gap-2">
+              <motion.button
+                whileTap={{ scale: 0.96 }}
+                onClick={() => setRunning(t)}
+                disabled={(t.definition.members ?? []).length === 0}
+                className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
+              >
+                ▶ Run team
+              </motion.button>
+              <button
+                onClick={() => setEditing(t)}
+                className="rounded-lg border border-line px-3 py-1 text-xs hover:bg-panel-2"
+              >
+                Edit
+              </button>
+            </div>
+          </motion.div>
         ))}
         {teams.length === 0 && (
           <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
@@ -86,6 +105,13 @@ export default function TeamsPage() {
       </div>
 
       <AnimatePresence>
+        {running && (
+          <RunTeamModal
+            team={running}
+            projects={projects}
+            onClose={() => setRunning(null)}
+          />
+        )}
         {editing && active && (
           <TeamEditor
             workspaceId={active.id}
@@ -100,6 +126,109 @@ export default function TeamsPage() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function RunTeamModal({
+  team,
+  projects,
+  onClose,
+}: {
+  team: Team;
+  projects: Project[];
+  onClose: () => void;
+}) {
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [goal, setGoal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  const start = async () => {
+    if (!projectId || !goal.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.runTeam(team.id, projectId, goal.trim());
+      navigate(`/projects/${projectId}`);
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: 20, scale: 0.98 }}
+        animate={{ y: 0, scale: 1 }}
+        exit={{ y: 20, scale: 0.98 }}
+        transition={{ type: "spring", stiffness: 380, damping: 30 }}
+        onClick={(e) => e.stopPropagation()}
+        className="card-shadow w-full max-w-lg rounded-2xl border border-line bg-panel p-6"
+      >
+        <div className="text-base font-semibold">Run {team.name}</div>
+        <div className="mt-0.5 text-xs text-ink-dim">
+          The team's <span className="capitalize">{team.pattern}</span> pattern becomes a
+          workflow, then runs step by step on your board.
+        </div>
+
+        {projects.length === 0 ? (
+          <div className="mt-4 rounded-lg border border-dashed border-line p-4 text-center text-sm text-ink-dim">
+            Load a project folder first.
+          </div>
+        ) : (
+          <>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="mt-4 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <textarea
+              autoFocus
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              rows={4}
+              placeholder="What should the team accomplish?"
+              className="mt-3 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+          </>
+        )}
+
+        {error && (
+          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={start}
+            disabled={busy || !goal.trim() || !projectId}
+            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {busy ? "Starting…" : "Start run"}
+          </motion.button>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

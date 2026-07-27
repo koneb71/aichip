@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
         .route("/runs/{id}/events", get(run_events))
+        .route("/runs/{id}/pending-permissions", get(pending_permissions))
         .route("/runs/{id}/cancel", post(cancel_run))
         .route("/permissions/{request_id}/resolve", post(resolve_permission))
 }
@@ -230,6 +231,23 @@ async fn run_events(
         })
         .collect();
     Ok(Json(json!({ "events": events })))
+}
+
+/// Permission requests live in memory while the engine's MCP call blocks on
+/// them, so a dashboard refresh needs to re-fetch anything still pending.
+async fn pending_permissions(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Json<Value> {
+    let pending: Vec<Value> = state
+        .permissions
+        .pending_for_run(id)
+        .into_iter()
+        .map(|(request_id, tool_name, input)| {
+            json!({ "requestId": request_id, "toolName": tool_name, "input": input })
+        })
+        .collect();
+    Json(json!({ "pending": pending }))
 }
 
 async fn cancel_run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Json<Value> {
