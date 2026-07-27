@@ -7,6 +7,7 @@ import { Board } from "../components/Board";
 import { NewTaskModal } from "../components/NewTaskModal";
 import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
+import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -15,6 +16,7 @@ export default function ProjectPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState<Task | null>(null);
+  const [tab, setTab] = useState<"board" | "workflows">("board");
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -45,19 +47,35 @@ export default function ProjectPage() {
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="flex items-center gap-3 border-b border-line bg-panel px-6 py-3">
           <div className="text-base font-semibold">{project?.name ?? "Project"}</div>
-          <span className="rounded-full bg-panel-2 px-2 py-0.5 text-xs text-ink-dim">
-            Tasks Board
-          </span>
-          <button
-            onClick={() => setShowNew(true)}
-            className="ml-auto rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
-          >
-            + New task
-          </button>
+          <div className="flex gap-1 rounded-lg bg-panel-2 p-0.5">
+            {(["board", "workflows"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
+                  tab === t ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
+                }`}
+              >
+                {t === "board" ? "Tasks Board" : "Workflows"}
+              </button>
+            ))}
+          </div>
+          {tab === "board" && (
+            <button
+              onClick={() => setShowNew(true)}
+              className="ml-auto rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            >
+              + New task
+            </button>
+          )}
         </header>
 
         <div className="min-h-0 flex-1">
-          <Board tasks={tasks} onSelect={setSelected} />
+          {tab === "board" ? (
+            <Board tasks={tasks} onSelect={setSelected} />
+          ) : (
+            <WorkflowsPanel projectId={projectId} />
+          )}
         </div>
       </div>
 

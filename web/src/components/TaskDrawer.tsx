@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { api, Task, tierColor, tierModel } from "../lib/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { api, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { Markdown } from "./Markdown";
 
@@ -16,7 +16,60 @@ export function TaskDrawer({
   const events = useRunStream(task.runId);
   const [diff, setDiff] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
+  const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
+  const [answered, setAnswered] = useState<Set<string>>(new Set());
   const accent = tierColor[task.modelTier];
+
+  // Permission requests are held in memory by the broker while the engine
+  // blocks on them, so a refresh has to re-fetch whatever is still open.
+  const runId = task.runId;
+  const refreshPending = useCallback(async () => {
+    if (!runId) return setServerPending([]);
+    try {
+      setServerPending((await api.pendingPermissions(runId)).pending);
+    } catch {
+      /* transient; next tick retries */
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    setAnswered(new Set());
+    refreshPending();
+    const interval = setInterval(refreshPending, 3000);
+    return () => clearInterval(interval);
+  }, [refreshPending]);
+
+  // Open prompts = server-held ∪ live-streamed, minus resolved/answered.
+  const openPermissions = useMemo(() => {
+    const resolved = new Set(
+      events
+        .filter((e) => e.type === "permission_resolved")
+        .map((e) => String(e.request_id)),
+    );
+    const merged = new Map<string, PendingPermission>();
+    for (const p of serverPending) merged.set(p.requestId, p);
+    for (const e of events) {
+      if (e.type !== "permission_requested") continue;
+      const requestId = String(e.request_id);
+      merged.set(requestId, {
+        requestId,
+        toolName: String(e.tool_name),
+        input: e.input,
+      });
+    }
+    return [...merged.values()].filter(
+      (p) => !resolved.has(p.requestId) && !answered.has(p.requestId),
+    );
+  }, [events, serverPending, answered]);
+
+  const answer = async (requestId: string, allowed: boolean) => {
+    setAnswered((prev) => new Set(prev).add(requestId));
+    try {
+      await api.resolvePermission(requestId, allowed);
+    } finally {
+      refreshPending();
+    }
+  };
 
   const loadDiff = async () => setDiff((await api.diff(task.id)).diff);
   const merge = async () => {
@@ -88,6 +141,28 @@ export function TaskDrawer({
         )}
       </div>
 
+      <AnimatePresence>
+        {openPermissions.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-b border-line bg-amber-50"
+          >
+            <div className="flex flex-col gap-2 p-4">
+              {openPermissions.map((p) => (
+                <PermissionRow
+                  key={p.requestId}
+                  toolName={p.toolName}
+                  input={p.input}
+                  onAnswer={(allowed) => answer(p.requestId, allowed)}
+                />
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {diff !== null ? (
           <DiffView diff={diff} onBack={() => setDiff(null)} />
@@ -150,13 +225,19 @@ function EventRow({ event }: { event: StreamEvent }) {
           ↳ {String(event.summary).slice(0, 200)}
         </div>
       );
+    // Open prompts render in the sticky banner above; the log keeps only a
+    // trace so the transcript stays readable.
     case "permission_requested":
       return (
-        <PermissionRow
-          requestId={String(event.request_id)}
-          toolName={String(event.tool_name)}
-          input={event.input}
-        />
+        <div className={`${base} text-xs text-ink-dim`}>
+          ⏸ asked to run {String(event.tool_name)}
+        </div>
+      );
+    case "permission_resolved":
+      return (
+        <div className={`${base} text-xs text-ink-dim`}>
+          {event.allowed ? "✓ you allowed it" : "✗ you denied it"}
+        </div>
       );
     case "run_completed":
       return (
@@ -189,53 +270,59 @@ function EventRow({ event }: { event: StreamEvent }) {
 }
 
 function PermissionRow({
-  requestId,
   toolName,
   input,
+  onAnswer,
 }: {
-  requestId: string;
   toolName: string;
   input: unknown;
+  onAnswer: (allowed: boolean) => void;
 }) {
-  const [resolved, setResolved] = useState<null | boolean>(null);
-  const answer = async (allowed: boolean) => {
-    await api.resolvePermission(requestId, allowed);
-    setResolved(allowed);
-  };
+  const summary = summarizeToolInput(toolName, input);
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2"
+      className="rounded-xl border border-amber-300 bg-panel px-3 py-2.5"
     >
-      <div className="text-sm text-amber-700">
-        Permission requested: <span className="font-mono">{toolName}</span>
+      <div className="text-sm font-medium text-amber-700">
+        Allow <span className="font-mono">{toolName}</span>?
       </div>
-      <div className="mt-1 max-h-24 overflow-y-auto font-mono text-xs text-ink-dim">
-        {JSON.stringify(input, null, 1)}
-      </div>
-      {resolved === null ? (
-        <div className="mt-2 flex gap-2">
-          <button
-            onClick={() => answer(true)}
-            className="rounded bg-tier-easy px-3 py-1 text-xs font-medium text-surface"
-          >
-            Allow
-          </button>
-          <button
-            onClick={() => answer(false)}
-            className="rounded border border-line px-3 py-1 text-xs hover:border-red-400 hover:text-red-400"
-          >
-            Deny
-          </button>
-        </div>
-      ) : (
-        <div className="mt-2 text-xs text-ink-dim">
-          {resolved ? "allowed" : "denied"}
-        </div>
+      {summary && (
+        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-ink">
+          {summary}
+        </pre>
       )}
+      <div className="mt-2.5 flex gap-2">
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={() => onAnswer(true)}
+          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-white"
+        >
+          Allow
+        </motion.button>
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={() => onAnswer(false)}
+          className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:border-danger hover:text-danger"
+        >
+          Deny
+        </motion.button>
+      </div>
     </motion.div>
   );
+}
+
+/** Show the part of a tool call the user actually needs to judge. */
+function summarizeToolInput(toolName: string, input: unknown): string {
+  const args = (input ?? {}) as Record<string, unknown>;
+  if (typeof args.command === "string") return args.command;
+  if (typeof args.file_path === "string") {
+    const body = typeof args.content === "string" ? `\n\n${args.content}` : "";
+    return `${args.file_path}${body}`.slice(0, 1200);
+  }
+  const json = JSON.stringify(args, null, 1);
+  return json === "{}" ? "" : json.slice(0, 1200);
 }
 
 function DiffView({ diff, onBack }: { diff: string; onBack: () => void }) {

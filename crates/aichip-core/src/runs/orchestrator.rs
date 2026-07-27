@@ -7,9 +7,11 @@
 //! - chat runs (project assistant turns): real checkout cwd, but locked to a
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
+use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
 use aichip_shared::{AichipEvent, EventEnvelope, ModelTier, PermissionMode, RunStatus, TierMapping};
 use aichip_engines::{Engine, RunSpec};
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,6 +62,31 @@ pub struct Orchestrator {
 struct StreamOutcome {
     status: RunStatus,
     reason: Option<String>,
+    /// Final assistant/result text, used to feed later pipeline steps.
+    output: String,
+    session_id: Option<String>,
+}
+
+/// An agent from the library, resolved for a step or task.
+struct BoundAgent {
+    system_prompt: String,
+    tier: ModelTier,
+    allowed_tools: Vec<String>,
+    permission_preset: String,
+}
+
+/// Race-free `events.seq` allocation. A workflow run has several steps
+/// writing concurrently, and `(run_id, seq)` is unique.
+#[derive(Clone)]
+struct SeqAlloc(Arc<std::sync::atomic::AtomicI64>);
+
+impl SeqAlloc {
+    fn starting_at(seq: i64) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicI64::new(seq)))
+    }
+    fn next(&self) -> i64 {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl Orchestrator {
@@ -122,6 +149,32 @@ impl Orchestrator {
         let run_id: Uuid = row.get("id");
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 20)")
             .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
+    }
+
+    /// Queue a workflow execution. `trigger` distinguishes manual runs from
+    /// scheduled ones for the activity view.
+    pub async fn enqueue_workflow(
+        &self,
+        workflow_id: Uuid,
+        trigger: &str,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO runs (workflow_id, status, trigger, engine)
+             VALUES ($1, 'queued', $2, 'claude-code') RETURNING id",
+        )
+        .bind(workflow_id)
+        .bind(trigger)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = row.get("id");
+        // Scheduled work yields to anything a human is waiting on.
+        let priority = if trigger == "schedule" { 1 } else { 10 };
+        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, $2)")
+            .bind(run_id)
+            .bind(priority)
             .execute(&self.db.pool)
             .await?;
         Ok(run_id)
@@ -190,13 +243,17 @@ impl Orchestrator {
     /// Dispatcher: task runs and chat runs share the streaming machinery but
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
-        let row = sqlx::query("SELECT chat_id FROM runs WHERE id=$1")
+        let row = sqlx::query("SELECT chat_id, workflow_id FROM runs WHERE id=$1")
             .bind(run_id)
             .fetch_one(&self.db.pool)
             .await?;
-        match row.get::<Option<Uuid>, _>("chat_id") {
-            Some(chat_id) => self.execute_chat_run(run_id, chat_id).await,
-            None => self.execute_task_run(run_id).await,
+        match (
+            row.get::<Option<Uuid>, _>("chat_id"),
+            row.get::<Option<Uuid>, _>("workflow_id"),
+        ) {
+            (Some(chat_id), _) => self.execute_chat_run(run_id, chat_id).await,
+            (_, Some(workflow_id)) => self.execute_workflow_run(run_id, workflow_id).await,
+            _ => self.execute_task_run(run_id).await,
         }
     }
 
@@ -308,7 +365,10 @@ impl Orchestrator {
             ]),
         };
 
-        let outcome = self.stream_run(run_id, engine, spec).await?;
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let outcome = self
+            .stream_run(run_id, None, &seq, engine, spec, true)
+            .await?;
 
         if outcome.status == RunStatus::Completed {
             sqlx::query("UPDATE tasks SET board_column='review' WHERE id=$1")
@@ -404,16 +464,15 @@ impl Orchestrator {
             extra_env: HashMap::from([("AICHIP_CHAT_ID".to_string(), chat_id.to_string())]),
         };
 
-        let outcome = self.stream_run(run_id, engine, spec).await?;
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let outcome = self
+            .stream_run(run_id, None, &seq, engine, spec, true)
+            .await?;
 
         if outcome.status == RunStatus::Completed {
             // Persist the (forked) session id for the next --resume, and the
             // assistant's reply as a durable chat message.
-            let final_row = sqlx::query("SELECT session_id FROM runs WHERE id=$1")
-                .bind(run_id)
-                .fetch_one(&self.db.pool)
-                .await?;
-            if let Some(sid) = final_row.get::<Option<String>, _>("session_id") {
+            if let Some(sid) = &outcome.session_id {
                 sqlx::query(
                     "UPDATE chats SET session_id=$1, session_engine=$2, updated_at=now() WHERE id=$3",
                 )
@@ -423,20 +482,16 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
             }
-            let reply: Option<String> = sqlx::query(
-                "SELECT payload->>'result_text' AS text FROM events
-                 WHERE run_id=$1 AND type='run_completed' ORDER BY seq DESC LIMIT 1",
-            )
-            .bind(run_id)
-            .fetch_optional(&self.db.pool)
-            .await?
-            .and_then(|r| r.get::<Option<String>, _>("text"));
             sqlx::query(
                 "INSERT INTO chat_messages (chat_id, role, content, run_id)
                  VALUES ($1, 'assistant', $2, $3)",
             )
             .bind(chat_id)
-            .bind(reply.filter(|t| !t.is_empty()).unwrap_or_else(|| "(no reply)".into()))
+            .bind(if outcome.output.is_empty() {
+                "(no reply)".to_string()
+            } else {
+                outcome.output.clone()
+            })
             .bind(run_id)
             .execute(&self.db.pool)
             .await?;
@@ -457,22 +512,296 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Execute a workflow: steps run in dependency order, a step's outputs
+    /// feed later prompts, and `strategy.parallel` fans a step out into
+    /// independent attempts. The whole workflow is one run, so the existing
+    /// streaming, replay, and cost tracking apply unchanged.
+    async fn execute_workflow_run(
+        self: &Arc<Self>,
+        run_id: Uuid,
+        workflow_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT w.source_yaml, w.name, r.engine, p.id AS project_id, p.workspace_id,
+                    p.path AS project_path, p.default_branch, p.full_auto_opt_in
+             FROM runs r JOIN workflows w ON w.id = r.workflow_id
+             JOIN projects p ON p.id = w.project_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        self.set_status(run_id, RunStatus::Starting).await?;
+
+        let workflow = Workflow::from_yaml(&row.get::<String, _>("source_yaml"))?;
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+        let project_path = PathBuf::from(row.get::<String, _>("project_path"));
+        let default_branch: String = row.get("default_branch");
+        let workspace_id: Uuid = row.get("workspace_id");
+        let full_auto_opt_in: bool = row.get("full_auto_opt_in");
+
+        // Shared worktree: sequential stages build on each other's work.
+        // Fan-out steps that ask for isolation get their own.
+        let shared = self
+            .worktrees
+            .create(
+                &project_path,
+                &default_branch,
+                run_id,
+                &slugify(&workflow.name),
+            )
+            .await?;
+
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let mut outputs = StepOutputs::new();
+        let mut sessions: HashMap<String, String> = HashMap::new();
+        let mut failure: Option<String> = None;
+
+        'layers: for layer in workflow.layers()? {
+            for step_id in layer {
+                let step = workflow
+                    .step(&step_id)
+                    .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
+
+                let agent = self.load_agent(workspace_id, step.agent.as_deref()).await?;
+                let model_id = workflow.resolve_model(step, agent.as_ref().map(|a| a.tier), &self.tiers);
+                let prompt = aichip_shared::interpolate(&step.prompt, &outputs);
+
+                let permission_mode = self.workflow_permission_mode(
+                    &workflow,
+                    agent.as_ref(),
+                    full_auto_opt_in,
+                    &shared.path,
+                );
+
+                // Resume the session of the step we depend on, so a
+                // "continue" stage keeps the prior stage's context.
+                let resume = if step.session == SessionMode::Continue {
+                    step.needs.first().and_then(|n| sessions.get(n).cloned())
+                } else {
+                    None
+                };
+
+                let attempts = step.parallelism();
+                let mut plans = Vec::with_capacity(attempts);
+                for index in 0..attempts {
+                    let step_key = if attempts > 1 {
+                        format!("{step_id}#{}", index + 1)
+                    } else {
+                        step_id.clone()
+                    };
+                    let cwd = if step.isolated_worktrees() && attempts > 1 {
+                        self.worktrees
+                            .create(
+                                &project_path,
+                                &default_branch,
+                                Uuid::new_v4(),
+                                &format!("{}-{}", slugify(&step_key), index + 1),
+                            )
+                            .await?
+                            .path
+                    } else {
+                        shared.path.clone()
+                    };
+                    let db_step_id = self.create_step_row(run_id, &step_key).await?;
+                    plans.push((db_step_id, step_key, cwd));
+                }
+
+                // Opportunistic parallelism: this run already holds one queue
+                // permit; extra ones are taken only if immediately free, so a
+                // fan-out can never deadlock against another workflow.
+                let extra: Vec<_> = (1..plans.len())
+                    .filter_map(|_| self.semaphore.clone().try_acquire_owned().ok())
+                    .collect();
+                let concurrency = 1 + extra.len();
+
+                let results = futures::stream::iter(plans.into_iter().map(
+                    |(db_step_id, step_key, cwd)| {
+                        let this = self.clone();
+                        let engine = engine.clone();
+                        let seq = seq.clone();
+                        let spec = RunSpec {
+                            cwd,
+                            prompt: prompt.clone(),
+                            model_tier: agent.as_ref().map(|a| a.tier).unwrap_or_default(),
+                            model_id: model_id.clone(),
+                            resume_session_id: resume.clone(),
+                            permission_mode,
+                            allowed_tools: agent
+                                .as_ref()
+                                .map(|a| a.allowed_tools.clone())
+                                .unwrap_or_default(),
+                            append_system_prompt: agent
+                                .as_ref()
+                                .and_then(|a| (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())),
+                            mcp_config_path: None,
+                            permission_prompt_tool: true,
+                            extra_env: HashMap::from([
+                                ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
+                                ("AICHIP_STEP".to_string(), step_key.clone()),
+                                ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
+                            ]),
+                        };
+                        async move {
+                            let outcome = this
+                                .stream_run(run_id, Some(db_step_id), &seq, engine, spec, false)
+                                .await;
+                            (db_step_id, step_key, outcome)
+                        }
+                    },
+                ))
+                .buffer_unordered(concurrency)
+                .collect::<Vec<_>>()
+                .await;
+                drop(extra);
+
+                let mut step_outputs = Vec::with_capacity(results.len());
+                for (db_step_id, step_key, outcome) in results {
+                    let outcome = outcome?;
+                    self.finish_step_row(db_step_id, &outcome).await?;
+                    if outcome.status != RunStatus::Completed {
+                        failure = Some(format!(
+                            "step '{step_key}' {}: {}",
+                            outcome.status.as_str(),
+                            outcome.reason.clone().unwrap_or_default()
+                        ));
+                        break 'layers;
+                    }
+                    if let Some(sid) = outcome.session_id.clone() {
+                        sessions.entry(step_id.clone()).or_insert(sid);
+                    }
+                    step_outputs.push(outcome.output);
+                }
+                outputs.insert(step_id.clone(), step_outputs);
+            }
+        }
+
+        match failure {
+            None => {
+                self.finish(run_id, RunStatus::Completed, None).await?;
+                // Surface the pipeline's result the same way a task does.
+                sqlx::query(
+                    "UPDATE workflows SET last_run_at = now() WHERE id = $1",
+                )
+                .bind(workflow_id)
+                .execute(&self.db.pool)
+                .await?;
+            }
+            Some(reason) => {
+                self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn create_step_row(&self, run_id: Uuid, step_key: &str) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, started_at)
+             VALUES ($1, $2, 'running', now()) RETURNING id",
+        )
+        .bind(run_id)
+        .bind(step_key)
+        .fetch_one(&self.db.pool)
+        .await?;
+        Ok(row.get("id"))
+    }
+
+    async fn finish_step_row(
+        &self,
+        step_id: Uuid,
+        outcome: &StreamOutcome,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE steps SET status=$1, session_id=$2, output_text=$3, finished_at=now()
+             WHERE id=$4",
+        )
+        .bind(outcome.status.as_str())
+        .bind(&outcome.session_id)
+        .bind(&outcome.output)
+        .bind(step_id)
+        .execute(&self.db.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn load_agent(
+        &self,
+        workspace_id: Uuid,
+        name: Option<&str>,
+    ) -> anyhow::Result<Option<BoundAgent>> {
+        let Some(name) = name else { return Ok(None) };
+        let row = sqlx::query(
+            "SELECT system_prompt, model_tier, allowed_tools, permission_preset
+             FROM agents WHERE workspace_id=$1 AND name=$2",
+        )
+        .bind(workspace_id)
+        .bind(name)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        Ok(row.map(|r| BoundAgent {
+            system_prompt: r.get("system_prompt"),
+            tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
+                .unwrap_or_default(),
+            allowed_tools: r.get("allowed_tools"),
+            permission_preset: r.get("permission_preset"),
+        }))
+    }
+
+    /// Workflow steps default to auto-edit (they run unattended in a
+    /// worktree); FullAuto still requires the project opt-in and a managed
+    /// worktree, same gate as task runs.
+    fn workflow_permission_mode(
+        &self,
+        workflow: &Workflow,
+        agent: Option<&BoundAgent>,
+        full_auto_opt_in: bool,
+        cwd: &std::path::Path,
+    ) -> PermissionMode {
+        let spec = agent
+            .map(|a| a.permission_preset.clone())
+            .or_else(|| workflow.defaults.permission_mode.clone());
+        let mode = spec
+            .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok())
+            .unwrap_or(PermissionMode::AutoEdit);
+        if mode == PermissionMode::FullAuto && !(full_auto_opt_in && self.worktrees.manages(cwd)) {
+            PermissionMode::Reviewed
+        } else {
+            mode
+        }
+    }
+
     /// Shared streaming loop: spawn the engine, persist+publish every event,
     /// handle cancel / rate-limit / terminal transitions.
+    ///
+    /// `step_id` tags events for pipeline steps. `finalize` is false for
+    /// individual workflow steps — the workflow decides the run's final
+    /// status once every step is done.
     async fn stream_run(
         self: &Arc<Self>,
         run_id: Uuid,
+        step_id: Option<Uuid>,
+        seq: &SeqAlloc,
         engine: Arc<dyn Engine>,
         spec: RunSpec,
+        finalize: bool,
     ) -> anyhow::Result<StreamOutcome> {
         let mut proc = engine.start(spec)?;
         self.set_status(run_id, RunStatus::Running).await?;
 
+        // A cancel targets the whole run; steps register under their own id
+        // so a workflow's parallel steps don't clobber each other's channel.
+        let cancel_key = step_id.unwrap_or(run_id);
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
-        self.cancels.lock().unwrap().insert(run_id, cancel_tx);
+        self.cancels.lock().unwrap().insert(cancel_key, cancel_tx);
 
-        let mut seq: i64 = next_seq(&self.db, run_id).await?;
         let mut outcome: Option<(RunStatus, Option<String>)> = None;
+        let mut text_parts: Vec<String> = vec![];
+        let mut result_text = String::new();
+        let mut session_id: Option<String> = None;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => {
@@ -482,21 +811,27 @@ impl Orchestrator {
                 }
                 event = proc.events.recv() => {
                     let Some(event) = event else { break };
-                    self.persist_and_publish(run_id, seq, &event).await?;
-                    seq += 1;
+                    self.persist_and_publish(run_id, step_id, seq.next(), &event).await?;
                     match &event {
-                        AichipEvent::RunStarted { session_id, .. } => {
-                            if let Some(sid) = session_id {
+                        AichipEvent::AssistantText { text } => text_parts.push(text.clone()),
+                        AichipEvent::RunStarted { session_id: sid, .. } => {
+                            if let Some(sid) = sid {
+                                session_id = Some(sid.clone());
                                 sqlx::query("UPDATE runs SET session_id=$1 WHERE id=$2")
                                     .bind(sid).bind(run_id)
                                     .execute(&self.db.pool).await?;
                             }
                         }
-                        AichipEvent::RunCompleted { session_id, cost_usd, usage, .. } => {
+                        AichipEvent::RunCompleted { session_id: sid, cost_usd, usage, result_text: rt } => {
+                            session_id = Some(sid.clone());
+                            result_text = rt.clone();
+                            // Costs accumulate: a workflow run has many steps.
                             sqlx::query(
-                                "UPDATE runs SET session_id=$1, cost_usd=$2,
-                                 input_tokens=$3, output_tokens=$4 WHERE id=$5")
-                                .bind(session_id)
+                                "UPDATE runs SET session_id=$1,
+                                 cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0),
+                                 input_tokens = input_tokens + $3,
+                                 output_tokens = output_tokens + $4 WHERE id=$5")
+                                .bind(sid)
                                 .bind(cost_usd)
                                 .bind(usage.input_tokens as i64)
                                 .bind(usage.output_tokens as i64)
@@ -516,16 +851,28 @@ impl Orchestrator {
                 }
             }
         }
-        self.cancels.lock().unwrap().remove(&run_id);
+        self.cancels.lock().unwrap().remove(&cancel_key);
 
         let (status, reason) =
             outcome.unwrap_or((RunStatus::Failed, Some("event stream ended unexpectedly".into())));
-        if status != RunStatus::RateLimited {
-            self.finish(run_id, status, reason.clone()).await?;
-        } else {
-            self.set_status(run_id, RunStatus::RateLimited).await?;
+        if finalize {
+            if status != RunStatus::RateLimited {
+                self.finish(run_id, status, reason.clone()).await?;
+            } else {
+                self.set_status(run_id, RunStatus::RateLimited).await?;
+            }
         }
-        Ok(StreamOutcome { status, reason })
+        let output = if result_text.is_empty() {
+            text_parts.join("\n")
+        } else {
+            result_text
+        };
+        Ok(StreamOutcome {
+            status,
+            reason,
+            output,
+            session_id,
+        })
     }
 
     async fn requeue_rate_limited(
@@ -572,6 +919,7 @@ impl Orchestrator {
     async fn persist_and_publish(
         &self,
         run_id: Uuid,
+        step_id: Option<Uuid>,
         seq: i64,
         event: &AichipEvent,
     ) -> anyhow::Result<()> {
@@ -583,9 +931,11 @@ impl Orchestrator {
             .to_string();
         let ts: DateTime<Utc> = Utc::now();
         sqlx::query(
-            "INSERT INTO events (run_id, seq, type, payload, ts) VALUES ($1,$2,$3,$4,$5)",
+            "INSERT INTO events (run_id, step_id, seq, type, payload, ts)
+             VALUES ($1,$2,$3,$4,$5,$6)",
         )
         .bind(run_id)
+        .bind(step_id)
         .bind(seq)
         .bind(&type_name)
         .bind(&payload)
@@ -594,7 +944,7 @@ impl Orchestrator {
         .await?;
         self.bus.publish(EventEnvelope {
             run_id,
-            step_id: None,
+            step_id,
             seq,
             ts,
             event: event.clone(),

@@ -70,6 +70,45 @@ export interface ChatMessage {
   ts: string;
 }
 
+export interface WorkflowDef {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  sourceYaml: string;
+  cronExpr: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+  stepCount: number;
+  error: string | null;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: string;
+  trigger: string;
+  costUsd: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface RunStep {
+  id: string;
+  stepKey: string;
+  status: string;
+  output: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface PendingPermission {
+  requestId: string;
+  toolName: string;
+  input: unknown;
+}
+
 export interface FsListing {
   path: string;
   parent: string | null;
@@ -145,6 +184,10 @@ export const api = {
   merge: (taskId: string) =>
     post(`/api/tasks/${taskId}/merge`).then((r) => json<{ merged: boolean }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`),
+  pendingPermissions: (runId: string) =>
+    fetch(`/api/runs/${runId}/pending-permissions`).then((r) =>
+      json<{ pending: PendingPermission[] }>(r),
+    ),
   resolvePermission: (requestId: string, allowed: boolean) =>
     post(`/api/permissions/${requestId}/resolve`, { allowed }),
 
@@ -171,6 +214,37 @@ export const api = {
   updateTeam: (id: string, body: Record<string, unknown>) =>
     patch(`/api/teams/${id}`, body).then((r) => json<Team>(r)),
   deleteTeam: (id: string) => fetch(`/api/teams/${id}`, { method: "DELETE" }),
+
+  // workflows
+  workflows: (projectId: string) =>
+    fetch(`/api/workflows?project_id=${projectId}`).then((r) =>
+      json<{ workflows: WorkflowDef[] }>(r),
+    ),
+  createWorkflow: (projectId: string, sourceYaml: string) =>
+    post("/api/workflows", { project_id: projectId, source_yaml: sourceYaml }).then((r) =>
+      json<WorkflowDef>(r),
+    ),
+  updateWorkflow: (id: string, sourceYaml: string) =>
+    patch(`/api/workflows/${id}`, { source_yaml: sourceYaml }).then((r) =>
+      json<WorkflowDef>(r),
+    ),
+  deleteWorkflow: (id: string) => fetch(`/api/workflows/${id}`, { method: "DELETE" }),
+  runWorkflow: (id: string) =>
+    post(`/api/workflows/${id}/run`).then((r) => json<{ runId: string }>(r)),
+  syncWorkflows: (projectId: string) =>
+    post(`/api/projects/${projectId}/workflows/sync`).then((r) =>
+      json<{ imported: WorkflowDef[]; errors: { file: string; error: string }[]; note?: string }>(r),
+    ),
+  workflowRuns: (projectId: string) =>
+    fetch(`/api/workflow-runs?project_id=${projectId}`).then((r) =>
+      json<{ runs: WorkflowRun[] }>(r),
+    ),
+  runSteps: (runId: string) =>
+    fetch(`/api/runs/${runId}/steps`).then((r) => json<{ steps: RunStep[] }>(r)),
+  runTeam: (teamId: string, projectId: string, goal: string) =>
+    post(`/api/teams/${teamId}/run`, { project_id: projectId, goal }).then((r) =>
+      json<{ runId: string; workflowId: string; steps: number }>(r),
+    ),
 
   // chat
   openChat: (projectId: string) =>

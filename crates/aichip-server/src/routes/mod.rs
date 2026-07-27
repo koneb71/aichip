@@ -4,6 +4,7 @@ pub mod fs;
 pub mod projects;
 pub mod tasks;
 pub mod teams;
+pub mod workflows;
 pub mod workspaces;
 
 use crate::AppState;
@@ -26,6 +27,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(tasks::router())
         .merge(agents::router())
         .merge(teams::router())
+        .merge(workflows::router())
         .merge(fs::router())
         .merge(chat::router())
 }
