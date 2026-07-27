@@ -19,4 +19,5 @@ axum = { workspace = true }
 tower-http = { workspace = true, features = ["fs"] }
 sqlx = { workspace = true }
 serde_yaml = "0.9"
+croner = "3"
 futures = "0.3"

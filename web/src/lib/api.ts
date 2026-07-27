@@ -78,7 +78,9 @@ export interface WorkflowDef {
   sourceYaml: string;
   cronExpr: string | null;
   enabled: boolean;
+  catchUp: string;
   lastRunAt: string | null;
+  nextRunAt: string | null;
   stepCount: number;
   error: string | null;
 }
@@ -228,6 +230,10 @@ export const api = {
     patch(`/api/workflows/${id}`, { source_yaml: sourceYaml }).then((r) =>
       json<WorkflowDef>(r),
     ),
+  setWorkflowEnabled: (id: string, enabled: boolean) =>
+    patch(`/api/workflows/${id}`, { enabled }).then((r) => json<WorkflowDef>(r)),
+  setWorkflowCatchUp: (id: string, catchUp: "skip" | "run_once") =>
+    patch(`/api/workflows/${id}`, { catch_up: catchUp }).then((r) => json<WorkflowDef>(r)),
   deleteWorkflow: (id: string) => fetch(`/api/workflows/${id}`, { method: "DELETE" }),
   runWorkflow: (id: string) =>
     post(`/api/workflows/${id}/run`).then((r) => json<{ runId: string }>(r)),

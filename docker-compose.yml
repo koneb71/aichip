@@ -1,0 +1,37 @@
+# Postgres for aichip.
+#
+# By default `aichip serve` boots its own private embedded Postgres and you
+# need none of this. Use this compose file when you'd rather run a real
+# server — for CI, for pointing several checkouts at one database, or just
+# to avoid the embedded cluster entirely.
+#
+#   docker compose up -d
+#   export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
+#   cargo run -p aichip-cli -- serve
+#
+# The aichip server itself deliberately stays on the host: it spawns your
+# own `claude` CLI under your own login, and that only works where you are
+# logged in. See the "Why isn't the app containerized?" note in README.md.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aichip-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aichip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aichip}
+      POSTGRES_DB: ${POSTGRES_DB:-aichip}
+    ports:
+      # 5433 on the host so a local Postgres on 5432 keeps working.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - aichip-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aichip} -d ${POSTGRES_DB:-aichip}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  aichip-pgdata:

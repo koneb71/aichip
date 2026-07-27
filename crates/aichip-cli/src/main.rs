@@ -102,6 +102,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         tracing::warn!(orphans, "marked orphaned runs from previous session as failed");
     }
     tokio::spawn(orchestrator.clone().run_loop());
+    tokio::spawn(aichip_core::Scheduler::new(db.clone(), orchestrator.clone()).run_loop());
 
     let state = aichip_server::AppState {
         db,

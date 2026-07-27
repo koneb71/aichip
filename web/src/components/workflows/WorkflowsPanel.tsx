@@ -92,9 +92,31 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
                 </div>
               </div>
               {w.cronExpr && (
-                <span className="rounded-full bg-tier-medium-soft px-2 py-0.5 text-[11px] text-tier-medium">
-                  ⏱ {w.cronExpr}
-                </span>
+                <button
+                  title={
+                    w.enabled
+                      ? "Scheduled — click to pause"
+                      : "Paused — click to resume"
+                  }
+                  onClick={async () => {
+                    await api.setWorkflowEnabled(w.id, !w.enabled);
+                    refresh();
+                  }}
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-mono"
+                  style={
+                    w.enabled
+                      ? {
+                          background: "var(--color-tier-medium-soft)",
+                          color: "var(--color-tier-medium)",
+                        }
+                      : {
+                          background: "var(--color-panel-2)",
+                          color: "var(--color-ink-dim)",
+                        }
+                  }
+                >
+                  {w.enabled ? "⏱" : "⏸"} {w.cronExpr}
+                </button>
               )}
             </div>
             {w.error ? (
@@ -102,7 +124,11 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
                 {w.error}
               </div>
             ) : (
-              <div className="mt-2 text-[11px] text-ink-dim">{w.stepCount} steps</div>
+              <div className="mt-2 text-[11px] text-ink-dim">
+                {w.stepCount} steps
+                {w.nextRunAt && ` · next ${relativeTime(w.nextRunAt)}`}
+                {!w.nextRunAt && w.cronExpr && !w.enabled && " · paused"}
+              </div>
             )}
             <div className="mt-3 flex gap-2">
               <motion.button
@@ -181,6 +207,20 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
       </AnimatePresence>
     </div>
   );
+}
+
+/** "in 4h", "in 2d", "now" — enough for a schedule badge. */
+function relativeTime(iso: string): string {
+  const seconds = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  if (seconds <= 60) return "now";
+  const units: [number, string][] = [
+    [60, "m"],
+    [3600, "h"],
+    [86400, "d"],
+  ];
+  const [divisor, suffix] =
+    seconds < 3600 ? units[0] : seconds < 86400 ? units[1] : units[2];
+  return `in ${Math.round(seconds / divisor)}${suffix}`;
 }
 
 export function StatusDot({ status }: { status: string }) {

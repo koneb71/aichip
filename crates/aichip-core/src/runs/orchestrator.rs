@@ -535,10 +535,17 @@ impl Orchestrator {
         self.set_status(run_id, RunStatus::Starting).await?;
 
         let workflow = Workflow::from_yaml(&row.get::<String, _>("source_yaml"))?;
-        let engine_id: String = row.get("engine");
+        // The YAML's `defaults.engine` wins: a scheduled run is queued long
+        // before we know which engine the workflow asked for.
+        let engine_id = workflow.defaults.engine.clone();
         let engine = self
             .engine(&engine_id)
             .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+        sqlx::query("UPDATE runs SET engine=$1 WHERE id=$2")
+            .bind(&engine_id)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
         let project_path = PathBuf::from(row.get::<String, _>("project_path"));
         let default_branch: String = row.get("default_branch");
         let workspace_id: Uuid = row.get("workspace_id");
