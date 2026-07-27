@@ -45,8 +45,12 @@ so there is nothing to install or configure.
 
 ## Workflows
 
-A workflow is YAML — write it in the dashboard, or commit it to
-`.aichip/workflows/` in your repo and press **Sync from repo**.
+Build workflows on a canvas — drag between node handles to say "run after",
+click a node to edit its prompt, model, agent, and fan-out. The canvas is a view
+over YAML, which stays the source of truth: flip to the YAML tab any time, or
+commit files to `.aichip/workflows/` in your repo and press **Sync from repo**.
+(Canvas edits regenerate the YAML, so comments in a hand-written file don't
+survive a round trip through the canvas.)
 
 ```yaml
 name: nightly-dep-audit
@@ -97,7 +101,12 @@ from a container, so that's the part compose provides.
 cargo build            # build the Rust workspace
 cargo test             # unit + fixture tests (mock engine; no model usage, no rate limits)
 cd web && pnpm install && pnpm dev   # dashboard dev server (proxies to the Rust API)
+cd web && pnpm test    # canvas ↔ YAML round-trip tests
 ```
+
+Adding a migration under `crates/aichip-core/migrations/` does not always
+retrigger a rebuild, because sqlx embeds them at compile time. If a new column
+comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild.
 
 ## Workspace layout
 

@@ -83,6 +83,7 @@ export interface WorkflowDef {
   nextRunAt: string | null;
   stepCount: number;
   error: string | null;
+  uiLayout: Record<string, { x: number; y: number }>;
 }
 
 export interface WorkflowRun {
@@ -235,6 +236,8 @@ export const api = {
   setWorkflowCatchUp: (id: string, catchUp: "skip" | "run_once") =>
     patch(`/api/workflows/${id}`, { catch_up: catchUp }).then((r) => json<WorkflowDef>(r)),
   deleteWorkflow: (id: string) => fetch(`/api/workflows/${id}`, { method: "DELETE" }),
+  saveWorkflowLayout: (id: string, layout: Record<string, { x: number; y: number }>) =>
+    post(`/api/workflows/${id}/layout`, layout),
   runWorkflow: (id: string) =>
     post(`/api/workflows/${id}/run`).then((r) => json<{ runId: string }>(r)),
   syncWorkflows: (projectId: string) =>
