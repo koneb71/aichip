@@ -184,12 +184,45 @@ cargo run -p aichip-cli -- serve
 
 See `.env.example` for the other knobs.
 
-### Why isn't the app containerized?
+## Running in Docker
 
-aichip works by spawning *your* `claude` CLI under *your* login. That login lives on your
-machine, so the server runs on your machine too — containerizing it would mean mounting
-your credentials into a container for no benefit. The database is the part that gains
-from a container, so that's the part compose provides.
+aichip works by spawning *your* `claude` CLI under *your* login, so the interesting
+question is how a container authenticates. On macOS the login lives in the **Keychain**
+(there is no credentials file to mount), and a container has no keychain and no browser
+to log in with. A container with your `~/.claude` mounted still reports
+`Not logged in · Please run /login`.
+
+The one way in is a long-lived token:
+
+```bash
+claude setup-token
+```
+
+Put it in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, set `AICHIP_PROJECTS_DIR` to the folder
+holding your code, then:
+
+```bash
+docker compose --profile app up -d --build
+```
+
+That runs everything — dashboard, orchestrator, and the agents — in containers, reachable
+at `http://localhost:4820`.
+
+**Know what you're trading.** The token is a real credential sitting in a file, valid
+until you revoke it, rather than a keychain entry scoped to your machine. aichip itself
+still never reads, stores, or forwards it — the container inherits it from the environment
+you set — but a token in `.env` is a broader exposure than the ordinary login, so keep
+`.env` out of version control (it is gitignored) and revoke the token when you're done.
+
+Two things the compose file handles that are easy to get wrong alone: your projects are
+mounted at the **same absolute path** inside and out, because a git worktree records
+absolute paths and a repo mounted elsewhere has a broken worktree link; and the container
+runs as your UID, so files the agents write stay yours instead of root's.
+
+**The recommended shape is still Postgres in a container and the server on your machine**
+(`docker compose up -d`, above). You keep the ordinary keychain login, no token exists to
+leak, and your paths are simply real. Containerize the whole thing when you want it on a
+Linux box, running unattended, or away from your laptop — not because it's tidier.
 
 ## Development
 

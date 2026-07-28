@@ -129,7 +129,15 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     };
     let app = aichip_server::app(state);
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    // Loopback by default: this is a local-first app and binding wide on a
+    // laptop would expose it to the network. A container overrides it,
+    // because there the port is only reachable through an explicit mapping
+    // — and the Host-header allowlist still guards it either way.
+    let bind: std::net::IpAddr = std::env::var("AICHIP_BIND")
+        .ok()
+        .and_then(|b| b.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let addr = std::net::SocketAddr::new(bind, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("aichip dashboard: http://127.0.0.1:{port}");
 
