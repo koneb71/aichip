@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod attachments;
 pub mod chat;
 pub mod files;
 pub mod fs;
@@ -34,6 +35,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(workflows::router())
         .merge(fs::router())
         .merge(files::router())
+        .merge(attachments::router())
         .merge(search::router())
         .merge(chat::router())
 }

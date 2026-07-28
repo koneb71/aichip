@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::bus::EventBus;
 use crate::db::Db;
+use crate::runs::attachments;
 use crate::queue::rate_limit_backoff;
 use crate::worktrees::manager::WorktreeManager;
 
@@ -414,9 +415,16 @@ impl Orchestrator {
             .execute(&self.db.pool)
             .await?;
 
+        // Attachments are folded in here rather than at the route, so that
+        // re-running a task re-attaches and `tasks.prompt` keeps holding
+        // exactly what the user typed.
+        let atts = attachments::for_task(&self.db, task_id).await.unwrap_or_default();
+        let (prompt, extra_read_dirs) =
+            attachments::augment_prompt(&run.get::<String, _>("prompt"), &atts);
+
         let spec = RunSpec {
             cwd,
-            prompt: run.get("prompt"),
+            prompt,
             model_tier: tier,
             model_id,
             resume_session_id: run.get("session_id"),
@@ -424,6 +432,7 @@ impl Orchestrator {
             allowed_tools: agent_tools.unwrap_or_default(),
             append_system_prompt: agent_prompt.filter(|p| !p.is_empty()),
             mcp_config_path,
+            extra_read_dirs,
             permission_prompt_tool: true,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
@@ -477,12 +486,17 @@ impl Orchestrator {
 
     async fn execute_chat_run(self: &Arc<Self>, run_id: Uuid, chat_id: Uuid) -> anyhow::Result<()> {
         let row = sqlx::query(
+            // Lateral join rather than a scalar subquery: the turn needs the
+            // message's id as well as its text, to look up its attachments.
             "SELECT r.engine, c.session_id, c.session_engine, p.path AS project_path,
-                    (SELECT content FROM chat_messages
-                     WHERE chat_id = c.id AND role = 'user'
-                     ORDER BY created_at DESC LIMIT 1) AS user_message
+                    m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              JOIN projects p ON p.id = c.project_id
+             LEFT JOIN LATERAL (
+                 SELECT id, content FROM chat_messages
+                 WHERE chat_id = c.id AND role = 'user'
+                 ORDER BY created_at DESC LIMIT 1
+             ) m ON TRUE
              WHERE r.id = $1",
         )
         .bind(run_id)
@@ -504,6 +518,16 @@ impl Orchestrator {
         let user_message: String = row
             .get::<Option<String>, _>("user_message")
             .unwrap_or_else(|| "Introduce yourself briefly.".to_string());
+
+        // An attachment-only turn stores empty content, so the prompt may be
+        // nothing but the attachment block.
+        let atts = match row.get::<Option<Uuid>, _>("user_message_id") {
+            Some(message_id) => attachments::for_message(&self.db, message_id)
+                .await
+                .unwrap_or_default(),
+            None => vec![],
+        };
+        let (user_message, extra_read_dirs) = attachments::augment_prompt(&user_message, &atts);
 
         let mcp_config_path = match (&self.mcp_base_url, engine_id.as_str()) {
             (Some(base), "claude-code") => {
@@ -530,6 +554,7 @@ impl Orchestrator {
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
             append_system_prompt: Some(CHAT_SYSTEM_PROMPT.to_string()),
             mcp_config_path,
+            extra_read_dirs,
             permission_prompt_tool: false,
             extra_env: HashMap::from([("AICHIP_CHAT_ID".to_string(), chat_id.to_string())]),
         };
@@ -718,6 +743,7 @@ impl Orchestrator {
                                 .as_ref()
                                 .and_then(|a| (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())),
                             mcp_config_path: None,
+                            extra_read_dirs: vec![],
                             permission_prompt_tool: true,
                             extra_env: HashMap::from([
                                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),

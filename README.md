@@ -30,8 +30,8 @@ These four invariants are contribution rules. PRs that violate them will not be 
 
 ## Status
 
-Early development. Task board, agents, teams, chat, pipelines, and scheduling all work
-end to end; see the roadmap below.
+Early development. Task board, agents, teams, chat, pipelines, scheduling, and
+prompt attachments all work end to end; see the roadmap below.
 
 ## Quick start
 
@@ -42,6 +42,35 @@ cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4
 
 The first run downloads and initializes a private Postgres under `~/.aichip/pgdata`,
 so there is nothing to install or configure.
+
+## Attachments and file references
+
+Drag an image, PDF, or text file onto the chat composer or the new-task form —
+or paste a screenshot straight from the clipboard. The agent reads the file
+itself, so a design mock, a spec PDF, or a CSV can go into a prompt instead of
+being described in prose.
+
+Attachments are stored under `~/.aichip/attachments/`, **outside your repository**,
+and the run is granted read access to them with `--add-dir`. They are never
+copied into a task worktree: an untracked file there would show up in
+`git status`, and an agent that runs `git add -A` would commit your PDF to the
+branch and then to `main` on squash-merge.
+
+Accepted: `png jpg jpeg gif webp pdf txt md csv json log`, up to 10 MB each and
+10 per message. The type is decided by the extension and confirmed against the
+file's magic bytes, so a renamed binary is rejected. Uploads you abandon are
+swept after 24 hours.
+
+To point at code that is already in the repo, type `@` in either composer and
+search by filename. Press `:` on a highlighted result (or type it inline) to
+pick a specific line or range:
+
+```
+compare `web/src/lib/api.ts:120-160` with the screenshot I attached
+```
+
+The reference is inserted as a backticked path, which resolves against the
+repository root in both chat and task runs.
 
 ## Workflows
 

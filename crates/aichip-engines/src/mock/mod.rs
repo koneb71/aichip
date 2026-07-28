@@ -92,6 +92,7 @@ mod tests {
             allowed_tools: vec![],
             append_system_prompt: None,
             mcp_config_path: None,
+            extra_read_dirs: vec![],
             permission_prompt_tool: true,
             extra_env: HashMap::new(),
         }

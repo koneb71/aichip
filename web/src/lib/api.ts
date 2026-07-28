@@ -131,7 +131,22 @@ export interface ChatMessage {
   content: string;
   runId: string | null;
   ts: string;
+  attachments: Attachment[];
 }
+
+export interface Attachment {
+  id: string;
+  filename: string;
+  mime: string;
+  kind: "image" | "pdf" | "text";
+  size: number;
+}
+
+/** Extensions the server accepts; mirrored here only to fail fast in the UI. */
+export const ATTACHMENT_ACCEPT =
+  ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.json,.log";
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 10;
 
 export interface ChatSummary {
   id: string;
@@ -248,6 +263,12 @@ const patch = (url: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 
+// Deliberately no headers: the browser must set multipart/form-data itself so
+// it can include the boundary. Setting Content-Type here would omit it and the
+// server would fail to parse the body.
+const postForm = (url: string, form: FormData) =>
+  fetch(url, { method: "POST", body: form });
+
 export const api = {
   // workspaces
   workspaces: () =>
@@ -290,6 +311,7 @@ export const api = {
     agent_id?: string | null;
     team_id?: string | null;
     engine?: string;
+    attachment_ids?: string[];
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
   startTask: (taskId: string) =>
     post(`/api/tasks/${taskId}/start`).then((r) => json<{ runId: string }>(r)),
@@ -392,6 +414,31 @@ export const api = {
       json<FileContent>(r),
     ),
 
+  // attachments
+  uploadAttachments: (projectId: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    return postForm(`/api/projects/${projectId}/attachments`, form).then((r) =>
+      json<{ attachments: Attachment[] }>(r),
+    );
+  },
+  /** Only works while unclaimed — 409 once a task or message owns it. */
+  deleteAttachment: (id: string) =>
+    fetch(`/api/attachments/${id}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
+  taskAttachments: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/attachments`).then((r) =>
+      json<{ attachments: Attachment[] }>(r),
+    ),
+  attachmentUrl: (id: string) => `/api/attachments/${id}`,
+
+  /** Recursive filename search, for the @-mention picker. */
+  searchFiles: (projectId: string, q: string) =>
+    fetch(`/api/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`).then((r) =>
+      json<{ files: { path: string; name: string }[]; truncated: boolean }>(r),
+    ),
+
   // global search
   search: (workspaceId: string, q: string) =>
     fetch(`/api/search?workspace_id=${workspaceId}&q=${encodeURIComponent(q)}`).then((r) =>
@@ -418,10 +465,18 @@ export const api = {
     fetch(`/api/chats/${chatId}/messages`).then((r) =>
       json<{ messages: ChatMessage[]; activeRunId: string | null }>(r),
     ),
-  sendChat: (chatId: string, content: string, engine?: string) =>
-    post(`/api/chats/${chatId}/messages`, { content, engine }).then((r) =>
-      json<{ messageId: string; runId: string }>(r),
-    ),
+  // Options object rather than trailing positionals: two optional args in a
+  // row is exactly how a caller silently passes an engine as attachment ids.
+  sendChat: (
+    chatId: string,
+    content: string,
+    opts: { attachmentIds?: string[]; engine?: string } = {},
+  ) =>
+    post(`/api/chats/${chatId}/messages`, {
+      content,
+      engine: opts.engine,
+      attachment_ids: opts.attachmentIds ?? [],
+    }).then((r) => json<{ messageId: string; runId: string }>(r)),
 };
 
 export const tierColor: Record<Tier, string> = {

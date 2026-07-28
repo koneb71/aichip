@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, ChatMessage, ChatSummary } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
+import { useAttachments } from "../../lib/useAttachments";
+import { AttachmentBar, AttachmentList } from "../AttachmentBar";
+import { useMentionPicker } from "../MentionPicker";
 import { Markdown } from "../Markdown";
 
 export function ChatPanel({ projectId }: { projectId: string }) {
@@ -14,6 +17,26 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
+  const att = useAttachments(projectId);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Caret is tracked separately: it moves on click and arrow keys, not just
+  // on change, and the mention token depends on where it is.
+  const [caret, setCaret] = useState(0);
+  const mention = useMentionPicker({
+    projectId,
+    text: draft,
+    caret,
+    onApply: (text, nextCaret) => {
+      setDraft(text);
+      setCaret(nextCaret);
+      // The textarea is uncontrolled w.r.t. selection, so place it by hand
+      // after React has written the new value.
+      requestAnimationFrame(() => {
+        composerRef.current?.setSelectionRange(nextCaret, nextCaret);
+        composerRef.current?.focus();
+      });
+    },
+  });
 
   const refreshChats = useCallback(
     () =>
@@ -92,17 +115,30 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   }, [messages.length, streamEvents.length]);
 
   const send = async () => {
-    if (!chatId || !draft.trim() || activeRunId) return;
+    // An attachment on its own is a legitimate turn, so text is not required.
+    if (!chatId || activeRunId || att.busy) return;
+    if (!draft.trim() && att.ids.length === 0) return;
     setError(null);
     const content = draft.trim();
+    const attachmentIds = att.ids;
+    // Carry the chips into the optimistic bubble, or they'd vanish for the
+    // ~2.5s until the next poll returns the real message.
+    const sent = att.items.filter((i) => i.remote).map((i) => i.remote!);
     setDraft("");
-    // Optimistic append.
+    att.clear();
     setMessages((prev) => [
       ...prev,
-      { id: "pending", role: "user", content, runId: null, ts: new Date().toISOString() },
+      {
+        id: "pending",
+        role: "user",
+        content,
+        runId: null,
+        ts: new Date().toISOString(),
+        attachments: sent,
+      },
     ]);
     try {
-      const r = await api.sendChat(chatId, content);
+      const r = await api.sendChat(chatId, content, { attachmentIds });
       setActiveRunId(r.runId);
       // The first message names the chat server-side — pick that title up.
       refreshChats();
@@ -232,30 +268,71 @@ export function ChatPanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <div className="border-t border-line p-3">
-        <div className="flex items-end gap-2 rounded-xl border border-line bg-panel px-3 py-2 focus-within:border-accent">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
+      <div className="relative border-t border-line p-3" {...att.dropProps}>
+        {mention.node}
+        <div
+          className={`flex flex-col gap-1.5 rounded-xl border bg-panel px-3 py-2 focus-within:border-accent ${
+            att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
+          }`}
+        >
+          {(att.items.length > 0 || att.dragging) && (
+            <AttachmentBar
+              items={att.items}
+              onAdd={att.add}
+              onRemove={att.remove}
+              full={att.full}
+              disabled={!!activeRunId}
+            />
+          )}
+          <div className="flex items-end gap-2">
+            {att.items.length === 0 && !att.dragging && (
+              <AttachmentBar
+                items={[]}
+                onAdd={att.add}
+                onRemove={att.remove}
+                full={att.full}
+                disabled={!!activeRunId}
+              />
+            )}
+            <textarea
+              ref={composerRef}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setCaret(e.target.selectionStart ?? 0);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+              onPaste={att.onPaste}
+              onKeyDown={(e) => {
+                // The picker gets first refusal: otherwise Enter sends the
+                // message instead of choosing the highlighted file.
+                if (mention.handleKey(e)) {
+                  e.preventDefault();
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              rows={Math.min(4, Math.max(1, draft.split("\n").length))}
+              placeholder={
+                activeRunId ? "Assistant is working…" : "What should we work on?"
               }
-            }}
-            rows={Math.min(4, Math.max(1, draft.split("\n").length))}
-            placeholder={activeRunId ? "Assistant is working…" : "What should we work on?"}
-            disabled={!!activeRunId}
-            className="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none disabled:opacity-60"
-          />
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            onClick={send}
-            disabled={!!activeRunId || !draft.trim()}
-            className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
-          >
-            ↑
-          </motion.button>
+              disabled={!!activeRunId}
+              className="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none disabled:opacity-60"
+            />
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              onClick={send}
+              disabled={
+                !!activeRunId || att.busy || (!draft.trim() && att.ids.length === 0)
+              }
+              className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+            >
+              ↑
+            </motion.button>
+          </div>
         </div>
       </div>
     </div>
@@ -268,9 +345,16 @@ function Message({ message }: { message: ChatMessage }) {
       <motion.div
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-[85%] self-end rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white whitespace-pre-wrap"
+        className="flex max-w-[85%] flex-col items-end self-end"
       >
-        {message.content}
+        {/* Above the bubble, not inside it: the bubble is solid accent, and
+            bordered file chips read badly on it. */}
+        <AttachmentList attachments={message.attachments} />
+        {message.content && (
+          <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
+            {message.content}
+          </div>
+        )}
       </motion.div>
     );
   }

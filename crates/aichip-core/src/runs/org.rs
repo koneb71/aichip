@@ -496,6 +496,7 @@ impl Orchestrator {
                 .as_ref()
                 .and_then(|a| (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())),
             mcp_config_path,
+            extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
@@ -587,6 +588,7 @@ impl Orchestrator {
             allowed_tools: vec![],
             append_system_prompt: None,
             mcp_config_path: None,
+            extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::new(),
         };
