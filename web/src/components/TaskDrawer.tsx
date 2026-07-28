@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
+import { api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
+import { AttachmentList } from "./AttachmentBar";
 import { Markdown } from "./Markdown";
 
 export function TaskDrawer({
@@ -20,7 +21,16 @@ export function TaskDrawer({
   const [merging, setMerging] = useState(false);
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const accent = tierColor[task.modelTier];
+
+  useEffect(() => {
+    setAttachments([]);
+    api
+      .taskAttachments(task.id)
+      .then((r) => setAttachments(r.attachments))
+      .catch(() => {});
+  }, [task.id]);
 
   // Permission requests are held in memory by the broker while the engine
   // blocks on them, so a refresh has to re-fetch whatever is still open.
@@ -151,6 +161,15 @@ export function TaskDrawer({
           </>
         )}
       </div>
+
+      {attachments.length > 0 && (
+        <div className="border-b border-line px-5 py-3">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+            Attachments
+          </div>
+          <AttachmentList attachments={attachments} />
+        </div>
+      )}
 
       <AnimatePresence>
         {openPermissions.length > 0 && (

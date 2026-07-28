@@ -1,4 +1,4 @@
-use super::{internal, ApiError};
+use super::{attachments, internal, ApiError};
 use crate::AppState;
 use aichip_shared::{ModelTier, PermissionMode};
 use axum::extract::{Path, Query, State};
@@ -98,6 +98,10 @@ struct CreateTask {
     team_id: Option<Uuid>,
     /// "claude-code" (default) or "mock" for demos/E2E.
     engine: Option<String>,
+    /// Ids from POST /api/projects/{id}/attachments, bound to this task on
+    /// create. Defaulted so existing clients keep working.
+    #[serde(default)]
+    attachment_ids: Vec<Uuid>,
 }
 
 async fn create(
@@ -122,6 +126,16 @@ async fn create(
     .await
     .map_err(internal)?;
     let task_id: Uuid = row.get("id");
+
+    // Must happen before the run is enqueued: the orchestrator assembles the
+    // prompt from whatever is bound at the time it picks the run up.
+    attachments::claim(
+        &state.db,
+        &body.attachment_ids,
+        body.project_id,
+        attachments::Owner::Task(task_id),
+    )
+    .await?;
 
     let run_id = if body.start {
         let id = state

@@ -39,6 +39,14 @@ pub struct RunSpec {
     /// Path to a generated MCP config pointing at one of aichip's MCP
     /// endpoints (permission proxy for task runs, workspace tools for chat).
     pub mcp_config_path: Option<PathBuf>,
+    /// Directories outside `cwd` the run legitimately needs to read — today
+    /// only the per-attachment dirs under `~/.aichip/attachments`.
+    ///
+    /// Declaring them is belt-and-braces: current Claude Code versions let an
+    /// allowed `Read` reach any absolute path, so attachments resolve without
+    /// this. We still say so explicitly, because that default is the CLI's to
+    /// change and a version that tightened it would break attachments silently.
+    pub extra_read_dirs: Vec<PathBuf>,
     /// Route permission prompts through aichip's MCP approve tool. Task runs
     /// set true; chat/utility runs set false (they rely on an explicit
     /// allowed-tools list and headless auto-deny instead).

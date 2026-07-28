@@ -1,4 +1,4 @@
-use super::{internal, ApiError};
+use super::{attachments, internal, ApiError};
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -134,8 +134,18 @@ async fn messages(
     Path(chat_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT id, role, content, run_id, created_at FROM chat_messages
-         WHERE chat_id=$1 ORDER BY created_at ASC",
+        // One aggregate rather than a query per message: the panel polls this
+        // every 2.5s, so an N+1 here would be felt.
+        "SELECT m.id, m.role, m.content, m.run_id, m.created_at, att.items AS attachments
+         FROM chat_messages m
+         LEFT JOIN LATERAL (
+             SELECT coalesce(json_agg(json_build_object(
+                 'id', a.id, 'filename', a.filename, 'mime', a.mime,
+                 'kind', a.kind, 'size', a.size_bytes
+             ) ORDER BY a.created_at), '[]'::json) AS items
+             FROM attachments a WHERE a.message_id = m.id
+         ) att ON TRUE
+         WHERE m.chat_id=$1 ORDER BY m.created_at ASC",
     )
     .bind(chat_id)
     .fetch_all(&state.db.pool)
@@ -150,6 +160,7 @@ async fn messages(
                 "content": r.get::<String, _>("content"),
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
                 "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "attachments": r.get::<Value, _>("attachments"),
             })
         })
         .collect();
@@ -176,6 +187,9 @@ struct SendBody {
     content: String,
     /// "claude-code" (default) or "mock" for demos/E2E.
     engine: Option<String>,
+    /// Ids from POST /api/projects/{id}/attachments, bound to this message.
+    #[serde(default)]
+    attachment_ids: Vec<Uuid>,
 }
 
 async fn send(
@@ -183,7 +197,9 @@ async fn send(
     Path(chat_id): Path<Uuid>,
     Json(body): Json<SendBody>,
 ) -> Result<Json<Value>, ApiError> {
-    if body.content.trim().is_empty() {
+    // "Look at this screenshot" with no words is a legitimate turn, so only
+    // reject a message that is empty *and* carries nothing.
+    if body.content.trim().is_empty() && body.attachment_ids.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "message is empty".into()));
     }
     // Serialize turns: --resume forks sessions, so two concurrent turns
@@ -195,6 +211,15 @@ async fn send(
         ));
     }
 
+    // The claim needs the owning project, which only the chat row knows.
+    let project_id: Uuid = sqlx::query("SELECT project_id FROM chats WHERE id=$1")
+        .bind(chat_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such chat".to_string()))?
+        .get("project_id");
+
     let row = sqlx::query(
         "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
     )
@@ -205,6 +230,14 @@ async fn send(
     .map_err(internal)?;
     let message_id: Uuid = row.get("id");
 
+    attachments::claim(
+        &state.db,
+        &body.attachment_ids,
+        project_id,
+        attachments::Owner::Message(message_id),
+    )
+    .await?;
+
     // Name the chat after its opening line, and float it to the top of the
     // list. Only untitled chats are renamed, so a user's own title sticks.
     sqlx::query(
@@ -214,7 +247,7 @@ async fn send(
     )
     .bind(chat_id)
     .bind(UNTITLED)
-    .bind(derive_title(&body.content))
+    .bind(chat_title_for(&body.content, message_id, &state).await?)
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -226,6 +259,28 @@ async fn send(
         .map_err(internal)?;
 
     Ok(Json(json!({ "messageId": message_id, "runId": run_id })))
+}
+
+/// Title for an untitled chat. Normally the message's opening line, but an
+/// attachment-only turn has no text — fall back to what was attached, so those
+/// chats aren't all called "Chat".
+async fn chat_title_for(
+    content: &str,
+    message_id: Uuid,
+    state: &AppState,
+) -> Result<String, ApiError> {
+    let title = derive_title(content);
+    if title != UNTITLED {
+        return Ok(title);
+    }
+    let first: Option<(String,)> = sqlx::query_as(
+        "SELECT filename FROM attachments WHERE message_id=$1 ORDER BY created_at LIMIT 1",
+    )
+    .bind(message_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(first.map(|(f,)| derive_title(&f)).unwrap_or_else(|| UNTITLED.to_string()))
 }
 
 /// A chat title from its first message: the opening line, clipped to

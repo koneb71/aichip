@@ -47,6 +47,22 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Reclaim attachment bytes: uploads the user abandoned by closing a composer,
+/// and directories whose row was cascade-deleted with the task or chat.
+///
+/// Never fatal — a failure here costs disk space, not correctness, so it logs
+/// and keeps going rather than taking the server down.
+async fn sweep_attachments(db: aichip_core::db::Db) {
+    loop {
+        match aichip_core::runs::attachments::sweep_abandoned(&db).await {
+            Ok(n) if n > 0 => tracing::info!(removed = n, "swept abandoned attachments"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "attachment sweep failed"),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+    }
+}
+
 fn aichip_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -103,6 +119,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     }
     tokio::spawn(orchestrator.clone().run_loop());
     tokio::spawn(aichip_core::Scheduler::new(db.clone(), orchestrator.clone()).run_loop());
+    tokio::spawn(sweep_attachments(db.clone()));
 
     let state = aichip_server::AppState {
         db,

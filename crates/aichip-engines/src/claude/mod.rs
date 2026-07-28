@@ -6,6 +6,7 @@ pub mod stream_parser;
 use crate::{Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
 use aichip_shared::{AichipEvent, PermissionMode};
 use async_trait::async_trait;
+use std::ffi::OsString;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -14,6 +15,70 @@ use tokio::sync::mpsc;
 /// Env keys the adapter refuses to pass through — auth must only ever come
 /// from the user's own CLI login (compliance invariant #3).
 pub const FORBIDDEN_ENV_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_OAUTH"];
+
+/// Build the argv for a run, minus the binary itself.
+///
+/// Split out from `start` so the flag logic is testable without spawning
+/// anything — the conditionals here (empty allowed-tools, the three-way
+/// permission-prompt guard) are the parts that have historically been easy to
+/// get subtly wrong.
+fn claude_args(spec: &RunSpec) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "-p".into(),
+        spec.prompt.clone().into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+        "--model".into(),
+        spec.model_id.clone().into(),
+    ];
+
+    match spec.permission_mode {
+        PermissionMode::Reviewed => {}
+        PermissionMode::AutoEdit => {
+            args.push("--permission-mode".into());
+            args.push("acceptEdits".into());
+        }
+        PermissionMode::FullAuto => {
+            // The orchestrator only ever sets FullAuto for runs whose cwd
+            // is an aichip-managed worktree; enforced again there.
+            args.push("--dangerously-skip-permissions".into());
+        }
+    }
+    if let Some(session) = &spec.resume_session_id {
+        args.push("--resume".into());
+        args.push(session.clone().into());
+    }
+    // Empty means "omit the flag", which leaves the CLI on its default tool
+    // set. Passing an empty list would instead forbid every tool.
+    if !spec.allowed_tools.is_empty() {
+        args.push("--allowedTools".into());
+        args.push(spec.allowed_tools.join(",").into());
+    }
+    if let Some(sys) = &spec.append_system_prompt {
+        args.push("--append-system-prompt".into());
+        args.push(sys.clone().into());
+    }
+    if let Some(mcp) = &spec.mcp_config_path {
+        args.push("--mcp-config".into());
+        args.push(mcp.clone().into());
+    }
+    // One flag per directory: `--add-dir` is variadic, so a single flag
+    // carrying several values would swallow whatever argument follows.
+    // Verified against CLI 2.1.205 that repeating it accumulates.
+    for dir in &spec.extra_read_dirs {
+        args.push("--add-dir".into());
+        args.push(dir.clone().into());
+    }
+    if spec.permission_prompt_tool
+        && spec.mcp_config_path.is_some()
+        && spec.permission_mode != PermissionMode::FullAuto
+    {
+        args.push("--permission-prompt-tool".into());
+        args.push("mcp__aichip__approve".into());
+    }
+    args
+}
 
 pub struct ClaudeEngine {
     /// Binary name resolved from PATH. Always "claude" in production; tests
@@ -53,44 +118,8 @@ impl Engine for ClaudeEngine {
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
         let mut cmd = Command::new(&self.binary);
-        cmd.current_dir(&spec.cwd)
-            .arg("-p")
-            .arg(&spec.prompt)
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose")
-            .arg("--model")
-            .arg(&spec.model_id);
+        cmd.current_dir(&spec.cwd).args(claude_args(&spec));
 
-        match spec.permission_mode {
-            PermissionMode::Reviewed => {}
-            PermissionMode::AutoEdit => {
-                cmd.arg("--permission-mode").arg("acceptEdits");
-            }
-            PermissionMode::FullAuto => {
-                // The orchestrator only ever sets FullAuto for runs whose cwd
-                // is an aichip-managed worktree; enforced again there.
-                cmd.arg("--dangerously-skip-permissions");
-            }
-        }
-        if let Some(session) = &spec.resume_session_id {
-            cmd.arg("--resume").arg(session);
-        }
-        if !spec.allowed_tools.is_empty() {
-            cmd.arg("--allowedTools").arg(spec.allowed_tools.join(","));
-        }
-        if let Some(sys) = &spec.append_system_prompt {
-            cmd.arg("--append-system-prompt").arg(sys);
-        }
-        if let Some(mcp) = &spec.mcp_config_path {
-            cmd.arg("--mcp-config").arg(mcp);
-        }
-        if spec.permission_prompt_tool
-            && spec.mcp_config_path.is_some()
-            && spec.permission_mode != PermissionMode::FullAuto
-        {
-            cmd.arg("--permission-prompt-tool").arg("mcp__aichip__approve");
-        }
         for (k, v) in &spec.extra_env {
             if FORBIDDEN_ENV_PREFIXES.iter().any(|p| k.starts_with(p)) {
                 anyhow::bail!("refusing to set auth-related env var {k}");
@@ -189,4 +218,96 @@ unsafe fn libc_kill(pid: i32, sig: i32) {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     kill(pid, sig);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claude_args;
+    use crate::RunSpec;
+    use aichip_shared::{ModelTier, PermissionMode};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn spec() -> RunSpec {
+        RunSpec {
+            cwd: std::env::temp_dir(),
+            prompt: "do the thing".into(),
+            model_tier: ModelTier::Medium,
+            model_id: "claude-opus-5".into(),
+            resume_session_id: None,
+            permission_mode: PermissionMode::Reviewed,
+            allowed_tools: vec![],
+            append_system_prompt: None,
+            mcp_config_path: None,
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::new(),
+        }
+    }
+
+    /// Flatten to lossy strings; assertions read better than OsStr comparisons.
+    fn args_of(spec: &RunSpec) -> Vec<String> {
+        claude_args(spec)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn extra_read_dirs_become_one_add_dir_flag_each() {
+        let mut s = spec();
+        s.extra_read_dirs = vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")];
+        let args = args_of(&s);
+
+        assert_eq!(args.iter().filter(|a| *a == "--add-dir").count(), 2);
+        // Each flag must be immediately followed by its own directory —
+        // a single variadic flag would swallow the next argument.
+        let first = args.iter().position(|a| a == "--add-dir").unwrap();
+        assert_eq!(args[first + 1], "/tmp/a");
+        assert_eq!(args[first + 3], "/tmp/b");
+    }
+
+    #[test]
+    fn no_add_dir_flag_when_there_are_no_extra_dirs() {
+        assert!(!args_of(&spec()).iter().any(|a| a == "--add-dir"));
+    }
+
+    #[test]
+    fn empty_allowed_tools_omits_the_flag_entirely() {
+        // Passing an empty --allowedTools would forbid every tool rather than
+        // fall back to the CLI default set.
+        assert!(!args_of(&spec()).iter().any(|a| a == "--allowedTools"));
+
+        let mut s = spec();
+        s.allowed_tools = vec!["Read".into(), "Grep".into()];
+        let args = args_of(&s);
+        let i = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[i + 1], "Read,Grep");
+    }
+
+    #[test]
+    fn permission_prompt_tool_requires_an_mcp_config_and_not_full_auto() {
+        let mut s = spec();
+        s.permission_prompt_tool = true;
+        // No MCP config ⇒ no broker to talk to, so the flag is pointless.
+        assert!(!args_of(&s).iter().any(|a| a == "--permission-prompt-tool"));
+
+        s.mcp_config_path = Some(PathBuf::from("/tmp/mcp.json"));
+        assert!(args_of(&s).iter().any(|a| a == "--permission-prompt-tool"));
+
+        // FullAuto deliberately bypasses the broker entirely.
+        s.permission_mode = PermissionMode::FullAuto;
+        let args = args_of(&s);
+        assert!(!args.iter().any(|a| a == "--permission-prompt-tool"));
+        assert!(args.iter().any(|a| a == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn prompt_is_passed_as_a_single_argv_entry() {
+        let mut s = spec();
+        s.prompt = "line one\nline two --not-a-flag".into();
+        let args = args_of(&s);
+        let i = args.iter().position(|a| a == "-p").unwrap();
+        assert_eq!(args[i + 1], "line one\nline two --not-a-flag");
+    }
 }

@@ -28,6 +28,7 @@ pub async fn utility_run(
         allowed_tools: vec![], // no tools: pure generation
         append_system_prompt: None,
         mcp_config_path: None,
+        extra_read_dirs: vec![],
         permission_prompt_tool: false,
         extra_env: HashMap::new(),
     };

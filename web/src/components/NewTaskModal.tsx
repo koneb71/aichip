@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Agent, api, Project, Team, Tier, tierColor, tierModel, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
+import { useAttachments } from "../lib/useAttachments";
+import { AttachmentBar } from "./AttachmentBar";
+import { useMentionPicker } from "./MentionPicker";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 
@@ -22,6 +25,23 @@ export function NewTaskModal({
   const [teams, setTeams] = useState<Team[]>([]);
   const [assignee, setAssignee] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const att = useAttachments(project.id);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const [caret, setCaret] = useState(0);
+  const mention = useMentionPicker({
+    projectId: project.id,
+    text: prompt,
+    caret,
+    onApply: (text, nextCaret) => {
+      setPrompt(text);
+      setCaret(nextCaret);
+      requestAnimationFrame(() => {
+        promptRef.current?.setSelectionRange(nextCaret, nextCaret);
+        promptRef.current?.focus();
+      });
+    },
+  });
 
   useEffect(() => {
     if (!active) return;
@@ -35,8 +55,11 @@ export function NewTaskModal({
   const assignedTeam = kind === "team" ? teams.find((t) => t.id === id) : undefined;
 
   const submit = async (start: boolean) => {
-    if (!title.trim() || !prompt.trim() || busy) return;
+    // An attached spec with no prose is a reasonable task.
+    if (!title.trim() || busy || att.busy) return;
+    if (!prompt.trim() && att.ids.length === 0) return;
     setBusy(true);
+    setError(null);
     try {
       await api.createTask({
         project_id: project.id,
@@ -46,8 +69,13 @@ export function NewTaskModal({
         agent_id: kind === "agent" ? id : null,
         team_id: kind === "team" ? id : null,
         start,
+        attachment_ids: att.ids,
       });
+      att.clear();
       onCreated();
+    } catch (e) {
+      // Without this the modal swallowed every failure silently.
+      setError(String(e));
     } finally {
       setBusy(false);
     }
@@ -67,7 +95,11 @@ export function NewTaskModal({
         exit={{ y: 24, scale: 0.97 }}
         transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-xl rounded-2xl border border-line bg-panel p-6"
+        // Drop anywhere in the modal, not just on the prompt box.
+        {...att.dropProps}
+        className={`card-shadow w-full max-w-xl rounded-2xl border bg-panel p-6 ${
+          att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
+        }`}
       >
         <div className="mb-4 text-lg font-semibold">New task · {project.name}</div>
         <input
@@ -77,13 +109,41 @@ export function NewTaskModal({
           placeholder="Task title"
           className="mb-3 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
         />
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe what the agent should do…"
-          rows={5}
-          className="mb-4 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-        />
+        <div className="relative mb-2">
+          {mention.node}
+          <textarea
+            ref={promptRef}
+            value={prompt}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              setCaret(e.target.selectionStart ?? 0);
+            }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+            onPaste={att.onPaste}
+            onKeyDown={(e) => {
+              // Picker first, or Enter picks nothing and just adds a newline.
+              if (mention.handleKey(e)) e.preventDefault();
+            }}
+            placeholder="Describe what the agent should do… (@ to reference a file)"
+            rows={5}
+            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+        </div>
+        <div className="mb-4">
+          <AttachmentBar
+            items={att.items}
+            onAdd={att.add}
+            onRemove={att.remove}
+            full={att.full}
+            disabled={busy}
+          />
+        </div>
+
+        {error && (
+          <div className="mb-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+            {error}
+          </div>
+        )}
 
         <div className="mb-4 grid grid-cols-2 gap-4">
           <div>
