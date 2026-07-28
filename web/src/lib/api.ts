@@ -133,6 +133,53 @@ export interface ChatMessage {
   ts: string;
 }
 
+export interface ChatSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  updatedAt: string;
+}
+
+export interface FileEntry {
+  name: string;
+  /** Project-relative, forward-slashed. */
+  path: string;
+  kind: "dir" | "file";
+  size: number | null;
+}
+
+export interface FileListing {
+  path: string;
+  /** null at the project root. */
+  parent: string | null;
+  entries: FileEntry[];
+}
+
+export interface FileContent {
+  path: string;
+  size: number;
+  tooLarge: boolean;
+  binary: boolean;
+  /** null when the file is binary or too large to send. */
+  content: string | null;
+}
+
+export interface SearchHit {
+  id: string;
+  label: string;
+  sublabel: string;
+  /** Set on tasks and workflows, so the client knows where to navigate. */
+  projectId?: string;
+}
+
+export interface SearchResults {
+  projects: SearchHit[];
+  tasks: SearchHit[];
+  agents: SearchHit[];
+  teams: SearchHit[];
+  workflows: SearchHit[];
+}
+
 export interface WorkflowDef {
   id: string;
   projectId: string;
@@ -335,9 +382,38 @@ export const api = {
   orgRun: (runId: string) =>
     fetch(`/api/org-runs/${runId}`).then((r) => json<OrgRunDetail>(r)),
 
+  // project files (read-only viewer)
+  files: (projectId: string, path?: string) =>
+    fetch(
+      `/api/projects/${projectId}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ).then((r) => json<FileListing>(r)),
+  file: (projectId: string, path: string) =>
+    fetch(`/api/projects/${projectId}/file?path=${encodeURIComponent(path)}`).then((r) =>
+      json<FileContent>(r),
+    ),
+
+  // global search
+  search: (workspaceId: string, q: string) =>
+    fetch(`/api/search?workspace_id=${workspaceId}&q=${encodeURIComponent(q)}`).then((r) =>
+      json<SearchResults>(r),
+    ),
+
   // chat
   openChat: (projectId: string) =>
     post(`/api/projects/${projectId}/chats`).then((r) => json<{ id: string }>(r)),
+  chats: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/chats`).then((r) =>
+      json<{ chats: ChatSummary[] }>(r),
+    ),
+  newChat: (projectId: string) =>
+    post(`/api/projects/${projectId}/chats/new`).then((r) => json<{ id: string }>(r)),
+  renameChat: (chatId: string, title: string) =>
+    patch(`/api/chats/${chatId}`, { title }).then(json),
+  // Throws on 409 when a turn is still running, so the UI can surface why.
+  deleteChat: (chatId: string) =>
+    fetch(`/api/chats/${chatId}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
   chatMessages: (chatId: string) =>
     fetch(`/api/chats/${chatId}/messages`).then((r) =>
       json<{ messages: ChatMessage[]; activeRunId: string | null }>(r),

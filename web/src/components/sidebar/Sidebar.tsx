@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { api, Project } from "../../lib/api";
 import { useWorkspace } from "../../lib/workspace";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { SearchPalette } from "./SearchPalette";
 
 const NAV = [
   { to: "/", label: "Home", icon: "⌂", end: true },
@@ -14,7 +15,6 @@ const NAV = [
 export function Sidebar() {
   const { active } = useWorkspace();
   const [recent, setRecent] = useState<Project[]>([]);
-  const [query, setQuery] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -24,10 +24,6 @@ export function Sidebar() {
       .then(({ projects }) => setRecent(projects.slice(0, 5)))
       .catch(() => setRecent([]));
   }, [active]);
-
-  const filteredRecent = query.trim()
-    ? recent.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()))
-    : recent;
 
   return (
     <aside className="flex min-h-0 flex-col gap-1 border-r border-line bg-panel px-3 py-4">
@@ -43,12 +39,7 @@ export function Sidebar() {
         <span className="text-accent">+</span> New
       </button>
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search…"
-        className="mt-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-accent"
-      />
+      <SearchPalette />
 
       <nav className="mt-3 flex flex-col gap-0.5">
         {NAV.map((item) => (
@@ -70,13 +61,13 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {filteredRecent.length > 0 && (
+      {recent.length > 0 && (
         <>
           <div className="mt-5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
             Recent
           </div>
           <div className="mt-1 flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-            {filteredRecent.map((p) => (
+            {recent.map((p) => (
               <NavLink
                 key={p.id}
                 to={`/projects/${p.id}`}

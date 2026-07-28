@@ -1,8 +1,10 @@
 pub mod agents;
 pub mod chat;
+pub mod files;
 pub mod fs;
 pub mod orgs;
 pub mod projects;
+pub mod search;
 pub mod tasks;
 pub mod teams;
 pub mod workflows;
@@ -31,6 +33,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(orgs::router())
         .merge(workflows::router())
         .merge(fs::router())
+        .merge(files::router())
+        .merge(search::router())
         .merge(chat::router())
 }
 
