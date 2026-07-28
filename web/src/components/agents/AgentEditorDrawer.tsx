@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Tier, tierColor, tierModel } from "../../lib/api";
+import { Agent, AgentMemory, api, Tier, tierColor, tierModel } from "../../lib/api";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
@@ -149,6 +149,7 @@ export function AgentEditorDrawer({
         {error && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
         )}
+        {agent && <MemorySection agentId={agent.id} />}
       </div>
 
       <div className="flex items-center justify-between border-t border-line p-4">
@@ -169,6 +170,55 @@ export function AgentEditorDrawer({
         </motion.button>
       </div>
     </motion.aside>
+  );
+}
+
+// What the agent remembers — written automatically as it completes tasks and
+// answers mentions, injected into its next runs. The user can prune it.
+function MemorySection({ agentId }: { agentId: string }) {
+  const [memories, setMemories] = useState<AgentMemory[]>([]);
+
+  const refresh = useCallback(
+    () => api.agentMemories(agentId).then((r) => setMemories(r.memories)).catch(() => {}),
+    [agentId],
+  );
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return (
+    <Field label={`Memory (${memories.length})`}>
+      {memories.length === 0 ? (
+        <div className="text-xs text-ink-dim">
+          Nothing yet — memories appear as this agent completes tasks and
+          answers mentions, and are fed into its next runs.
+        </div>
+      ) : (
+        <div className="flex max-h-56 flex-col gap-1.5 overflow-y-auto">
+          {memories.map((m) => (
+            <div
+              key={m.id}
+              className="group flex items-start gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-xs"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] text-ink-dim">
+                  {new Date(m.ts).toLocaleDateString()} · {m.projectName ?? "all projects"} ·{" "}
+                  {m.kind.replace("_", " ")}
+                </div>
+                <div className="mt-0.5 break-words">{m.content}</div>
+              </div>
+              <button
+                onClick={() => api.forgetMemory(m.id).then(refresh)}
+                title="Forget"
+                className="shrink-0 text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Field>
   );
 }
 

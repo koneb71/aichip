@@ -3,6 +3,7 @@
 
 use super::{internal, ApiError};
 use crate::AppState;
+use aichip_core::worktrees::manager::{ensure_repo, Vcs};
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -94,16 +95,17 @@ async fn git_init(Json(body): Json<GitInitBody>) -> Result<Json<Value>, ApiError
     if path.join(".git").exists() {
         return Err((StatusCode::BAD_REQUEST, "already a git repository".into()));
     }
-    let out = tokio::process::Command::new("git")
-        .current_dir(&path)
-        .args(["init", "-b", "main"])
-        .output()
-        .await
-        .map_err(internal)?;
-    if !out.status.success() {
-        return Err(internal(String::from_utf8_lossy(&out.stderr)));
+    // `init` alone leaves an unborn HEAD, and `git worktree add … main` then
+    // fails with "invalid reference: main" — so the first task run on a freshly
+    // initialized project used to die. The first commit must also include any
+    // existing files, or the worktree would be handed none of them.
+    match ensure_repo(&path, "main").await {
+        Vcs::Git => Ok(Json(json!({
+            "initialized": true,
+            "path": path.to_string_lossy(),
+        }))),
+        Vcs::None(reason) => Err((StatusCode::BAD_REQUEST, reason)),
     }
-    Ok(Json(json!({ "initialized": true, "path": path.to_string_lossy() })))
 }
 
 #[cfg(test)]

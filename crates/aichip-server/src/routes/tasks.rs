@@ -13,6 +13,10 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks", get(list).post(create))
+        .route("/tasks/{id}", axum::routing::patch(move_task).delete(delete_task))
+        .route("/tasks/{id}/retry", post(retry))
+        .route("/tasks/{id}/comments", get(comments).post(post_comment))
+        .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
@@ -33,7 +37,7 @@ async fn list(
     Query(filter): Query<TaskFilter>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch,
+        "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch, t.position,
                 t.project_id, t.agent_id, a.name AS agent_name, a.color AS agent_color,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
@@ -47,7 +51,7 @@ async fn list(
          ) r ON TRUE
          WHERE ($1::uuid IS NULL OR p.workspace_id = $1)
            AND ($2::uuid IS NULL OR t.project_id = $2)
-         ORDER BY t.created_at DESC",
+         ORDER BY t.position, t.created_at",
     )
     .bind(filter.workspace_id)
     .bind(filter.project_id)
@@ -62,6 +66,7 @@ async fn list(
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<String, _>("model_tier"),
                 "boardColumn": r.get::<String, _>("board_column"),
+                "position": r.get::<f64, _>("position"),
                 "branch": r.get::<Option<String>, _>("branch"),
                 "projectId": r.get::<Uuid, _>("project_id"),
                 "agentId": r.get::<Option<Uuid>, _>("agent_id"),
@@ -198,13 +203,23 @@ async fn merge(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
-        "SELECT t.title, t.worktree_path, t.branch, p.path AS project_path, p.default_branch
+        "SELECT t.title, t.worktree_path, t.branch, p.path AS project_path, p.default_branch, p.vcs
          FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id=$1",
     )
     .bind(id)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
+    // Say which of the two situations this is: a project with no version
+    // control can never have a worktree, and "not yet" would be misleading.
+    if row.get::<String, _>("vcs") != "git" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "this project has no version control, so its tasks edit the folder \
+             directly — there is nothing to merge"
+                .into(),
+        ));
+    }
     let (Some(worktree), Some(branch)): (Option<String>, Option<String>) =
         (row.get("worktree_path"), row.get("branch"))
     else {
@@ -295,4 +310,374 @@ async fn resolve_permission(
     } else {
         Err((StatusCode::NOT_FOUND, "no such pending permission".into()))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Kanban: card movement, the comment thread, attaching files after creation.
+
+#[derive(Deserialize)]
+struct MoveTask {
+    board_column: Option<String>,
+    position: Option<f64>,
+}
+
+/// Drag a card. Dropping a backlog card into "running" is the drag-native way
+/// to start it; every other move is bookkeeping. A card whose run is still
+/// active refuses to leave "running" — cancel the run first.
+async fn move_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MoveTask>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(
+        "SELECT t.board_column,
+                (SELECT status FROM runs WHERE task_id = t.id
+                 ORDER BY created_at DESC LIMIT 1) AS run_status
+         FROM tasks t WHERE t.id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+    let current: String = row.get("board_column");
+    let run_active = matches!(
+        row.get::<Option<String>, _>("run_status").as_deref(),
+        Some("queued" | "starting" | "running" | "waiting_permission" | "rate_limited")
+    );
+
+    if let Some(column) = &body.board_column {
+        if !["backlog", "running", "review", "done"].contains(&column.as_str()) {
+            return Err((StatusCode::BAD_REQUEST, format!("unknown column {column}")));
+        }
+        if run_active && column != "running" {
+            return Err((
+                StatusCode::CONFLICT,
+                "the agent is still working on this card — cancel the run first".into(),
+            ));
+        }
+    }
+
+    sqlx::query(
+        "UPDATE tasks SET board_column = coalesce($2, board_column),
+                          position = coalesce($3, position)
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&body.board_column)
+    .bind(body.position)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // Dropping into "running" from backlog means "go": start a run unless one
+    // is already active or the task already did its work.
+    let mut run_id: Option<Uuid> = None;
+    if body.board_column.as_deref() == Some("running") && current == "backlog" && !run_active {
+        run_id = Some(state.orchestrator.enqueue_task(id).await.map_err(internal)?);
+    }
+    Ok(Json(json!({ "moved": true, "runId": run_id })))
+}
+
+/// Which agents does a comment speak to? An agent is mentioned when
+/// `@its-name` appears, case-insensitively; names may contain spaces, so this
+/// is a per-agent substring check rather than token parsing.
+fn mentioned_agents(content: &str, agents: &[(Uuid, String)]) -> Vec<Uuid> {
+    let lower = content.to_lowercase();
+    agents
+        .iter()
+        .filter(|(_, name)| {
+            !name.is_empty() && lower.contains(&format!("@{}", name.to_lowercase()))
+        })
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+async fn comments(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT c.id, c.author, c.agent_id, c.content, c.run_id, c.created_at,
+                a.name AS agent_name, a.color AS agent_color,
+                r.status AS run_status
+         FROM task_comments c
+         LEFT JOIN agents a ON a.id = c.agent_id
+         LEFT JOIN runs r ON r.id = c.run_id
+         WHERE c.task_id=$1 ORDER BY c.created_at",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    // Replies still being written show as typing indicators, not comments.
+    let pending: i64 = sqlx::query(
+        "SELECT count(*) AS n FROM runs
+         WHERE comment_id IN (SELECT id FROM task_comments WHERE task_id=$1)
+           AND status NOT IN ('completed','failed','canceled')",
+    )
+    .bind(task_id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .get("n");
+
+    Ok(Json(json!({
+        "comments": rows.iter().map(|r| json!({
+            "id": r.get::<Uuid, _>("id"),
+            "author": r.get::<String, _>("author"),
+            "agentId": r.get::<Option<Uuid>, _>("agent_id"),
+            "agentName": r.get::<Option<String>, _>("agent_name"),
+            "agentColor": r.get::<Option<String>, _>("agent_color"),
+            "content": r.get::<String, _>("content"),
+            "runId": r.get::<Option<Uuid>, _>("run_id"),
+            "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+        })).collect::<Vec<_>>(),
+        "pendingReplies": pending,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PostComment {
+    content: String,
+    /// "claude-code" (default) or "mock" for demos/E2E.
+    engine: Option<String>,
+}
+
+async fn post_comment(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Json(body): Json<PostComment>,
+) -> Result<Json<Value>, ApiError> {
+    let content = body.content.trim();
+    if content.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "comment is empty".into()));
+    }
+    // The task's workspace bounds who can be mentioned.
+    let agents: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT a.id, a.name FROM agents a
+         JOIN projects p ON p.workspace_id = a.workspace_id
+         JOIN tasks t ON t.project_id = p.id
+         WHERE t.id = $1",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if agents.is_empty() {
+        // Distinguish "no such task" from "no agents to mention".
+        let exists = sqlx::query("SELECT 1 AS ok FROM tasks WHERE id=$1")
+            .bind(task_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+        if exists.is_none() {
+            return Err((StatusCode::NOT_FOUND, "no such task".into()));
+        }
+    }
+
+    let comment_id: Uuid = sqlx::query(
+        "INSERT INTO task_comments (task_id, author, content) VALUES ($1,'user',$2) RETURNING id",
+    )
+    .bind(task_id)
+    .bind(content)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .get("id");
+
+    // Every mentioned agent replies, capped so one comment can't fan out a
+    // whole roster of runs.
+    let engine = body.engine.as_deref().unwrap_or("claude-code");
+    let mut run_ids: Vec<Uuid> = vec![];
+    for agent_id in mentioned_agents(content, &agents).into_iter().take(3) {
+        run_ids.push(
+            state
+                .orchestrator
+                .enqueue_comment_reply(comment_id, agent_id, engine)
+                .await
+                .map_err(internal)?,
+        );
+    }
+    Ok(Json(json!({ "id": comment_id, "runIds": run_ids })))
+}
+
+#[derive(Deserialize)]
+struct AttachToTask {
+    attachment_ids: Vec<Uuid>,
+}
+
+/// Bind already-uploaded files to an existing card — the drawer's attach
+/// button. The next run of the task will see them.
+async fn attach_to_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Json(body): Json<AttachToTask>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query("SELECT project_id FROM tasks WHERE id=$1")
+        .bind(task_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+    attachments::claim(
+        &state.db,
+        &body.attachment_ids,
+        row.get("project_id"),
+        attachments::Owner::Task(task_id),
+    )
+    .await?;
+    Ok(Json(json!({ "attached": body.attachment_ids.len() })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mentioned_agents;
+    use uuid::Uuid;
+
+    #[test]
+    fn mentions_match_case_insensitively_and_allow_spaces_in_names() {
+        let rex = Uuid::new_v4();
+        let ada = Uuid::new_v4();
+        let agents = vec![
+            (rex, "Rex".to_string()),
+            (ada, "Ada Lovelace".to_string()),
+        ];
+        assert_eq!(mentioned_agents("hey @rex, look at this", &agents), vec![rex]);
+        assert_eq!(mentioned_agents("@Ada Lovelace what do you think?", &agents), vec![ada]);
+        assert_eq!(
+            mentioned_agents("@rex and @ada lovelace both", &agents),
+            vec![rex, ada]
+        );
+        assert!(mentioned_agents("mail me at rex@example.com", &agents).is_empty());
+        assert!(mentioned_agents("no mentions here", &agents).is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deleting and retrying a card.
+
+/// True when the task's latest run is still live.
+async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
+    let row = sqlx::query(
+        "SELECT status FROM runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(matches!(
+        row.map(|r| r.get::<String, _>("status")).as_deref(),
+        Some("queued" | "starting" | "running" | "waiting_permission" | "rate_limited")
+    ))
+}
+
+/// Drop a task's worktree and its branch, and forget them on the row.
+///
+/// This is the only production caller of `WorktreeManager::remove` — without
+/// it, every task ever run leaves a worktree and an `aichip/*` branch behind
+/// forever.
+async fn drop_worktree(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
+    let row = sqlx::query(
+        "SELECT t.worktree_path, t.branch, p.path AS project_path
+         FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id=$1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+
+    if let (Some(path), Some(branch)) = (
+        row.get::<Option<String>, _>("worktree_path"),
+        row.get::<Option<String>, _>("branch"),
+    ) {
+        let wt = aichip_core::worktrees::manager::Worktree { path: path.into(), branch };
+        // Best effort: a worktree the user already deleted by hand must not
+        // block deleting the card.
+        if let Err(e) = state
+            .orchestrator
+            .worktrees
+            .remove(std::path::Path::new(&row.get::<String, _>("project_path")), &wt)
+            .await
+        {
+            tracing::warn!(%task_id, error = %e, "could not remove worktree");
+        }
+        sqlx::query("UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE id=$1")
+            .bind(task_id)
+            .execute(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    }
+    Ok(())
+}
+
+/// Delete a card: its comments, runs, and attachment rows go with it (FK
+/// cascade), its worktree and branch are removed, and the attachment bytes are
+/// reclaimed by the sweeper. The agent's memory of the work survives —
+/// `agent_memories.task_id` is SET NULL, because what an agent learned
+/// shouldn't vanish when a card is tidied away.
+async fn delete_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    if run_is_active(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "the agent is still working on this card — cancel the run first".into(),
+        ));
+    }
+    drop_worktree(&state, id).await?;
+    let done = sqlx::query("DELETE FROM tasks WHERE id=$1")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    if done.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "no such task".into()));
+    }
+    Ok(Json(json!({ "deleted": true })))
+}
+
+#[derive(Deserialize)]
+struct Retry {
+    /// Start from a clean checkout (default). False continues in the existing
+    /// worktree, keeping whatever the previous attempt left behind.
+    #[serde(default = "yes")]
+    fresh: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Run a card again.
+///
+/// A fresh retry throws away the previous attempt's worktree and branch, so
+/// the agent starts from the base branch rather than silently inheriting its
+/// own half-finished work. That discards an unmerged diff, which is the point
+/// of retrying — but it is destructive, so the UI confirms it for cards
+/// sitting in review.
+async fn retry(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<Retry>>,
+) -> Result<Json<Value>, ApiError> {
+    if run_is_active(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card is already running — cancel it before retrying".into(),
+        ));
+    }
+    let fresh = body.map(|Json(b)| b.fresh).unwrap_or(true);
+    if fresh {
+        drop_worktree(&state, id).await?;
+    }
+    let run_id = state.orchestrator.enqueue_task(id).await.map_err(internal)?;
+    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "runId": run_id, "fresh": fresh })))
 }

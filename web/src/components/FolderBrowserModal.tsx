@@ -7,11 +7,15 @@ export function FolderBrowserModal({
   onPick,
 }: {
   onClose: () => void;
-  onPick: (path: string) => Promise<void>;
+  /** Resolves with how the project ended up being version controlled. */
+  onPick: (path: string) => Promise<{ vcs: string; vcsNote: string | null }>;
 }) {
   const [listing, setListing] = useState<FsListing | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when a project was added but couldn't get a repository — worth a
+  // beat of the user's attention rather than a silent close.
+  const [noVcs, setNoVcs] = useState<string | null>(null);
 
   const load = (path?: string) =>
     api
@@ -23,14 +27,17 @@ export function FolderBrowserModal({
     load();
   }, []);
 
-  const useFolder = async (initFirst: boolean) => {
+  // No separate "initialize git" step: adding the project does it server-side
+  // when the folder needs it, because a repository is what buys the isolated
+  // worktree and the reviewable diff.
+  const useFolder = async () => {
     if (!listing || busy) return;
     setBusy(true);
     setError(null);
     try {
-      if (initFirst) await api.gitInit(listing.path);
-      await onPick(listing.path);
-      onClose();
+      const result = await onPick(listing.path);
+      if (result.vcs === "git") onClose();
+      else setNoVcs(result.vcsNote ?? "This folder has no version control.");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -111,25 +118,40 @@ export function FolderBrowserModal({
           </div>
         )}
 
+        {noVcs && (
+          <div className="mx-4 mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <div className="font-medium">Added without version control</div>
+            <div className="mt-0.5">{noVcs}</div>
+            <div className="mt-1">
+              Tasks here edit the folder directly — no isolated worktree, no diff to
+              review, and no undo.
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between border-t border-line p-4">
-          <div className="min-w-0 truncate text-xs text-ink-dim">{listing?.path}</div>
-          {listing?.isGitRepo ? (
+          <div className="min-w-0 flex-1 truncate text-xs text-ink-dim">
+            {listing?.path}
+            {listing && !listing.isGitRepo && !noVcs && (
+              <span className="ml-1 opacity-80">· git will be initialized here</span>
+            )}
+          </div>
+          {noVcs ? (
             <motion.button
               whileTap={{ scale: 0.96 }}
-              onClick={() => useFolder(false)}
-              disabled={busy}
+              onClick={onClose}
               className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
             >
-              {busy ? "Adding…" : "Use this folder"}
+              Got it
             </motion.button>
           ) : (
             <motion.button
               whileTap={{ scale: 0.96 }}
-              onClick={() => useFolder(true)}
+              onClick={useFolder}
               disabled={busy || !listing}
-              className="rounded-lg border border-accent px-4 py-1.5 text-sm font-medium text-accent"
+              className="shrink-0 rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
-              {busy ? "Working…" : "Initialize git & use"}
+              {busy ? "Adding…" : "Use this folder"}
             </motion.button>
           )}
         </div>

@@ -42,7 +42,16 @@ export default function ProjectsPage() {
               <div className="text-sm font-semibold">{p.name}</div>
               <div className="mt-1 truncate text-xs text-ink-dim">{p.path}</div>
               <div className="mt-3 text-[11px] text-ink-dim">
-                base: {p.defaultBranch}
+                {p.vcs === "git" ? (
+                  <>base: {p.defaultBranch}</>
+                ) : (
+                  <span
+                    title={p.vcsNote ?? undefined}
+                    className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
+                  >
+                    no version control — edits in place
+                  </span>
+                )}
               </div>
             </motion.div>
           </Link>
@@ -59,8 +68,9 @@ export default function ProjectsPage() {
           <FolderBrowserModal
             onClose={() => setParams({})}
             onPick={async (path) => {
-              await api.addProject(active.id, path);
+              const added = await api.addProject(active.id, path);
               refresh();
+              return { vcs: added.vcs, vcsNote: added.vcsNote };
             }}
           />
         )}

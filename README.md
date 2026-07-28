@@ -43,6 +43,45 @@ cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4
 The first run downloads and initializes a private Postgres under `~/.aichip/pgdata`,
 so there is nothing to install or configure.
 
+## The board
+
+The task board is a real kanban: drag cards between columns and reorder them
+within one. Dropping a backlog card into **In Progress** starts its agent —
+drag is the verb for "go". A card whose agent is still working refuses to
+leave the column until you cancel the run.
+
+Every card has a comment thread. Type `@` to mention an agent by name and it
+replies in the thread — after reading the repository, so its answer is grounded
+in the code rather than in the question. Mentioned agents can't edit anything
+from a comment; they answer, and real changes still go through tasks. Files can
+be attached to a card at creation or later from its drawer; the next run sees
+them.
+
+Agents keep **memories**: when one finishes a task or answers a mention, a
+compact note of what happened is stored and fed into its next runs, so an agent
+you work with knows what it has been doing. Memories are visible (and prunable)
+in the agent's editor drawer.
+
+## Adding a folder
+
+Point aichip at any folder — it does not need to be a git repository. If it
+isn't one, aichip runs `git init` and makes a first commit of whatever is
+already there when you add it.
+
+That isn't ceremony. Coding tasks run in an isolated worktree so an agent never
+touches your working copy, and that worktree is also what produces the diff you
+review before anything is merged back. A repository is the price of that
+safety, so aichip creates one rather than asking you to.
+
+A folder occasionally can't have its own repository — most often because it sits
+inside another one, where nesting a second repo would confuse every later git
+command. Those projects still work, but their tasks **edit the folder directly**:
+no worktree, no diff, no review step, and no undo. They're marked
+*no version control — edits in place* in the UI, and their cards go straight to
+done because there is nothing to review. Full-auto permissions stay refused for
+them regardless of project settings, since the worktree that made full-auto safe
+isn't there.
+
 ## Attachments and file references
 
 Drag an image, PDF, or text file onto the chat composer or the new-task form —
