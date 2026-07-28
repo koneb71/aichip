@@ -8,7 +8,16 @@ import { NewTaskModal } from "../components/NewTaskModal";
 import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
 import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
+import { FilesPanel } from "../components/files/FilesPanel";
 import { OrgRunView } from "../components/orgs/OrgRunView";
+
+const TABS = [
+  { key: "board", label: "Tasks Board" },
+  { key: "workflows", label: "Workflows" },
+  { key: "files", label: "Files" },
+] as const;
+
+type Tab = (typeof TABS)[number]["key"];
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -17,7 +26,7 @@ export default function ProjectPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState<Task | null>(null);
-  const [tab, setTab] = useState<"board" | "workflows">("board");
+  const [tab, setTab] = useState<Tab>("board");
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -50,15 +59,15 @@ export default function ProjectPage() {
         <header className="flex items-center gap-3 border-b border-line bg-panel px-6 py-3">
           <div className="text-base font-semibold">{project?.name ?? "Project"}</div>
           <div className="flex gap-1 rounded-lg bg-panel-2 p-0.5">
-            {(["board", "workflows"] as const).map((t) => (
+            {TABS.map((t) => (
               <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
-                  tab === t ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`rounded-md px-3 py-1 text-xs transition-colors ${
+                  tab === t.key ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
                 }`}
               >
-                {t === "board" ? "Tasks Board" : "Workflows"}
+                {t.label}
               </button>
             ))}
           </div>
@@ -73,11 +82,9 @@ export default function ProjectPage() {
         </header>
 
         <div className="min-h-0 flex-1">
-          {tab === "board" ? (
-            <Board tasks={tasks} onSelect={setSelected} />
-          ) : (
-            <WorkflowsPanel projectId={projectId} />
-          )}
+          {tab === "board" && <Board tasks={tasks} onSelect={setSelected} />}
+          {tab === "workflows" && <WorkflowsPanel projectId={projectId} />}
+          {tab === "files" && <FilesPanel projectId={projectId} />}
         </div>
       </div>
 

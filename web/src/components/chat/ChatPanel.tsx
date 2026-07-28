@@ -1,24 +1,74 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { api, ChatMessage } from "../../lib/api";
+import { AnimatePresence, motion } from "framer-motion";
+import { api, ChatMessage, ChatSummary } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
 import { Markdown } from "../Markdown";
 
 export function ChatPanel({ projectId }: { projectId: string }) {
   const [chatId, setChatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
 
+  const refreshChats = useCallback(
+    () =>
+      api
+        .chats(projectId)
+        .then((r) => setChats(r.chats))
+        .catch(() => {}),
+    [projectId],
+  );
+
   useEffect(() => {
     setChatId(null);
+    setChats([]);
     setMessages([]);
     setActiveRunId(null);
+    setPickerOpen(false);
     api.openChat(projectId).then((r) => setChatId(r.id)).catch(() => {});
-  }, [projectId]);
+    refreshChats();
+  }, [projectId, refreshChats]);
+
+  // Switching conversations must drop the previous thread's messages and
+  // stream, or the old run's text bleeds into the new chat.
+  const switchTo = useCallback((id: string) => {
+    setChatId(id);
+    setMessages([]);
+    setActiveRunId(null);
+    setError(null);
+    setPickerOpen(false);
+  }, []);
+
+  const startNewChat = async () => {
+    try {
+      const r = await api.newChat(projectId);
+      switchTo(r.id);
+      refreshChats();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const removeChat = async (id: string) => {
+    try {
+      await api.deleteChat(id);
+      const remaining = chats.filter((c) => c.id !== id);
+      setChats(remaining);
+      if (id === chatId) {
+        // Fall back to whatever is left, creating one if the list is empty.
+        if (remaining[0]) switchTo(remaining[0].id);
+        else await api.openChat(projectId).then((r) => switchTo(r.id));
+      }
+      refreshChats();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const refresh = useCallback(async () => {
     if (!chatId) return;
@@ -54,6 +104,8 @@ export function ChatPanel({ projectId }: { projectId: string }) {
     try {
       const r = await api.sendChat(chatId, content);
       setActiveRunId(r.runId);
+      // The first message names the chat server-side — pick that title up.
+      refreshChats();
     } catch (e) {
       setError(String(e));
       refresh();
@@ -78,11 +130,71 @@ export function ChatPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col border-r border-line bg-panel">
-      <div className="border-b border-line px-4 py-3">
-        <div className="text-sm font-semibold">Assistant</div>
+      <div className="relative border-b border-line px-4 py-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPickerOpen((o) => !o)}
+            className="flex min-w-0 items-center gap-1.5 text-left"
+            title="Switch conversation"
+          >
+            <span className="truncate text-sm font-semibold">
+              {chats.find((c) => c.id === chatId)?.title ?? "Assistant"}
+            </span>
+            <span className="shrink-0 text-[10px] text-ink-dim">▾</span>
+          </button>
+          <button
+            onClick={startNewChat}
+            title="New conversation"
+            className="ml-auto shrink-0 rounded-lg border border-line px-2 py-0.5 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+          >
+            + New
+          </button>
+        </div>
         <div className="text-[11px] text-ink-dim">
           Asks your own Claude Code to plan &amp; launch tasks
         </div>
+
+        <AnimatePresence>
+          {pickerOpen && (
+            <>
+              {/* Click-away layer, below the menu but above the panel. */}
+              <div className="fixed inset-0 z-10" onClick={() => setPickerOpen(false)} />
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="absolute left-3 right-3 top-full z-20 max-h-72 overflow-y-auto rounded-xl border border-line bg-panel p-1 shadow-lg"
+              >
+                {chats.length === 0 && (
+                  <div className="px-2 py-2 text-xs text-ink-dim">No conversations yet.</div>
+                )}
+                {chats.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm ${
+                      c.id === chatId ? "bg-panel-2 font-medium" : "hover:bg-panel-2"
+                    }`}
+                  >
+                    <button
+                      onClick={() => switchTo(c.id)}
+                      className="min-w-0 flex-1 truncate text-left"
+                    >
+                      {c.title}
+                      <span className="ml-1.5 text-[10px] text-ink-dim">{c.messageCount}</span>
+                    </button>
+                    <button
+                      onClick={() => removeChat(c.id)}
+                      title="Delete conversation"
+                      className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
