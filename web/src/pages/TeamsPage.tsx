@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, OrgRunSummary, Project, Team } from "../lib/api";
+import { Agent, api, OrgRunSummary, Project, Team, TeamEstimate } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
@@ -66,7 +66,7 @@ export default function TeamsPage() {
         </motion.button>
       </div>
 
-      <div className="mt-6 grid max-w-4xl grid-cols-2 gap-4">
+      <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((t) => (
           <motion.div
             key={t.id}
@@ -237,7 +237,14 @@ function RunTeamModal({
   const [reviewPlan, setReviewPlan] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [estimate, setEstimate] = useState<TeamEstimate | null>(null);
   const navigate = useNavigate();
+
+  // What this team has cost before. An org run can quietly become $15 and
+  // forty minutes, and there was nothing here to suggest that beforehand.
+  useEffect(() => {
+    api.teamEstimate(team.id).then(setEstimate).catch(() => {});
+  }, [team.id]);
 
   const start = async () => {
     if (!projectId || !goal.trim() || busy) return;
@@ -264,7 +271,7 @@ function RunTeamModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 sm:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -273,7 +280,7 @@ function RunTeamModal({
         exit={{ y: 20, scale: 0.98 }}
         transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-lg rounded-2xl border border-line bg-panel p-6"
+        className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-5 sm:p-6"
       >
         <div className="text-base font-semibold">Run {team.name}</div>
         <div className="mt-0.5 text-xs text-ink-dim">
@@ -322,6 +329,24 @@ function RunTeamModal({
                   </span>
                 </span>
               </label>
+            )}
+            {estimate && estimate.runs > 0 && estimate.medianUsd != null && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg bg-panel-2 px-3 py-2 text-xs text-ink-dim">
+                <span>◷</span>
+                <span>
+                  Past runs cost about{" "}
+                  <span className="font-semibold text-ink">
+                    ${estimate.medianUsd.toFixed(2)}
+                  </span>
+                  {estimate.medianSecs != null &&
+                    ` and took ${Math.round(estimate.medianSecs / 60)} min`}{" "}
+                  (median of {estimate.runs})
+                  {estimate.worstUsd != null &&
+                    estimate.worstUsd > estimate.medianUsd * 1.5 &&
+                    `; the worst was $${estimate.worstUsd.toFixed(2)}`}
+                  .
+                </span>
+              </div>
             )}
           </>
         )}
@@ -415,7 +440,7 @@ function TeamEditor({
       animate={{ x: 0 }}
       exit={{ x: 480 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[480px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-line bg-panel"
     >
       <div className="flex items-center justify-between border-b border-line p-5">
         <div className="text-base font-semibold">{team ? `Edit ${team.name}` : "New team"}</div>

@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{ModelTier, PermissionMode};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -18,6 +19,8 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/comments", get(comments).post(post_comment))
         .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
+        .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
+        .route("/runs/{id}/keep", post(keep_variant))
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
         .route("/runs/{id}/events", get(run_events))
@@ -461,6 +464,7 @@ async fn comments(
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
         "SELECT c.id, c.author, c.agent_id, c.content, c.run_id, c.created_at,
+                c.file_path, c.line, c.hunk,
                 a.name AS agent_name, a.color AS agent_color,
                 r.status AS run_status
          FROM task_comments c
@@ -493,6 +497,9 @@ async fn comments(
             "agentColor": r.get::<Option<String>, _>("agent_color"),
             "content": r.get::<String, _>("content"),
             "runId": r.get::<Option<Uuid>, _>("run_id"),
+            "filePath": r.get::<Option<String>, _>("file_path"),
+            "line": r.get::<Option<i32>, _>("line"),
+            "hunk": r.get::<Option<String>, _>("hunk"),
             "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
         })).collect::<Vec<_>>(),
         "pendingReplies": pending,
@@ -504,6 +511,16 @@ struct PostComment {
     content: String,
     /// "claude-code" (default) or "mock" for demos/E2E.
     engine: Option<String>,
+    /// Anchor to a line of the diff. Present when the comment was written
+    /// from the diff view rather than the card.
+    file_path: Option<String>,
+    line: Option<i32>,
+    /// The hunk as it looked when the note was written — snapshotted because
+    /// the fix run changes the very diff the line number refers to.
+    hunk: Option<String>,
+    /// Act on it, rather than just record it. Spawns a scoped run in the
+    /// task's existing worktree.
+    fix: Option<bool>,
 }
 
 async fn post_comment(
@@ -539,14 +556,30 @@ async fn post_comment(
     }
 
     let comment_id: Uuid = sqlx::query(
-        "INSERT INTO task_comments (task_id, author, content) VALUES ($1,'user',$2) RETURNING id",
+        "INSERT INTO task_comments (task_id, author, content, file_path, line, hunk)
+         VALUES ($1,'user',$2,$3,$4,$5) RETURNING id",
     )
     .bind(task_id)
     .bind(content)
+    .bind(body.file_path.as_deref().map(str::trim).filter(|p| !p.is_empty()))
+    .bind(body.line)
+    .bind(body.hunk.as_deref())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?
     .get("id");
+
+    // "Fix this" is its own path: a comment reply is read-only by design, so
+    // acting on review feedback needs a run that can actually edit, in the
+    // worktree the diff came from.
+    if body.fix.unwrap_or(false) {
+        let run_id = state
+            .orchestrator
+            .enqueue_review_fix(comment_id)
+            .await
+            .map_err(internal)?;
+        return Ok(Json(json!({ "id": comment_id, "runIds": [run_id], "fixRunId": run_id })));
+    }
 
     // Every mentioned agent replies, capped so one comment can't fan out a
     // whole roster of runs.
@@ -562,6 +595,117 @@ async fn post_comment(
         );
     }
     Ok(Json(json!({ "id": comment_id, "runIds": run_ids })))
+}
+
+#[derive(Deserialize)]
+struct BakeoffBody {
+    variants: Vec<VariantBody>,
+}
+
+#[derive(Deserialize)]
+struct VariantBody {
+    label: String,
+    agent_id: Option<Uuid>,
+    /// "easy" | "medium" | "complex". Absent means the agent's own tier.
+    tier: Option<String>,
+}
+
+/// Run the same brief several ways at once.
+async fn start_bakeoff(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Json(body): Json<BakeoffBody>,
+) -> Result<Json<Value>, ApiError> {
+    let variants: Vec<Variant> = body
+        .variants
+        .into_iter()
+        .map(|v| Variant {
+            label: v.label,
+            agent_id: v.agent_id,
+            tier: v.tier,
+        })
+        .collect();
+
+    let run_ids = state
+        .orchestrator
+        .enqueue_bakeoff(task_id, &variants)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "runIds": run_ids })))
+}
+
+/// The variants of a task, with their diffs, so they can be read side by side.
+///
+/// The diff is the comparison — cost and duration matter, but nobody picks a
+/// winner on a number. Each is fetched from that variant's own worktree.
+async fn bakeoff(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT r.id, r.variant_label, r.status, r.cost_usd, r.model, r.worktree_path,
+                r.started_at, r.finished_at, r.error_reason,
+                a.name AS agent_name, p.default_branch
+         FROM runs r
+         JOIN tasks t ON t.id = r.task_id
+         JOIN projects p ON p.id = t.project_id
+         LEFT JOIN agents a ON a.id = r.agent_id
+         WHERE r.task_id = $1 AND r.variant_label IS NOT NULL
+         ORDER BY r.created_at",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let mut variants = vec![];
+    for r in &rows {
+        let diff = match r.get::<Option<String>, _>("worktree_path") {
+            Some(path) => state
+                .orchestrator
+                .worktrees
+                .diff(std::path::Path::new(&path), &r.get::<String, _>("default_branch"))
+                .await
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        let started = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at");
+        let finished = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at");
+        variants.push(json!({
+            "runId": r.get::<Uuid, _>("id"),
+            "label": r.get::<String, _>("variant_label"),
+            "status": r.get::<String, _>("status"),
+            "agentName": r.get::<Option<String>, _>("agent_name"),
+            "model": r.get::<Option<String>, _>("model"),
+            "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+            "error": r.get::<Option<String>, _>("error_reason"),
+            "seconds": match (started, finished) {
+                (Some(a), Some(b)) => Some((b - a).num_seconds()),
+                _ => None,
+            },
+            // Cheap, comparable signal to sit beside the diff itself.
+            "linesChanged": diff
+                .lines()
+                .filter(|l| (l.starts_with('+') || l.starts_with('-'))
+                    && !l.starts_with("+++") && !l.starts_with("---"))
+                .count(),
+            "diff": diff,
+        }));
+    }
+    Ok(Json(json!({ "variants": variants })))
+}
+
+/// Adopt a variant's work as the task's and discard the rest.
+async fn keep_variant(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .keep_variant(run_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "kept": run_id })))
 }
 
 #[derive(Deserialize)]

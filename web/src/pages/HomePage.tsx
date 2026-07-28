@@ -20,7 +20,7 @@ export default function HomePage() {
   const spent = tasks.reduce((sum, t) => sum + (t.costUsd ?? 0), 0);
 
   return (
-    <div className="h-full overflow-y-auto p-8">
+    <div className="h-full overflow-y-auto p-5 sm:p-8">
       <motion.h1
         initial={{ opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
@@ -32,7 +32,10 @@ export default function HomePage() {
         {active ? `Workspace: ${active.name}` : "Loading workspace…"}
       </p>
 
-      <div className="mt-6 grid max-w-2xl grid-cols-3 gap-4">
+      {/* `minmax(0,1fr)`, not `1fr`: three tiles whose labels set a min-content
+          floor is enough to push the page wider than a phone, and `max-w-2xl`
+          cannot claw that back — the whole page then scrolls sideways. */}
+      <div className="mt-6 grid max-w-2xl grid-cols-[repeat(3,minmax(0,1fr))] gap-2 sm:gap-4">
         <Stat label="Agents running" value={String(running)} accent="var(--color-tier-medium)" />
         <Stat label="Awaiting review" value={String(review)} accent="var(--color-tier-complex)" />
         <Stat label="Session spend" value={`$${spent.toFixed(2)}`} accent="var(--color-tier-easy)" />
@@ -41,7 +44,7 @@ export default function HomePage() {
       <h2 className="mt-10 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Projects
       </h2>
-      <div className="mt-3 grid max-w-4xl grid-cols-2 gap-4 lg:grid-cols-3">
+      <div className="mt-3 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {projects.map((p) => (
           <Link key={p.id} to={`/projects/${p.id}`}>
             <motion.div
@@ -65,11 +68,11 @@ export default function HomePage() {
 
 function Stat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
-    <div className="card-shadow rounded-xl border border-line bg-panel p-4">
-      <div className="text-2xl font-bold" style={{ color: accent }}>
+    <div className="card-shadow min-w-0 rounded-xl border border-line bg-panel p-3 sm:p-4">
+      <div className="truncate text-xl font-bold sm:text-2xl" style={{ color: accent }}>
         {value}
       </div>
-      <div className="mt-1 text-xs text-ink-dim">{label}</div>
+      <div className="mt-1 text-[11px] text-ink-dim sm:text-xs">{label}</div>
     </div>
   );
 }

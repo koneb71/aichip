@@ -101,6 +101,22 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Remove a worktree known only by its path, taking its branch with it.
+    ///
+    /// `remove` needs a `Worktree` value; a losing bake-off variant is a row
+    /// in the database holding a path, so the branch is read back off disk.
+    pub async fn discard(&self, repo: &Path, path: &Path) -> anyhow::Result<()> {
+        let branch = current_branch(path).await.unwrap_or_default();
+        self.remove(
+            repo,
+            &Worktree {
+                path: path.to_path_buf(),
+                branch,
+            },
+        )
+        .await
+    }
+
     pub async fn remove(&self, repo: &Path, worktree: &Worktree) -> anyhow::Result<()> {
         git(
             repo,
@@ -155,7 +171,7 @@ async fn branch_exists(repo: &Path, branch: &str) -> bool {
 
 /// The checked-out branch, which resolves even before the first commit.
 /// `None` when HEAD is detached.
-async fn current_branch(path: &Path) -> Option<String> {
+pub async fn current_branch(path: &Path) -> Option<String> {
     git(path, &["symbolic-ref", "--short", "HEAD"])
         .await
         .ok()

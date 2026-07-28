@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, OrgAssignment, OrgMember, OrgMessage, OrgRunDetail } from "../../lib/api";
-import { isWorking, needsYou, statusColor, statusLabel } from "../../lib/runStatus";
+import { isTerminal, isWorking, needsYou, statusColor, statusLabel } from "../../lib/runStatus";
+import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
 import { Markdown } from "../Markdown";
 import { PlanReview } from "./PlanReview";
 
@@ -10,6 +11,8 @@ type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
 
 export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => void }) {
   const [run, setRun] = useState<OrgRunDetail | null>(null);
+  const [pane, setPane] = useState<Pane>("chat");
+  const narrow = useMediaQuery(NARROW);
   const feedRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -41,6 +44,17 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
   // Narrow on purpose: a parked run is not "working", so the typing
   // indicator must not fire while it waits on the user.
   const live = isWorking(run?.status);
+  const needsReview = run?.status === "awaiting_approval";
+
+  // A plan waiting on approval is the whole point of having the modal open, so
+  // it wins the pane on a narrow screen rather than hiding behind a tab.
+  useEffect(() => {
+    if (needsReview) setPane("tasks");
+  }, [needsReview]);
+
+  // Wide viewports render all three; narrow ones render only the active pane,
+  // so the two idle scroll containers aren't kept alive off-screen.
+  const show = (id: Pane) => !narrow || pane === id;
 
   if (!run) {
     return (
@@ -58,80 +72,131 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
       status={run.status}
       cost={run.costUsd}
     >
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_1fr_300px]">
+      {narrow && <PaneTabs pane={pane} onPick={setPane} needsReview={needsReview} />}
+      {/* Three fixed columns only once there is room for three. `minmax(0,1fr)`
+       *  rather than `1fr`: a bare 1fr floors at min-content, so one long
+       *  unbreakable token in the transcript widens the middle column and
+       *  pushes Assignments out of the modal's clipped edge. */}
+      <div className="flex min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(200px,240px)_minmax(0,1fr)_minmax(0,300px)]">
         {/* ── Roster ───────────────────────────────────────────── */}
-        <div className="min-h-0 overflow-y-auto border-r border-line p-3">
-          <SectionLabel>Team</SectionLabel>
-          <div className="mt-2 flex flex-col gap-2">
-            {run.roster.map((member, i) => (
-              <MemberCard
-                key={member.name}
-                member={member}
-                state={states[member.name] ?? "idle"}
-                index={i}
-              />
-            ))}
+        {show("team") && (
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-line p-3 lg:flex-none lg:border-r">
+            {!narrow && <SectionLabel>Team</SectionLabel>}
+            <div className="mt-2 flex flex-col gap-2">
+              {run.roster.map((member, i) => (
+                <MemberCard
+                  key={member.name}
+                  member={member}
+                  state={states[member.name] ?? "idle"}
+                  index={i}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── Conversation ─────────────────────────────────────── */}
-        <div className="flex min-h-0 flex-col">
-          <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4"
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-            }}
-          >
-            <div className="flex flex-col gap-3">
-              <AnimatePresence initial={false}>
-                {run.messages.map((message) => (
-                  <Message
-                    key={message.id}
-                    message={message}
-                    color={colorOf(run.roster, message.from)}
-                  />
-                ))}
-              </AnimatePresence>
-              {live && <WorkingIndicator states={states} roster={run.roster} />}
-            </div>
-          </div>
-          {run.error && (
-            <div className="mx-5 mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-              {run.error}
-            </div>
-          )}
-        </div>
-
-        {/* ── Assignments ──────────────────────────────────────── */}
-        <div className="min-h-0 overflow-y-auto border-l border-line p-3">
-          <SectionLabel>Assignments</SectionLabel>
-          <div className="mt-2 flex flex-col gap-2">
-            {run.status === "awaiting_approval" ? (
-              <PlanReview run={run} onChanged={refresh} />
-            ) : (
-              <>
+        {show("chat") && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-none">
+            <div ref={feedRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+              }}
+            >
+              <div className="flex min-w-0 flex-col gap-3">
                 <AnimatePresence initial={false}>
-                  {run.assignments
-                    .filter((a) => a.kind === "assignment")
-                    .map((a) => (
-                      <AssignmentCard
-                        key={a.id}
-                        assignment={a}
-                        color={colorOf(run.roster, a.assignee ?? "")}
-                      />
-                    ))}
+                  {run.messages.map((message) => (
+                    <Message
+                      key={message.id}
+                      message={message}
+                      color={colorOf(run.roster, message.from)}
+                    />
+                  ))}
                 </AnimatePresence>
-                {run.assignments.every((a) => a.kind === "manager") && (
-                  <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
-                    The manager is still working out the plan…
-                  </div>
-                )}
-              </>
+                {live && <WorkingIndicator states={states} roster={run.roster} />}
+              </div>
+            </div>
+            {run.error && (
+              <div className="mx-4 mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger sm:mx-5">
+                {run.error}
+              </div>
             )}
           </div>
-        </div>
+        )}
+
+        {/* ── Assignments ──────────────────────────────────────── */}
+        {show("tasks") && (
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-line p-3 lg:flex-none lg:border-l">
+            {!narrow && <SectionLabel>Assignments</SectionLabel>}
+            <div className="mt-2 flex flex-col gap-2">
+              {needsReview ? (
+                <PlanReview run={run} onChanged={refresh} />
+              ) : (
+                <>
+                  <AnimatePresence initial={false}>
+                    {run.assignments
+                      .filter((a) => a.kind === "assignment")
+                      .map((a) => (
+                        <AssignmentCard
+                          key={a.id}
+                          assignment={a}
+                          color={colorOf(run.roster, a.assignee ?? "")}
+                          runEnded={isTerminal(run.status)}
+                        />
+                      ))}
+                  </AnimatePresence>
+                  {run.assignments.every((a) => a.kind === "manager") && (
+                    <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
+                      The manager is still working out the plan…
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </Shell>
+  );
+}
+
+type Pane = "team" | "chat" | "tasks";
+
+/** Pane switcher for narrow viewports, where the three columns are stacked one
+ *  at a time instead of side by side. */
+function PaneTabs({
+  pane,
+  onPick,
+  needsReview,
+}: {
+  pane: Pane;
+  onPick: (pane: Pane) => void;
+  needsReview: boolean;
+}) {
+  const tabs: [Pane, string][] = [
+    ["team", "Team"],
+    ["chat", "Conversation"],
+    ["tasks", needsReview ? "Approve plan" : "Assignments"],
+  ];
+  return (
+    <div className="flex shrink-0 gap-1 border-b border-line px-2 py-1.5">
+      {tabs.map(([id, label]) => (
+        <button
+          key={id}
+          onClick={() => onPick(id)}
+          aria-current={pane === id}
+          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${
+            pane === id ? "bg-panel-2 text-ink" : "text-ink-dim hover:text-ink"
+          }`}
+        >
+          {label}
+          {id === "tasks" && needsReview && (
+            <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-[#d97706] align-middle" />
+          )}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -155,7 +220,7 @@ function Shell({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-0 sm:p-4 lg:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -164,12 +229,14 @@ function Shell({
         exit={{ y: 24, scale: 0.98 }}
         transition={{ type: "spring", stiffness: 360, damping: 32 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-line bg-panel"
+        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-line bg-panel sm:h-[88vh] sm:rounded-2xl sm:border"
       >
-        <header className="flex items-start gap-3 border-b border-line px-5 py-3">
+        <header className="flex items-start gap-3 border-b border-line px-4 py-3 sm:px-5">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-base font-semibold">{title}</span>
+            {/* Wraps rather than shoving the ✕ off the edge: a long team name
+             *  plus a status chip plus a cost overflows a phone header. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate text-base font-semibold">{title}</span>
               {status && <StatusChip status={status} />}
               {cost != null && (
                 <span className="text-xs text-ink-dim">${cost.toFixed(3)}</span>
@@ -382,12 +449,14 @@ function WorkingIndicator({
 function AssignmentCard({
   assignment,
   color,
+  runEnded,
 }: {
   assignment: OrgAssignment;
   color: string;
+  runEnded: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const running = isWorking(assignment.status);
+  const running = isWorking(assignment.status) && !runEnded;
   return (
     <motion.button
       layout
@@ -401,7 +470,7 @@ function AssignmentCard({
       }}
     >
       <div className="flex items-start gap-2">
-        <StatusPip status={assignment.status} color={color} />
+        <StatusPip status={assignment.status} color={color} live={running} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium leading-snug">
             {assignment.title ?? assignment.key}
@@ -422,6 +491,19 @@ function AssignmentCard({
             className="overflow-hidden"
           >
             <div className="mt-2 border-t border-line pt-2 text-[11px] text-ink-dim">
+              {assignment.touches.length > 0 && (
+                <div className="mb-1.5 flex flex-wrap gap-1">
+                  {assignment.touches.map((path) => (
+                    <span
+                      key={path}
+                      title="Declared file scope — assignments with no overlap run at the same time"
+                      className="rounded bg-panel-2 px-1.5 py-0.5 font-mono text-[10px]"
+                    >
+                      {path}
+                    </span>
+                  ))}
+                </div>
+              )}
               {assignment.output || assignment.brief || "No detail yet."}
             </div>
           </motion.div>
@@ -431,16 +513,17 @@ function AssignmentCard({
   );
 }
 
-function StatusPip({ status, color }: { status: string; color: string }) {
-  const live = isWorking(status);
+function StatusPip({ status, color, live }: { status: string; color: string; live: boolean }) {
   const fill =
     status === "completed"
       ? "var(--color-tier-easy)"
       : status === "failed"
         ? "var(--color-danger)"
-        : live
-          ? color
-          : "var(--color-line)";
+        : status === "canceled"
+          ? "var(--color-ink-dim)"
+          : live
+            ? color
+            : "var(--color-line)";
   return live ? (
     <motion.span
       className="mt-1 h-2 w-2 shrink-0 rounded-full"
@@ -519,6 +602,16 @@ function memberStates(run: OrgRunDetail | null): Record<string, MemberState> {
     );
     if (!answered && states[lastQuestion.from] === "working") {
       states[lastQuestion.from] = "asking";
+    }
+  }
+
+  // Nobody is working inside a run that is over. The orchestrator settles step
+  // rows now, but runs orphaned before it did still carry 'running' steps, and
+  // a pulsing "working…" next to a failed run is a lie either way.
+  if (isTerminal(run.status)) {
+    const ended = run.status === "completed" ? "done" : "blocked";
+    for (const [name, state] of Object.entries(states)) {
+      if (state === "working" || state === "asking") states[name] = ended;
     }
   }
   return states;

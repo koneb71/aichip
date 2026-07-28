@@ -11,15 +11,18 @@
 //! plan before work starts, the manager revising it mid-run, and a parked or
 //! crashed run picking up where it left off.
 //!
-//! Assignments run one at a time in a shared worktree. Real teammates on one
-//! codebase serialize too, and it means a run produces a single coherent
-//! diff to review rather than N branches to merge.
+//! Assignments share one worktree, so a run produces a single coherent diff
+//! to review rather than N branches to merge. Within that, work runs in
+//! parallel exactly when the manager declared non-overlapping file scopes
+//! and no dependency between them — see `schedule`.
 
 pub mod plan;
 pub mod replan;
 pub mod roster;
+pub mod schedule;
 
 use aichip_engines::RunSpec;
+use futures::StreamExt;
 use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort, RunStatus};
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
@@ -29,7 +32,7 @@ use uuid::Uuid;
 
 use super::memory;
 use super::orchestrator::{
-    next_seq, slugify, write_mcp_config, Orchestrator, SeqAlloc, StreamOutcome,
+    next_seq, slugify, write_mcp_config_with, Orchestrator, SeqAlloc, StreamOutcome,
 };
 use plan::{
     assignment_prompt, has_blocking, inspect_plan, parse_plan, plan_prompt, repair_prompt,
@@ -37,9 +40,10 @@ use plan::{
 };
 use replan::{
     apply_decision, clip, replan_prompt, triage_prompt, Mutation, ReplanDecision, Triage,
-    TriageAction, MAX_ADDED_ASSIGNMENTS, MAX_REPLANS, MAX_TOTAL_ASSIGNMENTS,
+    TriageAction, MAX_ADDED_ASSIGNMENTS, MAX_REPLANS,
 };
 use roster::{render_roster, Member};
+use schedule::{parallel_batch, MAX_PARALLEL_ASSIGNMENTS};
 
 /// Tools the whole org shares for talking to each other.
 pub const ORG_TOOLS: &[&str] = &[
@@ -82,6 +86,9 @@ pub struct Assignment {
     pub done_when: Vec<String>,
     pub size: TaskSize,
     pub depends_on: Vec<String>,
+    /// Files this assignment expects to change; drives what may run at the
+    /// same time. Empty means unknown, which is treated as "everything".
+    pub touches: Vec<String>,
     pub status: String,
     pub output: Option<String>,
     pub attempt: i32,
@@ -573,56 +580,132 @@ impl Orchestrator {
                 break;
             }
 
-            let order = order_by_dependencies(&pending, &satisfied);
-            let next = pending[order[0]].clone();
-            let member = workers
-                .iter()
-                .find(|m| m.name == next.assignee)
-                .unwrap_or(&workers[0]);
-
+            // Everything ready whose file scopes don't collide. Usually one;
+            // several when the manager split the work cleanly.
+            let batch = parallel_batch(&pending, &satisfied, MAX_PARALLEL_ASSIGNMENTS);
             let completed: Vec<&Assignment> =
                 all.iter().filter(|a| a.status == "completed").collect();
-            let prompt = assignment_prompt(
-                &member.name,
-                &member.title,
-                &ctx.team_name,
-                &ctx.goal,
-                &next.title,
-                &next.brief,
-                &next.done_when,
-                &context_for(&next, &completed),
-            );
-
-            self.post(ctx.run_id, Some(next.step_id), &member.name, None, "status",
-                      &format!("Starting: {}", next.title)).await?;
 
             let mut tools: Vec<&str> = WORKER_TOOLS.to_vec();
             tools.extend_from_slice(ORG_TOOLS);
-            let outcome = self
-                .run_member(
-                    ctx,
-                    next.step_id,
-                    member,
-                    prompt,
+
+            let mut jobs = Vec::with_capacity(batch.len());
+            for &index in &batch {
+                let assignment = pending[index].clone();
+                let member = workers
+                    .iter()
+                    .find(|m| m.name == assignment.assignee)
+                    .unwrap_or(&workers[0])
+                    .clone();
+                let prompt = assignment_prompt(
+                    &member.name,
+                    &member.title,
+                    &ctx.team_name,
+                    &ctx.goal,
+                    &assignment.title,
+                    &assignment.brief,
+                    &assignment.done_when,
+                    &context_for(&assignment, &completed),
+                );
+                self.post(ctx.run_id, Some(assignment.step_id), &member.name, None, "status",
+                          &format!("Starting: {}", assignment.title)).await?;
+                jobs.push((assignment, member, prompt));
+            }
+            if batch.len() > 1 {
+                self.post(
+                    ctx.run_id,
                     None,
-                    &tools,
-                    PermissionMode::AutoEdit,
-                    member.effort,
+                    "system",
+                    None,
+                    "status",
+                    &format!(
+                        "{} are working in parallel — their files don't overlap.",
+                        jobs.iter()
+                            .map(|(_, m, _)| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" and ")
+                    ),
                 )
                 .await?;
+            }
 
-            if outcome.status == RunStatus::Completed {
-                self.post(ctx.run_id, Some(next.step_id), &member.name, None, "result", &outcome.output)
-                    .await?;
-                self.remember_assignment(ctx, member, &next.title, &outcome.output)
-                    .await;
+            // This run holds one queue permit already; extras are taken only
+            // if immediately free, so a batch can never deadlock against
+            // another run waiting for the same semaphore.
+            let extra: Vec<_> = (1..jobs.len())
+                .filter_map(|_| self.semaphore.clone().try_acquire_owned().ok())
+                .collect();
+            let concurrency = 1 + extra.len();
+
+            let results = futures::stream::iter(jobs.into_iter().map(
+                |(assignment, member, prompt)| {
+                    let this = self.clone();
+                    let tools = tools.clone();
+                    async move {
+                        let outcome = this
+                            .run_member(
+                                ctx,
+                                assignment.step_id,
+                                &member,
+                                prompt,
+                                None,
+                                &tools,
+                                PermissionMode::AutoEdit,
+                                member.effort,
+                            )
+                            .await;
+                        (assignment, member, outcome)
+                    }
+                },
+            ))
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await;
+            drop(extra);
+
+            // Report everything that landed before deciding what to do about
+            // anything that didn't — the manager should see the whole batch.
+            let mut finished: Vec<(Assignment, String, String)> = vec![];
+            let mut failures: Vec<(Assignment, String, StreamOutcome)> = vec![];
+            for (assignment, member, outcome) in results {
+                let outcome = outcome?;
+                if outcome.status == RunStatus::Completed {
+                    self.post(ctx.run_id, Some(assignment.step_id), &member.name, None,
+                              "result", &outcome.output).await?;
+                    self.remember_assignment(ctx, &member, &assignment.title, &outcome.output)
+                        .await;
+                    finished.push((assignment, member.name.clone(), outcome.output));
+                } else {
+                    failures.push((assignment, member.name.clone(), outcome));
+                }
+            }
+
+            if !finished.is_empty() {
+                let who = finished
+                    .iter()
+                    .map(|(_, name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                let titles = finished
+                    .iter()
+                    .map(|(a, _, _)| a.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\" and \"");
+                let report = finished
+                    .iter()
+                    .map(|(a, name, output)| format!("{} ({name}):\n{output}", a.title))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let (last, _, _) = &finished[finished.len() - 1];
                 added += self
-                    .replan_round(ctx, manager, workers, &manager_session, &next, &member.name,
-                                  &outcome.output, added)
+                    .replan_round(ctx, manager, workers, &manager_session, last, &who,
+                                  &titles, &report, added)
                     .await?;
-            } else {
+            }
+
+            for (assignment, who, outcome) in failures {
                 match self
-                    .triage_failure(ctx, manager, workers, &manager_session, &next, &member.name,
+                    .triage_failure(ctx, manager, workers, &manager_session, &assignment, &who,
                                     &outcome)
                     .await?
                 {
@@ -632,6 +715,9 @@ impl Orchestrator {
                     }
                     None => dropped += 1,
                 }
+            }
+            if aborted.is_some() {
+                break;
             }
         }
 
@@ -670,9 +756,11 @@ impl Orchestrator {
         manager_session: &Option<String>,
         finished: &Assignment,
         who: &str,
+        titles: &str,
         outcome: &str,
         added_so_far: usize,
     ) -> anyhow::Result<usize> {
+        let _ = finished; // kept for the call site's readability
         let all = self.load_assignments(ctx.run_id).await?;
         let pending: Vec<Assignment> =
             all.iter().filter(|a| a.status == "queued").cloned().collect();
@@ -706,7 +794,7 @@ impl Orchestrator {
                 ctx,
                 step,
                 manager,
-                replan_prompt(who, &finished.title, outcome, &pending, budget),
+                replan_prompt(who, titles, outcome, &pending, budget),
                 manager_session.clone(),
                 MANAGER_TOOLS,
                 PermissionMode::Reviewed,
@@ -883,6 +971,7 @@ impl Orchestrator {
                     done_when: failed.done_when.clone(),
                     size: failed.size,
                     depends_on: vec![],
+                    touches: failed.touches.clone(),
                 };
                 let step_id = self
                     .create_assignment(ctx.run_id, &task, &assignee, 999.0, "replan", 2)
@@ -953,13 +1042,30 @@ impl Orchestrator {
         permission_mode: PermissionMode,
         effort: Option<ReasoningEffort>,
     ) -> anyhow::Result<StreamOutcome> {
+        // A specialist brings the same connected servers into a team run that
+        // it would have on a board task — an agent's capabilities shouldn't
+        // depend on which surface launched it.
+        let user_servers = crate::mcp_servers::for_agent(&self.db, Some(member.agent_id))
+            .await
+            .unwrap_or_default();
+
         let mcp_config_path = match (&self.mcp_base_url, ctx.engine.id()) {
             (Some(base), "claude-code") => Some(
-                write_mcp_config(base, &format!("mcp/org/{}/{step_id}", ctx.run_id), step_id)
-                    .await?,
+                write_mcp_config_with(
+                    base,
+                    &format!("mcp/org/{}/{step_id}", ctx.run_id),
+                    step_id,
+                    &user_servers,
+                )
+                .await?,
             ),
             _ => None,
         };
+
+        // Org runs always pass an explicit tool list, so this is never the
+        // "empty means everything" case the board path has to guard against.
+        let mut allowed_tools: Vec<String> = tools.iter().map(|s| s.to_string()).collect();
+        allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
 
         // What this agent remembers about the project travels with it, the
         // same as it does for a board task.
@@ -986,7 +1092,7 @@ impl Orchestrator {
             effort,
             resume_session_id: resume,
             permission_mode,
-            allowed_tools: tools.iter().map(|s| s.to_string()).collect(),
+            allowed_tools,
             append_system_prompt,
             mcp_config_path,
             extra_read_dirs: vec![],
@@ -1215,8 +1321,8 @@ impl Orchestrator {
     ) -> anyhow::Result<Uuid> {
         let row = sqlx::query(
             "INSERT INTO steps (run_id, step_key, status, assignee, title, brief,
-                                done_when, size, depends_on, position, origin, attempt)
-             VALUES ($1,$2,'queued',$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                                done_when, size, depends_on, touches, position, origin, attempt)
+             VALUES ($1,$2,'queued',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (run_id, step_key) DO NOTHING
              RETURNING id",
         )
@@ -1228,6 +1334,7 @@ impl Orchestrator {
         .bind(&task.done_when)
         .bind(task.size.as_str())
         .bind(&task.depends_on)
+        .bind(&task.touches)
         .bind(position)
         .bind(origin)
         .bind(attempt)
@@ -1251,7 +1358,7 @@ impl Orchestrator {
     pub(crate) async fn load_assignments(&self, run_id: Uuid) -> anyhow::Result<Vec<Assignment>> {
         let rows = sqlx::query(&format!(
             "SELECT id, step_key, title, brief, assignee, done_when, size, depends_on,
-                    status, output_text, attempt
+                    touches, status, output_text, attempt
              FROM steps WHERE run_id = $1 AND {NOT_AN_ASSIGNMENT}
              ORDER BY position NULLS LAST, started_at NULLS LAST, id"
         ))
@@ -1272,6 +1379,7 @@ impl Orchestrator {
                     .map(|s| TaskSize::parse(&s))
                     .unwrap_or_default(),
                 depends_on: r.get("depends_on"),
+                touches: r.get("touches"),
                 status: r.get("status"),
                 output: r.get("output_text"),
                 attempt: r.get("attempt"),
@@ -1393,41 +1501,6 @@ pub fn context_for(task: &Assignment, completed: &[&Assignment]) -> String {
     clip(&body, MAX_CONTEXT_CHARS)
 }
 
-/// Kahn's algorithm over `depends_on`, treating already-finished keys as
-/// satisfied. Unknown keys are ignored and anything left in a cycle is
-/// appended in order — a confused plan should still run, not hang.
-fn order_by_dependencies(pending: &[Assignment], satisfied: &HashSet<String>) -> Vec<usize> {
-    let index_of: HashMap<&str, usize> = pending
-        .iter()
-        .enumerate()
-        .map(|(i, a)| (a.key.as_str(), i))
-        .collect();
-    let mut done: HashSet<usize> = HashSet::new();
-    let mut order = vec![];
-
-    while order.len() < pending.len() {
-        let ready: Vec<usize> = (0..pending.len())
-            .filter(|i| !done.contains(i))
-            .filter(|i| {
-                pending[*i].depends_on.iter().all(|dep| {
-                    let dep = dep.trim();
-                    satisfied.contains(dep)
-                        || index_of.get(dep).is_none_or(|j| done.contains(j))
-                })
-            })
-            .collect();
-        if ready.is_empty() {
-            order.extend((0..pending.len()).filter(|i| !done.contains(i)));
-            break;
-        }
-        for i in ready {
-            done.insert(i);
-            order.push(i);
-        }
-    }
-    order
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1442,71 +1515,11 @@ mod tests {
             done_when: vec![],
             size: TaskSize::Medium,
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            touches: vec![],
             status: "queued".into(),
             output: None,
             attempt: 1,
         }
-    }
-
-    fn ordered(pending: Vec<Assignment>, satisfied: &[&str]) -> Vec<String> {
-        let satisfied: HashSet<String> = satisfied.iter().map(|s| s.to_string()).collect();
-        order_by_dependencies(&pending, &satisfied)
-            .into_iter()
-            .map(|i| pending[i].key.clone())
-            .collect()
-    }
-
-    #[test]
-    fn respects_declared_dependencies() {
-        let order = ordered(
-            vec![
-                assignment("ui", &["api"]),
-                assignment("api", &["schema"]),
-                assignment("schema", &[]),
-            ],
-            &[],
-        );
-        assert_eq!(order, ["schema", "api", "ui"]);
-    }
-
-    #[test]
-    fn independent_work_keeps_authoring_order() {
-        assert_eq!(
-            ordered(vec![assignment("a", &[]), assignment("b", &[])], &[]),
-            ["a", "b"]
-        );
-    }
-
-    #[test]
-    fn a_hallucinated_dependency_does_not_strand_a_task() {
-        assert_eq!(ordered(vec![assignment("a", &["nope"])], &[]), ["a"]);
-    }
-
-    #[test]
-    fn a_cyclic_plan_still_runs_everything() {
-        let order = ordered(
-            vec![
-                assignment("a", &["b"]),
-                assignment("b", &["a"]),
-                assignment("c", &[]),
-            ],
-            &[],
-        );
-        assert_eq!(order.len(), 3);
-        assert_eq!(order[0], "c");
-    }
-
-    /// The resume case: work whose dependency finished in an earlier
-    /// dispatch is ready immediately.
-    #[test]
-    fn a_dependency_already_completed_counts_as_satisfied() {
-        assert_eq!(ordered(vec![assignment("ui", &["api"])], &["api"]), ["ui"]);
-    }
-
-    #[test]
-    fn a_dependency_that_was_dropped_does_not_block() {
-        // `skipped` keys are passed in as satisfied by the caller.
-        assert_eq!(ordered(vec![assignment("ui", &["gone"])], &["gone"]), ["ui"]);
     }
 
     #[test]

@@ -21,3 +21,6 @@ sqlx = { workspace = true }
 serde_yaml = "0.9"
 croner = "3"
 futures = "0.3"
+# Only for the "test this MCP server" probe. rustls rather than native-tls so
+# the check behaves the same in the container as it does on a Mac.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

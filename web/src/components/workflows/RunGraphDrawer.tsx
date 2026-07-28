@@ -64,7 +64,7 @@ export function RunGraphDrawer({
       animate={{ x: 0 }}
       exit={{ x: 720 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[720px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[720px] flex-col border-l border-line bg-panel"
     >
       <div className="flex items-start gap-3 border-b border-line p-5">
         <div className="min-w-0 flex-1">

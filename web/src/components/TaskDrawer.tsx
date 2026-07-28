@@ -1,26 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
+import { Agent, api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "./AttachmentBar";
 import { TaskComments } from "./TaskComments";
 import { Markdown } from "./Markdown";
+import { annotateDiff, hunkText, isCommentable } from "../lib/diff";
+import { PermissionRow } from "./PermissionRow";
+import { BakeoffView } from "./BakeoffView";
 
 export function TaskDrawer({
   task,
+  workspaceId,
   onClose,
   onChanged,
   onOpenTeamRoom,
 }: {
   task: Task;
+  /** Bounds which agents a bake-off may choose between. */
+  workspaceId: string;
   onClose: () => void;
   onChanged: () => void;
   onOpenTeamRoom?: (runId: string) => void;
 }) {
   const events = useRunStream(task.runId);
   const [diff, setDiff] = useState<string | null>(null);
+  // The bake-off panel: same brief, several attempts, compare and keep one.
+  const [bakeoff, setBakeoff] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [merging, setMerging] = useState(false);
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
@@ -88,6 +97,13 @@ export function TaskDrawer({
       },
     });
   };
+
+  useEffect(() => {
+    api
+      .agents(workspaceId)
+      .then((r) => setAgents(r.agents))
+      .catch(() => {});
+  }, [workspaceId]);
 
   useEffect(() => {
     setAttachments([]);
@@ -184,7 +200,7 @@ export function TaskDrawer({
       animate={{ x: 0 }}
       exit={{ x: 560 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[560px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[560px] flex-col border-l border-line bg-panel"
     >
       <div className="flex items-start gap-3 border-b border-line p-5">
         <div className="min-w-0 flex-1">
@@ -214,6 +230,17 @@ export function TaskDrawer({
           >
             🏛 Open team room
           </motion.button>
+        )}
+        {/* A bake-off answers "which agent should do this?" with evidence
+            rather than a hunch, so it belongs before the work is accepted —
+            not on a card that already has a diff you like. */}
+        {!task.teamId && task.boardColumn !== "done" && (
+          <button
+            onClick={() => setBakeoff(true)}
+            className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
+          >
+            ⚖ Bake-off
+          </button>
         )}
         {task.runId && isWorking(task.runStatus) && (
           <button
@@ -346,8 +373,21 @@ export function TaskDrawer({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        {diff !== null ? (
-          <DiffView diff={diff} onBack={() => setDiff(null)} />
+        {bakeoff ? (
+          <BakeoffView
+            taskId={task.id}
+            agents={agents}
+            currentTier={task.modelTier}
+            onKept={onChanged}
+            onClose={() => setBakeoff(false)}
+          />
+        ) : diff !== null ? (
+          <DiffView
+            diff={diff}
+            taskId={task.id}
+            onBack={() => setDiff(null)}
+            onFixStarted={onChanged}
+          />
         ) : panel === "comments" ? (
           <TaskComments taskId={task.id} />
         ) : (
@@ -453,86 +493,136 @@ function EventRow({ event }: { event: StreamEvent }) {
   }
 }
 
-function PermissionRow({
-  toolName,
-  input,
-  onAnswer,
+/**
+ * The diff, with a comment gutter.
+ *
+ * Clicking a line opens a note anchored to that file and line. "Ask to fix"
+ * turns the note into a scoped run in this task's existing worktree, so the
+ * correction lands on the same branch and shows up in this same diff —
+ * which is the difference between reviewing work and re-describing it.
+ */
+function DiffView({
+  diff,
+  taskId,
+  onBack,
+  onFixStarted,
 }: {
-  toolName: string;
-  input: unknown;
-  onAnswer: (allowed: boolean) => void;
+  diff: string;
+  taskId: string;
+  onBack: () => void;
+  onFixStarted: () => void;
 }) {
-  const summary = summarizeToolInput(toolName, input);
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="rounded-xl border border-amber-300 bg-panel px-3 py-2.5"
-    >
-      <div className="text-sm font-medium text-amber-700">
-        Allow <span className="font-mono">{toolName}</span>?
-      </div>
-      {summary && (
-        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-ink">
-          {summary}
-        </pre>
-      )}
-      <div className="mt-2.5 flex gap-2">
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={() => onAnswer(true)}
-          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-white"
-        >
-          Allow
-        </motion.button>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={() => onAnswer(false)}
-          className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:border-danger hover:text-danger"
-        >
-          Deny
-        </motion.button>
-      </div>
-    </motion.div>
-  );
-}
+  const lines = useMemo(() => annotateDiff(diff), [diff]);
+  const [openAt, setOpenAt] = useState<number | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
 
-/** Show the part of a tool call the user actually needs to judge. */
-function summarizeToolInput(toolName: string, input: unknown): string {
-  const args = (input ?? {}) as Record<string, unknown>;
-  if (typeof args.command === "string") return args.command;
-  if (typeof args.file_path === "string") {
-    const body = typeof args.content === "string" ? `\n\n${args.content}` : "";
-    return `${args.file_path}${body}`.slice(0, 1200);
-  }
-  const json = JSON.stringify(args, null, 1);
-  return json === "{}" ? "" : json.slice(0, 1200);
-}
+  const submit = async (fix: boolean) => {
+    if (openAt === null || !note.trim() || busy) return;
+    const line = lines[openAt];
+    setBusy(true);
+    try {
+      await api.postComment(taskId, note.trim(), undefined, {
+        file_path: line.file ?? undefined,
+        line: line.newLine ?? undefined,
+        hunk: hunkText(lines, line.hunk),
+        fix,
+      });
+      setNote("");
+      setOpenAt(null);
+      setSent(fix ? "Fix queued — it'll appear in this diff." : "Note saved to the card.");
+      if (fix) onFixStarted();
+    } finally {
+      setBusy(false);
+    }
+  };
 
-function DiffView({ diff, onBack }: { diff: string; onBack: () => void }) {
   return (
     <div>
-      <button onClick={onBack} className="mb-3 text-xs text-ink-dim hover:text-ink">
-        ← back to stream
-      </button>
-      <pre className="overflow-x-auto rounded-lg bg-panel-2 p-3 font-mono text-xs leading-relaxed">
-        {diff.split("\n").map((line, i) => (
-          <div
-            key={i}
-            className={
-              line.startsWith("+") && !line.startsWith("+++")
-                ? "text-tier-easy"
-                : line.startsWith("-") && !line.startsWith("---")
-                  ? "text-red-400"
-                  : line.startsWith("@@")
-                    ? "text-tier-medium"
-                    : "text-ink-dim"
-            }
-          >
-            {line || " "}
+      <div className="mb-3 flex items-center justify-between">
+        <button onClick={onBack} className="text-xs text-ink-dim hover:text-ink">
+          ← back to stream
+        </button>
+        <span className="text-[11px] text-ink-dim">Click a line to comment on it</span>
+      </div>
+
+      {sent && (
+        <div className="mb-2 rounded-lg bg-tier-easy-soft px-3 py-2 text-xs text-tier-easy">
+          {sent}
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-lg bg-panel-2 py-2 font-mono text-xs leading-relaxed">
+        {lines.map((line, i) => (
+          <div key={i}>
+            <div
+              onClick={() => isCommentable(line) && setOpenAt(openAt === i ? null : i)}
+              className={`group flex gap-2 px-3 ${
+                isCommentable(line) ? "cursor-pointer hover:bg-panel" : ""
+              } ${
+                line.kind === "add"
+                  ? "text-tier-easy"
+                  : line.kind === "del"
+                    ? "text-red-400"
+                    : line.kind === "hunk"
+                      ? "text-tier-medium"
+                      : "text-ink-dim"
+              }`}
+            >
+              <span className="w-8 shrink-0 select-none text-right text-ink-dim/50">
+                {line.newLine ?? ""}
+              </span>
+              <span className="w-3 shrink-0 select-none text-ink-dim opacity-0 group-hover:opacity-100">
+                {isCommentable(line) ? "+" : ""}
+              </span>
+              <span className="whitespace-pre">{line.text || " "}</span>
+            </div>
+
+            {openAt === i && (
+              <div className="my-1 rounded-lg border border-accent/40 bg-panel p-2.5 font-sans">
+                <div className="text-[11px] text-ink-dim">
+                  {line.file ?? "this change"}
+                  {line.newLine ? ` · line ${line.newLine}` : ""}
+                </div>
+                <textarea
+                  autoFocus
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  placeholder="What's wrong with this?"
+                  className="mt-1.5 w-full resize-none rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => submit(true)}
+                    disabled={busy || !note.trim()}
+                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                  >
+                    {busy ? "…" : "Ask to fix"}
+                  </button>
+                  <button
+                    onClick={() => submit(false)}
+                    disabled={busy || !note.trim()}
+                    className="rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-50"
+                  >
+                    Just comment
+                  </button>
+                  <button
+                    onClick={() => {
+                      setOpenAt(null);
+                      setNote("");
+                    }}
+                    className="px-2 text-xs text-ink-dim hover:text-ink"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
-      </pre>
+      </div>
     </div>
   );
 }

@@ -50,6 +50,10 @@ pub struct PlannedTask {
     pub size: TaskSize,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Files or directories this assignment expects to change. Lets the
+    /// scheduler run assignments with disjoint scopes at the same time.
+    #[serde(default)]
+    pub touches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -404,6 +408,12 @@ pub fn plan_prompt(goal: &str, roster: &str) -> String {
          Set size: \"small\" is one file or one function, \"medium\" is a few files in one layer, \
          \"large\" is a whole layer — allowed at most {MAX_LARGE_TASKS} time in the plan, and only \
          when splitting genuinely is not possible.\n\n\
+         STEP 4 — SAY WHAT EACH ASSIGNMENT TOUCHES.\n\
+         List the files or directories each one will create or change in `touches`. Assignments \
+         with no dependency between them AND no overlap in `touches` are run at the same time, so \
+         being accurate here is what makes the team fast. Be honest rather than optimistic: if two \
+         assignments really do share a file, say so and they will be sequenced. Leave `touches` \
+         empty only when you genuinely cannot predict the scope — that one will run alone.\n\n\
          Reply with ONLY a JSON object, no prose and no markdown fences:\n\
          {{\"summary\": \"one or two sentences: what you found in the repo, and how you are \
          splitting the work\",\n\
@@ -414,7 +424,8 @@ pub fn plan_prompt(goal: &str, roster: &str) -> String {
          \x20           \"assignee\": \"exact specialist name from the roster\",\n\
          \x20           \"done_when\": [\"checkable fact\", \"checkable fact\"],\n\
          \x20           \"size\": \"small|medium|large\",\n\
-         \x20           \"depends_on\": [\"keys that must finish first\"]}}]}}"
+         \x20           \"depends_on\": [\"keys that must finish first\"],\n\
+         \x20           \"touches\": [\"paths this will create or change\"]}}]}}"
     )
 }
 
@@ -510,6 +521,7 @@ mod tests {
             done_when: vec!["tests pass".into()],
             size: TaskSize::Medium,
             depends_on: vec![],
+            touches: vec![],
         }
     }
 

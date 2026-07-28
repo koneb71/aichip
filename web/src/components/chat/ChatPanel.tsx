@@ -165,7 +165,9 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   }, [turnDone, refresh]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col border-r border-line bg-panel">
+    // `lg:border-r` only: the divider separates the docked column from the
+    // board, and reads as a stray line when the panel is a narrow-screen tab.
+    <div className="flex h-full min-h-0 min-w-0 flex-col border-line bg-panel lg:border-r">
       <div className="relative border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <button

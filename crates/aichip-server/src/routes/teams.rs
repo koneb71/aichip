@@ -15,6 +15,38 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/teams", get(list).post(create))
         .route("/teams/{id}", patch(update).delete(remove))
+        .route("/teams/{id}/estimate", get(estimate))
+}
+
+/// What this team has historically cost per run.
+///
+/// An org run can quietly turn into $15 and forty minutes, and the launch
+/// modal offered no hint of that. Median rather than mean because one
+/// runaway run shouldn't set the expectation for the next ten.
+async fn estimate(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS runs,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY cost_usd) AS median,
+                MAX(cost_usd) AS worst,
+                percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))) AS median_secs
+         FROM runs
+         WHERE team_id = $1 AND status = 'completed' AND cost_usd IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(json!({
+        "runs": row.get::<i64, _>("runs"),
+        "medianUsd": row.get::<Option<f64>, _>("median"),
+        "worstUsd": row.get::<Option<f64>, _>("worst"),
+        "medianSecs": row.get::<Option<f64>, _>("median_secs"),
+    })))
 }
 
 fn team_json(r: &sqlx::postgres::PgRow) -> Value {

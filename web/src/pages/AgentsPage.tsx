@@ -46,7 +46,7 @@ export default function AgentsPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid max-w-5xl grid-cols-2 gap-4 lg:grid-cols-3">
+      <div className="mt-6 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {agents.map((a) => (
           <motion.button
             key={a.id}
