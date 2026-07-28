@@ -35,6 +35,26 @@ export default function ProjectPage() {
     setTasks(t.tasks);
   }, [projectId]);
 
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const move = useCallback(
+    async (taskId: string, column: Task["boardColumn"], position: number) => {
+      // Optimistic: the card lands where it was dropped, then the server
+      // refresh either confirms it or puts it back (409 while a run is live).
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, boardColumn: column, position } : t)),
+      );
+      try {
+        setMoveError(null);
+        await api.moveTask(taskId, { board_column: column, position });
+      } catch (e) {
+        setMoveError(String(e));
+        setTimeout(() => setMoveError(null), 5000);
+      }
+      refresh().catch(() => {});
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     if (!active || !projectId) return;
     api
@@ -58,6 +78,14 @@ export default function ProjectPage() {
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="flex items-center gap-3 border-b border-line bg-panel px-6 py-3">
           <div className="text-base font-semibold">{project?.name ?? "Project"}</div>
+          {project?.vcs === "none" && (
+            <span
+              title={project.vcsNote ?? undefined}
+              className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700"
+            >
+              edits in place
+            </span>
+          )}
           <div className="flex gap-1 rounded-lg bg-panel-2 p-0.5">
             {TABS.map((t) => (
               <button
@@ -82,7 +110,16 @@ export default function ProjectPage() {
         </header>
 
         <div className="min-h-0 flex-1">
-          {tab === "board" && <Board tasks={tasks} onSelect={setSelected} />}
+          {tab === "board" && (
+            <>
+              {moveError && (
+                <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+                  {moveError}
+                </div>
+              )}
+              <Board tasks={tasks} onSelect={setSelected} onMove={move} />
+            </>
+          )}
           {tab === "workflows" && <WorkflowsPanel projectId={projectId} />}
           {tab === "files" && <FilesPanel projectId={projectId} />}
         </div>

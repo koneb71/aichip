@@ -13,6 +13,10 @@ export interface Project {
   name: string;
   defaultBranch: string;
   workspaceId: string;
+  /** "git" — isolated worktrees, diffs, review. "none" — tasks edit in place. */
+  vcs: "git" | "none";
+  /** Why a project has no version control. Null for git projects. */
+  vcsNote: string | null;
 }
 
 export interface Task {
@@ -20,6 +24,8 @@ export interface Task {
   title: string;
   modelTier: Tier;
   boardColumn: "backlog" | "running" | "review" | "done";
+  /** Manual kanban ordering within a column; smaller sorts first. */
+  position: number;
   branch: string | null;
   projectId: string;
   agentId: string | null;
@@ -147,6 +153,25 @@ export const ATTACHMENT_ACCEPT =
   ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.json,.log";
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
+
+export interface TaskComment {
+  id: string;
+  author: "user" | "agent";
+  agentId: string | null;
+  agentName: string | null;
+  agentColor: string | null;
+  content: string;
+  runId: string | null;
+  ts: string;
+}
+
+export interface AgentMemory {
+  id: string;
+  kind: string;
+  content: string;
+  projectName: string | null;
+  ts: string;
+}
 
 export interface ChatSummary {
   id: string;
@@ -283,9 +308,10 @@ export const api = {
     fetch(`/api/projects?workspace_id=${workspaceId}`).then((r) =>
       json<{ projects: Project[] }>(r),
     ),
+  // Initializes a repository server-side when the folder needs one.
   addProject: (workspaceId: string, path: string) =>
     post("/api/projects", { workspace_id: workspaceId, path }).then((r) =>
-      json<{ id: string; name: string }>(r),
+      json<{ id: string; name: string; vcs: "git" | "none"; vcsNote: string | null }>(r),
     ),
 
   // fs browser
@@ -315,6 +341,32 @@ export const api = {
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
   startTask: (taskId: string) =>
     post(`/api/tasks/${taskId}/start`).then((r) => json<{ runId: string }>(r)),
+  deleteTask: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
+  /** `fresh` discards the previous attempt's worktree and its unmerged diff. */
+  retryTask: (taskId: string, fresh = true) =>
+    post(`/api/tasks/${taskId}/retry`, { fresh }).then((r) =>
+      json<{ runId: string; fresh: boolean }>(r),
+    ),
+  // Kanban drag: moving into "running" from backlog starts the task.
+  moveTask: (taskId: string, body: { board_column?: string; position?: number }) =>
+    patch(`/api/tasks/${taskId}`, body).then((r) =>
+      json<{ moved: boolean; runId: string | null }>(r),
+    ),
+  taskComments: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/comments`).then((r) =>
+      json<{ comments: TaskComment[]; pendingReplies: number }>(r),
+    ),
+  postComment: (taskId: string, content: string, engine?: string) =>
+    post(`/api/tasks/${taskId}/comments`, { content, engine }).then((r) =>
+      json<{ id: string; runIds: string[] }>(r),
+    ),
+  attachToTask: (taskId: string, attachmentIds: string[]) =>
+    post(`/api/tasks/${taskId}/attachments/claim`, { attachment_ids: attachmentIds }).then(
+      (r) => json<{ attached: number }>(r),
+    ),
   diff: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/diff`).then((r) => json<{ diff: string }>(r)),
   merge: (taskId: string) =>
@@ -337,6 +389,14 @@ export const api = {
   updateAgent: (id: string, body: Record<string, unknown>) =>
     patch(`/api/agents/${id}`, body).then((r) => json<Agent>(r)),
   deleteAgent: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }),
+  agentMemories: (agentId: string) =>
+    fetch(`/api/agents/${agentId}/memories`).then((r) =>
+      json<{ memories: AgentMemory[] }>(r),
+    ),
+  forgetMemory: (id: string) =>
+    fetch(`/api/agent-memories/${id}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
   generateAgents: (description: string, engine?: string) =>
     post("/api/agents/generate", { description, engine }).then((r) =>
       json<{ drafts: AgentDraft[] }>(r),

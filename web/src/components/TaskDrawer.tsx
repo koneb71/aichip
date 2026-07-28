@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
-import { AttachmentList } from "./AttachmentBar";
+import { useAttachments } from "../lib/useAttachments";
+import { AttachmentBar, AttachmentList } from "./AttachmentBar";
+import { TaskComments } from "./TaskComments";
 import { Markdown } from "./Markdown";
 
 export function TaskDrawer({
@@ -22,7 +24,69 @@ export function TaskDrawer({
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [panel, setPanel] = useState<"comments" | "activity">("comments");
+  const att = useAttachments(task.projectId);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [busy, setBusy] = useState<"retry" | "delete" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    body: string;
+    cta: string;
+    go: () => void;
+  } | null>(null);
   const accent = tierColor[task.modelTier];
+  const running = ["queued", "starting", "running", "waiting_permission", "rate_limited"].includes(
+    task.runStatus ?? "",
+  );
+
+  const doRetry = async () => {
+    setConfirm(null);
+    setBusy("retry");
+    try {
+      await api.retryTask(task.id, true);
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retry = () => {
+    // A card in review holds an unmerged diff, and a fresh retry throws it
+    // away — that is worth one click of confirmation.
+    if (task.boardColumn === "review") {
+      setConfirm({
+        title: "Retry discards the current diff",
+        body: "This card has unmerged work. Retrying starts again from a clean checkout, so that diff is lost.",
+        cta: "Retry anyway",
+        go: doRetry,
+      });
+    } else {
+      doRetry();
+    }
+  };
+
+  const remove = () => {
+    setConfirm({
+      title: "Delete this card?",
+      body: "Its comments, run history, attachments, and worktree branch go with it. Agents keep what they remember about the work.",
+      cta: "Delete",
+      go: async () => {
+        setConfirm(null);
+        setBusy("delete");
+        try {
+          await api.deleteTask(task.id);
+          onChanged();
+          onClose();
+        } catch (e) {
+          setError(String(e));
+          setBusy(null);
+        }
+      },
+    });
+  };
 
   useEffect(() => {
     setAttachments([]);
@@ -31,6 +95,22 @@ export function TaskDrawer({
       .then((r) => setAttachments(r.attachments))
       .catch(() => {});
   }, [task.id]);
+
+  // Bind freshly-uploaded files to this card; its next run will see them.
+  const commitAttachments = async () => {
+    if (!att.ids.length || attachBusy) return;
+    setAttachBusy(true);
+    try {
+      await api.attachToTask(task.id, att.ids);
+      att.clear();
+      const r = await api.taskAttachments(task.id);
+      setAttachments(r.attachments);
+    } catch {
+      /* chips keep their state; user can retry */
+    } finally {
+      setAttachBusy(false);
+    }
+  };
 
   // Permission requests are held in memory by the broker while the engine
   // blocks on them, so a refresh has to re-fetch whatever is still open.
@@ -160,16 +240,73 @@ export function TaskDrawer({
             </motion.button>
           </>
         )}
+        {!running && (
+          <button
+            onClick={retry}
+            disabled={busy !== null}
+            className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim disabled:opacity-50"
+            title="Run this card again from a clean checkout"
+          >
+            {busy === "retry" ? "Restarting…" : "↻ Retry"}
+          </button>
+        )}
+        <button
+          onClick={remove}
+          disabled={busy !== null}
+          className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger disabled:opacity-50"
+        >
+          {busy === "delete" ? "Deleting…" : "Delete"}
+        </button>
       </div>
 
-      {attachments.length > 0 && (
-        <div className="border-b border-line px-5 py-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
-            Attachments
-          </div>
-          <AttachmentList attachments={attachments} />
+      {error && (
+        <div className="border-b border-line bg-red-50 px-5 py-2 text-xs text-danger">
+          {error}
         </div>
       )}
+
+      {confirm && (
+        <div className="border-b border-line bg-amber-50 px-5 py-3 text-xs text-amber-800">
+          <div className="font-medium">{confirm.title}</div>
+          <div className="mt-0.5">{confirm.body}</div>
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={confirm.go}
+              className="rounded-lg bg-danger px-3 py-1 font-medium text-white"
+            >
+              {confirm.cta}
+            </button>
+            <button onClick={() => setConfirm(null)} className="px-2 py-1 hover:underline">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="border-b border-line px-5 py-3">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+          Attachments
+        </div>
+        <AttachmentList attachments={attachments} />
+        <div className="flex items-center gap-2">
+          <AttachmentBar
+            items={att.items}
+            onAdd={att.add}
+            onRemove={att.remove}
+            full={att.full}
+          />
+          {att.ids.length > 0 && (
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={commitAttachments}
+              disabled={att.busy || attachBusy}
+              className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {attachBusy ? "Attaching…" : `Attach ${att.ids.length}`}
+            </motion.button>
+          )}
+        </div>
+      </div>
 
       <AnimatePresence>
         {openPermissions.length > 0 && (
@@ -193,9 +330,25 @@ export function TaskDrawer({
         )}
       </AnimatePresence>
 
+      <div className="flex gap-1 border-b border-line px-5 py-2">
+        {(["comments", "activity"] as const).map((p) => (
+          <button
+            key={p}
+            onClick={() => setPanel(p)}
+            className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
+              panel === p ? "bg-panel-2 font-medium text-ink" : "text-ink-dim"
+            }`}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {diff !== null ? (
           <DiffView diff={diff} onBack={() => setDiff(null)} />
+        ) : panel === "comments" ? (
+          <TaskComments taskId={task.id} />
         ) : (
           <EventStream events={events} />
         )}

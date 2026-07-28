@@ -17,6 +17,47 @@ pub fn router() -> Router<AppState> {
         .route("/agents", get(list).post(create))
         .route("/agents/generate", post(generate))
         .route("/agents/{id}", patch(update).delete(remove))
+        .route("/agents/{id}/memories", get(memories))
+        .route("/agent-memories/{id}", axum::routing::delete(forget))
+}
+
+/// What this agent remembers, newest first — shown in the agent drawer so the
+/// user can see (and prune) what will be fed into its next runs.
+async fn memories(
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT m.id, m.kind, m.content, m.created_at, p.name AS project_name
+         FROM agent_memories m LEFT JOIN projects p ON p.id = m.project_id
+         WHERE m.agent_id=$1 ORDER BY m.created_at DESC LIMIT 50",
+    )
+    .bind(agent_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({
+        "memories": rows.iter().map(|r| json!({
+            "id": r.get::<Uuid, _>("id"),
+            "kind": r.get::<String, _>("kind"),
+            "content": r.get::<String, _>("content"),
+            "projectName": r.get::<Option<String>, _>("project_name"),
+            "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+        })).collect::<Vec<_>>()
+    })))
+}
+
+/// Forget one memory. The user owns the agent's memory, not the agent.
+async fn forget(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    sqlx::query("DELETE FROM agent_memories WHERE id=$1")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "deleted": true })))
 }
 
 fn agent_json(r: &sqlx::postgres::PgRow) -> Value {

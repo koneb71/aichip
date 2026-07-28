@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::bus::EventBus;
 use crate::db::Db;
 use crate::runs::attachments;
+use crate::runs::memory;
 use crate::queue::rate_limit_backoff;
 use crate::worktrees::manager::WorktreeManager;
 
@@ -157,6 +158,17 @@ impl Orchestrator {
         default_branch: &str,
         slug: &str,
     ) -> anyhow::Result<crate::worktrees::manager::Worktree> {
+        // Looked up here rather than passed in: every caller would otherwise
+        // have to remember, and forgetting means `git worktree add` against a
+        // folder with no repository.
+        if self.is_in_place(project_path).await? {
+            return Ok(crate::worktrees::manager::Worktree {
+                path: project_path.to_path_buf(),
+                // Empty signals "no branch to merge"; nothing is persisted to
+                // the task, so diff/merge stay unavailable.
+                branch: String::new(),
+            });
+        }
         if let Some(task_id) = task_id {
             let row = sqlx::query("SELECT worktree_path, branch FROM tasks WHERE id = $1")
                 .bind(task_id)
@@ -188,7 +200,18 @@ impl Orchestrator {
             .await
     }
 
-    /// Move a team-run task onto the review column when its run lands.
+    /// True when a project has no version control, so its runs happen in the
+    /// folder itself instead of an isolated worktree.
+    pub(crate) async fn is_in_place(&self, project_path: &std::path::Path) -> anyhow::Result<bool> {
+        let vcs: Option<(String,)> = sqlx::query_as("SELECT vcs FROM projects WHERE path = $1")
+            .bind(project_path.to_string_lossy().as_ref())
+            .fetch_optional(&self.db.pool)
+            .await?;
+        Ok(matches!(vcs, Some((v,)) if v != "git"))
+    }
+
+    /// Move a team-run task onto its landing column when the run finishes:
+    /// review when there is a diff to look at, done when there isn't.
     pub(crate) async fn settle_task_for_run(
         &self,
         task_id: Option<Uuid>,
@@ -196,10 +219,13 @@ impl Orchestrator {
     ) -> anyhow::Result<()> {
         let Some(task_id) = task_id else { return Ok(()) };
         if status == RunStatus::Completed {
-            sqlx::query("UPDATE tasks SET board_column='review' WHERE id=$1")
-                .bind(task_id)
-                .execute(&self.db.pool)
-                .await?;
+            sqlx::query(
+                "UPDATE tasks t SET board_column = CASE WHEN p.vcs = 'git' THEN 'review' ELSE 'done' END
+                 FROM projects p WHERE p.id = t.project_id AND t.id = $1",
+            )
+            .bind(task_id)
+            .execute(&self.db.pool)
+            .await?;
         }
         Ok(())
     }
@@ -217,6 +243,32 @@ impl Orchestrator {
         .await?;
         let run_id: Uuid = row.get("id");
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 20)")
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
+    }
+
+    /// Queue an agent's reply to an @-mention in a task comment. Priority 15:
+    /// a mentioned agent should feel responsive, but the user's own chat
+    /// turns (20) still come first.
+    pub async fn enqueue_comment_reply(
+        &self,
+        comment_id: Uuid,
+        agent_id: Uuid,
+        engine: &str,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO runs (comment_id, agent_id, status, trigger, engine)
+             VALUES ($1, $2, 'queued', 'comment', $3) RETURNING id",
+        )
+        .bind(comment_id)
+        .bind(agent_id)
+        .bind(engine)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = row.get("id");
+        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 15)")
             .bind(run_id)
             .execute(&self.db.pool)
             .await?;
@@ -312,7 +364,7 @@ impl Orchestrator {
     /// Dispatcher: task runs and chat runs share the streaming machinery but
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
-        let row = sqlx::query("SELECT chat_id, workflow_id, team_id FROM runs WHERE id=$1")
+        let row = sqlx::query("SELECT chat_id, workflow_id, team_id, comment_id FROM runs WHERE id=$1")
             .bind(run_id)
             .fetch_one(&self.db.pool)
             .await?;
@@ -320,10 +372,12 @@ impl Orchestrator {
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
             row.get::<Option<Uuid>, _>("team_id"),
+            row.get::<Option<Uuid>, _>("comment_id"),
         ) {
-            (Some(chat_id), _, _) => self.execute_chat_run(run_id, chat_id).await,
-            (_, Some(workflow_id), _) => self.execute_workflow_run(run_id, workflow_id).await,
-            (_, _, Some(team_id)) => self.execute_org_run(run_id, team_id).await,
+            (Some(chat_id), _, _, _) => self.execute_chat_run(run_id, chat_id).await,
+            (_, Some(workflow_id), _, _) => self.execute_workflow_run(run_id, workflow_id).await,
+            (_, _, Some(team_id), _) => self.execute_org_run(run_id, team_id).await,
+            (_, _, _, Some(comment_id)) => self.execute_comment_run(run_id, comment_id).await,
             _ => self.execute_task_run(run_id).await,
         }
     }
@@ -331,8 +385,10 @@ impl Orchestrator {
     async fn execute_task_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
         let run = sqlx::query(
             "SELECT r.id, r.engine, r.session_id, t.id AS task_id, t.prompt, t.model_tier,
+                    t.agent_id,
                     t.permission_mode, t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
+                    p.vcs,
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
                     a.allowed_tools AS agent_tools, a.permission_preset AS agent_preset,
                     a.name AS agent_name
@@ -357,8 +413,14 @@ impl Orchestrator {
         let task_id: Uuid = run.get("task_id");
         let project_path = PathBuf::from(run.get::<String, _>("project_path"));
         let default_branch: String = run.get("default_branch");
+        // A project without version control has nowhere to branch from, so the
+        // run happens in the folder itself. That trades away isolation and the
+        // review step; `settle` below sends the task straight to done because
+        // there is no diff to look at.
+        let in_place = run.get::<String, _>("vcs") != "git";
         let cwd = match run.get::<Option<String>, _>("worktree_path") {
             Some(p) => PathBuf::from(p),
+            None if in_place => project_path.clone(),
             None => {
                 let title: String = run.get("title");
                 let wt = self
@@ -422,6 +484,19 @@ impl Orchestrator {
         let (prompt, extra_read_dirs) =
             attachments::augment_prompt(&run.get::<String, _>("prompt"), &atts);
 
+        // A bound agent carries its memory into the run: what it did on this
+        // project before is context, and what it does now becomes memory below.
+        let bound_agent: Option<Uuid> = run.get("agent_id");
+        let project_id: Uuid = run.get("project_id");
+        let memory_block = match bound_agent {
+            Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
+                .await
+                .ok()
+                .as_deref()
+                .and_then(memory::render),
+            None => None,
+        };
+
         let spec = RunSpec {
             cwd,
             prompt,
@@ -430,7 +505,13 @@ impl Orchestrator {
             resume_session_id: run.get("session_id"),
             permission_mode,
             allowed_tools: agent_tools.unwrap_or_default(),
-            append_system_prompt: agent_prompt.filter(|p| !p.is_empty()),
+            append_system_prompt: match (agent_prompt.filter(|p| !p.is_empty()), memory_block) {
+                (Some(p), Some(m)) => Some(format!("{p}{m}")),
+                (Some(p), None) => Some(p),
+                // Memory is useful even when the agent has no system prompt.
+                (None, Some(m)) => Some(m),
+                (None, None) => None,
+            },
             mcp_config_path,
             extra_read_dirs,
             permission_prompt_tool: true,
@@ -450,10 +531,30 @@ impl Orchestrator {
             .await?;
 
         if outcome.status == RunStatus::Completed {
-            sqlx::query("UPDATE tasks SET board_column='review' WHERE id=$1")
+            // Review exists to gate a diff onto the base branch. An in-place
+            // run already wrote to the user's folder and produced no diff, so
+            // parking it in review would offer a review that cannot happen.
+            let column = if in_place { "done" } else { "review" };
+            sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
                 .bind(task_id)
+                .bind(column)
                 .execute(&self.db.pool)
                 .await?;
+
+            // The work joins the agent's memory. Best-effort: a failed memory
+            // write must not fail a completed run.
+            if let Some(agent_id) = bound_agent {
+                let title: String = run.get("title");
+                let note = format!(
+                    "Completed task \"{title}\": {}",
+                    if outcome.output.is_empty() { "(no summary)" } else { &outcome.output }
+                );
+                if let Err(e) =
+                    memory::remember(&self.db, agent_id, Some(project_id), Some(task_id), "task_result", &note).await
+                {
+                    tracing::warn!(%run_id, error = %e, "agent memory write failed");
+                }
+            }
         }
 
         // A task spawned from chat reports back into that chat.
@@ -602,6 +703,169 @@ impl Orchestrator {
             ))
             .bind(run_id)
             .execute(&self.db.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// An agent answering an @-mention on a task card.
+    ///
+    /// Structurally a chat-shaped run: cwd is the real checkout with read-only
+    /// tools, so the agent can ground its answer in the code but can never
+    /// edit anything from a comment. Thread context and the agent's memories
+    /// travel in the prompt — replies are one-shot, not resumed sessions,
+    /// because the thread itself is the durable state.
+    async fn execute_comment_run(
+        self: &Arc<Self>,
+        run_id: Uuid,
+        comment_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT r.engine, r.agent_id, c.task_id, c.content AS mention,
+                    t.title, t.prompt AS task_prompt, t.board_column,
+                    p.id AS project_id, p.path AS project_path,
+                    a.name AS agent_name, a.system_prompt, a.model_tier AS agent_tier
+             FROM runs r
+             JOIN task_comments c ON c.id = r.comment_id
+             JOIN tasks t ON t.id = c.task_id
+             JOIN projects p ON p.id = t.project_id
+             JOIN agents a ON a.id = r.agent_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        self.set_status(run_id, RunStatus::Starting).await?;
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+
+        let agent_id: Uuid = row.get("agent_id");
+        let task_id: Uuid = row.get("task_id");
+        let project_id: Uuid = row.get("project_id");
+        let agent_name: String = row.get("agent_name");
+        let title: String = row.get("title");
+
+        // The thread so far, oldest first, excluding the mention itself —
+        // that goes last, as the thing being answered.
+        let thread: Vec<(String, Option<String>, String)> = sqlx::query_as(
+            "SELECT c.author, a.name, c.content FROM task_comments c
+             LEFT JOIN agents a ON a.id = c.agent_id
+             WHERE c.task_id = $1 AND c.id <> $2
+             ORDER BY c.created_at DESC LIMIT 15",
+        )
+        .bind(task_id)
+        .bind(comment_id)
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        let memories = memory::recall(&self.db, agent_id, Some(project_id))
+            .await
+            .unwrap_or_default();
+
+        let mut prompt = format!(
+            "You were mentioned in a comment on the task card \"{title}\" \
+             (column: {}).\n\nThe task brief:\n{}\n",
+            row.get::<String, _>("board_column"),
+            row.get::<String, _>("task_prompt"),
+        );
+        if !thread.is_empty() {
+            prompt.push_str("\nThe discussion so far, oldest first:\n");
+            for (author, name, content) in thread.iter().rev() {
+                let who = match author.as_str() {
+                    "agent" => name.clone().unwrap_or_else(|| "agent".into()),
+                    _ => "user".into(),
+                };
+                prompt.push_str(&format!("[{who}] {content}\n"));
+            }
+        }
+        if let Some(block) = memory::render(&memories) {
+            prompt.push_str(&block);
+        }
+        prompt.push_str(&format!(
+            "\nThe comment mentioning you:\n{}\n\n\
+             Reply as a comment on this card: concise, concrete, grounded in this \
+             repository (use Read/Grep/Glob to check before claiming). You cannot \
+             edit files from here — if work is needed, describe it so the user can \
+             run the task. Your entire output is posted verbatim as your comment: \
+             no preamble, and never remark on tools, task lists, or how the \
+             comment gets delivered.",
+            row.get::<String, _>("mention"),
+        ));
+
+        let tier: ModelTier = serde_json::from_value(serde_json::Value::String(
+            row.get::<String, _>("agent_tier"),
+        ))
+        .unwrap_or_default();
+        let model_id = self.tiers.model_for(tier).to_string();
+        sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
+            .bind(&model_id)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+
+        let system_prompt: String = row.get("system_prompt");
+        let persona = format!(
+            "You are {agent_name}, an agent on this project's kanban board.{}",
+            if system_prompt.is_empty() {
+                String::new()
+            } else {
+                format!("\n\n{system_prompt}")
+            }
+        );
+
+        let spec = RunSpec {
+            cwd: PathBuf::from(row.get::<String, _>("project_path")),
+            prompt,
+            model_tier: tier,
+            model_id,
+            resume_session_id: None,
+            permission_mode: PermissionMode::Reviewed,
+            // Read-only, and no MCP: a comment reply answers, it doesn't act.
+            allowed_tools: vec!["Read".into(), "Grep".into(), "Glob".into()],
+            append_system_prompt: Some(persona),
+            mcp_config_path: None,
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::from([("AICHIP_RUN_ID".to_string(), run_id.to_string())]),
+        };
+
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let outcome = self.stream_run(run_id, None, &seq, engine, spec, true).await?;
+
+        if outcome.status == RunStatus::Completed {
+            let reply = if outcome.output.trim().is_empty() {
+                "(no reply)".to_string()
+            } else {
+                outcome.output.clone()
+            };
+            sqlx::query(
+                "INSERT INTO task_comments (task_id, author, agent_id, content, run_id)
+                 VALUES ($1, 'agent', $2, $3, $4)",
+            )
+            .bind(task_id)
+            .bind(agent_id)
+            .bind(&reply)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+            // The exchange becomes memory, so the agent's next run knows it
+            // happened.
+            let note = format!(
+                "On card \"{title}\": asked \"{}\" — I replied: {}",
+                row.get::<String, _>("mention"),
+                reply
+            );
+            memory::remember(
+                &self.db,
+                agent_id,
+                Some(project_id),
+                Some(task_id),
+                "comment_reply",
+                &note,
+            )
             .await?;
         }
         Ok(())
