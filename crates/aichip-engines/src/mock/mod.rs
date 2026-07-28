@@ -87,6 +87,7 @@ mod tests {
             prompt: "demo".into(),
             model_tier: ModelTier::Medium,
             model_id: "claude-opus-5".into(),
+            effort: None,
             resume_session_id: None,
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: vec![],

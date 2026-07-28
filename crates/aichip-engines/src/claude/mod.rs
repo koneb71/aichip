@@ -33,6 +33,13 @@ fn claude_args(spec: &RunSpec) -> Vec<OsString> {
         spec.model_id.clone().into(),
     ];
 
+    // Omitted when unset so the CLI keeps its own default. An unknown value
+    // is only a warning there, so this is safe on an older CLI too.
+    if let Some(effort) = spec.effort {
+        args.push("--effort".into());
+        args.push(effort.as_str().into());
+    }
+
     match spec.permission_mode {
         PermissionMode::Reviewed => {}
         PermissionMode::AutoEdit => {
@@ -224,7 +231,7 @@ unsafe fn libc_kill(pid: i32, sig: i32) {
 mod tests {
     use super::claude_args;
     use crate::RunSpec;
-    use aichip_shared::{ModelTier, PermissionMode};
+    use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -234,6 +241,7 @@ mod tests {
             prompt: "do the thing".into(),
             model_tier: ModelTier::Medium,
             model_id: "claude-opus-5".into(),
+            effort: None,
             resume_session_id: None,
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: vec![],
@@ -251,6 +259,17 @@ mod tests {
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn effort_is_omitted_unless_set() {
+        assert!(!args_of(&spec()).contains(&"--effort".to_string()));
+
+        let mut s = spec();
+        s.effort = Some(ReasoningEffort::XHigh);
+        let args = args_of(&s);
+        let i = args.iter().position(|a| a == "--effort").expect("flag present");
+        assert_eq!(args[i + 1], "xhigh");
     }
 
     #[test]

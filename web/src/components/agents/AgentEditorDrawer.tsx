@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, AgentMemory, api, Tier, tierColor, tierModel } from "../../lib/api";
+import { Agent, AgentMemory, api, Effort, Tier, tierColor, tierModel } from "../../lib/api";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
+const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
 
 export function AgentEditorDrawer({
@@ -22,6 +23,7 @@ export function AgentEditorDrawer({
   const [tier, setTier] = useState<Tier>(agent?.modelTier ?? "medium");
   const [color, setColor] = useState(agent?.color ?? COLORS[0]);
   const [preset, setPreset] = useState(agent?.permissionPreset ?? "reviewed");
+  const [effort, setEffort] = useState<Effort | "">(agent?.effort ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +39,7 @@ export function AgentEditorDrawer({
       model_tier: tier,
       color,
       permission_preset: preset,
+      effort: effort || null,
     };
     try {
       if (agent) await api.updateAgent(agent.id, body);
@@ -124,6 +127,33 @@ export function AgentEditorDrawer({
                 <span className="block text-[11px] opacity-75">{tierModel[t]}</span>
               </button>
             ))}
+          </div>
+        </Field>
+        <Field label="Thinking">
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setEffort("")}
+              className={`rounded-lg border px-2 py-1.5 text-xs ${
+                effort === "" ? "border-accent text-accent" : "border-line text-ink-dim"
+              }`}
+            >
+              default
+            </button>
+            {EFFORTS.map((e) => (
+              <button
+                key={e}
+                onClick={() => setEffort(e)}
+                className={`flex-1 rounded-lg border px-1 py-1.5 text-xs ${
+                  effort === e ? "border-accent text-accent" : "border-line text-ink-dim"
+                }`}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1 text-[11px] text-ink-dim">
+            How hard this agent thinks before answering. Separate from the model —
+            more thinking is usually cheaper than a bigger model.
           </div>
         </Field>
         <Field label="Permissions">

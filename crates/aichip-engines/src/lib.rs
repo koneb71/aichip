@@ -11,7 +11,7 @@
 pub mod claude;
 pub mod mock;
 
-use aichip_shared::{AichipEvent, ModelTier, PermissionMode};
+use aichip_shared::{AichipEvent, ModelTier, PermissionMode, ReasoningEffort};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,6 +32,8 @@ pub struct RunSpec {
     pub model_tier: ModelTier,
     /// Concrete model ID resolved from the user's tier mapping.
     pub model_id: String,
+    /// How hard to think. `None` leaves the CLI's own default alone.
+    pub effort: Option<ReasoningEffort>,
     pub resume_session_id: Option<String>,
     pub permission_mode: PermissionMode,
     pub allowed_tools: Vec<String>,

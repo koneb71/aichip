@@ -1,0 +1,1533 @@
+//! Organizations: a team with a manager.
+//!
+//! The manager reads the goal and the roster, splits the work into briefed
+//! assignments, and hands them out. Specialists can talk to the team and
+//! escalate decisions back. After every hand-off the manager gets a chance
+//! to adjust what is still queued, and a failure goes to it for a decision
+//! rather than killing the run.
+//!
+//! **The plan lives in the database, not on this stack frame.** That single
+//! choice is what makes three things the same mechanism: a human editing the
+//! plan before work starts, the manager revising it mid-run, and a parked or
+//! crashed run picking up where it left off.
+//!
+//! Assignments run one at a time in a shared worktree. Real teammates on one
+//! codebase serialize too, and it means a run produces a single coherent
+//! diff to review rather than N branches to merge.
+
+pub mod plan;
+pub mod replan;
+pub mod roster;
+
+use aichip_engines::RunSpec;
+use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort, RunStatus};
+use sqlx::Row;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use super::memory;
+use super::orchestrator::{
+    next_seq, slugify, write_mcp_config, Orchestrator, SeqAlloc, StreamOutcome,
+};
+use plan::{
+    assignment_prompt, has_blocking, inspect_plan, parse_plan, plan_prompt, repair_prompt,
+    resolve_assignee, Defect, Plan, PlannedTask, Severity, TaskSize,
+};
+use replan::{
+    apply_decision, clip, replan_prompt, triage_prompt, Mutation, ReplanDecision, Triage,
+    TriageAction, MAX_ADDED_ASSIGNMENTS, MAX_REPLANS, MAX_TOTAL_ASSIGNMENTS,
+};
+use roster::{render_roster, Member};
+
+/// Tools the whole org shares for talking to each other.
+pub const ORG_TOOLS: &[&str] = &[
+    "mcp__aichip__post_message",
+    "mcp__aichip__read_messages",
+    "mcp__aichip__ask_manager",
+];
+
+/// Planning is read-only: the manager inspects and delegates, never edits.
+const MANAGER_TOOLS: &[&str] = &["Read", "Grep", "Glob", "mcp__aichip__post_message"];
+
+/// Workers get the usual coding surface plus the org tools. Listed
+/// explicitly because org runs don't use the interactive permission proxy.
+const WORKER_TOOLS: &[&str] = &[
+    "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "TodoWrite",
+];
+
+/// A worker may escalate this many times before it has to make a call.
+pub const MAX_CONSULTS_PER_STEP: i64 = 3;
+
+/// Steps that are the manager thinking, not work assigned to anyone. Slashes
+/// rather than underscores so the SQL `LIKE` needs no escaping.
+const NOT_AN_ASSIGNMENT: &str = "step_key NOT IN ('plan','plan_repair','review') \
+     AND step_key NOT LIKE 'replan/%' AND step_key NOT LIKE 'triage/%'";
+
+/// A dependency's report is worth reading in full; everyone else's is worth
+/// one line. Unbounded accumulation used to put every prior assignment's
+/// whole output into every later prompt.
+const DEP_CONTEXT_CHARS: usize = 1500;
+const MAX_CONTEXT_CHARS: usize = 6000;
+
+/// One assignment, as it exists in the database.
+#[derive(Debug, Clone)]
+pub struct Assignment {
+    pub step_id: Uuid,
+    pub key: String,
+    pub title: String,
+    pub brief: String,
+    pub assignee: String,
+    pub done_when: Vec<String>,
+    pub size: TaskSize,
+    pub depends_on: Vec<String>,
+    pub status: String,
+    pub output: Option<String>,
+    pub attempt: i32,
+}
+
+/// Everything an org run needs to spawn a member, gathered once.
+struct OrgCtx {
+    run_id: Uuid,
+    task_id: Option<Uuid>,
+    project_id: Uuid,
+    goal: String,
+    team_name: String,
+    engine: Arc<dyn aichip_engines::Engine>,
+    worktree: PathBuf,
+    seq: SeqAlloc,
+    /// Floor applied to the manager's thinking while planning.
+    planning_effort: ReasoningEffort,
+}
+
+/// Where a dispatch of this run should pick up.
+enum Phase {
+    Plan,
+    Execute {
+        manager_session: Option<String>,
+    },
+}
+
+impl Orchestrator {
+    /// Queue an organization run for a goal.
+    pub async fn enqueue_org_run(
+        &self,
+        team_id: Uuid,
+        project_id: Uuid,
+        goal: &str,
+        plan_approval: bool,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
+             VALUES ($1, $2, $3, $4, 'queued', 'org', 'claude-code') RETURNING id",
+        )
+        .bind(team_id)
+        .bind(project_id)
+        .bind(goal)
+        .bind(plan_approval)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = row.get("id");
+        self.queue(run_id, 15).await?;
+        Ok(run_id)
+    }
+
+    /// Put a run on the queue. Public because approving a parked plan
+    /// re-dispatches it from an HTTP route.
+    pub async fn queue(&self, run_id: Uuid, priority: i32) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO queue (run_id, priority) VALUES ($1, $2)
+             ON CONFLICT (run_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(priority)
+        .execute(&self.db.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// A board task assigned to a team. Organizations get an org run;
+    /// pipeline/debate/swarm teams are translated to a workflow and run
+    /// through the pipeline executor. Either way the run carries the
+    /// `task_id`, so it works in the task's worktree and lands on review.
+    pub(crate) async fn enqueue_task_for_team(
+        &self,
+        task_id: Uuid,
+        team_id: Uuid,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "SELECT t.prompt, t.title, t.project_id, tm.name AS team_name, tm.pattern, tm.definition
+             FROM tasks t JOIN teams tm ON tm.id = t.team_id WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let project_id: Uuid = row.get("project_id");
+        let goal: String = row.get("prompt");
+        let pattern: String = row.get("pattern");
+
+        if pattern == "org" {
+            let run = sqlx::query(
+                "INSERT INTO runs (task_id, team_id, project_id, goal, status, trigger, engine)
+                 VALUES ($1,$2,$3,$4,'queued','task','claude-code') RETURNING id",
+            )
+            .bind(task_id)
+            .bind(team_id)
+            .bind(project_id)
+            .bind(&goal)
+            .fetch_one(&self.db.pool)
+            .await?;
+            let run_id: Uuid = run.get("id");
+            self.queue(run_id, 12).await?;
+            return Ok(run_id);
+        }
+
+        // Non-org patterns become a workflow named after the task, so
+        // re-running the task overwrites its workflow rather than piling up.
+        let definition: serde_json::Value = row.get("definition");
+        let names = self.member_names(&definition).await?;
+        if names.is_empty() {
+            anyhow::bail!("this team has no members to assign work to");
+        }
+        let team_name: String = row.get("team_name");
+        let title: String = row.get("title");
+        let mut workflow = aichip_shared::workflow::from_team(&team_name, &pattern, &names, &goal);
+        workflow.name = format!("{team_name} · {title}");
+        workflow.validate()?;
+        let yaml = serde_yaml::to_string(&workflow)?;
+
+        let wf = sqlx::query(
+            "INSERT INTO workflows (project_id, name, description, kind, source_yaml)
+             VALUES ($1,$2,$3,'team',$4)
+             ON CONFLICT (project_id, name) DO UPDATE SET source_yaml = EXCLUDED.source_yaml
+             RETURNING id",
+        )
+        .bind(project_id)
+        .bind(&workflow.name)
+        .bind(&workflow.description)
+        .bind(&yaml)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let workflow_id: Uuid = wf.get("id");
+
+        let run = sqlx::query(
+            "INSERT INTO runs (task_id, workflow_id, status, trigger, engine)
+             VALUES ($1,$2,'queued','task','claude-code') RETURNING id",
+        )
+        .bind(task_id)
+        .bind(workflow_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = run.get("id");
+        self.queue(run_id, 12).await?;
+        Ok(run_id)
+    }
+
+    /// Member agent names, in the order the team author arranged them.
+    async fn member_names(&self, definition: &serde_json::Value) -> anyhow::Result<Vec<String>> {
+        let mut names = vec![];
+        for entry in definition
+            .get("members")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let Some(agent_id) = entry
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+            else {
+                continue;
+            };
+            if let Some(r) = sqlx::query("SELECT name FROM agents WHERE id = $1")
+                .bind(agent_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+            {
+                names.push(r.get::<String, _>("name"));
+            }
+        }
+        Ok(names)
+    }
+
+    pub(crate) async fn execute_org_run(
+        self: &Arc<Self>,
+        run_id: Uuid,
+        _team_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT t.name AS team_name, t.definition, t.planning_effort,
+                    r.goal, r.engine, r.task_id, r.worktree_path, r.plan_approval,
+                    r.plan_approved_at,
+                    p.id AS project_id, p.path AS project_path, p.default_branch, p.workspace_id
+             FROM runs r JOIN teams t ON t.id = r.team_id
+             JOIN projects p ON p.id = r.project_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        self.set_status(run_id, RunStatus::Starting).await?;
+
+        let definition: serde_json::Value = row.get("definition");
+        let workspace_id: Uuid = row.get("workspace_id");
+        let team_name: String = row.get("team_name");
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+
+        let manager = self
+            .resolve_member(workspace_id, definition.get("manager"), "Manager")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("this organization has no manager"))?;
+        let workers = self.resolve_members(workspace_id, &definition).await?;
+        if workers.is_empty() {
+            anyhow::bail!("this organization has no specialists to delegate to");
+        }
+
+        let task_id: Option<Uuid> = row.get("task_id");
+        let phase = self.org_phase(run_id).await?;
+
+        // A resumed run must reach the same worktree it planned against.
+        let worktree = match (&phase, row.get::<Option<String>, _>("worktree_path")) {
+            (Phase::Execute { .. }, Some(path)) => PathBuf::from(path),
+            _ => {
+                let created = self
+                    .worktree_for_run(
+                        run_id,
+                        task_id,
+                        &PathBuf::from(row.get::<String, _>("project_path")),
+                        &row.get::<String, _>("default_branch"),
+                        &slugify(&team_name),
+                    )
+                    .await?;
+                sqlx::query("UPDATE runs SET worktree_path=$1 WHERE id=$2")
+                    .bind(created.path.to_string_lossy().as_ref())
+                    .bind(run_id)
+                    .execute(&self.db.pool)
+                    .await?;
+                created.path
+            }
+        };
+
+        let ctx = OrgCtx {
+            run_id,
+            task_id,
+            project_id: row.get("project_id"),
+            goal: row.get::<Option<String>, _>("goal").unwrap_or_default(),
+            team_name,
+            engine,
+            worktree,
+            seq: SeqAlloc::starting_at(next_seq(&self.db, run_id).await?),
+            planning_effort: ReasoningEffort::parse(&row.get::<String, _>("planning_effort"))
+                .unwrap_or(ReasoningEffort::High),
+        };
+
+        let manager_session = match phase {
+            Phase::Execute { manager_session } => manager_session,
+            Phase::Plan => {
+                match self.plan_phase(&ctx, &manager, &workers).await? {
+                    Some(session) => {
+                        // Park before anyone starts, if the user asked to
+                        // look first. Returning here drops this run's queue
+                        // permit rather than holding a slot for however long
+                        // a person takes.
+                        if row.get::<bool, _>("plan_approval")
+                            && row
+                                .get::<Option<chrono::DateTime<chrono::Utc>>, _>("plan_approved_at")
+                                .is_none()
+                        {
+                            self.post(
+                                run_id,
+                                None,
+                                "system",
+                                None,
+                                "status",
+                                "Plan ready — waiting for your approval before anyone starts.",
+                            )
+                            .await?;
+                            self.set_status(run_id, RunStatus::AwaitingApproval).await?;
+                            return Ok(());
+                        }
+                        session
+                    }
+                    // Planning failed; plan_phase already finished the run.
+                    None => return Ok(()),
+                }
+            }
+        };
+
+        self.set_status(run_id, RunStatus::Running).await?;
+        self.work_phase(&ctx, &manager, &workers, manager_session)
+            .await
+    }
+
+    /// Which half of the run this dispatch is for.
+    ///
+    /// `Execute` requires both a completed plan step *and* at least one
+    /// assignment: a half-materialized plan must re-plan rather than run an
+    /// empty team.
+    async fn org_phase(&self, run_id: Uuid) -> anyhow::Result<Phase> {
+        let planned = sqlx::query(
+            "SELECT session_id, status FROM steps WHERE run_id=$1 AND step_key='plan'",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        let Some(planned) = planned else {
+            return Ok(Phase::Plan);
+        };
+        if planned.get::<String, _>("status") != "completed" {
+            return Ok(Phase::Plan);
+        }
+        let assignments: i64 = sqlx::query(&format!(
+            "SELECT COUNT(*) AS n FROM steps WHERE run_id=$1 AND {NOT_AN_ASSIGNMENT}"
+        ))
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?
+        .get("n");
+        if assignments == 0 {
+            return Ok(Phase::Plan);
+        }
+        Ok(Phase::Execute {
+            manager_session: planned.get("session_id"),
+        })
+    }
+
+    /// Plan, repair once if needed, and materialize the assignments.
+    /// `Ok(None)` means the run is already finished as failed.
+    async fn plan_phase(
+        self: &Arc<Self>,
+        ctx: &OrgCtx,
+        manager: &Member,
+        workers: &[Member],
+    ) -> anyhow::Result<Option<Option<String>>> {
+        self.post(
+            ctx.run_id,
+            None,
+            "system",
+            None,
+            "status",
+            &format!("{} is on it.", ctx.team_name),
+        )
+        .await?;
+
+        let plan_step = self
+            .create_step(ctx.run_id, "plan", Some(&manager.name), "Plan the work", "", 0.0)
+            .await?;
+        let effort = Some(
+            manager
+                .effort
+                .map_or(ctx.planning_effort, |e| e.at_least(ctx.planning_effort)),
+        );
+
+        let outcome = self
+            .run_member(
+                ctx,
+                plan_step,
+                manager,
+                plan_prompt(&ctx.goal, &render_roster(workers)),
+                None,
+                MANAGER_TOOLS,
+                PermissionMode::Reviewed,
+                effort,
+            )
+            .await?;
+        if outcome.status != RunStatus::Completed {
+            let reason = outcome.reason.unwrap_or_default();
+            self.post(ctx.run_id, Some(plan_step), "system", None, "status",
+                      &format!("Planning failed: {reason}")).await?;
+            self.finish(ctx.run_id, outcome.status, Some(reason)).await?;
+            return Ok(None);
+        }
+
+        let (parsed, defects) = self.check_plan(&outcome.output, workers);
+        let (parsed, defects) = if defects.is_empty() {
+            (parsed, defects)
+        } else {
+            // One repair round on the manager's own session, naming the
+            // specific problems. A plan that was one missing field away from
+            // usable used to kill the whole run.
+            self.post(
+                ctx.run_id,
+                Some(plan_step),
+                "system",
+                None,
+                "status",
+                &format!(
+                    "The manager is tightening the plan ({} issue{}).",
+                    defects.len(),
+                    if defects.len() == 1 { "" } else { "s" }
+                ),
+            )
+            .await?;
+            let repair_step = self
+                .create_step(ctx.run_id, "plan_repair", Some(&manager.name), "Revise the plan", "", 0.1)
+                .await?;
+            let repaired = self
+                .run_member(
+                    ctx,
+                    repair_step,
+                    manager,
+                    repair_prompt(&defects),
+                    outcome.session_id.clone(),
+                    MANAGER_TOOLS,
+                    PermissionMode::Reviewed,
+                    effort,
+                )
+                .await?;
+            if repaired.status == RunStatus::Completed {
+                self.check_plan(&repaired.output, workers)
+            } else {
+                (parsed, defects)
+            }
+        };
+
+        if has_blocking(&defects) {
+            let why = defects
+                .iter()
+                .filter(|d| d.severity() == Severity::Blocking)
+                .map(Defect::message)
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.post(ctx.run_id, Some(plan_step), "system", None, "status",
+                      &format!("The plan still isn't runnable. {why}")).await?;
+            self.finish(ctx.run_id, RunStatus::Failed, Some(why)).await?;
+            return Ok(None);
+        }
+        for advisory in &defects {
+            self.post(ctx.run_id, Some(plan_step), "system", None, "status", &advisory.message())
+                .await?;
+        }
+
+        let plan = parsed.unwrap_or_default();
+        if !plan.summary.trim().is_empty() {
+            self.post(ctx.run_id, Some(plan_step), &manager.name, None, "message", &plan.summary)
+                .await?;
+        }
+
+        for (index, task) in plan.tasks.iter().enumerate() {
+            // Validation already proved the assignee resolves.
+            let assignee = resolve_assignee(workers, &task.assignee)
+                .unwrap_or_else(|| workers[0].name.clone());
+            let step_id = self
+                .create_assignment(ctx.run_id, task, &assignee, index as f64 + 1.0, "plan", 1)
+                .await?;
+            self.post(
+                ctx.run_id,
+                Some(step_id),
+                &manager.name,
+                Some(&assignee),
+                "assignment",
+                &format!("**{}** — {}", task.title, task.brief),
+            )
+            .await?;
+        }
+
+        Ok(Some(outcome.session_id))
+    }
+
+    fn check_plan(&self, output: &str, workers: &[Member]) -> (Option<Plan>, Vec<Defect>) {
+        match parse_plan(output) {
+            Ok(plan) => {
+                let defects = inspect_plan(&plan, workers);
+                (Some(plan), defects)
+            }
+            Err(defect) => (None, vec![defect]),
+        }
+    }
+
+    /// Run the assignments, re-planning after each and triaging failures.
+    async fn work_phase(
+        self: &Arc<Self>,
+        ctx: &OrgCtx,
+        manager: &Member,
+        workers: &[Member],
+        manager_session: Option<String>,
+    ) -> anyhow::Result<()> {
+        let mut aborted: Option<String> = None;
+        let mut dropped = 0usize;
+        let mut added = 0usize;
+
+        loop {
+            let all = self.load_assignments(ctx.run_id).await?;
+            let satisfied: HashSet<String> = all
+                .iter()
+                .filter(|a| a.status == "completed" || a.status == "skipped")
+                .map(|a| a.key.clone())
+                .collect();
+            let pending: Vec<Assignment> =
+                all.iter().filter(|a| a.status == "queued").cloned().collect();
+            if pending.is_empty() {
+                break;
+            }
+
+            let order = order_by_dependencies(&pending, &satisfied);
+            let next = pending[order[0]].clone();
+            let member = workers
+                .iter()
+                .find(|m| m.name == next.assignee)
+                .unwrap_or(&workers[0]);
+
+            let completed: Vec<&Assignment> =
+                all.iter().filter(|a| a.status == "completed").collect();
+            let prompt = assignment_prompt(
+                &member.name,
+                &member.title,
+                &ctx.team_name,
+                &ctx.goal,
+                &next.title,
+                &next.brief,
+                &next.done_when,
+                &context_for(&next, &completed),
+            );
+
+            self.post(ctx.run_id, Some(next.step_id), &member.name, None, "status",
+                      &format!("Starting: {}", next.title)).await?;
+
+            let mut tools: Vec<&str> = WORKER_TOOLS.to_vec();
+            tools.extend_from_slice(ORG_TOOLS);
+            let outcome = self
+                .run_member(
+                    ctx,
+                    next.step_id,
+                    member,
+                    prompt,
+                    None,
+                    &tools,
+                    PermissionMode::AutoEdit,
+                    member.effort,
+                )
+                .await?;
+
+            if outcome.status == RunStatus::Completed {
+                self.post(ctx.run_id, Some(next.step_id), &member.name, None, "result", &outcome.output)
+                    .await?;
+                self.remember_assignment(ctx, member, &next.title, &outcome.output)
+                    .await;
+                added += self
+                    .replan_round(ctx, manager, workers, &manager_session, &next, &member.name,
+                                  &outcome.output, added)
+                    .await?;
+            } else {
+                match self
+                    .triage_failure(ctx, manager, workers, &manager_session, &next, &member.name,
+                                    &outcome)
+                    .await?
+                {
+                    Some(reason) => {
+                        aborted = Some(reason);
+                        break;
+                    }
+                    None => dropped += 1,
+                }
+            }
+        }
+
+        if aborted.is_none() {
+            self.review(ctx, manager).await?;
+        }
+
+        let (status, reason) = match aborted {
+            Some(reason) => (RunStatus::Failed, Some(reason)),
+            None if dropped > 0 => (
+                RunStatus::Completed,
+                Some(format!(
+                    "{dropped} assignment{} were dropped after failing",
+                    if dropped == 1 { " was" } else { "s" }
+                )),
+            ),
+            None => (RunStatus::Completed, None),
+        };
+        self.finish(ctx.run_id, status, reason).await?;
+        self.settle_task_for_run(ctx.task_id, status).await?;
+        Ok(())
+    }
+
+    /// Give the manager a chance to adjust what is still queued. Returns how
+    /// many assignments it added.
+    #[allow(clippy::too_many_arguments)]
+    async fn replan_round(
+        self: &Arc<Self>,
+        ctx: &OrgCtx,
+        manager: &Member,
+        workers: &[Member],
+        manager_session: &Option<String>,
+        finished: &Assignment,
+        who: &str,
+        outcome: &str,
+        added_so_far: usize,
+    ) -> anyhow::Result<usize> {
+        let all = self.load_assignments(ctx.run_id).await?;
+        let pending: Vec<Assignment> =
+            all.iter().filter(|a| a.status == "queued").cloned().collect();
+        // Nothing left to adjust: skip the call entirely.
+        if pending.is_empty() {
+            return Ok(0);
+        }
+
+        let round: i32 = sqlx::query("UPDATE runs SET replans = replans + 1 WHERE id=$1 RETURNING replans")
+            .bind(ctx.run_id)
+            .fetch_one(&self.db.pool)
+            .await?
+            .get("replans");
+        if round > MAX_REPLANS {
+            return Ok(0);
+        }
+
+        let budget = MAX_ADDED_ASSIGNMENTS.saturating_sub(added_so_far);
+        let step = self
+            .create_step(
+                ctx.run_id,
+                &format!("replan/{round}"),
+                Some(&manager.name),
+                "Adjust the plan",
+                "",
+                0.2,
+            )
+            .await?;
+        let outcome_run = self
+            .run_member(
+                ctx,
+                step,
+                manager,
+                replan_prompt(who, &finished.title, outcome, &pending, budget),
+                manager_session.clone(),
+                MANAGER_TOOLS,
+                PermissionMode::Reviewed,
+                Some(
+                    manager
+                        .effort
+                        .map_or(ctx.planning_effort, |e| e.at_least(ctx.planning_effort)),
+                ),
+            )
+            .await?;
+        if outcome_run.status != RunStatus::Completed {
+            return Ok(0);
+        }
+
+        let decision: ReplanDecision = crate::runs::utility::extract_json(&outcome_run.output)
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        if decision.is_noop() {
+            return Ok(0);
+        }
+
+        let note = decision.note.clone();
+        let (mutations, refused) = apply_decision(
+            decision,
+            &pending,
+            workers,
+            all.len(),
+            budget,
+        );
+        let mut new_positions = all.len() as f64 + 1.0;
+        let mut added = 0usize;
+
+        for mutation in mutations {
+            match mutation {
+                Mutation::Drop { step_id, key } => {
+                    sqlx::query("UPDATE steps SET status='skipped', finished_at=now() WHERE id=$1")
+                        .bind(step_id)
+                        .execute(&self.db.pool)
+                        .await?;
+                    self.post(ctx.run_id, Some(step_id), &manager.name, None, "status",
+                              &format!("Dropped \"{key}\" — no longer needed.")).await?;
+                }
+                Mutation::Revise { step_id, key, assignee, brief, done_when } => {
+                    sqlx::query(
+                        "UPDATE steps SET assignee = COALESCE($1, assignee),
+                                brief = COALESCE($2, brief),
+                                done_when = COALESCE($3, done_when)
+                         WHERE id = $4",
+                    )
+                    .bind(&assignee)
+                    .bind(&brief)
+                    .bind(&done_when)
+                    .bind(step_id)
+                    .execute(&self.db.pool)
+                    .await?;
+                    let moved = assignee
+                        .as_deref()
+                        .map(|t| format!(" — now with {t}"))
+                        .unwrap_or_default();
+                    let rewritten = brief.map(|b| format!("\n\n{b}")).unwrap_or_default();
+                    self.post(
+                        ctx.run_id,
+                        Some(step_id),
+                        &manager.name,
+                        assignee.as_deref(),
+                        "assignment",
+                        &format!("Revised \"{key}\"{moved}{rewritten}"),
+                    )
+                    .await?;
+                }
+                Mutation::Add(task) => {
+                    let assignee = resolve_assignee(workers, &task.assignee)
+                        .unwrap_or_else(|| workers[0].name.clone());
+                    let step_id = self
+                        .create_assignment(ctx.run_id, &task, &assignee, new_positions, "replan", 1)
+                        .await?;
+                    new_positions += 1.0;
+                    added += 1;
+                    self.post(ctx.run_id, Some(step_id), &manager.name, Some(&assignee),
+                              "assignment", &format!("**{}** — {}", task.title, task.brief)).await?;
+                }
+            }
+        }
+        if !note.trim().is_empty() {
+            self.post(ctx.run_id, Some(step), &manager.name, None, "message", &note).await?;
+        }
+        for refusal in refused {
+            tracing::debug!(run_id = %ctx.run_id, "re-plan refused: {refusal}");
+        }
+        Ok(added)
+    }
+
+    /// A failed assignment goes to the manager. `Some(reason)` aborts the
+    /// run; `None` means the plan carries on without it.
+    #[allow(clippy::too_many_arguments)]
+    async fn triage_failure(
+        self: &Arc<Self>,
+        ctx: &OrgCtx,
+        manager: &Member,
+        workers: &[Member],
+        manager_session: &Option<String>,
+        failed: &Assignment,
+        who: &str,
+        outcome: &StreamOutcome,
+    ) -> anyhow::Result<Option<String>> {
+        let reason = outcome.reason.clone().unwrap_or_default();
+        self.post(ctx.run_id, Some(failed.step_id), "system", None, "status",
+                  &format!("{who} could not finish \"{}\": {reason}", failed.title)).await?;
+
+        // A second failure on the same work is a pattern, not a fluke.
+        if failed.attempt >= 2 {
+            return Ok(Some(format!(
+                "\"{}\" failed twice: {reason}",
+                failed.title
+            )));
+        }
+
+        let step = self
+            .create_step(
+                ctx.run_id,
+                &format!("triage/{}", failed.key),
+                Some(&manager.name),
+                "Decide what to do",
+                "",
+                0.3,
+            )
+            .await?;
+        let decided = self
+            .run_member(
+                ctx,
+                step,
+                manager,
+                triage_prompt(who, &failed.title, &reason, &outcome.output),
+                manager_session.clone(),
+                MANAGER_TOOLS,
+                PermissionMode::Reviewed,
+                Some(
+                    manager
+                        .effort
+                        .map_or(ctx.planning_effort, |e| e.at_least(ctx.planning_effort)),
+                ),
+            )
+            .await?;
+        let triage = if decided.status == RunStatus::Completed {
+            Triage::parse(&decided.output)
+        } else {
+            Triage::parse("")
+        };
+        if !triage.note.trim().is_empty() {
+            self.post(ctx.run_id, Some(step), &manager.name, None, "message", &triage.note)
+                .await?;
+        }
+
+        match triage.action {
+            TriageAction::Abort => Ok(Some(format!("\"{}\" failed: {reason}", failed.title))),
+            TriageAction::Drop => {
+                self.post(ctx.run_id, Some(failed.step_id), &manager.name, None, "status",
+                          &format!("Dropping \"{}\" — the goal survives without it.", failed.title))
+                    .await?;
+                Ok(None)
+            }
+            TriageAction::Retry | TriageAction::Reassign => {
+                let assignee = triage
+                    .assignee
+                    .as_deref()
+                    .and_then(|n| resolve_assignee(workers, n))
+                    .unwrap_or_else(|| failed.assignee.clone());
+                let task = PlannedTask {
+                    key: format!("{}#2", failed.key),
+                    title: failed.title.clone(),
+                    brief: triage.brief.unwrap_or_else(|| failed.brief.clone()),
+                    assignee: assignee.clone(),
+                    done_when: failed.done_when.clone(),
+                    size: failed.size,
+                    depends_on: vec![],
+                };
+                let step_id = self
+                    .create_assignment(ctx.run_id, &task, &assignee, 999.0, "replan", 2)
+                    .await?;
+                self.post(ctx.run_id, Some(step_id), &manager.name, Some(&assignee), "assignment",
+                          &format!("Another go at **{}** — {}", task.title, task.brief)).await?;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn review(self: &Arc<Self>, ctx: &OrgCtx, manager: &Member) -> anyhow::Result<()> {
+        let all = self.load_assignments(ctx.run_id).await?;
+        let reports = all
+            .iter()
+            .filter(|a| a.status == "completed")
+            .map(|a| {
+                format!(
+                    "### {} (by {})\n{}",
+                    a.title,
+                    a.assignee,
+                    clip(a.output.as_deref().unwrap_or(""), DEP_CONTEXT_CHARS)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let step = self
+            .create_step(ctx.run_id, "review", Some(&manager.name), "Review the work", "", 1000.0)
+            .await?;
+        let outcome = self
+            .run_member(
+                ctx,
+                step,
+                manager,
+                format!(
+                    "Your team has finished work toward this goal:\n\n{}\n\n\
+                     Their reports:\n\n{reports}\n\n\
+                     Inspect what actually changed in the repository and give the user a short \
+                     verdict: what was accomplished, anything you'd flag, and whether it's ready \
+                     to review. Be direct — say so if something looks wrong or incomplete.",
+                    ctx.goal
+                ),
+                None,
+                MANAGER_TOOLS,
+                PermissionMode::Reviewed,
+                manager.effort,
+            )
+            .await?;
+        if outcome.status == RunStatus::Completed {
+            self.post(ctx.run_id, Some(step), &manager.name, None, "result", &outcome.output)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Run one member's step. Each gets its own MCP endpoint so the server
+    /// knows which teammate is calling a tool.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_member(
+        self: &Arc<Self>,
+        ctx: &OrgCtx,
+        step_id: Uuid,
+        member: &Member,
+        prompt: String,
+        resume: Option<String>,
+        tools: &[&str],
+        permission_mode: PermissionMode,
+        effort: Option<ReasoningEffort>,
+    ) -> anyhow::Result<StreamOutcome> {
+        let mcp_config_path = match (&self.mcp_base_url, ctx.engine.id()) {
+            (Some(base), "claude-code") => Some(
+                write_mcp_config(base, &format!("mcp/org/{}/{step_id}", ctx.run_id), step_id)
+                    .await?,
+            ),
+            _ => None,
+        };
+
+        // What this agent remembers about the project travels with it, the
+        // same as it does for a board task.
+        let recalled = memory::recall(&self.db, member.agent_id, Some(ctx.project_id))
+            .await
+            .ok()
+            .as_deref()
+            .and_then(memory::render);
+        let append_system_prompt = match (
+            (!member.system_prompt.is_empty()).then(|| member.system_prompt.clone()),
+            recalled,
+        ) {
+            (Some(p), Some(m)) => Some(format!("{p}{m}")),
+            (Some(p), None) => Some(p),
+            (None, Some(m)) => Some(m),
+            (None, None) => None,
+        };
+
+        let spec = RunSpec {
+            cwd: ctx.worktree.clone(),
+            prompt,
+            model_tier: member.tier,
+            model_id: self.tiers.model_for(member.tier).to_string(),
+            effort,
+            resume_session_id: resume,
+            permission_mode,
+            allowed_tools: tools.iter().map(|s| s.to_string()).collect(),
+            append_system_prompt,
+            mcp_config_path,
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::from([
+                ("AICHIP_RUN_ID".to_string(), ctx.run_id.to_string()),
+                ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
+            ]),
+        };
+
+        // The step row is what the live view reads to show who's busy, so
+        // it has to bracket the actual work.
+        sqlx::query("UPDATE steps SET status='running', started_at=now() WHERE id=$1")
+            .bind(step_id)
+            .execute(&self.db.pool)
+            .await?;
+
+        let outcome = self
+            .stream_run(ctx.run_id, Some(step_id), &ctx.seq, ctx.engine.clone(), spec, false)
+            .await?;
+
+        sqlx::query(
+            "UPDATE steps SET status=$1, session_id=$2, output_text=$3, finished_at=now()
+             WHERE id=$4",
+        )
+        .bind(outcome.status.as_str())
+        .bind(&outcome.session_id)
+        .bind(&outcome.output)
+        .bind(step_id)
+        .execute(&self.db.pool)
+        .await?;
+
+        Ok(outcome)
+    }
+
+    async fn remember_assignment(&self, ctx: &OrgCtx, member: &Member, title: &str, summary: &str) {
+        let goal = clip(&ctx.goal, 80);
+        let note = format!(
+            "On {} toward \"{goal}\": finished \"{title}\" — {}",
+            ctx.team_name,
+            clip(summary, 200)
+        );
+        if let Err(e) = memory::remember(
+            &self.db,
+            member.agent_id,
+            Some(ctx.project_id),
+            ctx.task_id,
+            "org_assignment",
+            &note,
+        )
+        .await
+        {
+            // Never fail a completed assignment over bookkeeping.
+            tracing::warn!(error = %e, "could not record org memory");
+        }
+    }
+
+    /// A worker escalated a question. Wake the manager on its planning
+    /// session so it answers with the full context of the plan it wrote.
+    pub async fn consult_manager(
+        self: &Arc<Self>,
+        run_id: Uuid,
+        step_id: Uuid,
+        from_agent: &str,
+        question: &str,
+    ) -> anyhow::Result<String> {
+        self.post(run_id, Some(step_id), from_agent, None, "question", question)
+            .await?;
+        // Counted after posting, so the third question is the last one
+        // answered rather than the fourth.
+        let asked: i64 = sqlx::query(
+            "SELECT COUNT(*) AS n FROM org_messages WHERE step_id = $1 AND kind = 'question'",
+        )
+        .bind(step_id)
+        .fetch_one(&self.db.pool)
+        .await?
+        .get("n");
+        if asked > MAX_CONSULTS_PER_STEP {
+            let answer = "You've already escalated several times — use your best judgement \
+                          on this one and note the assumption in your summary.";
+            self.post(run_id, Some(step_id), "system", Some(from_agent), "answer", answer)
+                .await?;
+            return Ok(answer.to_string());
+        }
+
+        let row = sqlx::query(
+            "SELECT r.engine, r.goal, COALESCE(r.worktree_path, p.path) AS cwd,
+                    t.planning_effort,
+                    (SELECT session_id FROM steps WHERE run_id = r.id AND step_key = 'plan') AS manager_session,
+                    (SELECT assignee FROM steps WHERE run_id = r.id AND step_key = 'plan') AS manager_name,
+                    (SELECT a.model_tier FROM agents a WHERE a.id = (t.definition->>'manager')::uuid) AS manager_tier,
+                    (SELECT a.effort FROM agents a WHERE a.id = (t.definition->>'manager')::uuid) AS manager_effort
+             FROM runs r JOIN projects p ON p.id = r.project_id
+             LEFT JOIN teams t ON t.id = r.team_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+        let manager_name: String = row
+            .get::<Option<String>, _>("manager_name")
+            .unwrap_or_else(|| "Manager".into());
+        let tier: ModelTier = row
+            .get::<Option<String>, _>("manager_tier")
+            .and_then(|t| serde_json::from_value(serde_json::Value::String(t)).ok())
+            .unwrap_or(ModelTier::Medium);
+
+        let spec = RunSpec {
+            // The worktree, not the project root: a manager answering a
+            // question about work in progress has to be able to see it.
+            cwd: PathBuf::from(row.get::<String, _>("cwd")),
+            prompt: format!(
+                "{from_agent} is mid-assignment and asks:\n\n{question}\n\n\
+                 Answer in two or three sentences so they can keep moving. Decide — don't \
+                 hedge or hand the decision back."
+            ),
+            model_tier: tier,
+            model_id: self.tiers.model_for(tier).to_string(),
+            effort: row
+                .get::<Option<String>, _>("manager_effort")
+                .and_then(|e| ReasoningEffort::parse(&e)),
+            resume_session_id: row.get("manager_session"),
+            permission_mode: PermissionMode::Reviewed,
+            allowed_tools: MANAGER_TOOLS.iter().map(|s| s.to_string()).collect(),
+            append_system_prompt: None,
+            mcp_config_path: None,
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::new(),
+        };
+
+        // Deliberately not queued: a worker's tool call is blocked waiting
+        // on this, and the run already holds its concurrency permit.
+        let mut proc = engine.start(spec)?;
+        let mut text = String::new();
+        while let Some(event) = proc.events.recv().await {
+            match event {
+                aichip_shared::AichipEvent::RunCompleted { result_text, .. } => {
+                    text = result_text;
+                    break;
+                }
+                aichip_shared::AichipEvent::AssistantText { text: t } => {
+                    if text.is_empty() {
+                        text = t;
+                    }
+                }
+                aichip_shared::AichipEvent::RunFailed { .. } => break,
+                _ => {}
+            }
+        }
+        if text.trim().is_empty() {
+            text = "I couldn't weigh in right now — use your best judgement and flag the \
+                    assumption in your summary."
+                .to_string();
+        }
+        self.post(run_id, Some(step_id), &manager_name, Some(from_agent), "answer", &text)
+            .await?;
+        Ok(text)
+    }
+
+    /// Append to the team's conversation.
+    pub async fn post(
+        &self,
+        run_id: Uuid,
+        step_id: Option<Uuid>,
+        from_agent: &str,
+        to_agent: Option<&str>,
+        kind: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO org_messages (run_id, step_id, from_agent, to_agent, kind, content)
+             VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(run_id)
+        .bind(step_id)
+        .bind(from_agent)
+        .bind(to_agent)
+        .bind(kind)
+        .bind(content)
+        .execute(&self.db.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// A manager step: thinking, not work assigned to anyone.
+    async fn create_step(
+        &self,
+        run_id: Uuid,
+        key: &str,
+        assignee: Option<&str>,
+        title: &str,
+        brief: &str,
+        position: f64,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, assignee, title, brief, position)
+             VALUES ($1,$2,'queued',$3,$4,$5,$6)
+             ON CONFLICT (run_id, step_key) DO UPDATE SET status='queued'
+             RETURNING id",
+        )
+        .bind(run_id)
+        .bind(key)
+        .bind(assignee)
+        .bind(title)
+        .bind(brief)
+        .bind(position)
+        .fetch_one(&self.db.pool)
+        .await?;
+        Ok(row.get("id"))
+    }
+
+    async fn create_assignment(
+        &self,
+        run_id: Uuid,
+        task: &PlannedTask,
+        assignee: &str,
+        position: f64,
+        origin: &str,
+        attempt: i32,
+    ) -> anyhow::Result<Uuid> {
+        let row = sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, assignee, title, brief,
+                                done_when, size, depends_on, position, origin, attempt)
+             VALUES ($1,$2,'queued',$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ON CONFLICT (run_id, step_key) DO NOTHING
+             RETURNING id",
+        )
+        .bind(run_id)
+        .bind(&task.key)
+        .bind(assignee)
+        .bind(&task.title)
+        .bind(&task.brief)
+        .bind(&task.done_when)
+        .bind(task.size.as_str())
+        .bind(&task.depends_on)
+        .bind(position)
+        .bind(origin)
+        .bind(attempt)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        match row {
+            Some(r) => Ok(r.get("id")),
+            // The unique index absorbed a duplicate; reuse the existing row.
+            None => {
+                let existing =
+                    sqlx::query("SELECT id FROM steps WHERE run_id=$1 AND step_key=$2")
+                        .bind(run_id)
+                        .bind(&task.key)
+                        .fetch_one(&self.db.pool)
+                        .await?;
+                Ok(existing.get("id"))
+            }
+        }
+    }
+
+    pub(crate) async fn load_assignments(&self, run_id: Uuid) -> anyhow::Result<Vec<Assignment>> {
+        let rows = sqlx::query(&format!(
+            "SELECT id, step_key, title, brief, assignee, done_when, size, depends_on,
+                    status, output_text, attempt
+             FROM steps WHERE run_id = $1 AND {NOT_AN_ASSIGNMENT}
+             ORDER BY position NULLS LAST, started_at NULLS LAST, id"
+        ))
+        .bind(run_id)
+        .fetch_all(&self.db.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| Assignment {
+                step_id: r.get("id"),
+                key: r.get("step_key"),
+                title: r.get::<Option<String>, _>("title").unwrap_or_default(),
+                brief: r.get::<Option<String>, _>("brief").unwrap_or_default(),
+                assignee: r.get::<Option<String>, _>("assignee").unwrap_or_default(),
+                done_when: r.get("done_when"),
+                size: r
+                    .get::<Option<String>, _>("size")
+                    .map(|s| TaskSize::parse(&s))
+                    .unwrap_or_default(),
+                depends_on: r.get("depends_on"),
+                status: r.get("status"),
+                output: r.get("output_text"),
+                attempt: r.get("attempt"),
+            })
+            .collect())
+    }
+
+    async fn resolve_member(
+        &self,
+        workspace_id: Uuid,
+        id: Option<&serde_json::Value>,
+        title: &str,
+    ) -> anyhow::Result<Option<Member>> {
+        let Some(agent_id) = id.and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+        else {
+            return Ok(None);
+        };
+        Ok(self.load_member(workspace_id, agent_id, title).await?)
+    }
+
+    async fn resolve_members(
+        &self,
+        workspace_id: Uuid,
+        definition: &serde_json::Value,
+    ) -> anyhow::Result<Vec<Member>> {
+        let entries = definition
+            .get("members")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut members = vec![];
+        for entry in entries {
+            let Some(agent_id) = entry
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+            else {
+                continue;
+            };
+            let title = entry
+                .get("role")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Specialist");
+            if let Some(member) = self.load_member(workspace_id, agent_id, title).await? {
+                members.push(member);
+            }
+        }
+        Ok(members)
+    }
+
+    /// Scoped to the workspace: two agents may share a name across
+    /// workspaces, and picking the wrong one silently misroutes work.
+    async fn load_member(
+        &self,
+        workspace_id: Uuid,
+        agent_id: Uuid,
+        title: &str,
+    ) -> anyhow::Result<Option<Member>> {
+        let row = sqlx::query(
+            "SELECT id, name, description, model_tier, effort, system_prompt
+             FROM agents WHERE id = $1 AND workspace_id = $2",
+        )
+        .bind(agent_id)
+        .bind(workspace_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        Ok(row.map(|r| Member {
+            agent_id: r.get("id"),
+            name: r.get("name"),
+            title: title.to_string(),
+            description: r.get("description"),
+            tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
+                .unwrap_or_default(),
+            effort: r
+                .get::<Option<String>, _>("effort")
+                .and_then(|e| ReasoningEffort::parse(&e)),
+            system_prompt: r.get("system_prompt"),
+        }))
+    }
+}
+
+/// What a specialist needs to know about work already done.
+///
+/// Its declared dependencies are worth reading; everything else is a one-line
+/// index so it knows the work exists without carrying every word of it.
+pub fn context_for(task: &Assignment, completed: &[&Assignment]) -> String {
+    if completed.is_empty() {
+        return String::new();
+    }
+    let deps: HashSet<&str> = task.depends_on.iter().map(|d| d.trim()).collect();
+    let mut detailed = vec![];
+    let mut index = vec![];
+
+    for done in completed {
+        let output = done.output.as_deref().unwrap_or("").trim();
+        if deps.contains(done.key.as_str()) && !output.is_empty() {
+            detailed.push(format!(
+                "### {} (by {})\n{}",
+                done.title,
+                done.assignee,
+                clip(output, DEP_CONTEXT_CHARS)
+            ));
+        } else {
+            index.push(format!("- {} (by {}) — done", done.title, done.assignee));
+        }
+    }
+
+    let mut body = String::new();
+    if !detailed.is_empty() {
+        body.push_str("\n\nWhat your assignment builds on:\n");
+        body.push_str(&detailed.join("\n\n"));
+    }
+    if !index.is_empty() {
+        body.push_str("\n\nAlso finished (ask if you need detail):\n");
+        body.push_str(&index.join("\n"));
+    }
+    // Oldest non-dependency detail is the first thing worth losing.
+    clip(&body, MAX_CONTEXT_CHARS)
+}
+
+/// Kahn's algorithm over `depends_on`, treating already-finished keys as
+/// satisfied. Unknown keys are ignored and anything left in a cycle is
+/// appended in order — a confused plan should still run, not hang.
+fn order_by_dependencies(pending: &[Assignment], satisfied: &HashSet<String>) -> Vec<usize> {
+    let index_of: HashMap<&str, usize> = pending
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.key.as_str(), i))
+        .collect();
+    let mut done: HashSet<usize> = HashSet::new();
+    let mut order = vec![];
+
+    while order.len() < pending.len() {
+        let ready: Vec<usize> = (0..pending.len())
+            .filter(|i| !done.contains(i))
+            .filter(|i| {
+                pending[*i].depends_on.iter().all(|dep| {
+                    let dep = dep.trim();
+                    satisfied.contains(dep)
+                        || index_of.get(dep).is_none_or(|j| done.contains(j))
+                })
+            })
+            .collect();
+        if ready.is_empty() {
+            order.extend((0..pending.len()).filter(|i| !done.contains(i)));
+            break;
+        }
+        for i in ready {
+            done.insert(i);
+            order.push(i);
+        }
+    }
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assignment(key: &str, depends_on: &[&str]) -> Assignment {
+        Assignment {
+            step_id: Uuid::new_v4(),
+            key: key.into(),
+            title: format!("Do {key}"),
+            brief: String::new(),
+            assignee: "Rex".into(),
+            done_when: vec![],
+            size: TaskSize::Medium,
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            status: "queued".into(),
+            output: None,
+            attempt: 1,
+        }
+    }
+
+    fn ordered(pending: Vec<Assignment>, satisfied: &[&str]) -> Vec<String> {
+        let satisfied: HashSet<String> = satisfied.iter().map(|s| s.to_string()).collect();
+        order_by_dependencies(&pending, &satisfied)
+            .into_iter()
+            .map(|i| pending[i].key.clone())
+            .collect()
+    }
+
+    #[test]
+    fn respects_declared_dependencies() {
+        let order = ordered(
+            vec![
+                assignment("ui", &["api"]),
+                assignment("api", &["schema"]),
+                assignment("schema", &[]),
+            ],
+            &[],
+        );
+        assert_eq!(order, ["schema", "api", "ui"]);
+    }
+
+    #[test]
+    fn independent_work_keeps_authoring_order() {
+        assert_eq!(
+            ordered(vec![assignment("a", &[]), assignment("b", &[])], &[]),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn a_hallucinated_dependency_does_not_strand_a_task() {
+        assert_eq!(ordered(vec![assignment("a", &["nope"])], &[]), ["a"]);
+    }
+
+    #[test]
+    fn a_cyclic_plan_still_runs_everything() {
+        let order = ordered(
+            vec![
+                assignment("a", &["b"]),
+                assignment("b", &["a"]),
+                assignment("c", &[]),
+            ],
+            &[],
+        );
+        assert_eq!(order.len(), 3);
+        assert_eq!(order[0], "c");
+    }
+
+    /// The resume case: work whose dependency finished in an earlier
+    /// dispatch is ready immediately.
+    #[test]
+    fn a_dependency_already_completed_counts_as_satisfied() {
+        assert_eq!(ordered(vec![assignment("ui", &["api"])], &["api"]), ["ui"]);
+    }
+
+    #[test]
+    fn a_dependency_that_was_dropped_does_not_block() {
+        // `skipped` keys are passed in as satisfied by the caller.
+        assert_eq!(ordered(vec![assignment("ui", &["gone"])], &["gone"]), ["ui"]);
+    }
+
+    #[test]
+    fn context_gives_dependencies_in_full_and_everyone_else_a_line() {
+        let mut api = assignment("api", &[]);
+        api.status = "completed".into();
+        api.output = Some("Added GET /leads returning JSON".into());
+        let mut docs = assignment("docs", &[]);
+        docs.status = "completed".into();
+        docs.output = Some("Wrote the README section".into());
+
+        let ui = assignment("ui", &["api"]);
+        let context = context_for(&ui, &[&api, &docs]);
+
+        assert!(context.contains("Added GET /leads returning JSON"));
+        assert!(context.contains("- Do docs (by Rex) — done"));
+        assert!(!context.contains("Wrote the README section"));
+    }
+
+    #[test]
+    fn context_is_empty_when_nothing_has_finished() {
+        assert_eq!(context_for(&assignment("a", &[]), &[]), "");
+    }
+
+    #[test]
+    fn context_stays_bounded_however_much_was_written() {
+        let mut huge = assignment("api", &[]);
+        huge.status = "completed".into();
+        huge.output = Some("x".repeat(50_000));
+        let ui = assignment("ui", &["api"]);
+        let context = context_for(&ui, &[&huge]);
+        assert!(context.chars().count() <= MAX_CONTEXT_CHARS + 1);
+    }
+}

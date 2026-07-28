@@ -2,7 +2,7 @@
 //! DB, worktrees, or MCP — used for meta-work like AI agent generation. The
 //! engine still runs under the user's own CLI login (compliance unchanged).
 
-use aichip_shared::{AichipEvent, ModelTier, PermissionMode};
+use aichip_shared::{AichipEvent, ModelTier, PermissionMode, ReasoningEffort};
 use aichip_engines::{Engine, RunSpec};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,6 +13,7 @@ pub async fn utility_run(
     engine: Arc<dyn Engine>,
     model_id: String,
     prompt: String,
+    effort: Option<ReasoningEffort>,
     timeout: Duration,
 ) -> anyhow::Result<String> {
     let cwd = home().join(".aichip").join("tmp");
@@ -23,6 +24,7 @@ pub async fn utility_run(
         prompt,
         model_tier: ModelTier::Complex,
         model_id,
+        effort,
         resume_session_id: None,
         permission_mode: PermissionMode::Reviewed,
         allowed_tools: vec![], // no tools: pure generation

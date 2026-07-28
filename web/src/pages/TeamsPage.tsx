@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, OrgRunSummary, Project, Team } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { OrgRunView } from "../components/orgs/OrgRunView";
+import { isWorking, needsYou, statusColor } from "../lib/runStatus";
 
 const PATTERNS: { key: Team["pattern"]; label: string; blurb: string }[] = [
   {
@@ -144,14 +145,8 @@ export default function TeamsPage() {
           <h2 className="mt-10 text-sm font-semibold">Organization runs</h2>
           <div className="mt-3 flex max-w-4xl flex-col gap-1.5">
             {orgRuns.map((r) => {
-              const live =
-                r.status === "running" || r.status === "starting" || r.status === "queued";
-              const color =
-                r.status === "completed"
-                  ? "var(--color-tier-easy)"
-                  : r.status === "failed"
-                    ? "var(--color-danger)"
-                    : "var(--color-tier-medium)";
+              const live = isWorking(r.status);
+              const color = statusColor(r.status);
               return (
                 <motion.button
                   layout
@@ -176,6 +171,11 @@ export default function TeamsPage() {
                   <span className="min-w-0 flex-1 truncate text-xs text-ink-dim">
                     {r.goal}
                   </span>
+                  {needsYou(r.status) && (
+                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                      needs you
+                    </span>
+                  )}
                   {r.costUsd != null && (
                     <span className="text-xs text-ink-dim">${r.costUsd.toFixed(3)}</span>
                   )}
@@ -234,6 +234,7 @@ function RunTeamModal({
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [goal, setGoal] = useState("");
+  const [reviewPlan, setReviewPlan] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -245,7 +246,7 @@ function RunTeamModal({
     try {
       if (team.pattern === "org") {
         // Orgs get their own live view — that's the whole point of watching.
-        const { runId } = await api.runOrg(team.id, projectId, goal.trim());
+        const { runId } = await api.runOrg(team.id, projectId, goal.trim(), reviewPlan);
         onOrgStarted(runId);
         return;
       }
@@ -305,6 +306,23 @@ function RunTeamModal({
               placeholder="What should the team accomplish?"
               className="mt-3 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
             />
+            {team.pattern === "org" && (
+              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2.5">
+                <input
+                  type="checkbox"
+                  checked={reviewPlan}
+                  onChange={(e) => setReviewPlan(e.target.checked)}
+                  className="mt-0.5 accent-[var(--color-accent)]"
+                />
+                <span className="text-xs">
+                  <span className="font-medium">Review the plan before work starts</span>
+                  <span className="mt-0.5 block text-ink-dim">
+                    The team pauses after planning so you can reword, reassign, or drop
+                    assignments. Cheaper than finding out an hour in.
+                  </span>
+                </span>
+              </label>
+            )}
           </>
         )}
 

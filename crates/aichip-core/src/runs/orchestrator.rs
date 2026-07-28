@@ -8,7 +8,10 @@
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
-use aichip_shared::{AichipEvent, EventEnvelope, ModelTier, PermissionMode, RunStatus, TierMapping};
+use aichip_shared::{
+    AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
+    TierMapping,
+};
 use aichip_engines::{Engine, RunSpec};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -73,6 +76,7 @@ pub(crate) struct StreamOutcome {
 pub(crate) struct BoundAgent {
     pub system_prompt: String,
     pub tier: ModelTier,
+    pub effort: Option<ReasoningEffort>,
     pub allowed_tools: Vec<String>,
     pub permission_preset: String,
 }
@@ -390,6 +394,7 @@ impl Orchestrator {
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
                     p.vcs,
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
+                    a.effort AS agent_effort,
                     a.allowed_tools AS agent_tools, a.permission_preset AS agent_preset,
                     a.name AS agent_name
              FROM runs r
@@ -441,6 +446,10 @@ impl Orchestrator {
         // allowed tools, and permission preset.
         let agent_prompt: Option<String> = run.get("agent_prompt");
         let agent_tier: Option<String> = run.get("agent_tier");
+        // A bound agent's thinking budget travels with it, same as its tier.
+        let effort = run
+            .get::<Option<String>, _>("agent_effort")
+            .and_then(|e| ReasoningEffort::parse(&e));
         let agent_tools: Option<Vec<String>> = run.get("agent_tools");
         let agent_preset: Option<String> = run.get("agent_preset");
 
@@ -502,6 +511,7 @@ impl Orchestrator {
             prompt,
             model_tier: tier,
             model_id,
+            effort,
             resume_session_id: run.get("session_id"),
             permission_mode,
             allowed_tools: agent_tools.unwrap_or_default(),
@@ -650,6 +660,7 @@ impl Orchestrator {
             prompt: user_message,
             model_tier: tier,
             model_id,
+            effort: None,
             resume_session_id: session_id,
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
@@ -724,7 +735,8 @@ impl Orchestrator {
             "SELECT r.engine, r.agent_id, c.task_id, c.content AS mention,
                     t.title, t.prompt AS task_prompt, t.board_column,
                     p.id AS project_id, p.path AS project_path,
-                    a.name AS agent_name, a.system_prompt, a.model_tier AS agent_tier
+                    a.name AS agent_name, a.system_prompt, a.model_tier AS agent_tier,
+                    a.effort AS agent_effort
              FROM runs r
              JOIN task_comments c ON c.id = r.comment_id
              JOIN tasks t ON t.id = c.task_id
@@ -807,6 +819,9 @@ impl Orchestrator {
             .await?;
 
         let system_prompt: String = row.get("system_prompt");
+        let reply_effort = row
+            .get::<Option<String>, _>("agent_effort")
+            .and_then(|e| ReasoningEffort::parse(&e));
         let persona = format!(
             "You are {agent_name}, an agent on this project's kanban board.{}",
             if system_prompt.is_empty() {
@@ -821,6 +836,7 @@ impl Orchestrator {
             prompt,
             model_tier: tier,
             model_id,
+            effort: reply_effort,
             resume_session_id: None,
             permission_mode: PermissionMode::Reviewed,
             // Read-only, and no MCP: a comment reply answers, it doesn't act.
@@ -997,6 +1013,7 @@ impl Orchestrator {
                             prompt: prompt.clone(),
                             model_tier: agent.as_ref().map(|a| a.tier).unwrap_or_default(),
                             model_id: model_id.clone(),
+                            effort: agent.as_ref().and_then(|a| a.effort),
                             resume_session_id: resume.clone(),
                             permission_mode,
                             allowed_tools: agent
@@ -1106,7 +1123,7 @@ impl Orchestrator {
     ) -> anyhow::Result<Option<BoundAgent>> {
         let Some(name) = name else { return Ok(None) };
         let row = sqlx::query(
-            "SELECT system_prompt, model_tier, allowed_tools, permission_preset
+            "SELECT system_prompt, model_tier, effort, allowed_tools, permission_preset
              FROM agents WHERE workspace_id=$1 AND name=$2",
         )
         .bind(workspace_id)
@@ -1117,6 +1134,9 @@ impl Orchestrator {
             system_prompt: r.get("system_prompt"),
             tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
                 .unwrap_or_default(),
+            effort: r
+                .get::<Option<String>, _>("effort")
+                .and_then(|e| ReasoningEffort::parse(&e)),
             allowed_tools: r.get("allowed_tools"),
             permission_preset: r.get("permission_preset"),
         }))

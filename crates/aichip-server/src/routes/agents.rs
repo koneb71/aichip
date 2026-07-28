@@ -1,7 +1,7 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_core::runs::utility::{extract_json, utility_run};
-use aichip_shared::ModelTier;
+use aichip_shared::{ModelTier, ReasoningEffort};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
@@ -71,6 +71,7 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "modelTier": r.get::<String, _>("model_tier"),
         "allowedTools": r.get::<Vec<String>, _>("allowed_tools"),
         "permissionPreset": r.get::<String, _>("permission_preset"),
+        "effort": r.get::<Option<String>, _>("effort"),
         "builtin": r.get::<bool, _>("builtin"),
     })
 }
@@ -112,6 +113,9 @@ struct AgentBody {
     allowed_tools: Vec<String>,
     #[serde(default = "default_preset")]
     permission_preset: String,
+    /// None leaves the CLI's own default alone.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 fn default_icon() -> String {
@@ -134,8 +138,8 @@ async fn create(
     let tier = serde_json::to_value(body.model_tier).unwrap();
     let row = sqlx::query(
         "INSERT INTO agents (workspace_id, name, icon, color, description, system_prompt,
-                             model_tier, allowed_tools, permission_preset)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
+                             model_tier, allowed_tools, permission_preset, effort)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
     )
     .bind(body.workspace_id)
     .bind(body.name.trim())
@@ -146,6 +150,7 @@ async fn create(
     .bind(tier.as_str().unwrap())
     .bind(&body.allowed_tools)
     .bind(&body.permission_preset)
+    .bind(body.effort.as_deref().filter(|e| !e.is_empty()))
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -162,6 +167,17 @@ struct AgentPatch {
     model_tier: Option<ModelTier>,
     allowed_tools: Option<Vec<String>>,
     permission_preset: Option<String>,
+    /// Present-but-null clears it back to the CLI default.
+    #[serde(default, deserialize_with = "double_option")]
+    effort: Option<Option<String>>,
+}
+
+/// Distinguish "field absent" from "field set to null" so clearing works.
+fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
 }
 
 async fn update(
@@ -178,8 +194,9 @@ async fn update(
             color = COALESCE($3, color), description = COALESCE($4, description),
             system_prompt = COALESCE($5, system_prompt), model_tier = COALESCE($6, model_tier),
             allowed_tools = COALESCE($7, allowed_tools),
-            permission_preset = COALESCE($8, permission_preset)
-         WHERE id = $9 RETURNING *",
+            permission_preset = COALESCE($8, permission_preset),
+            effort = CASE WHEN $10 THEN $9 ELSE effort END
+         WHERE id = $11 RETURNING *",
     )
     .bind(body.name)
     .bind(body.icon)
@@ -189,6 +206,8 @@ async fn update(
     .bind(tier)
     .bind(body.allowed_tools)
     .bind(body.permission_preset)
+    .bind(body.effort.clone().flatten().filter(|e| !e.is_empty()))
+    .bind(body.effort.is_some())
     .bind(id)
     .fetch_one(&state.db.pool)
     .await
@@ -247,7 +266,15 @@ async fn generate(
         .to_string();
     let prompt = format!("{GENERATE_PROMPT}{}\"", body.description.trim());
 
-    let output = utility_run(engine, model_id, prompt, Duration::from_secs(180))
+    // Designing a team is the kind of one-shot judgement that repays
+    // thinking time far more than it repays a bigger model.
+    let output = utility_run(
+        engine,
+        model_id,
+        prompt,
+        Some(ReasoningEffort::High),
+        Duration::from_secs(180),
+    )
         .await
         .map_err(internal)?;
     match extract_json(&output) {
