@@ -84,6 +84,9 @@ export function TaskComments({ taskId }: { taskId: string }) {
         agentColor: null,
         content,
         runId: null,
+        filePath: null,
+        line: null,
+        hunk: null,
         ts: new Date().toISOString(),
       },
     ]);
@@ -216,9 +219,19 @@ function CommentRow({ comment }: { comment: TaskComment }) {
       <motion.div
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-[90%] self-end rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white"
+        className="max-w-[90%] self-end"
       >
-        {comment.content}
+        {/* A note written against the diff says so, or it reads as a general
+            remark once you have scrolled away from the code. */}
+        {comment.filePath && (
+          <div className="mb-1 truncate text-right font-mono text-[11px] text-ink-dim">
+            {comment.filePath}
+            {comment.line ? `:${comment.line}` : ""}
+          </div>
+        )}
+        <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
+          {comment.content}
+        </div>
       </motion.div>
     );
   }

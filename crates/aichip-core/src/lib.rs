@@ -1,5 +1,6 @@
 pub mod bus;
 pub mod db;
+pub mod mcp_servers;
 pub mod queue;
 pub mod runs;
 pub mod scheduler;

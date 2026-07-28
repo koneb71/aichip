@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, AgentMemory, api, Effort, Tier, tierColor, tierModel } from "../../lib/api";
+import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor, tierModel } from "../../lib/api";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -26,6 +26,21 @@ export function AgentEditorDrawer({
   const [effort, setEffort] = useState<Effort | "">(agent?.effort ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which connected MCP servers this agent may use. Opt-in per agent: a
+  // frontend specialist has no business holding a production database
+  // connection just because the workspace has one configured.
+  const [servers, setServers] = useState<McpServer[]>([]);
+  const [enabledServers, setEnabledServers] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.mcpServers(workspaceId).then((r) => setServers(r.servers)).catch(() => {});
+    if (agent) {
+      api
+        .agentMcpServers(agent.id)
+        .then((r) => setEnabledServers(r.serverIds))
+        .catch(() => {});
+    }
+  }, [workspaceId, agent]);
 
   const save = async () => {
     if (!name.trim() || busy) return;
@@ -42,8 +57,12 @@ export function AgentEditorDrawer({
       effort: effort || null,
     };
     try {
-      if (agent) await api.updateAgent(agent.id, body);
-      else await api.createAgent(body);
+      // A new agent has no id until it exists, so the server list is saved
+      // second either way.
+      const saved = agent ? await api.updateAgent(agent.id, body) : await api.createAgent(body);
+      if (servers.length > 0) {
+        await api.setAgentMcpServers(saved.id, enabledServers);
+      }
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -64,7 +83,7 @@ export function AgentEditorDrawer({
       animate={{ x: 0 }}
       exit={{ x: 480 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-[480px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-line bg-panel"
     >
       <div className="flex items-center justify-between border-b border-line p-5">
         <div className="text-base font-semibold">
@@ -176,6 +195,42 @@ export function AgentEditorDrawer({
             ))}
           </div>
         </Field>
+        {servers.length > 0 && (
+          <Field label="Connections">
+            <div className="space-y-1.5">
+              {servers.map((s) => (
+                <label
+                  key={s.id}
+                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2.5 hover:bg-panel-2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledServers.includes(s.id)}
+                    onChange={(e) =>
+                      setEnabledServers((prev) =>
+                        e.target.checked
+                          ? [...prev, s.id]
+                          : prev.filter((id) => id !== s.id),
+                      )
+                    }
+                    className="mt-0.5 accent-[var(--color-accent)]"
+                  />
+                  <span className="min-w-0 text-xs">
+                    <span className="font-medium">{s.name}</span>
+                    <span className="mt-0.5 block truncate text-ink-dim">
+                      {s.transport === "stdio"
+                        ? [s.command, ...s.args].join(" ")
+                        : s.url}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[11px] text-ink-dim">
+              Tools from these servers become available to this agent on every run.
+            </div>
+          </Field>
+        )}
         {error && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
         )}

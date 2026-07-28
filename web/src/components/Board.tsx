@@ -42,14 +42,17 @@ export function Board({
     setOverCol(null);
   };
 
+  // Columns share the width when there is enough of it and scroll sideways
+  // when there isn't — four columns squeezed onto a phone would fit nothing
+  // but the card titles.
   return (
-    <div className="grid h-full grid-cols-4 gap-4 overflow-x-auto bg-surface p-5">
+    <div className="grid h-full grid-cols-[repeat(4,minmax(240px,1fr))] gap-3 overflow-x-auto bg-surface p-3 sm:gap-4 sm:p-5">
       {COLUMNS.map((col) => {
         const colTasks = tasks.filter((t) => t.boardColumn === col.key);
         return (
           <div
             key={col.key}
-            className={`flex min-h-0 min-w-52 flex-col rounded-xl transition-colors ${
+            className={`flex min-h-0 min-w-0 flex-col rounded-xl transition-colors ${
               dragId && overCol === col.key ? "bg-panel-2/60 ring-1 ring-accent/40" : ""
             }`}
             onDragOver={(e) => {

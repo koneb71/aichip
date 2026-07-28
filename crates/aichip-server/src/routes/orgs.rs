@@ -184,7 +184,7 @@ async fn detail(
 
     let assignments = sqlx::query(
         "SELECT id, step_key, status, assignee, title, brief, output_text, depends_on,
-                done_when, size, origin, attempt, started_at, finished_at
+                done_when, size, touches, origin, attempt, started_at, finished_at
          FROM steps WHERE run_id = $1
          ORDER BY position NULLS LAST, started_at NULLS LAST, id",
     )
@@ -221,6 +221,7 @@ async fn detail(
             "output": r.get::<Option<String>, _>("output_text"),
             "dependsOn": r.get::<Vec<String>, _>("depends_on"),
             "doneWhen": r.get::<Vec<String>, _>("done_when"),
+            "touches": r.get::<Vec<String>, _>("touches"),
             "size": r.get::<Option<String>, _>("size"),
             "origin": r.get::<String, _>("origin"),
             "attempt": r.get::<i32, _>("attempt"),

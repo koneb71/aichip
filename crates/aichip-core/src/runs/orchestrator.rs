@@ -51,6 +51,29 @@ on the user's board for review. Use mcp__aichip__list_tasks / get_task_status to
 progress, and mcp__aichip__list_agents to pick a specialized agent for a task. Keep replies \
 short and conversational; the user sees them in a chat panel.";
 
+/// One attempt in a bake-off: an agent, a tier, or both.
+///
+/// Either field may be absent — "the same agent at three effort levels" and
+/// "three different agents at their own tiers" are both things you'd want to
+/// compare, and the label is what the user reads either way.
+#[derive(Debug, Clone)]
+pub struct Variant {
+    pub label: String,
+    pub agent_id: Option<Uuid>,
+    pub tier: Option<String>,
+}
+
+/// Why the queue is, or isn't, dispatching.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum QueueGate {
+    Open,
+    /// Someone pressed pause. Cleared by pressing resume.
+    Paused,
+    /// Today's spend reached the cap. Clears itself at midnight — there is no
+    /// resume for this one, which is why it can't just be a bool.
+    OverBudget { spent_today: f64, cap_usd: f64 },
+}
+
 pub struct Orchestrator {
     pub db: Db,
     pub bus: EventBus,
@@ -293,6 +316,154 @@ impl Orchestrator {
         Ok(run_id)
     }
 
+    /// One brief, several attempts, each in its own checkout.
+    ///
+    /// Deliberately does *not* touch the task's own worktree: until a winner
+    /// is picked the card is unchanged, so a bake-off you abandon costs
+    /// nothing but the tokens.
+    pub async fn enqueue_bakeoff(
+        &self,
+        task_id: Uuid,
+        variants: &[Variant],
+    ) -> anyhow::Result<Vec<Uuid>> {
+        if variants.len() < 2 {
+            anyhow::bail!("a bake-off needs at least two variants to compare");
+        }
+        let engine: String = sqlx::query("SELECT engine FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&self.db.pool)
+            .await?
+            .get("engine");
+
+        let mut ids = vec![];
+        for variant in variants {
+            let row = sqlx::query(
+                "INSERT INTO runs (task_id, agent_id, tier_override, variant_label,
+                                   status, trigger, engine)
+                 VALUES ($1,$2,$3,$4,'queued','bakeoff',$5) RETURNING id",
+            )
+            .bind(task_id)
+            .bind(variant.agent_id)
+            .bind(variant.tier.as_deref())
+            .bind(&variant.label)
+            .bind(&engine)
+            .fetch_one(&self.db.pool)
+            .await?;
+            let run_id: Uuid = row.get("id");
+            // Below interactive work: a bake-off is exploratory, and it is
+            // several runs at once against one rate limit.
+            sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 8)")
+                .bind(run_id)
+                .execute(&self.db.pool)
+                .await?;
+            ids.push(run_id);
+        }
+        Ok(ids)
+    }
+
+    /// Adopt one variant's work as the task's, and throw the rest away.
+    ///
+    /// The winner's worktree *becomes* the card's, rather than being copied
+    /// or merged: it already holds the branch, the commits, and the diff the
+    /// user just read and chose.
+    pub async fn keep_variant(&self, run_id: Uuid) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT r.task_id, r.worktree_path, r.variant_label, p.path AS project_path
+             FROM runs r
+             JOIN tasks t ON t.id = r.task_id
+             JOIN projects p ON p.id = t.project_id
+             WHERE r.id = $1 AND r.variant_label IS NOT NULL",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("that run is not a bake-off variant"))?;
+
+        let task_id: Uuid = row.get("task_id");
+        let project_path: String = row.get("project_path");
+        let worktree: String = row
+            .get::<Option<String>, _>("worktree_path")
+            .ok_or_else(|| anyhow::anyhow!("that variant never produced a checkout"))?;
+
+        let branch = crate::worktrees::manager::current_branch(std::path::Path::new(&worktree))
+            .await
+            .unwrap_or_default();
+
+        sqlx::query(
+            "UPDATE tasks SET worktree_path = $1, branch = $2, board_column = 'review'
+             WHERE id = $3",
+        )
+        .bind(&worktree)
+        .bind(&branch)
+        .bind(task_id)
+        .execute(&self.db.pool)
+        .await?;
+
+        // The losers' checkouts are removed, but their runs stay: what the
+        // other attempts cost and produced is the record of why this one won.
+        let losers: Vec<(Uuid, Option<String>)> = sqlx::query_as(
+            "SELECT id, worktree_path FROM runs
+             WHERE task_id = $1 AND variant_label IS NOT NULL AND id <> $2",
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_all(&self.db.pool)
+        .await?;
+        for (loser, path) in losers {
+            if let Some(path) = path {
+                let repo = std::path::Path::new(&project_path);
+                if let Err(e) = self.worktrees.discard(repo, std::path::Path::new(&path)).await {
+                    // Disk left behind is untidy, not broken.
+                    tracing::warn!(%loser, error=%e, "could not remove losing variant's worktree");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Act on a review note left against a line of the diff.
+    ///
+    /// A task run rather than a comment reply, and that distinction is the
+    /// whole feature: comment replies are read-only by design, so the only
+    /// way to act on review feedback was to re-run the entire task. This
+    /// reuses the task's existing worktree, so the fix lands on the same
+    /// branch and shows up in the same diff you were reading.
+    pub async fn enqueue_review_fix(&self, comment_id: Uuid) -> anyhow::Result<Uuid> {
+        let c = sqlx::query(
+            "SELECT c.task_id, c.content, c.file_path, c.line, c.hunk, t.engine, t.prompt
+             FROM task_comments c JOIN tasks t ON t.id = c.task_id WHERE c.id = $1",
+        )
+        .bind(comment_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let prompt = review_fix_prompt(
+            &c.get::<String, _>("prompt"),
+            c.get::<Option<String>, _>("file_path").as_deref(),
+            c.get::<Option<i32>, _>("line"),
+            c.get::<Option<String>, _>("hunk").as_deref(),
+            &c.get::<String, _>("content"),
+        );
+
+        let row = sqlx::query(
+            "INSERT INTO runs (task_id, comment_id, prompt_override, status, trigger, engine)
+             VALUES ($1, $2, $3, 'queued', 'review', $4) RETURNING id",
+        )
+        .bind(c.get::<Uuid, _>("task_id"))
+        .bind(comment_id)
+        .bind(&prompt)
+        .bind(c.get::<String, _>("engine"))
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = row.get("id");
+        // Above a normal task run: someone is sitting there reading the diff.
+        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 14)")
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
+    }
+
     /// Queue a workflow execution. `trigger` distinguishes manual runs from
     /// scheduled ones for the activity view.
     pub async fn enqueue_workflow(
@@ -351,13 +522,19 @@ impl Orchestrator {
     /// On boot: anything left in starting/running died with the previous
     /// process. Mark failed; the UI offers one-click resume via session_id.
     pub async fn recover_orphans(&self) -> anyhow::Result<u64> {
-        let res = sqlx::query(
+        let mut tx = self.db.pool.begin().await?;
+        let orphans: Vec<Uuid> = sqlx::query_scalar(
             "UPDATE runs SET status='failed', error_reason='orphaned by server restart',
-             finished_at=now() WHERE status IN ('starting','running','waiting_permission')",
+             finished_at=now() WHERE status IN ('starting','running','waiting_permission')
+             RETURNING id",
         )
-        .execute(&self.db.pool)
+        .fetch_all(&mut *tx)
         .await?;
-        Ok(res.rows_affected())
+        // The steps died with the run. Leaving them at 'running' is what makes
+        // a failed team run still animate a teammate as "working…".
+        settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
+        tx.commit().await?;
+        Ok(orphans.len() as u64)
     }
 
     /// Queue loop: claim ready runs under the concurrency semaphore.
@@ -388,7 +565,128 @@ impl Orchestrator {
         }
     }
 
+    /// Is the queue paused? Read per tick rather than cached, so the pause
+    /// takes effect on the next claim instead of whenever a process happens
+    /// to restart.
+    pub async fn queue_paused(&self) -> bool {
+        matches!(self.queue_gate().await, QueueGate::Paused)
+    }
+
+    /// Why the queue is or isn't handing out work.
+    ///
+    /// One answer for both reasons it can stop, because the UI has to tell
+    /// them apart: a pause you chose is resumed with a click, while a spent
+    /// budget clears on its own at midnight and a resume button would be a
+    /// lie.
+    pub async fn queue_gate(&self) -> QueueGate {
+        // Scalar subqueries rather than aggregates: `value` is jsonb, and
+        // there is no max(jsonb) — an aggregate here fails at runtime, which
+        // the fallback below would quietly turn into "queue wide open".
+        let settings = sqlx::query(
+            "SELECT (SELECT value FROM settings WHERE key = 'queue_paused')     AS paused,
+                    (SELECT value FROM settings WHERE key = 'daily_budget_usd') AS budget",
+        )
+        .fetch_optional(&self.db.pool)
+        .await;
+
+        let row = match settings {
+            Ok(Some(row)) => row,
+            // Never fail closed on a read error — a database hiccup must not
+            // silently stop every run on the machine. But say so: failing
+            // open without a word is how a broken gate looks like no gate.
+            other => {
+                if let Err(e) = other {
+                    tracing::error!(error=%e, "queue gate read failed; dispatching anyway");
+                }
+                return QueueGate::Open;
+            }
+        };
+        if row
+            .get::<Option<serde_json::Value>, _>("paused")
+            .and_then(|v| serde_json::from_value::<bool>(v).ok())
+            .unwrap_or(false)
+        {
+            return QueueGate::Paused;
+        }
+
+        let Some(cap_usd) = row
+            .get::<Option<serde_json::Value>, _>("budget")
+            .and_then(|v| serde_json::from_value::<f64>(v).ok())
+            .filter(|c| *c > 0.0)
+        else {
+            return QueueGate::Open; // No cap set: the common case, one query.
+        };
+
+        let spent_today = self.spent_today().await;
+        if spent_today >= cap_usd {
+            QueueGate::OverBudget { spent_today, cap_usd }
+        } else {
+            QueueGate::Open
+        }
+    }
+
+    /// Spend since local midnight, matching the day buckets the activity view
+    /// charts so the two can never disagree about what "today" cost.
+    pub async fn spent_today(&self) -> f64 {
+        sqlx::query_scalar::<_, Option<f64>>(
+            "SELECT SUM(cost_usd) FROM runs WHERE created_at >= date_trunc('day', now())",
+        )
+        .fetch_one(&self.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0.0)
+    }
+
+    /// Stop or resume dispatching. Runs already executing are left alone —
+    /// pausing is about not spending more, not about throwing away work in
+    /// progress.
+    pub async fn set_queue_paused(&self, paused: bool) -> anyhow::Result<()> {
+        self.put_setting("queue_paused", serde_json::json!(paused)).await
+    }
+
+    pub async fn daily_budget(&self) -> Option<f64> {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM settings WHERE key = 'daily_budget_usd'",
+        )
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_value::<f64>(v).ok())
+        .filter(|c| *c > 0.0)
+    }
+
+    /// `None` removes the cap. A zero or negative cap would mean "never run
+    /// anything", which is what the pause is for, so it is stored as no cap.
+    pub async fn set_daily_budget(&self, cap: Option<f64>) -> anyhow::Result<()> {
+        match cap.filter(|c| *c > 0.0) {
+            Some(cap) => self.put_setting("daily_budget_usd", serde_json::json!(cap)).await,
+            None => {
+                sqlx::query("DELETE FROM settings WHERE key = 'daily_budget_usd'")
+                    .execute(&self.db.pool)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn put_setting(&self, key: &str, value: serde_json::Value) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.db.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn claim_next(&self) -> anyhow::Result<Option<Uuid>> {
+        if !matches!(self.queue_gate().await, QueueGate::Open) {
+            return Ok(None);
+        }
         let row = sqlx::query(
             "DELETE FROM queue WHERE run_id = (
                  SELECT run_id FROM queue
@@ -425,8 +723,14 @@ impl Orchestrator {
 
     async fn execute_task_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
         let run = sqlx::query(
-            "SELECT r.id, r.engine, r.session_id, t.id AS task_id, t.prompt, t.model_tier,
-                    t.agent_id,
+            // A bake-off variant overrides the card: its own agent, its own
+            // tier, its own worktree. COALESCE keeps every ordinary run on
+            // exactly the path it was on before.
+            "SELECT r.id, r.engine, r.session_id, t.id AS task_id,
+                    COALESCE(r.prompt_override, t.prompt) AS prompt,
+                    t.model_tier, r.tier_override,
+                    COALESCE(r.agent_id, t.agent_id) AS agent_id,
+                    r.variant_label, r.worktree_path AS run_worktree,
                     t.permission_mode, t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
                     p.vcs,
@@ -437,7 +741,7 @@ impl Orchestrator {
              FROM runs r
              JOIN tasks t ON t.id = r.task_id
              JOIN projects p ON p.id = t.project_id
-             LEFT JOIN agents a ON a.id = t.agent_id
+             LEFT JOIN agents a ON a.id = COALESCE(r.agent_id, t.agent_id)
              WHERE r.id = $1",
         )
         .bind(run_id)
@@ -460,21 +764,42 @@ impl Orchestrator {
         // review step; `settle` below sends the task straight to done because
         // there is no diff to look at.
         let in_place = run.get::<String, _>("vcs") != "git";
-        let cwd = match run.get::<Option<String>, _>("worktree_path") {
+        // A bake-off variant gets its own checkout, keyed by run rather than
+        // task — the whole point is that the attempts don't see each other,
+        // and sharing the task's worktree would have them overwrite one
+        // another's answer.
+        let variant: Option<String> = run.get("variant_label");
+        let existing = match &variant {
+            Some(_) => run.get::<Option<String>, _>("run_worktree"),
+            None => run.get::<Option<String>, _>("worktree_path"),
+        };
+        let cwd = match existing {
             Some(p) => PathBuf::from(p),
             None if in_place => project_path.clone(),
             None => {
                 let title: String = run.get("title");
+                let (key, slug) = match &variant {
+                    Some(label) => (run_id, format!("{}-{}", slugify(&title), slugify(label))),
+                    None => (task_id, slugify(&title)),
+                };
                 let wt = self
                     .worktrees
-                    .create(&project_path, &default_branch, task_id, &slugify(&title))
+                    .create(&project_path, &default_branch, key, &slug)
                     .await?;
-                sqlx::query("UPDATE tasks SET worktree_path=$1, branch=$2 WHERE id=$3")
-                    .bind(wt.path.to_string_lossy().as_ref())
-                    .bind(&wt.branch)
-                    .bind(task_id)
-                    .execute(&self.db.pool)
-                    .await?;
+                if variant.is_some() {
+                    sqlx::query("UPDATE runs SET worktree_path=$1 WHERE id=$2")
+                        .bind(wt.path.to_string_lossy().as_ref())
+                        .bind(run_id)
+                        .execute(&self.db.pool)
+                        .await?;
+                } else {
+                    sqlx::query("UPDATE tasks SET worktree_path=$1, branch=$2 WHERE id=$3")
+                        .bind(wt.path.to_string_lossy().as_ref())
+                        .bind(&wt.branch)
+                        .bind(task_id)
+                        .execute(&self.db.pool)
+                        .await?;
+                }
                 wt.path
             }
         };
@@ -490,7 +815,13 @@ impl Orchestrator {
         let agent_tools: Option<Vec<String>> = run.get("agent_tools");
         let agent_preset: Option<String> = run.get("agent_preset");
 
-        let tier_str: String = agent_tier.unwrap_or_else(|| run.get("model_tier"));
+        // Normally a bound agent's tier wins over the card's. A bake-off
+        // variant inverts that — comparing tiers means the variant's tier has
+        // to beat the agent's, or every variant would run the same model.
+        let tier_str: String = match run.get::<Option<String>, _>("tier_override") {
+            Some(explicit) => explicit,
+            None => agent_tier.unwrap_or_else(|| run.get("model_tier")),
+        };
         let tier: ModelTier =
             serde_json::from_value(serde_json::Value::String(tier_str)).unwrap_or_default();
         let mode_str: String = agent_preset.unwrap_or_else(|| run.get("permission_mode"));
@@ -509,12 +840,33 @@ impl Orchestrator {
             permission_mode
         };
 
+        // Servers this agent opted into. Loaded before the config is written
+        // because they go into the same file as aichip's own endpoint.
+        let bound_agent: Option<Uuid> = run.get("agent_id");
+        let user_servers = crate::mcp_servers::for_agent(&self.db, bound_agent)
+            .await
+            .unwrap_or_else(|e| {
+                // A broken server row must not take the whole run down; the
+                // agent simply runs without the extra capability.
+                tracing::warn!(%run_id, error=%e, "could not load agent MCP servers");
+                vec![]
+            });
+
         let mcp_config_path = match (&self.mcp_base_url, engine_id.as_str()) {
-            (Some(base), "claude-code") => {
-                Some(write_mcp_config(base, &format!("mcp/run/{run_id}"), run_id).await?)
-            }
+            (Some(base), "claude-code") => Some(
+                write_mcp_config_with(base, &format!("mcp/run/{run_id}"), run_id, &user_servers)
+                    .await?,
+            ),
             _ => None,
         };
+
+        // An empty allow-list means "no --allowedTools flag", which allows
+        // everything — so only extend a list that already exists. Appending
+        // to an empty one would silently narrow the run to MCP tools alone.
+        let mut allowed_tools = agent_tools.unwrap_or_default();
+        if !allowed_tools.is_empty() {
+            allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+        }
 
         let model_id = self.tiers.model_for(tier).to_string();
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
@@ -532,7 +884,6 @@ impl Orchestrator {
 
         // A bound agent carries its memory into the run: what it did on this
         // project before is context, and what it does now becomes memory below.
-        let bound_agent: Option<Uuid> = run.get("agent_id");
         let project_id: Uuid = run.get("project_id");
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
@@ -551,7 +902,7 @@ impl Orchestrator {
             effort,
             resume_session_id: run.get("session_id"),
             permission_mode,
-            allowed_tools: agent_tools.unwrap_or_default(),
+            allowed_tools,
             append_system_prompt: match (agent_prompt.filter(|p| !p.is_empty()), memory_block) {
                 (Some(p), Some(m)) => Some(format!("{p}{m}")),
                 (Some(p), None) => Some(p),
@@ -568,7 +919,12 @@ impl Orchestrator {
                 // answers in the dashboard; raise the CLI's tool timeout so
                 // it waits as long as the broker does (15 min).
                 ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
-                ("MCP_TIMEOUT".to_string(), "60000".to_string()),
+                // Server startup. 60s was ample when the only server was
+                // aichip's own local HTTP endpoint; a user-connected server
+                // may cold-start `npx -y …` and fetch a package first, and a
+                // server that misses this window fails every tool call after
+                // it with an unhelpful "operation timed out".
+                ("MCP_TIMEOUT".to_string(), "180000".to_string()),
             ]),
         };
 
@@ -1362,12 +1718,17 @@ impl Orchestrator {
         reason: Option<String>,
     ) -> anyhow::Result<()> {
         self.forget_cancel(run_id);
+        let mut tx = self.db.pool.begin().await?;
         sqlx::query("UPDATE runs SET status=$1, error_reason=$2, finished_at=now() WHERE id=$3")
             .bind(status.as_str())
             .bind(reason)
             .bind(run_id)
-            .execute(&self.db.pool)
+            .execute(&mut *tx)
             .await?;
+        // A cancel mid-step, or a failure that skipped the per-step bookkeeping,
+        // leaves step rows non-terminal under a terminal run. Normally a no-op.
+        settle_steps(&mut tx, &[run_id], status).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1408,6 +1769,46 @@ impl Orchestrator {
     }
 }
 
+/// Drag step rows to a terminal state along with the run that owned them.
+///
+/// The UI derives "who is working right now" from step status, so a step left
+/// at 'running' under a failed run reads as a live teammate forever. Two
+/// buckets, because they are not the same fact: a step that was mid-flight
+/// really did fail (or was canceled with the run), while a step still queued
+/// was never opened — calling that one 'failed' would paint its assignee as
+/// blocked on work they never started.
+pub(crate) async fn settle_steps(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_ids: &[Uuid],
+    run_status: RunStatus,
+) -> anyhow::Result<()> {
+    if run_ids.is_empty() {
+        return Ok(());
+    }
+    let interrupted = if run_status == RunStatus::Canceled {
+        RunStatus::Canceled
+    } else {
+        RunStatus::Failed
+    };
+    sqlx::query(
+        "UPDATE steps SET status=$1, finished_at=now()
+         WHERE run_id = ANY($2)
+           AND status IN ('starting','running','waiting_permission','rate_limited')",
+    )
+    .bind(interrupted.as_str())
+    .bind(run_ids)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE steps SET status='skipped', finished_at=now()
+         WHERE run_id = ANY($1) AND status='queued'",
+    )
+    .bind(run_ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
     let row = sqlx::query("SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM events WHERE run_id=$1")
         .bind(run_id)
@@ -1419,6 +1820,20 @@ pub(crate) async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
 /// Write a per-run MCP config pointing the engine at one of aichip's MCP
 /// endpoints. Lives under ~/.aichip/mcp/, keyed by run id.
 pub(crate) async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uuid) -> anyhow::Result<PathBuf> {
+    write_mcp_config_with(base_url, url_path, run_id, &[]).await
+}
+
+/// As above, plus any servers the run's agent opted into.
+///
+/// One file per run rather than a shared one: the set of servers depends on
+/// which agent is running, so two concurrent runs legitimately need
+/// different configs.
+pub(crate) async fn write_mcp_config_with(
+    base_url: &str,
+    url_path: &str,
+    run_id: Uuid,
+    extra: &[crate::mcp_servers::McpServer],
+) -> anyhow::Result<PathBuf> {
     let dir = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1426,13 +1841,65 @@ pub(crate) async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uui
         .join("mcp");
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{run_id}.json"));
-    let config = serde_json::json!({
+    let mut config = serde_json::json!({
         "mcpServers": {
             "aichip": { "type": "http", "url": format!("{base_url}/{url_path}") }
         }
     });
+    crate::mcp_servers::merge_into(&mut config, extra);
     tokio::fs::write(&path, serde_json::to_vec_pretty(&config)?).await?;
     Ok(path)
+}
+
+/// Turn a review note into a brief for the agent.
+///
+/// Pure so the shape can be tested without a database. Three things have to
+/// survive into the prompt: where the note points, what the code looked like
+/// when it was written, and a scope limit — a review note is not licence to
+/// keep working on the task.
+fn review_fix_prompt(
+    task_prompt: &str,
+    file_path: Option<&str>,
+    line: Option<i32>,
+    hunk: Option<&str>,
+    note: &str,
+) -> String {
+    let mut prompt = String::from("You are acting on review feedback for work you already did.\n\n");
+    match (file_path, line) {
+        (Some(path), Some(line)) => {
+            prompt.push_str(&format!("The reviewer commented on {path}, around line {line}.\n"))
+        }
+        (Some(path), None) => prompt.push_str(&format!("The reviewer commented on {path}.\n")),
+        _ => prompt.push_str("The reviewer commented on the change as a whole.\n"),
+    }
+    if let Some(hunk) = hunk.filter(|h| !h.trim().is_empty()) {
+        // Line numbers drift the moment you edit; the snapshot is what
+        // actually identifies the code being talked about.
+        prompt.push_str(&format!(
+            "\nThe code as it stood when they wrote the note:\n```diff\n{}\n```\n",
+            clip_chars(hunk, 2000),
+        ));
+    }
+    prompt.push_str(&format!("\nTheir note:\n{note}\n"));
+    prompt.push_str(&format!(
+        "\nFor context, the original task was:\n{}\n",
+        clip_chars(task_prompt, 800),
+    ));
+    prompt.push_str(
+        "\nMake exactly this change and stop. Do not refactor beyond it, do not \
+         revisit other review notes, and do not continue the original task. If \
+         the note is a question rather than a request, answer it without editing \
+         anything. Finish with one short line saying what you changed.",
+    );
+    prompt
+}
+
+/// Truncate on a character boundary, marking that something was dropped.
+fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect::<String>() + "\n…"
 }
 
 pub(crate) fn slugify(s: &str) -> String {
@@ -1451,6 +1918,52 @@ pub(crate) fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_review_note_becomes_a_scoped_brief() {
+        let prompt = review_fix_prompt(
+            "Build the leads finder",
+            Some("backend/app/routes.py"),
+            Some(42),
+            Some("- return None\n+ return leads"),
+            "This swallows the error; raise instead.",
+        );
+        assert!(prompt.contains("backend/app/routes.py"));
+        assert!(prompt.contains("line 42"));
+        assert!(prompt.contains("return leads"), "the hunk grounds the note");
+        assert!(prompt.contains("raise instead"));
+        // The scope limit is the point: a review note must not restart the task.
+        assert!(prompt.contains("do not continue the original task"));
+    }
+
+    #[test]
+    fn a_note_without_an_anchor_still_works() {
+        // Card-level review feedback has no file or line.
+        let prompt = review_fix_prompt("Do the thing", None, None, None, "Rename the module.");
+        assert!(prompt.contains("the change as a whole"));
+        assert!(prompt.contains("Rename the module."));
+        assert!(!prompt.contains("```diff"), "no hunk, no empty code fence");
+    }
+
+    #[test]
+    fn a_huge_hunk_cannot_crowd_out_the_note() {
+        let prompt = review_fix_prompt(
+            &"task ".repeat(1000),
+            Some("a.rs"),
+            Some(1),
+            Some(&"x".repeat(50_000)),
+            "Fix it.",
+        );
+        assert!(prompt.chars().count() < 4000);
+        assert!(prompt.contains("Fix it."));
+    }
+
+    /// Clipping by chars, not bytes — a a multi-byte boundary would panic.
+    #[test]
+    fn clipping_respects_character_boundaries() {
+        assert_eq!(clip_chars("héllo wörld", 5), "héllo\n…");
+        assert_eq!(clip_chars("short", 99), "short");
+    }
 
     /// The bug this guards: cancel channels were keyed by step id while
     /// `cancel()` looked them up by run id, so cancelling any multi-step

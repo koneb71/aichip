@@ -9,7 +9,7 @@
 //! forever gets refused by `apply_decision`, not by wording.
 
 use super::plan::{
-    inspect_plan, resolve_assignee, Plan, PlannedTask, Severity, TaskSize,
+    inspect_plan, resolve_assignee, Plan, PlannedTask, Severity,
 };
 use super::roster::Member;
 use super::Assignment;
@@ -231,6 +231,8 @@ pub fn clip(text: &str, max_chars: usize) -> String {
     format!("{}…", clipped.trim_end())
 }
 
+/// `finished_title` is one title, or several joined when a batch finished
+/// together — a parallel batch reports as one hand-off.
 pub fn replan_prompt(
     who: &str,
     finished_title: &str,
@@ -262,7 +264,8 @@ pub fn replan_prompt(
          \x20\"drop\": [\"keys that are no longer needed\"],\n\
          \x20\"revise\": [{{\"key\": \"…\", \"brief\": \"…\", \"assignee\": \"…\", \"done_when\": [\"…\"]}}],\n\
          \x20\"add\": [{{\"key\": \"…\", \"title\": \"…\", \"brief\": \"…\", \"assignee\": \"…\", \
-         \"done_when\": [\"…\"], \"size\": \"small\", \"depends_on\": [\"…\"]}}]}}\n\n\
+         \"done_when\": [\"…\"], \"size\": \"small\", \"depends_on\": [\"…\"], \
+         \"touches\": [\"paths it will change\"]}}]}}\n\n\
          Add work only when that report revealed something the plan genuinely missed — not to \
          polish, not to gold-plate. You may add at most {add_budget} more assignments for the rest \
          of this run.",
@@ -292,6 +295,7 @@ pub fn triage_prompt(who: &str, title: &str, reason: &str, output: &str) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::org::plan::TaskSize;
     use aichip_shared::ModelTier;
 
     fn member(name: &str) -> Member {
@@ -316,6 +320,7 @@ mod tests {
             done_when: vec!["ok".into()],
             size: TaskSize::Medium,
             depends_on: vec![],
+            touches: vec![],
             status: "queued".into(),
             output: None,
             attempt: 1,
@@ -331,6 +336,7 @@ mod tests {
             done_when: vec!["ok".into()],
             size: TaskSize::Small,
             depends_on: vec![],
+            touches: vec![],
         }
     }
 

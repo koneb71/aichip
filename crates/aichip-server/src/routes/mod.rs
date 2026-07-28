@@ -1,8 +1,10 @@
+pub mod activity;
 pub mod agents;
 pub mod attachments;
 pub mod chat;
 pub mod files;
 pub mod fs;
+pub mod mcp_servers;
 pub mod orgs;
 pub mod projects;
 pub mod search;
@@ -38,6 +40,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(attachments::router())
         .merge(search::router())
         .merge(chat::router())
+        .merge(activity::router())
+        .merge(mcp_servers::router())
 }
 
 async fn health() -> Json<Value> {

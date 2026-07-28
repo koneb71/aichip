@@ -10,11 +10,15 @@ import { ChatPanel } from "../components/chat/ChatPanel";
 import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
 import { FilesPanel } from "../components/files/FilesPanel";
 import { OrgRunView } from "../components/orgs/OrgRunView";
+import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
   { key: "workflows", label: "Workflows" },
   { key: "files", label: "Files" },
+  // Docked beside the board on a wide screen; below `lg` there is no room for
+  // a 380px column, so the chat becomes a tab like the others.
+  { key: "chat", label: "Chat", narrowOnly: true },
 ] as const;
 
 type Tab = (typeof TABS)[number]["key"];
@@ -28,6 +32,7 @@ export default function ProjectPage() {
   const [selected, setSelected] = useState<Task | null>(null);
   const [tab, setTab] = useState<Tab>("board");
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
+  const narrow = useMediaQuery(NARROW);
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -71,13 +76,17 @@ export default function ProjectPage() {
 
   if (!projectId) return null;
 
+  // The chat tab only exists while it has nowhere to dock, so a viewport that
+  // widens while it is selected must not leave the page on a dead tab.
+  const activeTab: Tab = tab === "chat" && !narrow ? "board" : tab;
+
   return (
-    <div className="grid h-full grid-cols-[380px_1fr]">
-      <ChatPanel projectId={projectId} />
+    <div className="grid h-full grid-cols-[minmax(0,1fr)] lg:grid-cols-[380px_minmax(0,1fr)]">
+      {!narrow && <ChatPanel projectId={projectId} />}
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        <header className="flex items-center gap-3 border-b border-line bg-panel px-6 py-3">
-          <div className="text-base font-semibold">{project?.name ?? "Project"}</div>
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel px-4 py-3 lg:px-6">
+          <div className="truncate text-base font-semibold">{project?.name ?? "Project"}</div>
           {project?.vcs === "none" && (
             <span
               title={project.vcsNote ?? undefined}
@@ -86,42 +95,43 @@ export default function ProjectPage() {
               edits in place
             </span>
           )}
-          <div className="flex gap-1 rounded-lg bg-panel-2 p-0.5">
-            {TABS.map((t) => (
+          <div className="flex min-w-0 gap-1 overflow-x-auto rounded-lg bg-panel-2 p-0.5">
+            {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                  tab === t.key ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
+                className={`shrink-0 rounded-md px-3 py-1 text-xs transition-colors ${
+                  activeTab === t.key ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
                 }`}
               >
                 {t.label}
               </button>
             ))}
           </div>
-          {tab === "board" && (
+          {activeTab === "board" && (
             <button
               onClick={() => setShowNew(true)}
-              className="ml-auto rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              className="ml-auto shrink-0 rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
             >
               + New task
             </button>
           )}
         </header>
 
-        <div className="min-h-0 flex-1">
-          {tab === "board" && (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {activeTab === "board" && (
             <>
               {moveError && (
-                <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+                <div className="mx-4 mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger lg:mx-5">
                   {moveError}
                 </div>
               )}
               <Board tasks={tasks} onSelect={setSelected} onMove={move} />
             </>
           )}
-          {tab === "workflows" && <WorkflowsPanel projectId={projectId} />}
-          {tab === "files" && <FilesPanel projectId={projectId} />}
+          {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
+          {activeTab === "files" && <FilesPanel projectId={projectId} />}
+          {activeTab === "chat" && <ChatPanel projectId={projectId} />}
         </div>
       </div>
 
@@ -139,6 +149,7 @@ export default function ProjectPage() {
         {selected && (
           <TaskDrawer
             task={tasks.find((t) => t.id === selected.id) ?? selected}
+            workspaceId={project?.workspaceId ?? ""}
             onClose={() => setSelected(null)}
             onChanged={refresh}
             onOpenTeamRoom={setTeamRoom}

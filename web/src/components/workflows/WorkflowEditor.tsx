@@ -130,7 +130,7 @@ export function WorkflowEditor({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-0 sm:p-4 lg:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -139,9 +139,9 @@ export function WorkflowEditor({
         exit={{ y: 20, scale: 0.98 }}
         transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-line bg-panel"
+        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-line bg-panel sm:h-[86vh] sm:rounded-2xl sm:border"
       >
-        <header className="flex items-center gap-3 border-b border-line px-5 py-3">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-3 sm:px-5">
           <input
             value={meta.name}
             onChange={(e) => setMeta({ ...meta, name: e.target.value })}
@@ -178,25 +178,30 @@ export function WorkflowEditor({
           )}
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[1fr_320px]">
-          {view === "canvas" ? (
-            <WorkflowCanvas
-              steps={steps}
-              onChange={setSteps}
-              positions={positions}
-              onPositions={setPositions}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          ) : (
-            <textarea
-              value={rawYaml}
-              onChange={(e) => setRawYaml(e.target.value)}
-              spellCheck={false}
-              className="h-full w-full resize-none bg-surface p-5 font-mono text-xs leading-relaxed outline-none"
-            />
-          )}
+        {/* Side-by-side once the inspector's 320px still leaves a usable canvas;
+            stacked below that, with the canvas keeping the larger share. */}
+        <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-h-0 min-w-0 basis-3/5 lg:basis-auto">
+            {view === "canvas" ? (
+              <WorkflowCanvas
+                steps={steps}
+                onChange={setSteps}
+                positions={positions}
+                onPositions={setPositions}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+            ) : (
+              <textarea
+                value={rawYaml}
+                onChange={(e) => setRawYaml(e.target.value)}
+                spellCheck={false}
+                className="h-full w-full resize-none bg-surface p-5 font-mono text-xs leading-relaxed outline-none"
+              />
+            )}
+          </div>
 
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line lg:border-t-0">
           {selected && view === "canvas" ? (
             <StepInspector
               step={selected}
@@ -209,7 +214,7 @@ export function WorkflowEditor({
               }}
             />
           ) : (
-            <aside className="overflow-y-auto border-l border-line p-4">
+            <aside className="min-h-0 overflow-y-auto border-line p-4 lg:border-l">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
                 {view === "canvas" ? "Workflow" : "Preview"}
               </div>
@@ -241,6 +246,7 @@ export function WorkflowEditor({
               )}
             </aside>
           )}
+          </div>
         </div>
 
         {error && (

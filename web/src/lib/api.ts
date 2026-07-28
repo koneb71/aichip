@@ -98,6 +98,8 @@ export interface OrgAssignment {
   output: string | null;
   dependsOn: string[];
   doneWhen: string[];
+  /** Files this assignment declared it would change; drives parallelism. */
+  touches: string[];
   size: string | null;
   origin: string;
   attempt: number;
@@ -172,6 +174,10 @@ export interface TaskComment {
   agentColor: string | null;
   content: string;
   runId: string | null;
+  /** Set when the note was written against a line of the diff. */
+  filePath: string | null;
+  line: number | null;
+  hunk: string | null;
   ts: string;
 }
 
@@ -272,6 +278,93 @@ export interface PendingPermission {
   input: unknown;
 }
 
+export interface ActivityRun {
+  id: string;
+  label: string;
+  status: string;
+  trigger: string;
+  teamName: string | null;
+  projectName: string | null;
+  projectId: string | null;
+  taskId: string | null;
+  isOrg: boolean;
+  costUsd: number | null;
+  startedAt: string | null;
+  createdAt: string;
+}
+
+/** Something that will not move until a person does something about it. */
+export interface Blocker {
+  runId: string;
+  kind: "plan" | "permission";
+  label: string;
+  requestId?: string;
+  tool?: string;
+  input?: unknown;
+}
+
+/** Why the queue is or isn't dispatching. `over_budget` has no resume — it
+ *  clears at midnight — so it must not be rendered as a pause. */
+export type QueueGate =
+  | { state: "open" }
+  | { state: "paused" }
+  | { state: "over_budget"; spentToday: number; capUsd: number };
+
+export interface TeamEstimate {
+  runs: number;
+  medianUsd: number | null;
+  worstUsd: number | null;
+  medianSecs: number | null;
+}
+
+export interface Activity {
+  paused: boolean;
+  gate: QueueGate;
+  /** Daily cap in dollars, or null when uncapped. */
+  budgetUsd: number | null;
+  live: ActivityRun[];
+  blocked: Blocker[];
+  spend: {
+    today: number;
+    window: number;
+    daily: { day: string; cost: number; runs: number }[];
+    byAgent: { name: string; cost: number; steps: number }[];
+  };
+}
+
+/** One attempt in a bake-off, with the diff that decides it. */
+export interface BakeoffVariant {
+  runId: string;
+  label: string;
+  status: string;
+  agentName: string | null;
+  model: string | null;
+  costUsd: number | null;
+  error: string | null;
+  seconds: number | null;
+  linesChanged: number;
+  diff: string;
+}
+
+/** An MCP server the user connected, giving agents tools beyond files+bash. */
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: "stdio" | "http" | "sse";
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
+  enabled: boolean;
+  /** What the model sees its tools called, e.g. `mcp__playwright`. */
+  toolPrefix: string;
+}
+
+export type McpTestResult =
+  | { ok: true; tools: string[]; toolPrefix: string }
+  | { ok: false; error: string };
+
 export interface FsListing {
   path: string;
   parent: string | null;
@@ -330,6 +423,36 @@ export const api = {
       (r) => json<FsListing>(r),
     ),
   gitInit: (path: string) => post("/api/fs/git-init", { path }).then(json),
+  /** Create `name` inside `parent`, so a project can start from nothing. */
+  fsMkdir: (parent: string, name: string) =>
+    post("/api/fs/mkdir", { parent, name }).then((r) =>
+      json<{ path: string; name: string; isGitRepo: boolean }>(r),
+    ),
+
+  // MCP servers the user connects
+  mcpServers: (workspaceId: string) =>
+    fetch(`/api/mcp-servers?workspace_id=${workspaceId}`).then((r) =>
+      json<{ servers: McpServer[] }>(r),
+    ),
+  createMcpServer: (body: Record<string, unknown>) =>
+    post("/api/mcp-servers", body).then((r) => json<McpServer>(r)),
+  updateMcpServer: (id: string, body: Record<string, unknown>) =>
+    patch(`/api/mcp-servers/${id}`, body).then((r) => json<McpServer>(r)),
+  deleteMcpServer: (id: string) =>
+    fetch(`/api/mcp-servers/${id}`, { method: "DELETE" }).then(json),
+  /** Connect and ask what tools it offers. Slow by nature — it starts the server. */
+  testMcpServer: (id: string) =>
+    post(`/api/mcp-servers/${id}/test`).then((r) => json<McpTestResult>(r)),
+  agentMcpServers: (agentId: string) =>
+    fetch(`/api/agents/${agentId}/mcp-servers`).then((r) =>
+      json<{ serverIds: string[] }>(r),
+    ),
+  setAgentMcpServers: (agentId: string, serverIds: string[]) =>
+    fetch(`/api/agents/${agentId}/mcp-servers`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server_ids: serverIds }),
+    }).then((r) => json<{ serverIds: string[] }>(r)),
 
   // tasks
   tasks: (opts: { workspaceId?: string; projectId?: string }) => {
@@ -369,9 +492,16 @@ export const api = {
     fetch(`/api/tasks/${taskId}/comments`).then((r) =>
       json<{ comments: TaskComment[]; pendingReplies: number }>(r),
     ),
-  postComment: (taskId: string, content: string, engine?: string) =>
-    post(`/api/tasks/${taskId}/comments`, { content, engine }).then((r) =>
-      json<{ id: string; runIds: string[] }>(r),
+  /** `anchor` attaches the note to a line of the diff; `fix: true` turns it
+   *  into a scoped run in the task's existing worktree. */
+  postComment: (
+    taskId: string,
+    content: string,
+    engine?: string,
+    anchor?: { file_path?: string; line?: number; hunk?: string; fix?: boolean },
+  ) =>
+    post(`/api/tasks/${taskId}/comments`, { content, engine, ...anchor }).then((r) =>
+      json<{ id: string; runIds: string[]; fixRunId?: string }>(r),
     ),
   attachToTask: (taskId: string, attachmentIds: string[]) =>
     post(`/api/tasks/${taskId}/attachments/claim`, { attachment_ids: attachmentIds }).then(
@@ -382,12 +512,46 @@ export const api = {
   merge: (taskId: string) =>
     post(`/api/tasks/${taskId}/merge`).then((r) => json<{ merged: boolean }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`),
+
+  // bake-off: one brief, several attempts, keep the best
+  startBakeoff: (
+    taskId: string,
+    variants: { label: string; agent_id?: string; tier?: string }[],
+  ) =>
+    post(`/api/tasks/${taskId}/bakeoff`, { variants }).then((r) =>
+      json<{ runIds: string[] }>(r),
+    ),
+  bakeoff: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/bakeoff`).then((r) =>
+      json<{ variants: BakeoffVariant[] }>(r),
+    ),
+  /** Adopt this variant's worktree as the task's; the others are discarded. */
+  keepVariant: (runId: string) =>
+    post(`/api/runs/${runId}/keep`).then((r) => json<{ kept: string }>(r)),
   pendingPermissions: (runId: string) =>
     fetch(`/api/runs/${runId}/pending-permissions`).then((r) =>
       json<{ pending: PendingPermission[] }>(r),
     ),
   resolvePermission: (requestId: string, allowed: boolean) =>
     post(`/api/permissions/${requestId}/resolve`, { allowed }),
+
+  // activity
+  activity: (workspaceId?: string) =>
+    fetch(`/api/activity${workspaceId ? `?workspace_id=${workspaceId}` : ""}`).then((r) =>
+      json<Activity>(r),
+    ),
+  /** Stops the queue handing out new runs. In-flight work is left alone. */
+  pauseQueue: (paused: boolean) =>
+    post(`/api/queue/${paused ? "pause" : "resume"}`).then((r) =>
+      json<{ paused: boolean }>(r),
+    ),
+  /** Dollars per day; null removes the cap. */
+  setBudget: (capUsd: number | null) =>
+    post("/api/queue/budget", { cap_usd: capUsd }).then((r) =>
+      json<{ capUsd: number | null }>(r),
+    ),
+  teamEstimate: (teamId: string) =>
+    fetch(`/api/teams/${teamId}/estimate`).then((r) => json<TeamEstimate>(r)),
 
   // agents
   agents: (workspaceId: string) =>

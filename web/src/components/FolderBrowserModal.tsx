@@ -13,6 +13,9 @@ export function FolderBrowserModal({
   const [listing, setListing] = useState<FsListing | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Creating a folder, so a project can start from nothing rather than
+  // requiring a trip to a terminal first.
+  const [newName, setNewName] = useState<string | null>(null);
   // Set when a project was added but couldn't get a repository — worth a
   // beat of the user's attention rather than a silent close.
   const [noVcs, setNoVcs] = useState<string | null>(null);
@@ -45,6 +48,22 @@ export function FolderBrowserModal({
     }
   };
 
+  /** Create the folder and step into it — the point of making one is to use it. */
+  const createFolder = async () => {
+    if (!listing || !newName?.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.fsMkdir(listing.path, newName.trim());
+      setNewName(null);
+      await load(created.path);
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const crumbs = listing?.path.split("/").filter(Boolean) ?? [];
 
   return (
@@ -52,7 +71,7 @@ export function FolderBrowserModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 sm:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -61,10 +80,18 @@ export function FolderBrowserModal({
         exit={{ y: 20, scale: 0.98 }}
         transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex max-h-[70vh] w-full max-w-xl flex-col rounded-2xl border border-line bg-panel"
+        className="card-shadow flex max-h-[80vh] w-full max-w-xl flex-col sm:max-h-[70vh] rounded-2xl border border-line bg-panel"
       >
         <div className="border-b border-line p-4">
-          <div className="text-base font-semibold">Load a project folder</div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-base font-semibold">Choose a project folder</div>
+            <button
+              onClick={() => setNewName(newName === null ? "" : null)}
+              className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+            >
+              + New folder
+            </button>
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-ink-dim">
             <button onClick={() => load()} className="hover:text-accent">
               ~
@@ -82,6 +109,33 @@ export function FolderBrowserModal({
             ))}
           </div>
         </div>
+
+        {newName !== null && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createFolder();
+            }}
+            className="flex items-center gap-2 border-b border-line px-4 py-2.5"
+          >
+            <span className="text-xs text-ink-dim">New folder in {listing?.path ?? "…"}</span>
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setNewName(null)}
+              placeholder="my-project"
+              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1 text-sm outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              disabled={busy || !newName.trim()}
+              className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+            >
+              Create
+            </button>
+          </form>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {listing?.parent && (
@@ -108,7 +162,9 @@ export function FolderBrowserModal({
             </button>
           ))}
           {listing && listing.dirs.length === 0 && (
-            <div className="p-3 text-sm text-ink-dim">No subfolders here.</div>
+            <div className="p-3 text-sm text-ink-dim">
+              No subfolders here — use this folder, or create one.
+            </div>
           )}
         </div>
 

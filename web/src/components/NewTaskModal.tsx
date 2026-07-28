@@ -86,7 +86,7 @@ export function NewTaskModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 sm:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -97,7 +97,7 @@ export function NewTaskModal({
         onClick={(e) => e.stopPropagation()}
         // Drop anywhere in the modal, not just on the prompt box.
         {...att.dropProps}
-        className={`card-shadow w-full max-w-xl rounded-2xl border bg-panel p-6 ${
+        className={`card-shadow max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border bg-panel p-5 sm:p-6 ${
           att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
         }`}
       >
@@ -145,7 +145,7 @@ export function NewTaskModal({
           </div>
         )}
 
-        <div className="mb-4 grid grid-cols-2 gap-4">
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
               Complexity → model

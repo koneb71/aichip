@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, FileContent, FileEntry, FileListing } from "../../lib/api";
+import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
 
-/** Read-only browser for the project checkout: tree on the left, file on the right. */
+/** Read-only browser for the project checkout: tree on the left, file on the
+ *  right — or one at a time on a narrow viewport. */
 export function FilesPanel({ projectId }: { projectId: string }) {
+  const narrow = useMediaQuery(NARROW);
   const [listing, setListing] = useState<FileListing | null>(null);
   const [dir, setDir] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -52,9 +55,17 @@ export function FilesPanel({ projectId }: { projectId: string }) {
     [projectId],
   );
 
+  // Below `lg` the tree and the viewer take turns: opening a file swaps to it,
+  // and the viewer offers a way back. Two 50%-wide panes would make both the
+  // paths and the code unreadable.
+  const showTree = !narrow || !selected;
+  const showViewer = !narrow || !!selected;
+
   return (
-    <div className="grid h-full min-h-0 grid-cols-[280px_1fr]">
-      <div className="flex min-h-0 flex-col border-r border-line bg-panel">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div
+        className={`${showTree ? "flex" : "hidden"} min-h-0 min-w-0 flex-col border-line bg-panel lg:flex lg:border-r`}
+      >
         <Breadcrumbs dir={dir} onNavigate={setDir} />
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {listing?.parent !== null && listing !== null && (
@@ -90,7 +101,7 @@ export function FilesPanel({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col">
+      <div className={`${showViewer ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}>
         {error && (
           <div className="m-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
         )}
@@ -103,6 +114,14 @@ export function FilesPanel({ projectId }: { projectId: string }) {
         {selected && (
           <>
             <div className="flex items-center gap-2 border-b border-line bg-panel px-4 py-2">
+              {narrow && (
+                <button
+                  onClick={() => setSelected(null)}
+                  className="shrink-0 rounded-md px-1.5 py-0.5 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+                >
+                  ← Files
+                </button>
+              )}
               <div className="truncate font-mono text-xs text-ink-dim">{selected}</div>
               {file && !file.tooLarge && (
                 <span className="ml-auto shrink-0 text-[10px] text-ink-dim/70">
