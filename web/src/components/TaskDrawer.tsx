@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
+import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "./AttachmentBar";
 import { TaskComments } from "./TaskComments";
@@ -36,9 +37,9 @@ export function TaskDrawer({
     go: () => void;
   } | null>(null);
   const accent = tierColor[task.modelTier];
-  const running = ["queued", "starting", "running", "waiting_permission", "rate_limited"].includes(
-    task.runStatus ?? "",
-  );
+  // Anything that still owes an outcome, including a team run parked for
+  // your approval — those must not look finished.
+  const running = isActive(task.runStatus);
 
   const doRetry = async () => {
     setConfirm(null);
@@ -195,7 +196,7 @@ export function TaskDrawer({
             >
               {tierModel[task.modelTier]}
             </span>
-            {task.runStatus && <span>{task.runStatus.replace("_", " ")}</span>}
+            {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
             {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
           </div>
         </div>
@@ -214,7 +215,7 @@ export function TaskDrawer({
             🏛 Open team room
           </motion.button>
         )}
-        {task.runId && task.runStatus === "running" && (
+        {task.runId && isWorking(task.runStatus) && (
           <button
             onClick={() => api.cancelRun(task.runId!)}
             className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-red-400 hover:text-red-400"

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, OrgAssignment, OrgMember, OrgMessage, OrgRunDetail } from "../../lib/api";
+import { isWorking, needsYou, statusColor, statusLabel } from "../../lib/runStatus";
 import { Markdown } from "../Markdown";
+import { PlanReview } from "./PlanReview";
 
 /** What a teammate is doing right now, derived from their assignments. */
 type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
@@ -36,7 +38,9 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
   }, [run?.messages.length]);
 
   const states = useMemo(() => memberStates(run), [run]);
-  const live = run?.status === "running" || run?.status === "starting" || run?.status === "queued";
+  // Narrow on purpose: a parked run is not "working", so the typing
+  // indicator must not fire while it waits on the user.
+  const live = isWorking(run?.status);
 
   if (!run) {
     return (
@@ -102,21 +106,27 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
         <div className="min-h-0 overflow-y-auto border-l border-line p-3">
           <SectionLabel>Assignments</SectionLabel>
           <div className="mt-2 flex flex-col gap-2">
-            <AnimatePresence initial={false}>
-              {run.assignments
-                .filter((a) => a.key !== "plan" && a.key !== "review")
-                .map((a) => (
-                  <AssignmentCard
-                    key={a.id}
-                    assignment={a}
-                    color={colorOf(run.roster, a.assignee ?? "")}
-                  />
-                ))}
-            </AnimatePresence>
-            {run.assignments.every((a) => a.key === "plan") && (
-              <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
-                The manager is still working out the plan…
-              </div>
+            {run.status === "awaiting_approval" ? (
+              <PlanReview run={run} onChanged={refresh} />
+            ) : (
+              <>
+                <AnimatePresence initial={false}>
+                  {run.assignments
+                    .filter((a) => a.kind === "assignment")
+                    .map((a) => (
+                      <AssignmentCard
+                        key={a.id}
+                        assignment={a}
+                        color={colorOf(run.roster, a.assignee ?? "")}
+                      />
+                    ))}
+                </AnimatePresence>
+                {run.assignments.every((a) => a.kind === "manager") && (
+                  <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
+                    The manager is still working out the plan…
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -377,7 +387,7 @@ function AssignmentCard({
   color: string;
 }) {
   const [open, setOpen] = useState(false);
-  const running = assignment.status === "running" || assignment.status === "starting";
+  const running = isWorking(assignment.status);
   return (
     <motion.button
       layout
@@ -422,7 +432,7 @@ function AssignmentCard({
 }
 
 function StatusPip({ status, color }: { status: string; color: string }) {
-  const live = status === "running" || status === "starting";
+  const live = isWorking(status);
   const fill =
     status === "completed"
       ? "var(--color-tier-easy)"
@@ -444,13 +454,8 @@ function StatusPip({ status, color }: { status: string; color: string }) {
 }
 
 function StatusChip({ status }: { status: string }) {
-  const live = status === "running" || status === "starting" || status === "queued";
-  const color =
-    status === "completed"
-      ? "var(--color-tier-easy)"
-      : status === "failed"
-        ? "var(--color-danger)"
-        : "var(--color-tier-medium)";
+  const live = isWorking(status);
+  const color = statusColor(status);
   return (
     <span
       className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px]"
@@ -466,7 +471,7 @@ function StatusChip({ status }: { status: string }) {
       ) : (
         <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
       )}
-      {status.replace("_", " ")}
+      {statusLabel(status)}
     </span>
   );
 }
@@ -499,8 +504,9 @@ function memberStates(run: OrgRunDetail | null): Record<string, MemberState> {
 
   for (const a of run.assignments) {
     if (!a.assignee) continue;
-    if (a.status === "running" || a.status === "starting") states[a.assignee] = "working";
+    if (isWorking(a.status)) states[a.assignee] = "working";
     else if (a.status === "failed") states[a.assignee] = "blocked";
+    else if (a.status === "skipped") continue;
     else if (a.status === "completed" && states[a.assignee] !== "working")
       states[a.assignee] = "done";
   }

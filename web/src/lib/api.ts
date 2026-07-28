@@ -52,6 +52,8 @@ export interface Agent {
   modelTier: Tier;
   allowedTools: string[];
   permissionPreset: string;
+  /** null = leave the CLI's own default alone. */
+  effort: Effort | null;
   builtin: boolean;
 }
 
@@ -84,6 +86,8 @@ export interface OrgMember {
   isManager: boolean;
 }
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface OrgAssignment {
   id: string;
   key: string;
@@ -93,6 +97,12 @@ export interface OrgAssignment {
   brief: string | null;
   output: string | null;
   dependsOn: string[];
+  doneWhen: string[];
+  size: string | null;
+  origin: string;
+  attempt: number;
+  /** "manager" steps are planning, not work handed to a specialist. */
+  kind: "manager" | "assignment";
   startedAt: string | null;
   finishedAt: string | null;
 }
@@ -449,10 +459,28 @@ export const api = {
     ),
 
   // organizations
-  runOrg: (teamId: string, projectId: string, goal: string) =>
-    post(`/api/teams/${teamId}/run-org`, { project_id: projectId, goal }).then((r) =>
-      json<{ runId: string }>(r),
-    ),
+  runOrg: (teamId: string, projectId: string, goal: string, reviewPlan = false) =>
+    post(`/api/teams/${teamId}/run-org`, {
+      project_id: projectId,
+      goal,
+      review_plan: reviewPlan,
+    }).then((r) => json<{ runId: string }>(r)),
+  approvePlan: (runId: string) => post(`/api/org-runs/${runId}/plan/approve`).then(json),
+  rejectPlan: (runId: string, reason?: string) =>
+    post(`/api/org-runs/${runId}/plan/reject`, { reason }).then(json),
+  updateAssignment: (
+    runId: string,
+    stepId: string,
+    body: Partial<{
+      title: string;
+      brief: string;
+      assignee: string;
+      done_when: string[];
+      position: number;
+    }>,
+  ) => patch(`/api/org-runs/${runId}/assignments/${stepId}`, body).then(json),
+  dropAssignment: (runId: string, stepId: string) =>
+    fetch(`/api/org-runs/${runId}/assignments/${stepId}`, { method: "DELETE" }).then(json),
   orgRuns: (opts: { projectId?: string; workspaceId?: string }) => {
     const params = new URLSearchParams();
     if (opts.projectId) params.set("project_id", opts.projectId);
