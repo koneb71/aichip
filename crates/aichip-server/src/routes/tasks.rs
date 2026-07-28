@@ -290,9 +290,71 @@ async fn pending_permissions(
     Json(json!({ "pending": pending }))
 }
 
-async fn cancel_run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Json<Value> {
-    state.orchestrator.cancel(id);
-    Json(json!({ "canceled": true }))
+/// Stop a run, whatever state it is in.
+///
+/// A run that is executing gets its step interrupted and its intent
+/// recorded, so a multi-step workflow or organization stops rather than
+/// rolling on to the next assignment. A run that is merely queued, or
+/// parked waiting for plan approval, has no process to interrupt — it is
+/// taken off the queue and closed out here instead. This used to answer
+/// `{"canceled": true}` no matter what, including when it had done nothing.
+async fn cancel_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let status: String = sqlx::query("SELECT status FROM runs WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such run".to_string()))?
+        .get("status");
+
+    if matches!(status.as_str(), "completed" | "failed" | "canceled") {
+        return Ok(Json(json!({
+            "canceled": false,
+            "status": status,
+            "detail": format!("this run already {status}"),
+        })));
+    }
+
+    let interrupted = state.orchestrator.cancel(id);
+
+    // Nothing was executing: close it out directly, or the run would sit
+    // "queued" forever with a cancel nobody ever reads.
+    if !interrupted {
+        sqlx::query("DELETE FROM queue WHERE run_id=$1")
+            .bind(id)
+            .execute(&state.db.pool)
+            .await
+            .map_err(internal)?;
+        sqlx::query(
+            "UPDATE runs SET status='canceled', finished_at=now()
+             WHERE id=$1 AND status NOT IN ('completed','failed','canceled')",
+        )
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+        sqlx::query(
+            "UPDATE steps SET status='skipped', finished_at=now()
+             WHERE run_id=$1 AND status IN ('queued','running')",
+        )
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    }
+
+    Ok(Json(json!({
+        "canceled": true,
+        "wasRunning": interrupted,
+        "detail": if interrupted {
+            "stopping — the current step is being interrupted"
+        } else {
+            "canceled before it started"
+        },
+    })))
 }
 
 #[derive(Deserialize)]
