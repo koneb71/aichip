@@ -566,6 +566,12 @@ impl Orchestrator {
             if pending.is_empty() {
                 break;
             }
+            // Interrupting the step that was running is not enough — without
+            // this the run would simply start the next assignment.
+            if self.cancel_requested(ctx.run_id) {
+                aborted = Some("canceled".to_string());
+                break;
+            }
 
             let order = order_by_dependencies(&pending, &satisfied);
             let next = pending[order[0]].clone();
@@ -629,11 +635,15 @@ impl Orchestrator {
             }
         }
 
+        // No point asking for a review of work the user just stopped.
         if aborted.is_none() {
             self.review(ctx, manager).await?;
         }
 
         let (status, reason) = match aborted {
+            // A cancel is a decision, not a failure; saying "failed" would
+            // misreport what happened.
+            Some(reason) if reason == "canceled" => (RunStatus::Canceled, None),
             Some(reason) => (RunStatus::Failed, Some(reason)),
             None if dropped > 0 => (
                 RunStatus::Completed,

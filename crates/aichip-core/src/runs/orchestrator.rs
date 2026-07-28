@@ -61,7 +61,8 @@ pub struct Orchestrator {
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
     /// None disables MCP wiring (mock engine / tests).
     pub(crate) mcp_base_url: Option<String>,
-    cancels: Mutex<HashMap<Uuid, oneshot::Sender<()>>>,
+    /// Keyed by run, never by step — see `CancelState`.
+    cancels: Mutex<HashMap<Uuid, CancelState>>,
 }
 
 pub(crate) struct StreamOutcome {
@@ -70,6 +71,19 @@ pub(crate) struct StreamOutcome {
     /// Final assistant/result text, used to feed later pipeline steps.
     pub output: String,
     pub session_id: Option<String>,
+}
+
+/// Cancellation for a run that may be several steps long.
+///
+/// `requested` is the part that matters: interrupting the process running
+/// right now is not enough, because a workflow or organization would simply
+/// start the next assignment. The flag is checked between steps, so asking
+/// to cancel stops the whole run rather than one step of it.
+#[derive(Default)]
+pub(crate) struct CancelState {
+    requested: bool,
+    /// Live steps to interrupt. Several at once during a fan-out.
+    steps: HashMap<Uuid, oneshot::Sender<()>>,
 }
 
 /// An agent from the library, resolved for a step or task.
@@ -305,10 +319,33 @@ impl Orchestrator {
         Ok(run_id)
     }
 
-    pub fn cancel(&self, run_id: Uuid) {
-        if let Some(tx) = self.cancels.lock().unwrap().remove(&run_id) {
+    /// Ask a run to stop. Returns true if it was executing — a queued or
+    /// parked run has no process to interrupt and is handled by the caller.
+    pub fn cancel(&self, run_id: Uuid) -> bool {
+        let mut cancels = self.cancels.lock().unwrap();
+        let state = cancels.entry(run_id).or_default();
+        state.requested = true;
+        let live = std::mem::take(&mut state.steps);
+        let was_running = !live.is_empty();
+        for (_, tx) in live {
             let _ = tx.send(());
         }
+        was_running
+    }
+
+    /// Has someone asked this run to stop? Checked between steps.
+    pub(crate) fn cancel_requested(&self, run_id: Uuid) -> bool {
+        self.cancels
+            .lock()
+            .unwrap()
+            .get(&run_id)
+            .is_some_and(|c| c.requested)
+    }
+
+    /// Drop cancellation bookkeeping once a run reaches a terminal state, so
+    /// the map doesn't grow for the life of the process.
+    pub(crate) fn forget_cancel(&self, run_id: Uuid) {
+        self.cancels.lock().unwrap().remove(&run_id);
     }
 
     /// On boot: anything left in starting/running died with the previous
@@ -947,6 +984,12 @@ impl Orchestrator {
 
         'layers: for layer in workflow.layers()? {
             for step_id in layer {
+                // Same reason as the org executor: a cancel has to stop the
+                // pipeline, not just whichever step was mid-flight.
+                if self.cancel_requested(run_id) {
+                    failure = Some("canceled".to_string());
+                    break 'layers;
+                }
                 let step = workflow
                     .step(&step_id)
                     .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
@@ -1066,6 +1109,11 @@ impl Orchestrator {
             }
         }
 
+        if failure.as_deref() == Some("canceled") {
+            self.finish(run_id, RunStatus::Canceled, None).await?;
+            self.settle_task_for_run(task_id, RunStatus::Canceled).await?;
+            return Ok(());
+        }
         let status = match failure {
             None => {
                 self.finish(run_id, RunStatus::Completed, None).await?;
@@ -1183,11 +1231,24 @@ impl Orchestrator {
         let mut proc = engine.start(spec)?;
         self.set_status(run_id, RunStatus::Running).await?;
 
-        // A cancel targets the whole run; steps register under their own id
-        // so a workflow's parallel steps don't clobber each other's channel.
-        let cancel_key = step_id.unwrap_or(run_id);
+        // Registered under the run, with a per-step slot so a fan-out's
+        // steps don't clobber each other. A cancel that arrived while this
+        // step was starting is honoured immediately rather than lost.
+        let step_key = step_id.unwrap_or(run_id);
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
-        self.cancels.lock().unwrap().insert(cancel_key, cancel_tx);
+        {
+            let mut cancels = self.cancels.lock().unwrap();
+            let state = cancels.entry(run_id).or_default();
+            let already = state.requested;
+            state.steps.insert(step_key, cancel_tx);
+            if already {
+                // Asked to stop while this step was starting: fire it now
+                // rather than letting the request fall through the gap.
+                if let Some(tx) = state.steps.remove(&step_key) {
+                    let _ = tx.send(());
+                }
+            }
+        }
 
         let mut outcome: Option<(RunStatus, Option<String>)> = None;
         let mut text_parts: Vec<String> = vec![];
@@ -1242,7 +1303,9 @@ impl Orchestrator {
                 }
             }
         }
-        self.cancels.lock().unwrap().remove(&cancel_key);
+        if let Some(state) = self.cancels.lock().unwrap().get_mut(&run_id) {
+            state.steps.remove(&step_key);
+        }
 
         let (status, reason) =
             outcome.unwrap_or((RunStatus::Failed, Some("event stream ended unexpectedly".into())));
@@ -1298,6 +1361,7 @@ impl Orchestrator {
         status: RunStatus,
         reason: Option<String>,
     ) -> anyhow::Result<()> {
+        self.forget_cancel(run_id);
         sqlx::query("UPDATE runs SET status=$1, error_reason=$2, finished_at=now() WHERE id=$3")
             .bind(status.as_str())
             .bind(reason)
@@ -1386,6 +1450,59 @@ pub(crate) fn slugify(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The bug this guards: cancel channels were keyed by step id while
+    /// `cancel()` looked them up by run id, so cancelling any multi-step
+    /// run silently did nothing.
+    #[test]
+    fn cancelling_reaches_every_live_step_of_a_run() {
+        let cancels: Mutex<HashMap<Uuid, CancelState>> = Mutex::new(HashMap::new());
+        let run = Uuid::new_v4();
+        let mut receivers = vec![];
+
+        // Three steps of one run register, as a fan-out would.
+        for _ in 0..3 {
+            let (tx, rx) = oneshot::channel();
+            cancels
+                .lock()
+                .unwrap()
+                .entry(run)
+                .or_default()
+                .steps
+                .insert(Uuid::new_v4(), tx);
+            receivers.push(rx);
+        }
+
+        // What cancel() does, by run id.
+        let mut state = cancels.lock().unwrap();
+        let entry = state.entry(run).or_default();
+        entry.requested = true;
+        for (_, tx) in std::mem::take(&mut entry.steps) {
+            let _ = tx.send(());
+        }
+        drop(state);
+
+        for mut rx in receivers {
+            assert!(rx.try_recv().is_ok(), "every live step must be signalled");
+        }
+        assert!(cancels.lock().unwrap()[&run].requested, "intent outlives the steps");
+    }
+
+    /// A cancel arriving between steps must not be lost: the flag is what a
+    /// multi-step run checks before starting the next assignment.
+    #[test]
+    fn cancel_intent_survives_when_no_step_is_live() {
+        let cancels: Mutex<HashMap<Uuid, CancelState>> = Mutex::new(HashMap::new());
+        let run = Uuid::new_v4();
+
+        cancels.lock().unwrap().entry(run).or_default().requested = true;
+
+        // The next step to start sees the request already standing.
+        let requested = cancels.lock().unwrap()[&run].requested;
+        assert!(requested);
+    }
+
     use super::slugify;
 
     #[test]
