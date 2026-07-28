@@ -1,17 +1,16 @@
-# Postgres for aichip.
-#
-# By default `aichip serve` boots its own private embedded Postgres and you
-# need none of this. Use this compose file when you'd rather run a real
-# server — for CI, for pointing several checkouts at one database, or just
-# to avoid the embedded cluster entirely.
+# Postgres for aichip, and optionally aichip itself.
 #
 #   docker compose up -d
-#   export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
-#   cargo run -p aichip-cli -- serve
+#     Just Postgres. Run the server on your machine against it:
+#       export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
+#       cargo run -p aichip-cli -- serve
+#     This is the recommended shape — see README.md for why.
 #
-# The aichip server itself deliberately stays on the host: it spawns your
-# own `claude` CLI under your own login, and that only works where you are
-# logged in. See the "Why isn't the app containerized?" note in README.md.
+#   docker compose --profile app up -d --build
+#     Everything, including the agents, inside containers. Needs
+#     CLAUDE_CODE_OAUTH_TOKEN and AICHIP_PROJECTS_DIR in a .env file, because
+#     a container has no keychain and no browser to log in with. Read the
+#     "Running in Docker" section of README.md first.
 
 services:
   postgres:
@@ -33,5 +32,41 @@ services:
       timeout: 5s
       retries: 10
 
+  aichip:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        # Files the agents write land in your mounted code, so they should
+        # belong to you and not to root.
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    container_name: aichip
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-aichip}:${POSTGRES_PASSWORD:-aichip}@postgres:5432/${POSTGRES_DB:-aichip}
+      # The only way to authenticate without a keychain or a browser.
+      # `claude setup-token` on your machine produces it. Failing loudly
+      # beats starting a server whose every run dies logged-out.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?run "claude setup-token" and put the result in .env}
+      # Your code, at the same path inside and out — see the volume below.
+      AICHIP_BROWSE_ROOT: ${AICHIP_PROJECTS_DIR:?set AICHIP_PROJECTS_DIR in .env to the folder holding your projects}
+      AICHIP_MAX_CONCURRENT: ${AICHIP_MAX_CONCURRENT:-2}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+    ports:
+      - "${AICHIP_PORT:-4820}:4820"
+    volumes:
+      # Mounted at the *same absolute path* on both sides. A git worktree
+      # records absolute paths in .git, so a repo checked out at one path on
+      # the host and another in the container has a broken worktree link.
+      - ${AICHIP_PROJECTS_DIR}:${AICHIP_PROJECTS_DIR}
+      # Worktrees and agent state. A named volume, so a container restart
+      # doesn't strand half-finished work.
+      - aichip-state:/home/aichip/.aichip
+
 volumes:
   aichip-pgdata:
+  aichip-state:

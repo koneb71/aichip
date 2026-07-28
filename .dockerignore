@@ -1,0 +1,14 @@
+# Host build output must never reach the image: macOS-native node_modules
+# binaries and target/ artifacts break the Linux build in confusing ways, and
+# they dwarf the source in size.
+target/
+web/node_modules/
+web/dist/
+node_modules/
+**/*.tsbuildinfo
+
+# Never ship secrets or local state into a layer.
+.env
+.git/
+
+.DS_Store

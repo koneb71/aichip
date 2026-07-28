@@ -1,5 +1,5 @@
 //! Local folder browser for "load folder". The server runs on the user's own
-//! machine; browsing is still sandboxed to $HOME and directory names only.
+//! machine; browsing is still sandboxed to one root and directory names only.
 
 use super::{internal, ApiError};
 use crate::AppState;
@@ -18,18 +18,23 @@ pub fn router() -> Router<AppState> {
         .route("/fs/git-init", post(git_init))
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
+/// The only directory tree the browser may show.
+///
+/// `$HOME` when run normally. In a container `$HOME` is the container's, not
+/// yours, so `AICHIP_BROWSE_ROOT` points it at wherever your code is mounted.
+fn browse_root() -> PathBuf {
+    std::env::var_os("AICHIP_BROWSE_ROOT")
+        .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Canonicalize `requested` and require it to live under `home`.
+/// Canonicalize `requested` and require it to live under `root`.
 /// Returns None for anything that escapes (symlinks included).
-fn sandboxed(home: &Path, requested: &Path) -> Option<PathBuf> {
+fn sandboxed(root: &Path, requested: &Path) -> Option<PathBuf> {
     let canonical = std::fs::canonicalize(requested).ok()?;
-    let home_canonical = std::fs::canonicalize(home).ok()?;
-    canonical.starts_with(&home_canonical).then_some(canonical)
+    let root_canonical = std::fs::canonicalize(root).ok()?;
+    canonical.starts_with(&root_canonical).then_some(canonical)
 }
 
 #[derive(Deserialize)]
@@ -38,10 +43,10 @@ struct ListQuery {
 }
 
 async fn list(Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
-    let home = home();
+    let home = browse_root();
     let requested = q.path.map(PathBuf::from).unwrap_or_else(|| home.clone());
     let Some(path) = sandboxed(&home, &requested) else {
-        return Err((StatusCode::FORBIDDEN, "path is outside your home directory".into()));
+        return Err((StatusCode::FORBIDDEN, "that path is outside the folder aichip is allowed to browse".into()));
     };
 
     let mut dirs: Vec<Value> = vec![];
@@ -88,9 +93,9 @@ struct GitInitBody {
 }
 
 async fn git_init(Json(body): Json<GitInitBody>) -> Result<Json<Value>, ApiError> {
-    let home = home();
+    let home = browse_root();
     let Some(path) = sandboxed(&home, Path::new(&body.path)) else {
-        return Err((StatusCode::FORBIDDEN, "path is outside your home directory".into()));
+        return Err((StatusCode::FORBIDDEN, "that path is outside the folder aichip is allowed to browse".into()));
     };
     if path.join(".git").exists() {
         return Err((StatusCode::BAD_REQUEST, "already a git repository".into()));
