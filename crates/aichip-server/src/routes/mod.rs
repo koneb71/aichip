@@ -8,6 +8,7 @@ pub mod mcp_servers;
 pub mod orgs;
 pub mod projects;
 pub mod search;
+pub mod settings;
 pub mod tasks;
 pub mod teams;
 pub mod workflows;
@@ -42,6 +43,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(chat::router())
         .merge(activity::router())
         .merge(mcp_servers::router())
+        .merge(settings::router())
 }
 
 async fn health() -> Json<Value> {

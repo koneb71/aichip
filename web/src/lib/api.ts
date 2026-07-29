@@ -332,6 +332,13 @@ export interface Activity {
   };
 }
 
+/** Which model each complexity tier routes to, plus what may be chosen. */
+export interface ModelSettings {
+  tiers: Record<Tier, string>;
+  choices: { id: string; label: string; blurb: string }[];
+  defaults: Record<Tier, string>;
+}
+
 /** One attempt in a bake-off, with the diff that decides it. */
 export interface BakeoffVariant {
   runId: string;
@@ -429,6 +436,15 @@ export const api = {
       json<{ path: string; name: string; isGitRepo: boolean }>(r),
     ),
 
+  // settings
+  modelSettings: () => fetch("/api/settings/models").then((r) => json<ModelSettings>(r)),
+  setModelSettings: (tiers: Record<Tier, string>) =>
+    fetch("/api/settings/models", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tiers),
+    }).then((r) => json<{ saved: boolean }>(r)),
+
   // MCP servers the user connects
   mcpServers: (workspaceId: string) =>
     fetch(`/api/mcp-servers?workspace_id=${workspaceId}`).then((r) =>
@@ -512,6 +528,16 @@ export const api = {
   merge: (taskId: string) =>
     post(`/api/tasks/${taskId}/merge`).then((r) => json<{ merged: boolean }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`),
+
+  /** Hand a card to someone else, or to nobody.
+   *
+   *  `null` clears the assignment; omitting a field leaves it alone. The two
+   *  are different requests, so both ids are always sent explicitly. */
+  reassignTask: (taskId: string, assignee: { kind: "agent" | "team"; id: string } | null) =>
+    patch(`/api/tasks/${taskId}`, {
+      agent_id: assignee?.kind === "agent" ? assignee.id : null,
+      team_id: assignee?.kind === "team" ? assignee.id : null,
+    }).then(json),
 
   // bake-off: one brief, several attempts, keep the best
   startBakeoff: (
@@ -743,8 +769,6 @@ export const tierSoft: Record<Tier, string> = {
   complex: "var(--color-tier-complex-soft)",
 };
 
-export const tierModel: Record<Tier, string> = {
-  easy: "Sonnet 5",
-  medium: "Opus 5",
-  complex: "Fable 5",
-};
+// Tier → model labels are no longer a constant: the mapping is a user
+// setting, so a baked-in label would name a model the run isn't using.
+// See `useTierModel` in lib/models.

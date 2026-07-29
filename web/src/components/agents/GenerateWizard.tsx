@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { AgentDraft, api, Tier, tierColor, tierModel, tierSoft } from "../../lib/api";
+import { AgentDraft, api, Tier, tierColor, tierSoft } from "../../lib/api";
+import { useTierModel } from "../../lib/models";
 
 type Phase = "describe" | "generating" | "review";
 
@@ -13,6 +14,7 @@ export function GenerateWizard({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const tierModel = useTierModel();
   const [phase, setPhase] = useState<Phase>("describe");
   const [description, setDescription] = useState("");
   const [drafts, setDrafts] = useState<AgentDraft[]>([]);
@@ -135,7 +137,7 @@ export function GenerateWizard({
                     >
                       {(["easy", "medium", "complex"] as Tier[]).map((t) => (
                         <option key={t} value={t}>
-                          {tierModel[t]}
+                          {tierModel(t)}
                         </option>
                       ))}
                     </select>

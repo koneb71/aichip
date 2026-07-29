@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Agent, Tier, tierColor, tierModel } from "../../lib/api";
+import { Agent, Tier, tierColor } from "../../lib/api";
 import { StepData, renameStep, uniqueStepId } from "../../lib/workflowGraph";
+import { useTierModel } from "../../lib/models";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 
@@ -17,6 +18,7 @@ export function StepInspector({
   onChange: (steps: StepData[]) => void;
   onDelete: () => void;
 }) {
+  const tierModel = useTierModel();
   // The id is edited as free text but only committed when it's valid and
   // unique, so half-typed names don't orphan dependency links.
   const [draftId, setDraftId] = useState(step.id);
@@ -82,7 +84,7 @@ export function StepInspector({
                 }}
               >
                 {t}
-                <span className="block text-[10px] opacity-70">{tierModel[t]}</span>
+                <span className="block text-[10px] opacity-70">{tierModel(t)}</span>
               </button>
             ))}
           </div>

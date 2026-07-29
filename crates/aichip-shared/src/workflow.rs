@@ -556,17 +556,32 @@ steps:
         assert_eq!(wf.steps.len(), 1);
     }
 
+    /// A mapping whose three models are distinguishable from each other.
+    ///
+    /// Deliberately not `TierMapping::default()`: these tests are about
+    /// *resolution*, and asserting against the default made them fail the
+    /// moment the default legitimately changed — while also being unable to
+    /// tell "resolved complex" from "resolved medium" whenever two tiers
+    /// happen to share a model.
+    fn test_tiers() -> crate::TierMapping {
+        crate::TierMapping(std::collections::BTreeMap::from([
+            (ModelTier::Easy, "model-easy".to_string()),
+            (ModelTier::Medium, "model-medium".to_string()),
+            (ModelTier::Complex, "model-complex".to_string()),
+        ]))
+    }
+
     #[test]
     fn resolves_tier_names_and_literal_model_ids() {
         let wf = Workflow::from_yaml(PIPELINE).unwrap();
-        let tiers = crate::TierMapping::default();
+        let tiers = test_tiers();
         assert_eq!(
             wf.resolve_model(wf.step("triage").unwrap(), None, &tiers),
-            "claude-sonnet-5"
+            "model-easy"
         );
         assert_eq!(
             wf.resolve_model(wf.step("judge").unwrap(), None, &tiers),
-            "claude-fable-5"
+            "model-complex"
         );
 
         let literal = "name: l\nsteps:\n  - id: a\n    prompt: x\n    model: some-custom-model\n";
@@ -581,10 +596,40 @@ steps:
     fn step_without_model_falls_back_to_its_agent_tier() {
         let yaml = "name: a\nsteps:\n  - id: review\n    prompt: x\n    agent: Reviewer\n";
         let wf = Workflow::from_yaml(yaml).unwrap();
-        let tiers = crate::TierMapping::default();
         assert_eq!(
-            wf.resolve_model(wf.step("review").unwrap(), Some(ModelTier::Complex), &tiers),
-            "claude-fable-5"
+            wf.resolve_model(
+                wf.step("review").unwrap(),
+                Some(ModelTier::Complex),
+                &test_tiers()
+            ),
+            "model-complex"
         );
+    }
+
+    /// The default routing is a product decision, so it gets its own test
+    /// rather than being asserted incidentally by everything that resolves a
+    /// model. Fable is opt-in: it is the most expensive model and the one
+    /// most likely to be outside a given plan, so nobody should get it by
+    /// simply not choosing.
+    #[test]
+    fn the_default_routing_never_reaches_for_the_priciest_model() {
+        let tiers = crate::TierMapping::default();
+        for tier in [ModelTier::Easy, ModelTier::Medium, ModelTier::Complex] {
+            assert_ne!(
+                tiers.model_for(tier),
+                "claude-fable-5",
+                "{tier:?} must not default to Fable"
+            );
+            assert!(
+                crate::is_known_model(tiers.model_for(tier)),
+                "{tier:?} defaults to a model the settings picker doesn't offer"
+            );
+        }
+    }
+
+    /// …but it is still selectable, or the setting would be a lie.
+    #[test]
+    fn fable_is_offered_as_a_choice() {
+        assert!(crate::is_known_model("claude-fable-5"));
     }
 }

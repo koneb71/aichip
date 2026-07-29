@@ -1,7 +1,8 @@
 import { Handle, NodeProps, Position } from "@xyflow/react";
 import { motion } from "framer-motion";
-import { Tier, tierColor, tierModel, tierSoft } from "../../lib/api";
+import { Tier, tierColor, tierSoft } from "../../lib/api";
 import { StepData } from "../../lib/workflowGraph";
+import { useTierModel } from "../../lib/models";
 
 export interface StepNodeData extends Record<string, unknown> {
   step: StepData;
@@ -13,6 +14,7 @@ export interface StepNodeData extends Record<string, unknown> {
 const TIERS = new Set(["easy", "medium", "complex"]);
 
 export function StepNode({ data, selected }: NodeProps & { data: StepNodeData }) {
+  const tierModel = useTierModel();
   const { step, status, attempts } = data;
   const tier = TIERS.has(step.model ?? "") ? (step.model as Tier) : undefined;
   const accent = tier ? tierColor[tier] : "var(--color-ink-dim)";
@@ -66,7 +68,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
             className="rounded-full px-1.5 py-0.5 text-[10px]"
             style={{ background: tierSoft[tier], color: accent }}
           >
-            {tierModel[tier]}
+            {tierModel(tier)}
           </span>
         )}
         {step.model && !tier && (

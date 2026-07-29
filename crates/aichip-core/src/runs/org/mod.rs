@@ -1088,7 +1088,7 @@ impl Orchestrator {
             cwd: ctx.worktree.clone(),
             prompt,
             model_tier: member.tier,
-            model_id: self.tiers.model_for(member.tier).to_string(),
+            model_id: self.model_for(member.tier),
             effort,
             resume_session_id: resume,
             permission_mode,
@@ -1215,7 +1215,7 @@ impl Orchestrator {
                  hedge or hand the decision back."
             ),
             model_tier: tier,
-            model_id: self.tiers.model_for(tier).to_string(),
+            model_id: self.model_for(tier),
             effort: row
                 .get::<Option<String>, _>("manager_effort")
                 .and_then(|e| ReasoningEffort::parse(&e)),

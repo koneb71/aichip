@@ -259,11 +259,7 @@ async fn generate(
         .orchestrator
         .engine(engine_id)
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
-    let model_id = state
-        .orchestrator
-        .tiers
-        .model_for(ModelTier::Complex)
-        .to_string();
+    let model_id = state.orchestrator.model_for(ModelTier::Complex);
     let prompt = format!("{GENERATE_PROMPT}{}\"", body.description.trim());
 
     // Designing a team is the kind of one-shot judgement that repays
