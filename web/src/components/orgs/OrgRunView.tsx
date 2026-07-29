@@ -4,6 +4,8 @@ import { api, OrgAssignment, OrgMember, OrgMessage, OrgRunDetail } from "../../l
 import { isTerminal, isWorking, needsYou, statusColor, statusLabel } from "../../lib/runStatus";
 import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
 import { Markdown } from "../Markdown";
+import { ActivityLine, RunStream } from "../RunStream";
+import { StreamEvent, useRunStream } from "../../lib/ws";
 import { PlanReview } from "./PlanReview";
 
 /** What a teammate is doing right now, derived from their assignments. */
@@ -11,6 +13,10 @@ type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
 
 export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => void }) {
   const [run, setRun] = useState<OrgRunDetail | null>(null);
+  // The same transcript a solo task shows, but attributed per teammate via
+  // each event's step id. Without this a team run could only ever say
+  // "working" — you could watch the conversation but never the work.
+  const events = useRunStream(runId);
   const [pane, setPane] = useState<Pane>("chat");
   const narrow = useMediaQuery(NARROW);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -143,6 +149,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
                           assignment={a}
                           color={colorOf(run.roster, a.assignee ?? "")}
                           runEnded={isTerminal(run.status)}
+                          events={events}
                         />
                       ))}
                   </AnimatePresence>
@@ -450,10 +457,12 @@ function AssignmentCard({
   assignment,
   color,
   runEnded,
+  events,
 }: {
   assignment: OrgAssignment;
   color: string;
   runEnded: boolean;
+  events: StreamEvent[];
 }) {
   const [open, setOpen] = useState(false);
   const running = isWorking(assignment.status) && !runEnded;
@@ -480,6 +489,8 @@ function AssignmentCard({
               {assignment.assignee}
             </div>
           )}
+          {/* Collapsed, each teammate still shows their current action. */}
+          <ActivityLine events={events} stepId={assignment.id} live={running} className="mt-1" />
         </div>
       </div>
       <AnimatePresence>
@@ -505,6 +516,15 @@ function AssignmentCard({
                 </div>
               )}
               {assignment.output || assignment.brief || "No detail yet."}
+            </div>
+            {/* Expanded, the full transcript for this teammate alone — the
+                same renderer a solo task uses, filtered to their step. */}
+            <div className="mt-2 max-h-72 overflow-y-auto border-t border-line pt-2">
+              <RunStream
+                events={events}
+                stepId={assignment.id}
+                empty="No activity recorded for this assignment yet."
+              />
             </div>
           </motion.div>
         )}

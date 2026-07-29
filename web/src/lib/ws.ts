@@ -26,8 +26,17 @@ export function useRunStream(runId: string | null) {
       try {
         const raw = JSON.parse(msg.data);
         // Replay frames nest the payload under `event`; live frames are flat.
+        // `step_id` sits on the envelope in both cases and must be lifted out
+        // explicitly — spreading only `raw.event` drops it, which silently
+        // costs every multi-agent view its ability to say *who* acted.
         const event: StreamEvent = raw.event
-          ? { runId: raw.runId ?? raw.run_id, seq: raw.seq, ts: raw.ts, ...raw.event }
+          ? {
+              runId: raw.runId ?? raw.run_id,
+              seq: raw.seq,
+              ts: raw.ts,
+              step_id: raw.step_id ?? raw.stepId,
+              ...raw.event,
+            }
           : { runId: raw.run_id, seq: raw.seq, ts: raw.ts, ...raw };
         const key = `${event.seq}:${event.type}`;
         if (event.seq >= 0 && seenSeq.current.has(key)) return;

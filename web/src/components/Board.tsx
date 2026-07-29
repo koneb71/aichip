@@ -2,6 +2,8 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Task, tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
+import { ActivityLine } from "./RunStream";
+import { useRunStream } from "../lib/ws";
 
 const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -156,6 +158,7 @@ function TaskCard({
         <span className="absolute right-3 top-3 text-xs text-amber-600">⏸ approval</span>
       )}
       <div className="pr-5 text-sm font-medium leading-snug">{task.title}</div>
+      {running && <CardActivity runId={task.runId} />}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">
         {!teamRun && (
           <span
@@ -185,4 +188,15 @@ function TaskCard({
       </div>
     </motion.button>
   );
+}
+
+/** A live card's current action.
+ *
+ * Split into its own component so the websocket is only opened while a card
+ * is actually running — a board of finished cards each holding a socket open
+ * would be a lot of connections to say nothing.
+ */
+function CardActivity({ runId }: { runId: string | null }) {
+  const events = useRunStream(runId);
+  return <ActivityLine events={events} live className="mt-1.5" />;
 }

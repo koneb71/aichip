@@ -7,6 +7,8 @@ import { useWorkspace } from "../lib/workspace";
 import { isWorking, statusColor, statusLabel } from "../lib/runStatus";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { PermissionRow } from "../components/PermissionRow";
+import { ActivityLine } from "../components/RunStream";
+import { useRunStream } from "../lib/ws";
 
 /**
  * The operations view.
@@ -358,6 +360,8 @@ function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void })
             .filter(Boolean)
             .join(" · ")}
         </div>
+        {/* The operations view is exactly where "running" is too vague. */}
+        {isWorking(run.status) && <LiveAction runId={run.id} />}
       </div>
       <Elapsed since={run.startedAt ?? run.createdAt} />
       {run.costUsd != null && (
@@ -484,4 +488,11 @@ function Stat({ label, value, accent }: { label: string; value: string; accent: 
       <div className="mt-1 text-xs text-ink-dim">{label}</div>
     </div>
   );
+}
+
+/** Current action for one live run. Its own component so the socket exists
+ *  only while the run does. */
+function LiveAction({ runId }: { runId: string }) {
+  const events = useRunStream(runId);
+  return <ActivityLine events={events} live />;
 }

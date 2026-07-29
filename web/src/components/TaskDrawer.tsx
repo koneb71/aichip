@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, Attachment, PendingPermission, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
@@ -10,6 +10,7 @@ import { Markdown } from "./Markdown";
 import { annotateDiff, hunkText, isCommentable } from "../lib/diff";
 import { PermissionRow } from "./PermissionRow";
 import { BakeoffView } from "./BakeoffView";
+import { RunStream, ActivityLine } from "./RunStream";
 import { AssigneePicker } from "./AssigneePicker";
 import { useTierModel } from "../lib/models";
 
@@ -39,7 +40,12 @@ export function TaskDrawer({
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [panel, setPanel] = useState<"comments" | "activity">("comments");
+  // A live run opens on its transcript, not on an empty comment thread —
+  // landing on "No comments yet" while an agent is mid-Bash is how the card
+  // ends up looking like nothing is happening at all.
+  const [panel, setPanel] = useState<"comments" | "activity">(
+    isActive(task.runStatus) ? "activity" : "comments",
+  );
   const att = useAttachments(task.projectId);
   const [attachBusy, setAttachBusy] = useState(false);
   const [busy, setBusy] = useState<"retry" | "delete" | null>(null);
@@ -113,6 +119,16 @@ export function TaskDrawer({
       .then((r) => setTeams(r.teams))
       .catch(() => {});
   }, [workspaceId]);
+
+  // Follow a run that starts while the drawer is already open. Keyed on the
+  // run id so it fires once per run and never fights a manual tab click.
+  const followedRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (task.runId && isActive(task.runStatus) && followedRun.current !== task.runId) {
+      followedRun.current = task.runId;
+      setPanel("activity");
+    }
+  }, [task.runId, task.runStatus]);
 
   const reassign = async (next: { kind: "agent" | "team"; id: string } | null) => {
     setReassignError(null);
@@ -234,6 +250,9 @@ export function TaskDrawer({
             {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
             {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
           </div>
+          {/* What it is doing, right in the header — visible without opening
+              a tab or scrolling a transcript. */}
+          <ActivityLine events={events} live={running} className="mt-1" />
         </div>
         <button onClick={onClose} className="text-ink-dim hover:text-ink">
           ✕
@@ -411,7 +430,14 @@ export function TaskDrawer({
               panel === p ? "bg-panel-2 font-medium text-ink" : "text-ink-dim"
             }`}
           >
-            {p}
+            {p === "activity" ? "Activity" : "Comments"}
+            {p === "activity" && running && (
+              <motion.span
+                className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-tier-medium align-middle"
+                animate={{ opacity: [1, 0.25, 1] }}
+                transition={{ duration: 1.6, repeat: Infinity }}
+              />
+            )}
           </button>
         ))}
       </div>
@@ -435,106 +461,11 @@ export function TaskDrawer({
         ) : panel === "comments" ? (
           <TaskComments taskId={task.id} />
         ) : (
-          <EventStream events={events} />
+          <RunStream events={events} empty="Nothing yet." />
         )}
       </div>
     </motion.aside>
   );
-}
-
-function EventStream({ events }: { events: StreamEvent[] }) {
-  if (events.length === 0) {
-    return <div className="text-sm text-ink-dim">No events yet.</div>;
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      {events.map((e, i) => (
-        <EventRow key={`${e.seq}-${i}`} event={e} />
-      ))}
-    </div>
-  );
-}
-
-function EventRow({ event }: { event: StreamEvent }) {
-  const base = "rounded-lg px-3 py-2 text-sm";
-  switch (event.type) {
-    case "run_started":
-      return (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`${base} text-xs text-ink-dim`}>
-          ▶ session started {String(event.model ?? "")}
-        </motion.div>
-      );
-    case "assistant_text":
-      return (
-        <motion.div
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`${base} bg-panel-2`}
-        >
-          <Markdown>{String(event.text)}</Markdown>
-        </motion.div>
-      );
-    case "tool_call":
-      return (
-        <motion.div
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`${base} border border-line font-mono text-xs text-ink-dim`}
-        >
-          ⚙ {String(event.tool_name)}{" "}
-          <span className="opacity-70">
-            {JSON.stringify(event.input).slice(0, 140)}
-          </span>
-        </motion.div>
-      );
-    case "tool_result":
-      return (
-        <div className={`${base} font-mono text-xs ${event.is_error ? "text-red-400" : "text-ink-dim/80"}`}>
-          ↳ {String(event.summary).slice(0, 200)}
-        </div>
-      );
-    // Open prompts render in the sticky banner above; the log keeps only a
-    // trace so the transcript stays readable.
-    case "permission_requested":
-      return (
-        <div className={`${base} text-xs text-ink-dim`}>
-          ⏸ asked to run {String(event.tool_name)}
-        </div>
-      );
-    case "permission_resolved":
-      return (
-        <div className={`${base} text-xs text-ink-dim`}>
-          {event.allowed ? "✓ you allowed it" : "✗ you denied it"}
-        </div>
-      );
-    case "run_completed":
-      return (
-        <motion.div
-          initial={{ scale: 0.97, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className={`${base} border border-tier-easy/40 bg-tier-easy/10 text-tier-easy`}
-        >
-          <div className="flex gap-1.5">
-            <span>✓</span>
-            <Markdown>{String(event.result_text)}</Markdown>
-          </div>
-        </motion.div>
-      );
-    case "run_failed":
-      return (
-        <div className={`${base} border border-red-400/40 bg-red-400/10 text-red-400`}>
-          ✗ {String(event.reason)}
-        </div>
-      );
-    case "rate_limited":
-      return (
-        <div className={`${base} border border-amber-400/40 bg-amber-400/10 text-amber-600`}>
-          ⏳ rate-limited — re-queued automatically
-        </div>
-      );
-    default:
-      return null;
-  }
 }
 
 /**
