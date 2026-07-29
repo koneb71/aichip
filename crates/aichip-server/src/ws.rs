@@ -37,8 +37,14 @@ async fn handle(mut socket: WebSocket, params: WsParams, state: AppState) {
     let mut last_seq = params.after_seq;
 
     if let Some(run_id) = params.run_id {
+        // `step_id` travels with every replayed frame, matching what the live
+        // path already sends. Without it a client can see that *something* is
+        // happening but not *who* is doing it — which is why an org run could
+        // only ever render status labels. Callers that want names map the id
+        // against the step list they already hold.
         let rows = sqlx::query(
-            "SELECT seq, payload, ts FROM events WHERE run_id=$1 AND seq > $2 ORDER BY seq ASC",
+            "SELECT seq, payload, ts, step_id FROM events
+             WHERE run_id=$1 AND seq > $2 ORDER BY seq ASC",
         )
         .bind(run_id)
         .bind(params.after_seq)
@@ -51,6 +57,7 @@ async fn handle(mut socket: WebSocket, params: WsParams, state: AppState) {
                 "runId": run_id,
                 "seq": seq,
                 "ts": row.get::<chrono::DateTime<chrono::Utc>, _>("ts"),
+                "step_id": row.get::<Option<uuid::Uuid>, _>("step_id"),
                 "event": row.get::<serde_json::Value, _>("payload"),
             });
             if socket.send(Message::text(msg.to_string())).await.is_err() {

@@ -257,7 +257,7 @@ async fn run_events(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT seq, type, payload, ts FROM events WHERE run_id=$1 ORDER BY seq ASC",
+        "SELECT seq, type, payload, ts, step_id FROM events WHERE run_id=$1 ORDER BY seq ASC",
     )
     .bind(id)
     .fetch_all(&state.db.pool)
@@ -269,6 +269,9 @@ async fn run_events(
             json!({
                 "seq": r.get::<i64, _>("seq"),
                 "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("ts"),
+                // Which step produced it — the only way a multi-agent run can
+                // attribute an action to a teammate.
+                "stepId": r.get::<Option<Uuid>, _>("step_id"),
                 "event": r.get::<Value, _>("payload"),
             })
         })
