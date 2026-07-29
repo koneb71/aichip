@@ -95,6 +95,7 @@ export default function ProjectPage() {
               edits in place
             </span>
           )}
+          {project && <AutonomyToggle project={project} onChanged={setProject} />}
           <div className="flex min-w-0 gap-1 overflow-x-auto rounded-lg bg-panel-2 p-0.5">
             {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (
               <button
@@ -160,5 +161,62 @@ export default function ProjectPage() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * Whether agents may work in this project without stopping to ask.
+ *
+ * The orchestrator has always consulted `full_auto_opt_in` before honouring
+ * a no-prompts run, but nothing could ever set it — so every run asked about
+ * everything and there was no way to say "just get on with it". This is that
+ * switch.
+ *
+ * Only offered for git projects: the reason skipping prompts is reasonable at
+ * all is that the work happens in an isolated worktree you read as a diff
+ * before it touches your branch. A project that edits in place has neither.
+ */
+function AutonomyToggle({
+  project,
+  onChanged,
+}: {
+  project: Project;
+  onChanged: (p: Project) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (project.vcs !== "git") return null;
+
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChanged(await api.setProjectFullAuto(project.id, !project.fullAutoOptIn));
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={busy}
+      title={
+        error ??
+        (project.fullAutoOptIn
+          ? "Agents work straight through here. Click to make them ask again."
+          : "Agents stop to ask before edits and commands. Click to let them work uninterrupted — the run stays in an isolated worktree you review.")
+      }
+      className={`rounded-full px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+        project.fullAutoOptIn
+          ? "bg-tier-easy-soft text-tier-easy"
+          : "bg-panel-2 text-ink-dim hover:text-ink"
+      }`}
+    >
+      {project.fullAutoOptIn ? "✓ works without asking" : "asks before acting"}
+    </button>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, ModelSettings, Tier } from "../lib/api";
+import { api, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -22,6 +22,11 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [perms, setPerms] = useState<PermissionSettings | null>(null);
+
+  useEffect(() => {
+    api.permissionSettings().then(setPerms).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -64,7 +69,65 @@ export default function SettingsPage() {
         all pick a tier — this is what those tiers mean.
       </p>
 
-      <div className="mt-6 max-w-2xl space-y-3">
+      <h2 className="mt-7 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+        Permissions
+      </h2>
+      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+        How much new work is allowed to do before it stops to ask you.
+      </p>
+      <div className="mt-3 max-w-2xl space-y-2">
+        {perms?.modes.map((m) => (
+          <label
+            key={m.id}
+            className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${
+              perms.defaultMode === m.id ? "border-accent bg-accent/5" : "border-line bg-panel"
+            }`}
+          >
+            <input
+              type="radio"
+              name="permission-mode"
+              checked={perms.defaultMode === m.id}
+              onChange={async () => {
+                setPerms({ ...perms, defaultMode: m.id });
+                await api.setDefaultPermissionMode(m.id as PermissionMode);
+              }}
+              className="mt-0.5 accent-[var(--color-accent)]"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{m.label}</span>
+              <span className="mt-0.5 block text-xs text-ink-dim">{m.blurb}</span>
+            </span>
+          </label>
+        ))}
+        <p className="text-[11px] text-ink-dim">
+          Applies to cards created from now on. "Don't ask" also needs the project
+          itself to opt in — that switch is on the project, next to its name.
+        </p>
+        {!!perms?.agentsOverriding && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            <span className="font-semibold">
+              {perms.agentsOverriding} agent{perms.agentsOverriding === 1 ? "" : "s"} set
+              their own permission mode
+            </span>{" "}
+            — a card's agent overrides the setting above, so those runs will keep
+            asking whatever you choose here.
+            <button
+              onClick={async () => {
+                await api.applyPermissionsToAgents();
+                setPerms(await api.permissionSettings());
+              }}
+              className="ml-2 rounded-lg border border-amber-400 bg-panel px-2.5 py-1 font-medium hover:bg-amber-100"
+            >
+              Make them follow this setting
+            </button>
+          </div>
+        )}
+      </div>
+
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+        Models
+      </h2>
+      <div className="mt-3 max-w-2xl space-y-3">
         {TIERS.map((tier) => (
           <div key={tier.key} className="card-shadow rounded-xl border border-line bg-panel p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">

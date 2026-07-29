@@ -17,6 +17,17 @@ export interface Project {
   vcs: "git" | "none";
   /** Why a project has no version control. Null for git projects. */
   vcsNote: string | null;
+  /** Agents may work here without stopping to ask. Requires a git project. */
+  fullAutoOptIn: boolean;
+}
+
+export type PermissionMode = "reviewed" | "auto_edit" | "full_auto";
+
+export interface PermissionSettings {
+  defaultMode: PermissionMode;
+  /** Agents pinning their own mode — each one ignores `defaultMode`. */
+  agentsOverriding: number;
+  modes: { id: PermissionMode; label: string; blurb: string }[];
 }
 
 export interface Task {
@@ -51,7 +62,8 @@ export interface Agent {
   systemPrompt: string;
   modelTier: Tier;
   allowedTools: string[];
-  permissionPreset: string;
+  /** null = inherit the workspace default. */
+  permissionPreset: string | null;
   /** null = leave the CLI's own default alone. */
   effort: Effort | null;
   builtin: boolean;
@@ -438,6 +450,24 @@ export const api = {
 
   // settings
   modelSettings: () => fetch("/api/settings/models").then((r) => json<ModelSettings>(r)),
+  permissionSettings: () =>
+    fetch("/api/settings/permissions").then((r) => json<PermissionSettings>(r)),
+  setDefaultPermissionMode: (mode: PermissionMode) =>
+    fetch("/api/settings/permissions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_mode: mode }),
+    }).then((r) => json<{ defaultMode: PermissionMode }>(r)),
+  /** Clear every agent's own preset so they follow the workspace default. */
+  applyPermissionsToAgents: () =>
+    post("/api/settings/permissions/apply-to-agents").then((r) =>
+      json<{ cleared: number }>(r),
+    ),
+  /** Let agents work in this project without stopping to ask. */
+  setProjectFullAuto: (projectId: string, on: boolean) =>
+    patch(`/api/projects/${projectId}`, { full_auto_opt_in: on }).then((r) =>
+      json<Project>(r),
+    ),
   setModelSettings: (tiers: Record<Tier, string>) =>
     fetch("/api/settings/models", {
       method: "PUT",

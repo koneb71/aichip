@@ -97,6 +97,19 @@ impl WorktreeManager {
         let base = resolve_base(repo, base_branch).await?;
         git(repo, &["checkout", &base]).await?;
         git(repo, &["merge", "--squash", &worktree.branch]).await?;
+
+        // A squash that staged nothing means this branch is already in the
+        // base — a second click on Merge, or work that was merged by hand.
+        // `git commit` exits non-zero for that, so committing unconditionally
+        // turned a successful, already-done merge into an error alert while
+        // the change sat safely on the branch. Merging twice should be quiet.
+        if git(repo, &["diff", "--cached", "--quiet"]).await.is_ok() {
+            tracing::info!(
+                branch = %worktree.branch,
+                "nothing to merge — the branch is already in {base}"
+            );
+            return Ok(());
+        }
         git(repo, &["commit", "-m", message]).await?;
         Ok(())
     }
@@ -305,10 +318,22 @@ async fn commit_everything(path: &Path) -> anyhow::Result<()> {
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = Command::new("git").current_dir(cwd).args(args).output().await?;
     if !out.status.success() {
+        // Both streams, because git is inconsistent about which it uses:
+        // "nothing to commit, working tree clean" is a *stdout* message on a
+        // failing exit, so reporting stderr alone produced the useless
+        // "git commit -m … failed:" with nothing after the colon.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let detail = [stderr.trim(), stdout.trim()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" — ");
         anyhow::bail!(
             "git {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr)
+            if detail.is_empty() { "no output".into() } else { detail }
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -517,5 +542,50 @@ mod tests {
 
         mgr.remove(repo_dir.path(), &wt).await.unwrap();
         assert!(!wt.path.exists());
+    }
+
+    /// Clicking Merge twice must be quiet, not an error.
+    ///
+    /// The second squash stages nothing, and `git commit` exits non-zero for
+    /// that — so committing unconditionally reported "Merge failed" for work
+    /// that had merged perfectly well a moment earlier.
+    #[tokio::test]
+    async fn merging_an_already_merged_branch_is_a_no_op() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "twice")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("once.txt"), "one\n").await.unwrap();
+
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "add once")
+            .await
+            .unwrap();
+        let before = git(repo_dir.path(), &["rev-parse", "HEAD"]).await.unwrap();
+
+        // Second time: succeeds, and creates no empty commit.
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "add once")
+            .await
+            .expect("merging twice should not fail");
+        let after = git(repo_dir.path(), &["rev-parse", "HEAD"]).await.unwrap();
+        assert_eq!(before, after, "a no-op merge must not add a commit");
+    }
+
+    /// git puts "nothing to commit" on stdout while exiting non-zero, so an
+    /// error built from stderr alone read as "git commit … failed:" — a
+    /// failure report containing no information at all.
+    #[tokio::test]
+    async fn git_errors_carry_whichever_stream_git_used() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let err = git(repo_dir.path(), &["commit", "-m", "empty"])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nothing to commit"), "got: {err}");
     }
 }

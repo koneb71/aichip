@@ -97,8 +97,10 @@ struct CreateTask {
     prompt: String,
     #[serde(default)]
     model_tier: ModelTier,
-    #[serde(default)]
-    permission_mode: PermissionMode,
+    /// Absent means "use the workspace default", which is not the same as
+    /// asking for Reviewed — `#[serde(default)]` here would silently force
+    /// prompts on every client that doesn't name a mode.
+    permission_mode: Option<PermissionMode>,
     #[serde(default)]
     start: bool,
     agent_id: Option<Uuid>,
@@ -117,7 +119,11 @@ async fn create(
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, ApiError> {
     let tier = serde_json::to_value(body.model_tier).unwrap();
-    let mode = serde_json::to_value(body.permission_mode).unwrap();
+    // Store NULL when the caller didn't choose, so the card inherits whatever
+    // the default is *when it runs* rather than freezing today's value.
+    let mode: Option<String> = body
+        .permission_mode
+        .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
     let row = sqlx::query(
         "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog') RETURNING id",
@@ -126,7 +132,7 @@ async fn create(
     .bind(&body.title)
     .bind(&body.prompt)
     .bind(tier.as_str().unwrap())
-    .bind(mode.as_str().unwrap())
+    .bind(mode.as_deref())
     .bind(body.engine.as_deref().unwrap_or("claude-code"))
     .bind(body.agent_id)
     .bind(body.team_id)

@@ -217,13 +217,17 @@ export function TaskDrawer({
 
   const loadDiff = async () => setDiff((await api.diff(task.id)).diff);
   const merge = async () => {
+    if (merging) return;
     setMerging(true);
+    setError(null);
     try {
       await api.merge(task.id);
       onChanged();
       onClose();
     } catch (e) {
-      alert(`Merge failed:\n${e}`);
+      // Inline, like every other failure in this drawer. A native alert()
+      // loses the drawer's context and can't be copied out of easily.
+      setError(`Merge failed. ${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
       setMerging(false);
     }
@@ -259,6 +263,13 @@ export function TaskDrawer({
         </button>
       </div>
 
+      {/* Everything between the pinned header and the pinned tabs scrolls on
+          its own. Without this the card's controls, attachments and any
+          queued permission prompts simply ran off the bottom of the drawer
+          with no way to reach them — several prompts stacked up is exactly
+          when you most need to get at them. Capped so it can never crowd out
+          the transcript below. */}
+      <div className="max-h-[55vh] overflow-y-auto">
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
           Assigned to
@@ -420,6 +431,7 @@ export function TaskDrawer({
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
 
       <div className="flex gap-1 border-b border-line px-5 py-2">
         {(["comments", "activity"] as const).map((p) => (
