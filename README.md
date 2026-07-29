@@ -2,16 +2,22 @@
 
 **A local-first multi-agent workflow platform for coding agents — no API keys.**
 
-aichip orchestrates the official [Claude Code](https://code.claude.com) CLI (and, later, other
-agent CLIs like Codex) on *your own machine*, under *your own* subscription login. It gives you:
+aichip orchestrates official coding-agent CLIs — [Claude Code](https://code.claude.com) and
+[OpenCode](https://opencode.ai) today — on *your own machine*, under *your own* subscription
+login. It gives you:
 
 - **Parallel task board** — kick off many coding tasks at once, each isolated in its own git
   worktree; watch live streams, review diffs, merge.
 - **Pipelines / DAGs** — chained stages (plan → implement → review → fix) defined in YAML.
 - **Scheduled agents** — cron-style recurring workflows (nightly dep updates, issue triage).
 - **Agent teams & debate** — reusable agent definitions, N parallel attempts + a judge.
-- **Model tiering** — route easy work to Sonnet, medium to Opus, complex to Fable, per task or
-  per pipeline step.
+- **Model tiering** — route easy work to a fast model and hard work to a strong one, per task
+  or per pipeline step. The mapping is *per engine*, because "medium" cannot name one model
+  globally: OpenCode has never heard of `claude-opus-5`.
+- **More than one engine** — pick which CLI runs a card, a chat, a team or a single workflow
+  step, and pit two against each other on the same brief in a bake-off. An engine that isn't
+  installed is simply not offered, and one that can't honour a permission mode says so before
+  you start rather than failing forty minutes in.
 
 ## How it stays within the terms of service
 
@@ -22,9 +28,11 @@ aichip is **process orchestration, not API access**. The compliance model is str
 2. aichip **never reads, stores, extracts, or forwards credentials** — it does not touch
    `~/.claude`, does not set auth environment variables, and does not proxy network traffic.
 3. aichip only spawns the **official binaries found on `PATH`** (e.g. `claude -p
-   --output-format stream-json`) and reads their stdout.
-4. `aichip doctor` verifies the CLI is installed and logged in **by running it**, never by
-   inspecting its config files.
+   --output-format stream-json`, `opencode run --format json`) and reads their stdout. No
+   engine has an HTTP control API in the loop.
+4. `aichip doctor` verifies each CLI is installed and logged in **by running it**, never by
+   inspecting its config files. Where a CLI can name its providers (`opencode providers
+   list`), aichip shows the **name and auth type only** — never a credential.
 
 These four invariants are contribution rules. PRs that violate them will not be merged.
 
@@ -36,7 +44,7 @@ prompt attachments all work end to end; see the roadmap below.
 ## Quick start
 
 ```bash
-cargo run -p aichip-cli -- doctor   # checks git + the claude CLI are usable
+cargo run -p aichip-cli -- doctor   # checks git + every agent CLI it can find
 cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4820
 ```
 
@@ -56,6 +64,35 @@ in the code rather than in the question. Mentioned agents can't edit anything
 from a comment; they answer, and real changes still go through tasks. Files can
 be attached to a card at creation or later from its drawer; the next run sees
 them.
+
+### Plan first
+
+A card can be set to **plan first**. The agent reads the code and writes down
+what it means to do — what it found, which files it will touch, what it is
+leaving alone, what it had to guess — then stops. Nothing has changed yet.
+
+You get three answers, and the middle one is why this exists:
+
+- **Approve** — work starts from the plan.
+- **Edit, then approve** — rewrite the plan in place and start from *your*
+  version. When a plan is 90% right, fixing the line beats paying for another
+  planning pass to fix it for you.
+- **Ask for changes** — send it back with a note; the next pass gets your
+  feedback alongside what it proposed.
+
+The planning pass is genuinely read-only: `Edit`, `Write`, `Bash` and friends
+are *denied*, not merely left off the allow-list. That distinction is load
+bearing — Claude Code's `--allowedTools` pre-approves rather than restricts, so
+a planning pass "allowed" only `Read` will still reach for `Bash` unless told
+it cannot.
+
+The work pass resumes the planning session, so the agent keeps everything it
+learned reading the code. When you edited the plan it is told so explicitly,
+because it is resuming a conversation in which it remembers proposing something
+else, and would otherwise follow its own memory over the text in front of it.
+
+While parked the run holds no queue slot: planning finishes, the run waits, and
+approving re-queues it.
 
 Agents keep **memories**: when one finishes a task or answers a mention, a
 compact note of what happened is stored and fed into its next runs, so an agent
@@ -172,6 +209,119 @@ happens in the task's own worktree, so the card lands on Review and you diff
 and squash-merge it exactly like a solo task. Open the card and hit **Open team
 room** to watch or replay the conversation behind it.
 
+## Knowledge base
+
+A wiki, not a folder of documents. Pages have **a place, an address, and a
+memory**:
+
+- **A place.** Pages nest under each other in a tree, grouped into **spaces** —
+  and a space is a repository, because the pages worth writing are about a
+  codebase. Pages that belong to no one repo live in *General*.
+- **An address.** `/knowledge/:pageId` is a real route with a read view,
+  breadcrumbs, a contents list, child pages, and "linked from". Type `@` in the
+  editor to link another page; the backlink appears on the other end.
+- **A memory.** Every version is kept. The history shows what changed, when, and
+  whether a person or an agent wrote it — including the versions that were
+  turned down, because "what did we decide not to do" is usually the interesting
+  question.
+
+Editing has no Save button: typing saves. Every save carries the revision it
+started from, so if the page moved under you the server refuses rather than
+overwriting, and you get a diff and a choice instead of a lost afternoon.
+
+### Agents propose; they never overwrite
+
+This wiki has two kinds of writer, and that is the unusual part. An agent can
+read your repository and write documentation for it — but **an agent's write is
+always a proposal**. The live page is untouched until a person accepts it.
+
+You get the proposal as a diff, and three answers: accept, *accept and edit*, or
+discard with a note. If you edited the page while the agent was working, the
+banner says so and names the revision the agent actually read.
+
+The diff is over the page's **text**, never its HTML — two model passes over
+identical prose emit different markup, and a diff that claims every line changed
+is a diff nobody reads, which turns review into rubber-stamping.
+
+### What agents read
+
+Attach a page to a card and its text is folded into that run's prompt, so
+attaching one is how you say "read the runbook before you touch anything". You
+can also reference a page in a single comment, which reaches the reply without
+pinning it to the card.
+
+Those bodies reach a process holding Edit, Write and Bash, and *another agent
+may have written them* — so the prompt fences each page, states plainly that the
+enclosed text is reference material rather than instructions, and says whether a
+human has published the page or it is still an unreviewed draft. Titles are
+escaped and bodies cannot close their own fence.
+
+### Storage and search
+
+Page text lives in Postgres and is fully searchable — titles, summaries and
+bodies. Images and files pasted into a page go to **MinIO** (or any
+S3-compatible endpoint), so a 4 MB screenshot doesn't end up in every database
+backup:
+
+```bash
+docker compose up -d minio
+export AICHIP_S3_ENDPOINT=http://127.0.0.1:9100
+export AICHIP_S3_ACCESS_KEY=aichip
+export AICHIP_S3_SECRET_KEY=aichip-dev-secret
+```
+
+The bucket is created on boot. Without these variables the wiki still works —
+you just can't attach files, and the upload endpoint says so.
+
+Bodies are sanitised **on write**, not on render: editor HTML is stored and
+served back to other readers, which is the textbook stored-XSS shape, and a
+string that is only safe when every reader remembers to clean it will meet the
+reader who forgets. Embeds are allowed from a short host allowlist; an
+`<iframe>` pointing anywhere else does not survive being saved.
+
+The editor is [TipTap](https://tiptap.dev) — MIT, self-hosted, no account and no
+licence key. It emits HTML, which is why swapping it changed nothing behind it:
+the same sanitiser, the same text projection, the same diff, the same search
+index. A markdown-first editor would have meant rewriting all four.
+
+## Engines
+
+Two are supported. Which ones you're offered depends on what's installed — `aichip doctor`
+and `GET /api/engines` both answer by *running* each CLI.
+
+| | Claude Code | OpenCode |
+|---|---|---|
+| Model ids | fixed catalog (`claude-opus-5`) | `provider/model`, from `opencode models` |
+| Ask permission mid-run | yes | **no** — headless it rejects every prompt |
+| Resume a session | yes | yes |
+| Rate-limit signal | structured, so the queue backs off precisely | best-effort text match |
+| Providers | your Claude login | whatever you've authenticated (`opencode providers list`) |
+
+Because OpenCode cannot stop and ask, starting a **Reviewed** card on it is refused with a
+`409` and a reason, at the click that caused it. Auto-edit works: aichip generates a
+permission allow-list from the run's tools instead of answering prompts one at a time. That
+refusal is deliberately *not* a silent downgrade — quietly turning Reviewed into Auto-edit
+would be a privilege escalation performed on your behalf.
+
+Tier defaults for a multi-provider engine are derived at boot from the models that install
+can actually reach, rather than hard-coded: an `anthropic/…` default is wrong for someone
+whose only provider is Google, and they'd discover it when their first task failed.
+
+### Scheduled runs never park
+
+A step that stops to ask holds its concurrency permit for the whole run, so a
+scheduled workflow blocking on a permission prompt at 3am doesn't just go
+unanswered — it eats one of `AICHIP_MAX_CONCURRENT` (default 2) until the server
+restarts. Two of them and nothing dispatches at all.
+
+So a **scheduled** run whose step resolves to Reviewed fails with a reason
+naming the step, instead of parking. Manual runs still park: someone chose to
+start them and is there to answer.
+
+The common way to hit this isn't writing `permission_mode: reviewed` — it's
+writing `full_auto` on a project that hasn't opted in, which is cut down to
+Reviewed by the safety gate. The failure message says which of the two happened.
+
 ## Database
 
 `aichip serve` manages its own Postgres by default. To use your own instead:
@@ -240,7 +390,7 @@ comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild
 ## Workspace layout
 
 - `crates/aichip-shared` — event types, model tiers, API DTOs
-- `crates/aichip-engines` — engine adapter trait, Claude Code adapter, mock engine
+- `crates/aichip-engines` — engine adapter trait, Claude Code and OpenCode adapters, mock engine
 - `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler
 - `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy
 - `crates/aichip-cli` — the `aichip` binary (`serve`, `doctor`)

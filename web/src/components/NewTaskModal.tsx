@@ -7,6 +7,8 @@ import { AttachmentBar } from "./AttachmentBar";
 import { useMentionPicker } from "./MentionPicker";
 import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
 import { useTierModel } from "../lib/models";
+import { EnginePicker, useEngines } from "../lib/engines";
+import { ArticlePicker } from "./kb/ArticlePicker";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 
@@ -20,6 +22,7 @@ export function NewTaskModal({
   onCreated: () => void;
 }) {
   const tierModel = useTierModel();
+  const engines = useEngines();
   const { active } = useWorkspace();
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -27,6 +30,10 @@ export function NewTaskModal({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [assignee, setAssignee] = useState<string>("");
+  // null = the machine default, which is what the server picks.
+  const [engine, setEngine] = useState<string | null>(null);
+  const [planFirst, setPlanFirst] = useState(false);
+  const [articleIds, setArticleIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const att = useAttachments(project.id);
@@ -72,6 +79,9 @@ export function NewTaskModal({
         agent_id: kind === "agent" ? id : null,
         team_id: kind === "team" ? id : null,
         start,
+        engine: engine ?? undefined,
+        plan_first: planFirst,
+        article_ids: articleIds,
         attachment_ids: att.ids,
       });
       att.clear();
@@ -166,7 +176,9 @@ export function NewTaskModal({
                   }}
                 >
                   {t}
-                  <span className="block text-[10px] opacity-75">{tierModel(t)}</span>
+                  <span className="block text-[10px] opacity-75">
+                    {tierModel(t, engine ?? undefined)}
+                  </span>
                 </button>
               ))}
             </div>
@@ -183,6 +195,41 @@ export function NewTaskModal({
             />
           </div>
         </div>
+
+        {!!engines && engines.length > 1 && (
+          <div className="mb-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+              Run on
+            </div>
+            <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
+          </div>
+        )}
+
+        {!!active && (
+          <div className="mb-4">
+            <ArticlePicker
+              workspaceId={active.id}
+              selected={articleIds}
+              onChange={setArticleIds}
+            />
+          </div>
+        )}
+
+        <label className="mb-4 flex cursor-pointer items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={planFirst}
+            onChange={(e) => setPlanFirst(e.target.checked)}
+            className="mt-0.5 accent-[var(--color-accent)]"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium">Plan first</span>
+            <span className="block text-xs text-ink-dim">
+              The agent writes down what it intends to do and stops. You confirm
+              it, rewrite it, or send it back — then work starts.
+            </span>
+          </span>
+        </label>
 
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
@@ -201,7 +248,7 @@ export function NewTaskModal({
             disabled={busy}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           >
-            Start now
+            {planFirst ? "Plan it" : "Start now"}
           </motion.button>
         </div>
       </motion.div>

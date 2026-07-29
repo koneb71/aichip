@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, TaskComment } from "../lib/api";
+import { ArticlePicker } from "./kb/ArticlePicker";
 import { useWorkspace } from "../lib/workspace";
 import { mentionToken } from "../lib/mention";
 import { Markdown } from "./Markdown";
@@ -18,6 +19,9 @@ export function TaskComments({ taskId }: { taskId: string }) {
   const [caret, setCaret] = useState(0);
   const [cursor, setCursor] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Scoped to this reply rather than pinned to the card: "see #runbook" is
+  // context for the answer, not a permanent property of the work.
+  const [articleIds, setArticleIds] = useState<string[]>([]);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -91,7 +95,8 @@ export function TaskComments({ taskId }: { taskId: string }) {
       },
     ]);
     try {
-      const r = await api.postComment(taskId, content);
+      const r = await api.postComment(taskId, content, undefined, articleIds);
+      setArticleIds([]);
       if (r.runIds.length > 0) setPending((p) => p + r.runIds.length);
       refresh();
     } catch (e) {
@@ -165,6 +170,17 @@ export function TaskComments({ taskId }: { taskId: string }) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {!!active && (
+          <div className="mb-1.5">
+            <ArticlePicker
+              workspaceId={active.id}
+              selected={articleIds}
+              onChange={setArticleIds}
+              compact
+            />
+          </div>
+        )}
 
         <div className="flex items-end gap-2 rounded-xl border border-line bg-panel px-3 py-2 focus-within:border-accent">
           <textarea

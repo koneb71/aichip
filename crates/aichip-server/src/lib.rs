@@ -15,6 +15,10 @@ pub struct AppState {
     pub bus: EventBus,
     pub orchestrator: Arc<Orchestrator>,
     pub permissions: PermissionBroker,
+    /// Object storage for knowledge-base attachments. `None` when it isn't
+    /// configured, which is a normal state: articles work without it, and the
+    /// upload endpoint says so rather than failing obscurely.
+    pub storage: Option<aichip_core::storage::Storage>,
 }
 
 pub fn app(state: AppState) -> Router {

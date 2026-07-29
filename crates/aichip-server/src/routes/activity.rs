@@ -77,6 +77,7 @@ async fn activity(
     // The project join is via whichever of task/workflow/chat/org owns it.
     let runs = sqlx::query(
         "SELECT r.id, r.status, r.trigger, r.cost_usd, r.created_at, r.started_at,
+                r.engine, r.model,
                 r.goal, t.title AS task_title, w.name AS workflow_name,
                 tm.name AS team_name, p.name AS project_name, p.id AS project_id,
                 r.team_id, r.task_id
@@ -121,6 +122,8 @@ async fn activity(
                 "taskId": r.get::<Option<Uuid>, _>("task_id"),
                 "isOrg": r.get::<Option<Uuid>, _>("team_id").is_some(),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                "engine": r.get::<String, _>("engine"),
+                "model": r.get::<Option<String>, _>("model"),
                 "startedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at"),
                 "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
             })
@@ -132,7 +135,16 @@ async fn activity(
     let mut blocked: Vec<Value> = live
         .iter()
         .filter(|r| r["status"] == "awaiting_approval")
-        .map(|r| json!({ "runId": r["id"], "kind": "plan", "label": r["label"] }))
+        // Where to send someone who clicks it. A team's plan lives in the team
+        // room; a card's lives on the card, and opening an org room for a run
+        // that has no team shows an empty one.
+        .map(|r| json!({
+            "runId": r["id"],
+            "kind": "plan",
+            "label": r["label"],
+            "isOrg": r["isOrg"],
+            "projectId": r["projectId"],
+        }))
         .collect();
     for run in &live {
         let run_id: Uuid = serde_json::from_value(run["id"].clone()).map_err(internal)?;

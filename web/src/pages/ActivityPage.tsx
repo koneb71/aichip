@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ActivityRun, api } from "../lib/api";
+import { ActivityRun, api, Blocker } from "../lib/api";
+import { useEngines } from "../lib/engines";
 import { useActivity, notificationsOn, toggleNotifications } from "../lib/activity";
 import { useWorkspace } from "../lib/workspace";
 import { isWorking, statusColor, statusLabel } from "../lib/runStatus";
@@ -144,21 +145,11 @@ export default function ActivityPage() {
                   }}
                 />
               ) : (
-                <motion.button
+                <PlanBlocker
                   key={`${b.runId}-plan-${i}`}
-                  initial={{ opacity: 0, x: -6 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  onClick={() => setOrgRun(b.runId)}
-                  className="card-shadow flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50/60 px-4 py-3 text-left hover:bg-amber-50"
-                >
-                  <span className="text-lg">◧</span>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{b.label}</div>
-                    <div className="truncate text-xs text-ink-dim">
-                      A plan is ready for your review
-                    </div>
-                  </div>
-                </motion.button>
+                  blocker={b}
+                  onOpenOrg={() => setOrgRun(b.runId)}
+                />
               ),
             )}
           </div>
@@ -339,6 +330,13 @@ function NotifyToggle() {
 }
 
 function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void }) {
+  const engines = useEngines();
+  // Naming the engine only earns its space once there's more than one; the
+  // model always does.
+  const engineLabel =
+    (engines?.length ?? 0) > 1
+      ? engines?.find((e) => e.id === run.engine)?.label
+      : undefined;
   const body = (
     <>
       <span
@@ -356,7 +354,14 @@ function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void })
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{run.label}</div>
         <div className="truncate text-xs text-ink-dim">
-          {[run.projectName, run.teamName, statusLabel(run.status)]
+          {[
+            run.projectName,
+            run.teamName,
+            statusLabel(run.status),
+            // Which CLI is spending your subscription, and on what. Only
+            // worth the space once more than one engine exists.
+            [engineLabel, run.model].filter(Boolean).join(" · ") || null,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </div>
@@ -495,4 +500,50 @@ function Stat({ label, value, accent }: { label: string; value: string; accent: 
 function LiveAction({ runId }: { runId: string }) {
   const events = useRunStream(runId);
   return <ActivityLine events={events} live />;
+}
+
+/**
+ * A plan waiting on you. A team's opens the room it was written in; a card's
+ * opens the board it belongs to, where the drawer shows it inline.
+ */
+function PlanBlocker({
+  blocker,
+  onOpenOrg,
+}: {
+  blocker: Blocker;
+  onOpenOrg: () => void;
+}) {
+  const className =
+    "card-shadow flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50/60 px-4 py-3 text-left hover:bg-amber-50";
+  const body = (
+    <>
+      <span className="text-lg">◧</span>
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold">{blocker.label}</div>
+        <div className="truncate text-xs text-ink-dim">
+          A plan is ready for your review
+        </div>
+      </div>
+    </>
+  );
+  if (blocker.isOrg) {
+    return (
+      <motion.button
+        initial={{ opacity: 0, x: -6 }}
+        animate={{ opacity: 1, x: 0 }}
+        onClick={onOpenOrg}
+        className={className}
+      >
+        {body}
+      </motion.button>
+    );
+  }
+  if (blocker.projectId) {
+    return (
+      <Link to={`/projects/${blocker.projectId}`} className={className}>
+        {body}
+      </Link>
+    );
+  }
+  return <div className={className}>{body}</div>;
 }

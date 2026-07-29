@@ -20,11 +20,8 @@ use serde_json::{json, Map, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-/// Env var prefixes a user-defined server may never set. Mirrors
-/// `aichip_engines::claude::FORBIDDEN_ENV_PREFIXES`; duplicated rather than
-/// imported so core doesn't depend on the engine crate for a validation rule
-/// it must enforce regardless of which engine ends up running.
-pub const FORBIDDEN_ENV_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_OAUTH"];
+// The rule lives in `aichip_shared::env_guard` so this and both adapters
+// enforce exactly one definition of "auth-shaped".
 
 #[derive(Debug, Clone)]
 pub struct McpServer {
@@ -66,6 +63,31 @@ impl McpServer {
         }
     }
 
+    /// Engine-neutral description, for `RunSpec.mcp`.
+    pub fn to_spec(&self) -> aichip_shared::McpServerSpec {
+        let pairs = |v: &Value| -> Vec<(String, String)> {
+            v.as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let transport = match self.transport.as_str() {
+            "http" | "sse" => aichip_shared::McpTransport::Http {
+                url: self.url.clone().unwrap_or_default(),
+                headers: pairs(&self.headers),
+            },
+            _ => aichip_shared::McpTransport::Stdio {
+                command: self.command.clone().unwrap_or_default(),
+                args: self.args.clone(),
+                env: pairs(&self.env),
+            },
+        };
+        aichip_shared::McpServerSpec { name: self.name.clone(), transport }
+    }
+
     /// What to put in `--allowedTools` to permit this server's tools.
     ///
     /// The server-level prefix rather than `mcp__name__tool` for each tool:
@@ -85,12 +107,8 @@ pub fn check_env(env: &Value) -> anyhow::Result<()> {
         return Ok(());
     };
     for key in map.keys() {
-        let upper = key.to_uppercase();
-        if FORBIDDEN_ENV_PREFIXES.iter().any(|p| upper.starts_with(p)) {
-            anyhow::bail!(
-                "refusing to store auth-related env var {key}: aichip runs on your CLI's own \
-                 login and never handles API credentials"
-            );
+        if aichip_shared::is_auth_env(key) {
+            anyhow::bail!("{}", aichip_shared::auth_env_refusal(key));
         }
     }
     Ok(())

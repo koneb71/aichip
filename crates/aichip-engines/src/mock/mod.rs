@@ -2,7 +2,7 @@
 //! pacing. The backbone of all testing — zero model usage.
 
 use crate::claude::stream_parser;
-use crate::{Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
+use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
 use aichip_shared::AichipEvent;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -38,10 +38,29 @@ impl Engine for MockEngine {
         "mock"
     }
 
+    fn label(&self) -> &'static str {
+        "Mock"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        // Claims everything so tests exercising any surface aren't blocked by
+        // the capability gate; it replays fixtures rather than honouring any
+        // of it.
+        Capabilities {
+            interactive_permissions: true,
+            structured_rate_limit: true,
+            resume_sessions: true,
+            append_system_prompt: true,
+            fixed_model_catalog: true,
+        }
+    }
+
     async fn detect(&self) -> Option<EngineInfo> {
         Some(EngineInfo {
             version: "mock-0".to_string(),
             authenticated: true,
+            providers: vec![],
+            models: vec![],
         })
     }
 
@@ -91,8 +110,10 @@ mod tests {
             resume_session_id: None,
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: vec![],
+            denied_tools: vec![],
             append_system_prompt: None,
-            mcp_config_path: None,
+            mcp: Default::default(),
+            run_key: "test".to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: true,
             extra_env: HashMap::new(),

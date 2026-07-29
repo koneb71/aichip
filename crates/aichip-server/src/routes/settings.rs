@@ -7,7 +7,10 @@
 
 use super::{internal, ApiError};
 use crate::AppState;
-use aichip_shared::{is_known_model, ModelTier, PermissionMode, TierMapping, MODEL_CHOICES};
+use aichip_shared::{
+    is_known_model_for, EngineTierMapping, ModelTier, PermissionMode, TierMapping, MODEL_CHOICES,
+};
+use std::collections::BTreeMap;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -24,27 +27,67 @@ pub fn router() -> Router<AppState> {
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
     let mapping = state.orchestrator.tier_mapping();
-    Json(json!({
-        "tiers": {
-            "easy": mapping.model_for(ModelTier::Easy),
-            "medium": mapping.model_for(ModelTier::Medium),
-            "complex": mapping.model_for(ModelTier::Complex),
-        },
-        // The catalog travels with the current values so the picker can't
-        // offer a model the server would then reject.
-        "choices": MODEL_CHOICES.iter().map(|m| json!({
-            "id": m.id, "label": m.label, "blurb": m.blurb,
-        })).collect::<Vec<_>>(),
-        "defaults": {
-            "easy": TierMapping::default().model_for(ModelTier::Easy),
-            "medium": TierMapping::default().model_for(ModelTier::Medium),
-            "complex": TierMapping::default().model_for(ModelTier::Complex),
-        },
-    }))
+    // One column per engine that is actually installed. An engine the user
+    // doesn't have is not worth asking them to configure.
+    let engines = state
+        .orchestrator
+        .engines()
+        .into_iter()
+        .filter(|e| e.id() != "mock")
+        .map(|e| {
+            let current = mapping.for_engine(e.id());
+            let defaults = EngineTierMapping::defaults_for(e.id());
+            json!({
+                "id": e.id(),
+                "label": e.label(),
+                // A fixed catalog is only honest for an engine that has one.
+                // OpenCode fronts 75+ providers, so its field is free text and
+                // the picker says so rather than offering a stale list.
+                "fixedCatalog": e.capabilities().fixed_model_catalog,
+                "choices": if e.capabilities().fixed_model_catalog {
+                    MODEL_CHOICES.iter().map(|m| json!({
+                        "id": m.id, "label": m.label, "blurb": m.blurb,
+                    })).collect::<Vec<_>>()
+                } else {
+                    vec![]
+                },
+                // What this install can actually reach, straight from the CLI.
+                // Suggestions, not a whitelist: a local model the CLI doesn't
+                // enumerate is still a legitimate thing to type.
+                "available": state
+                    .orchestrator
+                    .engine_info(e.id())
+                    .map(|i| i.models.clone())
+                    .unwrap_or_default(),
+                "providers": state
+                    .orchestrator
+                    .engine_info(e.id())
+                    .map(|i| i.providers.clone())
+                    .unwrap_or_default(),
+                "tiers": tiers_json(&current),
+                "defaults": tiers_json(&defaults),
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(json!({ "engines": engines }))
+}
+
+fn tiers_json(m: &TierMapping) -> Value {
+    json!({
+        "easy": m.model_for(ModelTier::Easy),
+        "medium": m.model_for(ModelTier::Medium),
+        "complex": m.model_for(ModelTier::Complex),
+    })
 }
 
 #[derive(Deserialize)]
 struct ModelsBody {
+    /// `{engine_id: {easy, medium, complex}}`.
+    engines: BTreeMap<String, TierRow>,
+}
+
+#[derive(Deserialize)]
+struct TierRow {
     easy: String,
     medium: String,
     complex: String,
@@ -54,34 +97,45 @@ async fn set_models(
     State(state): State<AppState>,
     Json(body): Json<ModelsBody>,
 ) -> Result<Json<Value>, ApiError> {
-    // Checked here as well as in the orchestrator so the message names the
-    // offending field rather than just the id.
-    for (field, model) in [
-        ("easy", &body.easy),
-        ("medium", &body.medium),
-        ("complex", &body.complex),
-    ] {
-        if !is_known_model(model) {
+    let mut mapping = BTreeMap::new();
+    for (engine, row) in body.engines {
+        if state.orchestrator.engine(&engine).is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("\"{model}\" is not a model aichip offers (field {field})"),
+                format!("\"{engine}\" is not an engine this machine has"),
             ));
         }
+        // Checked here as well as in the orchestrator so the message names the
+        // offending field rather than just the id.
+        for (field, model) in [
+            ("easy", &row.easy),
+            ("medium", &row.medium),
+            ("complex", &row.complex),
+        ] {
+            if !is_known_model_for(&engine, model) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("\"{model}\" is not a model {engine} can run (field {field})"),
+                ));
+            }
+        }
+        mapping.insert(
+            engine,
+            TierMapping(
+                [
+                    (ModelTier::Easy, row.easy),
+                    (ModelTier::Medium, row.medium),
+                    (ModelTier::Complex, row.complex),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
     }
-
-    let mapping = TierMapping(
-        [
-            (ModelTier::Easy, body.easy),
-            (ModelTier::Medium, body.medium),
-            (ModelTier::Complex, body.complex),
-        ]
-        .into_iter()
-        .collect(),
-    );
 
     state
         .orchestrator
-        .set_tier_mapping(mapping)
+        .set_tier_mapping(EngineTierMapping(mapping))
         .await
         .map_err(internal)?;
 

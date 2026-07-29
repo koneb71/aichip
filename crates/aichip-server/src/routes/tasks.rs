@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}", axum::routing::patch(move_task).delete(delete_task))
         .route("/tasks/{id}/retry", post(retry))
         .route("/tasks/{id}/comments", get(comments).post(post_comment))
+        .route("/tasks/{id}/articles", get(task_articles).put(set_task_articles))
         .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
@@ -26,6 +27,9 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}/events", get(run_events))
         .route("/runs/{id}/pending-permissions", get(pending_permissions))
         .route("/runs/{id}/cancel", post(cancel_run))
+        .route("/runs/{id}/plan", get(plan).patch(edit_plan))
+        .route("/runs/{id}/plan/approve", post(approve_plan))
+        .route("/runs/{id}/plan/revise", post(revise_plan))
         .route("/permissions/{request_id}/resolve", post(resolve_permission))
 }
 
@@ -41,7 +45,8 @@ async fn list(
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
         "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch, t.position,
-                t.project_id, t.agent_id, a.name AS agent_name, a.color AS agent_color,
+                t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
+                a.name AS agent_name, a.color AS agent_color,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
                 r.team_id AS run_team_id
@@ -84,6 +89,8 @@ async fn list(
                 "runStatus": r.get::<Option<String>, _>("run_status"),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
                 "model": r.get::<Option<String>, _>("model"),
+                "engine": r.get::<String, _>("engine"),
+                "planFirst": r.get::<bool, _>("plan_first"),
             })
         })
         .collect();
@@ -106,8 +113,15 @@ struct CreateTask {
     agent_id: Option<Uuid>,
     /// Hand the whole task to a team instead of a single agent.
     team_id: Option<Uuid>,
-    /// "claude-code" (default) or "mock" for demos/E2E.
+    /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
+    /// Write a plan and stop, so a person can confirm or rewrite it before any
+    /// work happens.
+    #[serde(default)]
+    plan_first: bool,
+    /// Knowledge-base articles the agent should read before starting.
+    #[serde(default)]
+    article_ids: Vec<Uuid>,
     /// Ids from POST /api/projects/{id}/attachments, bound to this task on
     /// create. Defaulted so existing clients keep working.
     #[serde(default)]
@@ -125,21 +139,25 @@ async fn create(
         .permission_mode
         .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog') RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
     .bind(&body.prompt)
     .bind(tier.as_str().unwrap())
     .bind(mode.as_deref())
-    .bind(body.engine.as_deref().unwrap_or("claude-code"))
+    .bind(body.engine.clone().unwrap_or_else(|| state.orchestrator.default_engine()))
     .bind(body.agent_id)
     .bind(body.team_id)
+    .bind(body.plan_first)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
     let task_id: Uuid = row.get("id");
+    // Before the run is enqueued, for the same reason attachments are: the
+    // prompt is assembled from whatever is bound when the run is picked up.
+    link_articles(&state, task_id, &body.article_ids).await?;
 
     // Must happen before the run is enqueued: the orchestrator assembles the
     // prompt from whatever is bound at the time it picks the run up.
@@ -152,6 +170,9 @@ async fn create(
     .await?;
 
     let run_id = if body.start {
+        // Same gate as `start`: a card created with start=true must not slip
+        // past the capability check.
+        vet_task(&state, task_id).await?;
         let id = state
             .orchestrator
             .enqueue_task(task_id)
@@ -173,6 +194,7 @@ async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    vet_task(&state, id).await?;
     let run_id = state.orchestrator.enqueue_task(id).await.map_err(internal)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(id)
@@ -180,6 +202,35 @@ async fn start(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "runId": run_id })))
+}
+
+/// Refuse to queue a card its engine cannot honour.
+///
+/// The same check runs again at dispatch, but doing it here means the user
+/// sees the reason on the click that caused it rather than as a failed run.
+async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
+    let row = sqlx::query(
+        "SELECT COALESCE(a.engine, t.engine) AS engine,
+                COALESCE(a.permission_preset, t.permission_mode) AS mode
+         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+
+    let mode = match row.get::<Option<String>, _>("mode") {
+        Some(m) => serde_json::from_value(Value::String(m)).unwrap_or_default(),
+        None => state.orchestrator.default_permission_mode().await,
+    };
+    match state
+        .orchestrator
+        .vet_engine(&row.get::<String, _>("engine"), mode)
+    {
+        Some(reason) => Err((StatusCode::CONFLICT, reason)),
+        None => Ok(()),
+    }
 }
 
 async fn diff(
@@ -402,6 +453,13 @@ struct MoveTask {
     agent_id: Option<Option<Uuid>>,
     #[serde(default, deserialize_with = "present")]
     team_id: Option<Option<Uuid>>,
+    /// Which CLI runs this card. Absent leaves it alone; a card always has
+    /// one, so unlike the assignee there is no "clear it" case.
+    #[serde(default)]
+    engine: Option<String>,
+    /// Absent leaves it alone.
+    #[serde(default)]
+    plan_first: Option<bool>,
 }
 
 /// Distinguish "field was present and null" from "field was absent".
@@ -481,7 +539,9 @@ async fn move_task(
         "UPDATE tasks SET board_column = coalesce($2, board_column),
                           position = coalesce($3, position),
                           agent_id = CASE WHEN $4 THEN $5 ELSE agent_id END,
-                          team_id  = CASE WHEN $6 THEN $7 ELSE team_id  END
+                          team_id  = CASE WHEN $6 THEN $7 ELSE team_id  END,
+                          engine   = coalesce($8, engine),
+                          plan_first = coalesce($9, plan_first)
          WHERE id = $1",
     )
     .bind(id)
@@ -491,6 +551,8 @@ async fn move_task(
     .bind(agent_id.flatten())
     .bind(team_id.is_some())
     .bind(team_id.flatten())
+    .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
+    .bind(body.plan_first)
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -516,7 +578,7 @@ async fn require_same_workspace(
     table: &str,
     assignee_id: Uuid,
 ) -> Result<(), ApiError> {
-    // `table` is a literal from the two call sites, never user input.
+    // `table` is a literal from the call sites, never user input.
     let ok: Option<i32> = sqlx::query_scalar(&format!(
         "SELECT 1 FROM {table} x
          JOIN projects p ON p.workspace_id = x.workspace_id
@@ -600,7 +662,7 @@ async fn comments(
 #[derive(Deserialize)]
 struct PostComment {
     content: String,
-    /// "claude-code" (default) or "mock" for demos/E2E.
+    /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
     /// Anchor to a line of the diff. Present when the comment was written
     /// from the diff view rather than the card.
@@ -612,6 +674,11 @@ struct PostComment {
     /// Act on it, rather than just record it. Spawns a scoped run in the
     /// task's existing worktree.
     fix: Option<bool>,
+    /// Knowledge-base articles referenced by this comment alone. Scoped to the
+    /// comment rather than pinned to the card: "see #runbook" is context for
+    /// this reply, not a permanent property of the work.
+    #[serde(default)]
+    article_ids: Vec<Uuid>,
 }
 
 async fn post_comment(
@@ -660,6 +727,18 @@ async fn post_comment(
     .map_err(internal)?
     .get("id");
 
+    if !body.article_ids.is_empty() {
+        sqlx::query(
+            "INSERT INTO comment_articles (comment_id, article_id)
+             SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING",
+        )
+        .bind(comment_id)
+        .bind(&body.article_ids)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    }
+
     // "Fix this" is its own path: a comment reply is read-only by design, so
     // acting on review feedback needs a run that can actually edit, in the
     // worktree the diff came from.
@@ -674,7 +753,8 @@ async fn post_comment(
 
     // Every mentioned agent replies, capped so one comment can't fan out a
     // whole roster of runs.
-    let engine = body.engine.as_deref().unwrap_or("claude-code");
+    let default_engine = state.orchestrator.default_engine();
+    let engine = body.engine.as_deref().unwrap_or(&default_engine);
     let mut run_ids: Vec<Uuid> = vec![];
     for agent_id in mentioned_agents(content, &agents).into_iter().take(3) {
         run_ids.push(
@@ -699,6 +779,8 @@ struct VariantBody {
     agent_id: Option<Uuid>,
     /// "easy" | "medium" | "complex". Absent means the agent's own tier.
     tier: Option<String>,
+    /// Absent means the card's engine.
+    engine: Option<String>,
 }
 
 /// Run the same brief several ways at once.
@@ -714,6 +796,7 @@ async fn start_bakeoff(
             label: v.label,
             agent_id: v.agent_id,
             tier: v.tier,
+            engine: v.engine,
         })
         .collect();
 
@@ -734,7 +817,7 @@ async fn bakeoff(
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT r.id, r.variant_label, r.status, r.cost_usd, r.model, r.worktree_path,
+        "SELECT r.id, r.variant_label, r.status, r.cost_usd, r.model, r.worktree_path, r.engine,
                 r.started_at, r.finished_at, r.error_reason,
                 a.name AS agent_name, p.default_branch
          FROM runs r
@@ -768,6 +851,7 @@ async fn bakeoff(
             "status": r.get::<String, _>("status"),
             "agentName": r.get::<Option<String>, _>("agent_name"),
             "model": r.get::<Option<String>, _>("model"),
+            "engine": r.get::<String, _>("engine"),
             "costUsd": r.get::<Option<f64>, _>("cost_usd"),
             "error": r.get::<Option<String>, _>("error_reason"),
             "seconds": match (started, finished) {
@@ -1016,4 +1100,230 @@ async fn retry(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "runId": run_id, "fresh": fresh })))
+}
+
+// ── Plan-first cards ────────────────────────────────────────────────────────
+//
+// A card can ask the agent to write down what it means to do before it does
+// it. The run parks at `awaiting_approval` with the plan stored as a step, and
+// these routes are how a person confirms it, rewrites it, or sends it back.
+//
+// Everything here refuses on a run that isn't parked. A plan being edited
+// while work is already underway would describe a decision nobody gets to
+// make, which is worse than no plan at all.
+
+/// Only a parked run's plan is editable.
+async fn assert_parked(state: &AppState, run_id: Uuid) -> Result<(), ApiError> {
+    let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such run".to_string()))?;
+    if status != "awaiting_approval" {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("this run is {status}, so its plan is no longer editable"),
+        ));
+    }
+    Ok(())
+}
+
+async fn plan(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(
+        "SELECT r.status, r.plan_edited, s.output_text, s.finished_at
+         FROM runs r
+         LEFT JOIN steps s ON s.run_id = r.id AND s.step_key = 'plan'
+         WHERE r.id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such run".to_string()))?;
+
+    let status: String = row.get("status");
+    Ok(Json(json!({
+        "runId": run_id,
+        "content": row.get::<Option<String>, _>("output_text"),
+        // Only while parked can it be answered; afterwards it's a record of
+        // what was agreed, which is still worth showing.
+        "awaitingApproval": status == "awaiting_approval",
+        "edited": row.get::<bool, _>("plan_edited"),
+        "writtenAt": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at"),
+    })))
+}
+
+#[derive(Deserialize)]
+struct PlanEdit {
+    content: String,
+}
+
+/// Rewrite the plan by hand. The work pass is told the text was edited, so it
+/// follows what's in front of it rather than what it remembers proposing.
+async fn edit_plan(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    Json(body): Json<PlanEdit>,
+) -> Result<Json<Value>, ApiError> {
+    assert_parked(&state, run_id).await?;
+    if body.content.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "an empty plan approves nothing — delete the card instead".into(),
+        ));
+    }
+    let updated = sqlx::query(
+        "UPDATE steps SET output_text = $2 WHERE run_id = $1 AND step_key = 'plan'",
+    )
+    .bind(run_id)
+    .bind(body.content.trim())
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if updated.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "this run has no plan".into()));
+    }
+    sqlx::query("UPDATE runs SET plan_edited = TRUE WHERE id = $1")
+        .bind(run_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "saved": true })))
+}
+
+/// Start the work, from whatever the plan says now.
+async fn approve_plan(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let updated = sqlx::query(
+        "UPDATE runs SET plan_approved_at = now(), status = 'queued'
+         WHERE id = $1 AND status = 'awaiting_approval'",
+    )
+    .bind(run_id)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if updated.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "this run is not waiting for approval".into(),
+        ));
+    }
+    // Re-queued rather than resumed in place: the planning dispatch already
+    // released its slot, so this takes a fresh one when the queue has room.
+    state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
+    Ok(Json(json!({ "approved": true })))
+}
+
+#[derive(Deserialize)]
+struct Revise {
+    note: String,
+}
+
+/// Send the plan back for another pass, saying what was wrong with it.
+async fn revise_plan(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    Json(body): Json<Revise>,
+) -> Result<Json<Value>, ApiError> {
+    assert_parked(&state, run_id).await?;
+    if body.note.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "say what to change — a rejection with no reason just burns another pass".into(),
+        ));
+    }
+    // The rejected plan stays on file: the next pass is shown it alongside the
+    // feedback, so it can answer the objection rather than start from nothing.
+    // A written-but-unapproved plan re-plans rather than runs, which is what
+    // makes leaving the row safe.
+    sqlx::query(
+        "UPDATE runs SET plan_note = $2, plan_edited = FALSE, status = 'queued'
+         WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(body.note.trim())
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
+    Ok(Json(json!({ "revising": true })))
+}
+
+// ── Knowledge-base articles on a card ───────────────────────────────────────
+
+async fn link_articles(state: &AppState, task_id: Uuid, ids: &[Uuid]) -> Result<(), ApiError> {
+    // A tagged page's full text is injected into the run's prompt, so tagging
+    // is a read grant. Without this, a page from another workspace could be
+    // attached to this card and handed to an agent working in it.
+    for id in ids {
+        require_same_workspace(state, task_id, "kb_articles", *id).await?;
+    }
+    sqlx::query("DELETE FROM task_articles WHERE task_id = $1 AND NOT (article_id = ANY($2))")
+        .bind(task_id)
+        .bind(ids)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO task_articles (task_id, article_id)
+         SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING",
+    )
+    .bind(task_id)
+    .bind(ids)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(())
+}
+
+async fn task_articles(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT a.id, a.title, a.summary, a.status, a.origin
+         FROM task_articles ta JOIN kb_articles a ON a.id = ta.article_id
+         WHERE ta.task_id = $1 ORDER BY a.title",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({
+        "articles": rows.iter().map(|r| json!({
+            "id": r.get::<Uuid, _>("id"),
+            "title": r.get::<String, _>("title"),
+            "summary": r.get::<String, _>("summary"),
+            "status": r.get::<String, _>("status"),
+            "origin": r.get::<String, _>("origin"),
+        })).collect::<Vec<_>>()
+    })))
+}
+
+#[derive(Deserialize)]
+struct ArticleLinks {
+    article_ids: Vec<Uuid>,
+}
+
+/// Replace the set of articles tagged onto a card.
+///
+/// A full replacement rather than add/remove endpoints: the UI holds the whole
+/// list anyway, and two endpoints invite the state where the client and the
+/// server disagree about what is attached.
+async fn set_task_articles(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ArticleLinks>,
+) -> Result<Json<Value>, ApiError> {
+    link_articles(&state, id, &body.article_ids).await?;
+    Ok(Json(json!({ "linked": body.article_ids.len() })))
 }

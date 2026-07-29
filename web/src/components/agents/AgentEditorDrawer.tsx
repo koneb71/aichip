@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
+import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../lib/engines";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -27,6 +28,9 @@ export function AgentEditorDrawer({
   // null = inherit the workspace default, which is what a new agent should do.
   const [preset, setPreset] = useState<string | null>(agent?.permissionPreset ?? null);
   const [effort, setEffort] = useState<Effort | "">(agent?.effort ?? "");
+  // null = inherit from the card, which is the right default: an agent
+  // describes a skill, not a toolchain.
+  const [engine, setEngine] = useState<string | null>(agent?.engine ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which connected MCP servers this agent may use. Opt-in per agent: a
@@ -58,6 +62,7 @@ export function AgentEditorDrawer({
       color,
       permission_preset: preset,
       effort: effort || null,
+      engine,
     };
     try {
       // A new agent has no id until it exists, so the server list is saved
@@ -204,7 +209,9 @@ export function AgentEditorDrawer({
             runs. Leave it on "Workspace default" unless this agent specifically
             needs more or less freedom than the rest.
           </div>
+          <EngineWarning engine={engine} preset={preset} />
         </Field>
+        <EngineField engine={engine} onChange={setEngine} />
         {servers.length > 0 && (
           <Field label="Connections">
             <div className="space-y-1.5">
@@ -324,6 +331,43 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </div>
       {children}
+    </div>
+  );
+}
+
+/** Only rendered when there's a choice to make. */
+function EngineField({
+  engine,
+  onChange,
+}: {
+  engine: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const engines = useEngines();
+  if (!engines || engines.length < 2) return null;
+  return (
+    <Field label="Engine">
+      <EnginePicker value={engine} onChange={onChange} inheritLabel="Whatever the card says" />
+      <div className="mt-1 text-[11px] text-ink-dim">
+        Which CLI this agent runs on. Pinning one is worth it when the agent
+        depends on something only that engine does.
+      </div>
+    </Field>
+  );
+}
+
+/**
+ * Say up front when a pinned engine and a pinned permission mode contradict
+ * each other, rather than letting every card this agent touches fail on the
+ * click that starts it.
+ */
+function EngineWarning({ engine, preset }: { engine: string | null; preset: string | null }) {
+  const descriptor = useEngine(engine);
+  const blocker = permissionBlocker(descriptor, preset ?? "");
+  if (!blocker) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+      {blocker} Cards using this agent would be refused when you start them.
     </div>
   );
 }

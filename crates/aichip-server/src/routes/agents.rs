@@ -71,6 +71,8 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "modelTier": r.get::<String, _>("model_tier"),
         "allowedTools": r.get::<Vec<String>, _>("allowed_tools"),
         "permissionPreset": r.get::<Option<String>, _>("permission_preset"),
+        // Null means "inherit" — see the AgentBody doc comment.
+        "engine": r.get::<Option<String>, _>("engine"),
         "effort": r.get::<Option<String>, _>("effort"),
         "builtin": r.get::<bool, _>("builtin"),
     })
@@ -119,6 +121,10 @@ struct AgentBody {
     /// None leaves the CLI's own default alone.
     #[serde(default)]
     effort: Option<String>,
+    /// Which CLI this agent prefers. `None` inherits, same reasoning as
+    /// `permission_preset`: an agent describes a skill, not a toolchain.
+    #[serde(default)]
+    engine: Option<String>,
 }
 
 fn default_icon() -> String {
@@ -126,9 +132,6 @@ fn default_icon() -> String {
 }
 fn default_color() -> String {
     "#4f46e5".into()
-}
-fn default_preset() -> String {
-    "reviewed".into()
 }
 
 async fn create(
@@ -141,8 +144,8 @@ async fn create(
     let tier = serde_json::to_value(body.model_tier).unwrap();
     let row = sqlx::query(
         "INSERT INTO agents (workspace_id, name, icon, color, description, system_prompt,
-                             model_tier, allowed_tools, permission_preset, effort)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
+                             model_tier, allowed_tools, permission_preset, effort, engine)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
     )
     .bind(body.workspace_id)
     .bind(body.name.trim())
@@ -154,6 +157,7 @@ async fn create(
     .bind(&body.allowed_tools)
     .bind(&body.permission_preset)
     .bind(body.effort.as_deref().filter(|e| !e.is_empty()))
+    .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -175,6 +179,9 @@ struct AgentPatch {
     /// Present-but-null clears it back to the CLI default.
     #[serde(default, deserialize_with = "double_option")]
     effort: Option<Option<String>>,
+    /// Present-but-null clears it back to inheriting.
+    #[serde(default, deserialize_with = "double_option")]
+    engine: Option<Option<String>>,
 }
 
 /// Distinguish "field absent" from "field set to null" so clearing works.
@@ -200,7 +207,8 @@ async fn update(
             system_prompt = COALESCE($5, system_prompt), model_tier = COALESCE($6, model_tier),
             allowed_tools = COALESCE($7, allowed_tools),
             permission_preset = CASE WHEN $12 THEN $8 ELSE permission_preset END,
-            effort = CASE WHEN $10 THEN $9 ELSE effort END
+            effort = CASE WHEN $10 THEN $9 ELSE effort END,
+            engine = CASE WHEN $14 THEN $13 ELSE engine END
          WHERE id = $11 RETURNING *",
     )
     .bind(body.name)
@@ -215,6 +223,8 @@ async fn update(
     .bind(body.effort.is_some())
     .bind(id)
     .bind(body.permission_preset.is_some())
+    .bind(body.engine.clone().flatten().filter(|e| !e.is_empty()))
+    .bind(body.engine.is_some())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -236,7 +246,7 @@ async fn remove(
 #[derive(Deserialize)]
 struct GenerateBody {
     description: String,
-    /// "claude-code" (default) or "mock" for tests.
+    /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
 }
 
@@ -260,12 +270,13 @@ async fn generate(
     if body.description.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "description is required".into()));
     }
-    let engine_id = body.engine.as_deref().unwrap_or("claude-code");
+    let default_engine = state.orchestrator.default_engine();
+    let engine_id = body.engine.as_deref().unwrap_or(&default_engine);
     let engine = state
         .orchestrator
         .engine(engine_id)
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
-    let model_id = state.orchestrator.model_for(ModelTier::Complex);
+    let model_id = state.orchestrator.model_for(engine_id, ModelTier::Complex);
     let prompt = format!("{GENERATE_PROMPT}{}\"", body.description.trim());
 
     // Designing a team is the kind of one-shot judgement that repays

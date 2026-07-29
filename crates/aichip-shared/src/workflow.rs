@@ -66,6 +66,10 @@ pub struct Step {
     /// Tier name or literal model id; overrides the agent's tier.
     #[serde(default)]
     pub model: Option<String>,
+    /// Which CLI runs this step. Overrides `defaults.engine`, so one workflow
+    /// can put a Reviewed stage on Claude and the rest somewhere cheaper.
+    #[serde(default)]
+    pub engine: Option<String>,
     #[serde(default)]
     pub session: SessionMode,
     #[serde(default)]
@@ -273,6 +277,7 @@ pub fn from_team(team_name: &str, pattern: &str, members: &[String], goal: &str)
             let (solvers, judge) = members.split_at(members.len() - 1);
             for (i, agent) in solvers.iter().enumerate() {
                 steps.push(Step {
+                engine: None,
                     id: step_id(i, agent),
                     needs: vec![],
                     prompt: format!("{goal}\n\nWork independently — other agents are attempting this in parallel. Produce your best solution and end with a short summary of your approach."),
@@ -292,6 +297,7 @@ pub fn from_team(team_name: &str, pattern: &str, members: &[String], goal: &str)
                 .collect::<Vec<_>>()
                 .join("\n\n");
             steps.push(Step {
+                engine: None,
                 id: step_id(members.len() - 1, &judge[0]),
                 needs: solvers
                     .iter()
@@ -310,6 +316,7 @@ pub fn from_team(team_name: &str, pattern: &str, members: &[String], goal: &str)
         "swarm" => {
             for (i, agent) in members.iter().enumerate() {
                 steps.push(Step {
+                engine: None,
                     id: step_id(i, agent),
                     needs: vec![],
                     prompt: format!("{goal}\n\nHandle the part of this that fits your role. Other agents are working on it in parallel."),
@@ -331,6 +338,7 @@ pub fn from_team(team_name: &str, pattern: &str, members: &[String], goal: &str)
                     None => goal.to_string(),
                 };
                 steps.push(Step {
+                engine: None,
                     id: step_id(i, agent),
                     needs: previous.into_iter().collect(),
                     prompt,

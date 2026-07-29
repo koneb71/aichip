@@ -1,6 +1,7 @@
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
+use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::mock::MockEngine;
 use aichip_engines::Engine;
 use clap::{Parser, Subcommand};
@@ -63,6 +64,32 @@ async fn sweep_attachments(db: aichip_core::db::Db) {
     }
 }
 
+/// The engines aichip knows how to drive, in the order they're offered.
+///
+/// One list, used by both `serve` and `doctor`, so adding a third adapter
+/// never means remembering to edit the doctor separately.
+fn real_engines() -> Vec<Arc<dyn Engine>> {
+    vec![
+        Arc::new(ClaudeEngine::default()) as Arc<dyn Engine>,
+        Arc::new(OpenCodeEngine::default()) as Arc<dyn Engine>,
+    ]
+}
+
+/// Provider names and auth *type* — never a credential.
+fn describe_providers(info: &aichip_engines::EngineInfo) -> String {
+    let s = info
+        .providers
+        .iter()
+        .map(|p| format!("{} ({})", p.name, p.auth))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if s.is_empty() {
+        "—".into()
+    } else {
+        s
+    }
+}
+
 fn aichip_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -98,6 +125,12 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     };
 
     let db = Db::connect(&database_url).await?;
+    // Before anything serves a request: a half-migrated wiki answers searches
+    // wrong for some pages and says nothing about why.
+    if let Err(e) = aichip_core::kb::backfill::run(&db).await {
+        tracing::error!(error = %e, "knowledge-base migration failed; some pages may not be searchable");
+    }
+
     let bus = EventBus::new();
     let worktrees = Arc::new(WorktreeManager::new(WorktreeManager::default_root()));
     let mcp_base = format!("http://127.0.0.1:{port}");
@@ -109,7 +142,21 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         max_concurrent(),
         Some(mcp_base),
     );
-    orchestrator.register_engine(Arc::new(ClaudeEngine::default()) as Arc<dyn Engine>);
+    // Register only what is actually installed, so an engine that isn't
+    // present is simply *not offered* rather than accepted and then failing
+    // at spawn time.
+    for engine in real_engines() {
+        let id = engine.id();
+        match orchestrator.register_if_available(engine).await {
+            Some(info) => tracing::info!(
+                id,
+                version = %info.version,
+                providers = %describe_providers(&info),
+                "engine available"
+            ),
+            None => tracing::info!(id, "engine not found on PATH; it will not be offered"),
+        }
+    }
     orchestrator.register_engine(Arc::new(MockEngine::demo()) as Arc<dyn Engine>);
     let orchestrator = Arc::new(orchestrator);
 
@@ -125,11 +172,32 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     tokio::spawn(aichip_core::Scheduler::new(db.clone(), orchestrator.clone()).run_loop());
     tokio::spawn(sweep_attachments(db.clone()));
 
+    // Object storage, when it's configured. The bucket is created on boot so
+    // a fresh MinIO needs no manual setup step; a failure here is logged and
+    // the feature simply stays off rather than taking the server down.
+    let storage = match aichip_core::storage::Storage::from_env() {
+        Some(s) => match s.ensure_bucket().await {
+            Ok(()) => {
+                tracing::info!(bucket = s.bucket(), "object storage ready");
+                Some(s)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "object storage unreachable; attachments disabled");
+                None
+            }
+        },
+        None => {
+            tracing::info!("object storage not configured; knowledge-base attachments disabled");
+            None
+        }
+    };
+
     let state = aichip_server::AppState {
         db,
         bus: bus.clone(),
         orchestrator,
         permissions: PermissionBroker::new(bus),
+        storage,
     };
     let app = aichip_server::app(state);
 
@@ -206,7 +274,9 @@ fn max_concurrent() -> usize {
 
 async fn doctor() -> anyhow::Result<()> {
     // Compliance invariant: we probe tools by RUNNING them, never by
-    // inspecting their config or credential files.
+    // inspecting their config or credential files. That is exactly what
+    // `Engine::detect` does, which is why this loops the registry rather than
+    // hand-coding a `--version` call per engine.
     let mut ok = true;
 
     match run_version("git", &["--version"]).await {
@@ -217,16 +287,36 @@ async fn doctor() -> anyhow::Result<()> {
         }
     }
 
-    match run_version("claude", &["--version"]).await {
-        Some(v) => {
-            println!("✓ claude CLI: {v}");
-            println!("  (login status is verified on first run; if runs fail immediately,");
-            println!("   run `claude` interactively once and log in)");
+    let mut found = 0;
+    for engine in real_engines() {
+        match engine.detect().await {
+            Some(info) => {
+                found += 1;
+                println!("✓ {}: {}", engine.label(), info.version);
+                let providers = describe_providers(&info);
+                if providers != "—" {
+                    println!("  providers: {providers}");
+                }
+                let caps = engine.capabilities();
+                if !caps.interactive_permissions {
+                    println!("  note: can't ask permission mid-run — use Auto-edit or Don't-ask");
+                }
+                if !caps.structured_rate_limit {
+                    println!("  note: no rate-limit signal, so the queue can't back off for it");
+                }
+            }
+            None => println!("· {}: not installed — it won't be offered", engine.label()),
         }
-        None => {
-            println!("✗ claude CLI: not found on PATH — install from https://code.claude.com");
-            ok = false;
-        }
+    }
+
+    if found == 0 {
+        println!("\n✗ no agent CLI found. Install at least one:");
+        println!("    claude   → https://code.claude.com");
+        println!("    opencode → https://opencode.ai");
+        ok = false;
+    } else {
+        println!("\n  (login is verified on first run; if runs fail immediately, start the");
+        println!("   CLI interactively once and log in)");
     }
 
     if ok {

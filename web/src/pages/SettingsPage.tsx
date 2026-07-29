@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -16,9 +16,15 @@ const TIERS: { key: Tier; label: string; when: string }[] = [
   { key: "complex", label: "Complex", when: "Architecture, judging, gnarly debugging." },
 ];
 
+/** `{engine_id: {easy, medium, complex}}` — what the Save button sends. */
+type Draft = Record<string, Record<Tier, string>>;
+
+const asDraft = (s: ModelSettings): Draft =>
+  Object.fromEntries(s.engines.map((e) => [e.id, { ...e.tiers }]));
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [draft, setDraft] = useState<Record<Tier, string> | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -33,13 +39,15 @@ export default function SettingsPage() {
       .modelSettings()
       .then((s) => {
         setSettings(s);
-        setDraft(s.tiers);
+        setDraft(asDraft(s));
       })
       .catch((e) => setError(String(e)));
   }, []);
 
   const dirty =
-    !!draft && !!settings && TIERS.some((t) => draft[t.key] !== settings.tiers[t.key]);
+    !!draft &&
+    !!settings &&
+    settings.engines.some((e) => TIERS.some((t) => draft[e.id]?.[t.key] !== e.tiers[t.key]));
 
   const save = async () => {
     if (!draft) return;
@@ -49,7 +57,7 @@ export default function SettingsPage() {
       await api.setModelSettings(draft);
       const fresh = await api.modelSettings();
       setSettings(fresh);
-      setDraft(fresh.tiers);
+      setDraft(asDraft(fresh));
       setSaved(true);
       // Labels elsewhere in the app come from a provider loaded at startup,
       // so a reload is the honest way to make every chip agree at once.
@@ -127,44 +135,66 @@ export default function SettingsPage() {
       <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Models
       </h2>
-      <div className="mt-3 max-w-2xl space-y-3">
-        {TIERS.map((tier) => (
-          <div key={tier.key} className="card-shadow rounded-xl border border-line bg-panel p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">{tier.label}</div>
-                <div className="mt-0.5 text-xs text-ink-dim">{tier.when}</div>
-              </div>
-              <select
-                value={draft?.[tier.key] ?? ""}
-                onChange={(e) =>
-                  setDraft((d) => (d ? { ...d, [tier.key]: e.target.value } : d))
-                }
-                disabled={!settings}
-                className="min-w-52 rounded-lg border border-line bg-panel px-2.5 py-2 text-sm"
-              >
-                {settings?.choices.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
+      <p className="mt-1 max-w-2xl text-sm text-ink-dim">
+        A tier means a different model on each engine — "medium" can't name one
+        model globally, since OpenCode has never heard of{" "}
+        <code className="text-[11px]">claude-opus-5</code>.
+      </p>
+      <div className="mt-3 max-w-2xl space-y-5">
+        {settings?.engines.map((engine) => (
+          <div key={engine.id}>
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
+              <span className="text-sm font-semibold">{engine.label}</span>
+              {!!engine.providers.length && (
+                <span className="text-[11px] text-ink-dim">
+                  signed in with {engine.providers.map((p) => p.name).join(", ")}
+                </span>
+              )}
             </div>
-            {settings && draft && (
-              <div className="mt-2 text-[11px] text-ink-dim">
-                {settings.choices.find((c) => c.id === draft[tier.key])?.blurb}
-                {draft[tier.key] !== settings.defaults[tier.key] && (
-                  <span className="ml-1 opacity-70">
-                    (default:{" "}
-                    {
-                      settings.choices.find((c) => c.id === settings.defaults[tier.key])
-                        ?.label
-                    }
-                    )
-                  </span>
-                )}
-              </div>
-            )}
+            <div className="space-y-3">
+              {TIERS.map((tier) => (
+                <div
+                  key={tier.key}
+                  className="card-shadow rounded-xl border border-line bg-panel p-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">{tier.label}</div>
+                      <div className="mt-0.5 text-xs text-ink-dim">{tier.when}</div>
+                    </div>
+                    <TierField
+                      engine={engine}
+                      value={draft?.[engine.id]?.[tier.key] ?? ""}
+                      onChange={(v) =>
+                        setDraft((d) =>
+                          d
+                            ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
+                            : d,
+                        )
+                      }
+                    />
+                  </div>
+                  {draft && (
+                    <div className="mt-2 text-[11px] text-ink-dim">
+                      {engine.choices.find(
+                        (c) => c.id === draft[engine.id]?.[tier.key],
+                      )?.blurb ??
+                        (engine.fixedCatalog
+                          ? null
+                          : "Any provider/model id this engine can reach.")}
+                      {draft[engine.id]?.[tier.key] !== engine.defaults[tier.key] && (
+                        <span className="ml-1 opacity-70">
+                          (default:{" "}
+                          {engine.choices.find((c) => c.id === engine.defaults[tier.key])
+                            ?.label ?? engine.defaults[tier.key]}
+                          )
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
@@ -186,7 +216,13 @@ export default function SettingsPage() {
         </motion.button>
         {settings && (
           <button
-            onClick={() => setDraft(settings.defaults)}
+            onClick={() =>
+              setDraft(
+                Object.fromEntries(
+                  settings.engines.map((e) => [e.id, { ...e.defaults }]),
+                ),
+              )
+            }
             className="text-xs text-ink-dim hover:text-ink"
           >
             Reset to defaults
@@ -196,6 +232,65 @@ export default function SettingsPage() {
           Runs already in flight keep the model they started with.
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A fixed catalog gets a picker; everything else gets free text.
+ *
+ * OpenCode fronts 75+ providers plus local models, so a dropdown would be
+ * both wrong within a week and unable to express `ollama/qwen3-coder`. The
+ * server still validates the `provider/model` shape, which catches the one
+ * mistake people actually make: pasting a Claude id into this field.
+ */
+function TierField({
+  engine,
+  value,
+  onChange,
+}: {
+  engine: EngineModels;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (engine.fixedCatalog) {
+    return (
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="min-w-52 rounded-lg border border-line bg-panel px-2.5 py-2 text-sm"
+      >
+        {engine.choices.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  // A datalist rather than a select: the CLI's list is what this machine can
+  // reach today, but a local model it doesn't enumerate is still legitimate.
+  const listId = `models-${engine.id}`;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <input
+        value={value}
+        list={listId}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+        placeholder="provider/model"
+        className="min-w-64 rounded-lg border border-line bg-panel px-2.5 py-2 font-mono text-xs"
+      />
+      <datalist id={listId}>
+        {engine.available.map((id) => (
+          <option key={id} value={id} />
+        ))}
+      </datalist>
+      {!engine.available.includes(value) && !!engine.available.length && (
+        <span className="text-[10px] text-amber-700">
+          not in this install's model list
+        </span>
+      )}
     </div>
   );
 }

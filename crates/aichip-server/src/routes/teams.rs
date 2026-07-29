@@ -55,6 +55,8 @@ fn team_json(r: &sqlx::postgres::PgRow) -> Value {
         "name": r.get::<String, _>("name"),
         "pattern": r.get::<String, _>("pattern"),
         "definition": r.get::<Value, _>("definition"),
+        // Null means "whatever the card or machine default says".
+        "engine": r.get::<Option<String>, _>("engine"),
     })
 }
 
@@ -85,6 +87,9 @@ struct TeamBody {
     /// {"members": [{"agent_id": "...", "role": "..."}]}
     #[serde(default)]
     definition: Value,
+    /// Which CLI this team runs on. `None` inherits from the card.
+    #[serde(default)]
+    engine: Option<String>,
 }
 
 async fn create(
@@ -101,13 +106,14 @@ async fn create(
         ));
     }
     let row = sqlx::query(
-        "INSERT INTO teams (workspace_id, name, pattern, definition)
-         VALUES ($1,$2,$3,$4) RETURNING *",
+        "INSERT INTO teams (workspace_id, name, pattern, definition, engine)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *",
     )
     .bind(body.workspace_id)
     .bind(body.name.trim())
     .bind(&body.pattern)
     .bind(&body.definition)
+    .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -119,6 +125,17 @@ struct TeamPatch {
     name: Option<String>,
     pattern: Option<String>,
     definition: Option<Value>,
+    /// Present-but-null clears it back to inheriting.
+    #[serde(default, deserialize_with = "double_option")]
+    engine: Option<Option<String>>,
+}
+
+/// Distinguish "field absent" from "field set to null" so clearing works.
+fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
 }
 
 async fn update(
@@ -136,13 +153,16 @@ async fn update(
     }
     let row = sqlx::query(
         "UPDATE teams SET name = COALESCE($1, name), pattern = COALESCE($2, pattern),
-                definition = COALESCE($3, definition)
+                definition = COALESCE($3, definition),
+                engine = CASE WHEN $6 THEN $5 ELSE engine END
          WHERE id = $4 RETURNING *",
     )
     .bind(body.name)
     .bind(body.pattern)
     .bind(body.definition)
     .bind(id)
+    .bind(body.engine.clone().flatten().filter(|e| !e.is_empty()))
+    .bind(body.engine.is_some())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;

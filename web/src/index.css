@@ -144,3 +144,151 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* A knowledge-base page body.
+   Separate from `.md` because this is editor HTML, not rendered markdown: it
+   carries tables, embeds and figures that markdown never produces, and wide
+   content has to scroll inside its own box rather than pushing the page. */
+.kb { font-size: 15px; line-height: 1.7; }
+.kb > :first-child { margin-top: 0; }
+.kb h2 { font-size: 1.35rem; font-weight: 600; margin: 1.8em 0 .5em; }
+.kb h3 { font-size: 1.1rem; font-weight: 600; margin: 1.5em 0 .4em; }
+.kb p { margin: .8em 0; }
+.kb ul { list-style: disc; padding-left: 1.4em; margin: .8em 0; }
+.kb ol { list-style: decimal; padding-left: 1.4em; margin: .8em 0; }
+.kb li { margin: .3em 0; }
+.kb a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
+.kb blockquote {
+  border-left: 3px solid var(--color-line);
+  padding-left: .9em; margin: 1em 0; color: var(--color-ink-dim);
+}
+.kb code {
+  font-family: ui-monospace, monospace; font-size: .88em;
+  background: var(--color-panel-2); padding: .1em .35em; border-radius: .3rem;
+}
+.kb pre {
+  background: var(--color-panel-2); padding: .8rem; border-radius: .6rem;
+  overflow-x: auto; margin: 1em 0;
+}
+.kb pre code { background: none; padding: 0; }
+/* Tables and embeds scroll inside themselves; a wide one must never make the
+   whole page scroll sideways. */
+.kb table { border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+.kb th, .kb td { border: 1px solid var(--color-line); padding: .4rem .7rem; text-align: left; }
+.kb th { background: var(--color-panel-2); font-weight: 600; }
+.kb img { max-width: 100%; height: auto; border-radius: .5rem; margin: .8em 0; }
+.kb iframe { max-width: 100%; border: 0; border-radius: .5rem; margin: .8em 0; }
+.kb figure { margin: 1em 0; }
+.kb figcaption { font-size: .85em; color: var(--color-ink-dim); margin-top: .3em; }
+.kb hr { border: 0; border-top: 1px solid var(--color-line); margin: 1.6em 0; }
+
+/* The editing surface. Shares `.kb` with the read view so what you type looks
+   like what gets published — the single most useful property of a WYSIWYG
+   editor, and the one that quietly breaks when the two have separate styles. */
+.kb-editor { min-height: 420px; padding: 1rem 1.25rem; }
+.kb-editor:focus { outline: none; }
+
+/* TipTap's placeholder is a CSS pseudo-element on the first empty node. */
+.kb-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--color-ink-dim);
+}
+
+/* Page links, in both the editor and the read view. */
+.kb-page-link {
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 8%, transparent);
+  border-radius: .3rem;
+  padding: .05em .3em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* Selected image, and the resize handles tables get. */
+.kb-editor img.ProseMirror-selectednode { outline: 2px solid var(--color-accent); }
+.kb-editor .tableWrapper { overflow-x: auto; }
+.kb-editor .column-resize-handle {
+  position: absolute; right: -2px; top: 0; bottom: 0; width: 4px;
+  background: var(--color-accent); pointer-events: none;
+}
+.kb-editor.resize-cursor { cursor: col-resize; }
+/* A selected cell needs to look selected, or multi-cell operations feel blind. */
+.kb-editor .selectedCell:after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+}
+.kb-editor td, .kb-editor th { position: relative; }
+
+/* ── New block types ────────────────────────────────────────────────────────
+   Styled under `.kb`, so the editor and the published page look the same. The
+   checkbox is drawn here rather than stored as an `<input>`: the tick lives in
+   `data-checked`, which is the only attribute the sanitiser allows through. */
+
+.kb ul[data-type="taskList"] { list-style: none; padding-left: .2em; }
+.kb ul[data-type="taskList"] li {
+  display: flex; align-items: flex-start; gap: .55em; margin: .35em 0;
+}
+.kb ul[data-type="taskList"] li > p { margin: 0; }
+/* The published page draws its own marker, because the stored HTML carries no
+   checkbox — only `data-checked`. The editor must NOT get one: its node view
+   renders a real, clickable input, and a second glyph beside it is both a
+   duplicate and a decoy that swallows the click. */
+.kb:not(.kb-editor) ul[data-type="taskList"] li::before {
+  content: "☐";
+  flex: 0 0 auto;
+  line-height: 1.5;
+  color: var(--color-ink-dim);
+}
+.kb:not(.kb-editor) ul[data-type="taskList"] li[data-checked="true"]::before {
+  content: "☑";
+  color: var(--color-accent);
+}
+
+/* The editor's real checkbox. */
+.kb-editor ul[data-type="taskList"] li > label {
+  flex: 0 0 auto; line-height: 1.6; cursor: pointer;
+}
+.kb-editor ul[data-type="taskList"] li input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--color-accent);
+}
+/* A finished item should read as finished at a glance. */
+.kb ul[data-type="taskList"] li[data-checked="true"] > p,
+.kb ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--color-ink-dim);
+  text-decoration: line-through;
+}
+
+.kb mark {
+  background: color-mix(in oklab, #fde047 55%, transparent);
+  padding: .05em .15em; border-radius: .2rem;
+}
+
+.kb details {
+  border: 1px solid var(--color-line);
+  border-radius: .6rem;
+  padding: .5rem .75rem;
+  margin: .9em 0;
+}
+.kb details > summary {
+  cursor: pointer; font-weight: 600; list-style: none;
+}
+.kb details > summary::-webkit-details-marker { display: none; }
+.kb details > summary::before { content: "▸ "; color: var(--color-ink-dim); }
+.kb details[open] > summary::before { content: "▾ "; }
+
+/* Syntax highlighting. A restrained palette — a code block in a document is
+   there to be read, not to look like a terminal. */
+.kb .hljs-comment, .kb .hljs-quote { color: #6b7280; font-style: italic; }
+.kb .hljs-keyword, .kb .hljs-selector-tag, .kb .hljs-literal { color: #7c3aed; }
+.kb .hljs-string, .kb .hljs-regexp, .kb .hljs-addition { color: #047857; }
+.kb .hljs-number, .kb .hljs-built_in { color: #b45309; }
+.kb .hljs-title, .kb .hljs-section, .kb .hljs-name { color: #1d4ed8; }
+.kb .hljs-attr, .kb .hljs-attribute, .kb .hljs-variable { color: #be185d; }
+.kb .hljs-type, .kb .hljs-class .hljs-title { color: #0e7490; }
+.kb .hljs-deletion { color: #b91c1c; }
+.kb .hljs-emphasis { font-style: italic; }
+.kb .hljs-strong { font-weight: 600; }
