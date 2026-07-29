@@ -12,7 +12,10 @@ import { PermissionRow } from "./PermissionRow";
 import { BakeoffView } from "./BakeoffView";
 import { RunStream, ActivityLine } from "./RunStream";
 import { AssigneePicker } from "./AssigneePicker";
+import { PlanReviewPanel } from "./PlanReviewPanel";
+import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
+import { EnginePicker, useEngines } from "../lib/engines";
 
 export function TaskDrawer({
   task,
@@ -29,6 +32,7 @@ export function TaskDrawer({
   onOpenTeamRoom?: (runId: string) => void;
 }) {
   const tierModel = useTierModel();
+  const engines = useEngines();
   const events = useRunStream(task.runId);
   const [diff, setDiff] = useState<string | null>(null);
   // The bake-off panel: same brief, several attempts, compare and keep one.
@@ -40,6 +44,7 @@ export function TaskDrawer({
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [articleIds, setArticleIds] = useState<string[]>([]);
   // A live run opens on its transcript, not on an empty comment thread —
   // landing on "No comments yet" while an agent is mid-Bash is how the card
   // ends up looking like nothing is happening at all.
@@ -108,6 +113,13 @@ export function TaskDrawer({
       },
     });
   };
+
+  useEffect(() => {
+    api
+      .taskArticles(task.id)
+      .then((r) => setArticleIds(r.articles.map((a) => a.id)))
+      .catch(() => {});
+  }, [task.id]);
 
   useEffect(() => {
     api
@@ -270,6 +282,8 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
+      {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
+
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
           Assigned to
@@ -291,6 +305,52 @@ export function TaskDrawer({
         {reassignError && (
           <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
             {reassignError}
+          </div>
+        )}
+        <div className="mt-3">
+          <ArticlePicker
+            workspaceId={workspaceId}
+            selected={articleIds}
+            onChange={async (ids) => {
+              setArticleIds(ids);
+              await api.setTaskArticles(task.id, ids);
+            }}
+          />
+        </div>
+
+        <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={task.planFirst}
+            disabled={running}
+            onChange={async (e) => {
+              await api.moveTask(task.id, { plan_first: e.target.checked });
+              onChanged();
+            }}
+            className="mt-0.5 accent-[var(--color-accent)]"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium">Plan first</span>
+            <span className="block text-[11px] text-ink-dim">
+              Write a plan and stop, so you can confirm or rewrite it before
+              anything changes.
+            </span>
+          </span>
+        </label>
+
+        {!!engines && engines.length > 1 && (
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+              Run on
+            </span>
+            <EnginePicker
+              value={task.engine}
+              onChange={async (id) => {
+                if (!id || running) return;
+                await api.moveTask(task.id, { engine: id });
+                onChanged();
+              }}
+            />
           </div>
         )}
       </div>
@@ -510,7 +570,7 @@ function DiffView({
     const line = lines[openAt];
     setBusy(true);
     try {
-      await api.postComment(taskId, note.trim(), undefined, {
+      await api.postComment(taskId, note.trim(), undefined, undefined, {
         file_path: line.file ?? undefined,
         line: line.newLine ?? undefined,
         hunk: hunkText(lines, line.hunk),

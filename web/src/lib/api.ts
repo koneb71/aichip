@@ -1,3 +1,4 @@
+import { TreePage } from "./kbTree";
 export type Tier = "easy" | "medium" | "complex";
 
 export interface Workspace {
@@ -51,6 +52,88 @@ export interface Task {
   runStatus: string | null;
   costUsd: number | null;
   model: string | null;
+  /** Which CLI this card runs on. */
+  engine: string;
+  /** Draft a plan and wait for approval before doing any work. */
+  planFirst: boolean;
+}
+
+/** A knowledge-base page. `contentHtml` is absent in list responses. */
+export interface Article {
+  id: string;
+  workspaceId: string;
+  title: string;
+  summary: string;
+  status: "draft" | "published";
+  origin: "human" | "agent";
+  sourceRunId: string | null;
+  updatedAt: string;
+  parentId: string | null;
+  projectId: string | null;
+  icon: string;
+  position: number;
+  /** The newest accepted revision — also the token a save must match. */
+  currentSeq: number;
+  contentHtml?: string;
+  // Present only on the single-page read.
+  breadcrumb?: { id: string; title: string; icon: string }[];
+  children?: { id: string; title: string; icon: string; summary: string }[];
+  backlinks?: { id: string; title: string; icon: string }[];
+  pendingRevision?: Revision | null;
+  writing?: boolean;
+}
+
+/** One entry in a page's history. */
+export interface Revision {
+  seq: number;
+  kind: "edit" | "agent" | "restore" | "import";
+  state: "pending" | "accepted" | "discarded" | "superseded";
+  authorKind: "human" | "agent";
+  title: string;
+  baseSeq: number | null;
+  restoredFrom: number | null;
+  runId: string | null;
+  note: string;
+  createdAt: string;
+  chars: number;
+}
+
+export interface RevisionDiff {
+  from: number | null;
+  to: number;
+  added: number;
+  removed: number;
+  diff: string;
+}
+
+/** A space is a repository; `id: null` is the workspace-wide General space. */
+export interface Space {
+  id: string | null;
+  name: string;
+  pages: number;
+}
+
+/** Raised when a page moved on while you were editing it. */
+export class ConflictError extends Error {}
+
+/** An article as it appears when tagged onto a card. */
+export interface LinkedArticle {
+  id: string;
+  title: string;
+  summary: string;
+  status: string;
+  origin: string;
+}
+
+/** The plan a parked run is waiting on. */
+export interface TaskPlan {
+  runId: string;
+  content: string | null;
+  /** Only while true can it be approved, edited, or sent back. */
+  awaitingApproval: boolean;
+  /** A person rewrote it, rather than approving what was proposed. */
+  edited: boolean;
+  writtenAt: string | null;
 }
 
 export interface Agent {
@@ -66,6 +149,8 @@ export interface Agent {
   permissionPreset: string | null;
   /** null = leave the CLI's own default alone. */
   effort: Effort | null;
+  /** null = inherit whatever the card says. */
+  engine: string | null;
   builtin: boolean;
 }
 
@@ -83,6 +168,8 @@ export interface AgentDraft {
 export interface Team {
   id: string;
   name: string;
+  /** null = inherit from the card that summoned it. */
+  engine: string | null;
   pattern: "pipeline" | "debate" | "swarm" | "org";
   definition: {
     manager?: string;
@@ -301,6 +388,9 @@ export interface ActivityRun {
   taskId: string | null;
   isOrg: boolean;
   costUsd: number | null;
+  /** Which CLI is doing the work, and the exact model it resolved to. */
+  engine: string;
+  model: string | null;
   startedAt: string | null;
   createdAt: string;
 }
@@ -310,6 +400,9 @@ export interface Blocker {
   runId: string;
   kind: "plan" | "permission";
   label: string;
+  /** Plan blockers only: a team's plan opens the room, a card's opens the board. */
+  isOrg?: boolean;
+  projectId?: string | null;
   requestId?: string;
   tool?: string;
   input?: unknown;
@@ -345,10 +438,22 @@ export interface Activity {
 }
 
 /** Which model each complexity tier routes to, plus what may be chosen. */
-export interface ModelSettings {
-  tiers: Record<Tier, string>;
+/** One engine's tier routing, as the settings page edits it. */
+export interface EngineModels {
+  id: string;
+  label: string;
+  /** False for engines fronting many providers — the field is free text. */
+  fixedCatalog: boolean;
   choices: { id: string; label: string; blurb: string }[];
+  /** Model ids this install can actually reach. Suggestions, not a whitelist. */
+  available: string[];
+  providers: { name: string; auth: string }[];
+  tiers: Record<Tier, string>;
   defaults: Record<Tier, string>;
+}
+
+export interface ModelSettings {
+  engines: EngineModels[];
 }
 
 /** One attempt in a bake-off, with the diff that decides it. */
@@ -468,11 +573,11 @@ export const api = {
     patch(`/api/projects/${projectId}`, { full_auto_opt_in: on }).then((r) =>
       json<Project>(r),
     ),
-  setModelSettings: (tiers: Record<Tier, string>) =>
+  setModelSettings: (engines: Record<string, Record<Tier, string>>) =>
     fetch("/api/settings/models", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tiers),
+      body: JSON.stringify({ engines }),
     }).then((r) => json<{ saved: boolean }>(r)),
 
   // MCP servers the user connects
@@ -516,6 +621,8 @@ export const api = {
     agent_id?: string | null;
     team_id?: string | null;
     engine?: string;
+    plan_first?: boolean;
+    article_ids?: string[];
     attachment_ids?: string[];
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
   startTask: (taskId: string) =>
@@ -530,10 +637,142 @@ export const api = {
       json<{ runId: string; fresh: boolean }>(r),
     ),
   // Kanban drag: moving into "running" from backlog starts the task.
-  moveTask: (taskId: string, body: { board_column?: string; position?: number }) =>
+  moveTask: (
+    taskId: string,
+    body: {
+      board_column?: string;
+      position?: number;
+      engine?: string;
+      plan_first?: boolean;
+    },
+  ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
     ),
+  // Knowledge base
+  articles: (workspaceId: string, q?: string) =>
+    fetch(
+      `/api/kb/articles?workspace_id=${workspaceId}` +
+        (q ? `&q=${encodeURIComponent(q)}` : ""),
+    ).then((r) => json<{ articles: Article[] }>(r)),
+  article: (id: string) => fetch(`/api/kb/articles/${id}`).then((r) => json<Article>(r)),
+  createArticle: (body: {
+    workspace_id: string;
+    title: string;
+    content_html?: string;
+    status?: string;
+    parent_id?: string | null;
+    project_id?: string | null;
+    icon?: string;
+    asset_ids?: string[];
+  }) => post("/api/kb/articles", body).then((r) => json<Article>(r)),
+  updateArticle: async (
+    id: string,
+    body: {
+      title?: string;
+      content_html?: string;
+      status?: string;
+      icon?: string;
+      project_id?: string | null;
+      /** Required whenever content_html is sent. */
+      base_seq?: number;
+      asset_ids?: string[];
+    },
+  ) => {
+    const r = await patch(`/api/kb/articles/${id}`, body);
+    // A stale editor is a decision for the user, not a failure to swallow.
+    if (r.status === 409) throw new ConflictError(await r.text());
+    return json<Article>(r);
+  },
+
+  // Structure
+  kbSpaces: (workspaceId: string) =>
+    fetch(`/api/kb/spaces?workspace_id=${workspaceId}`).then((r) =>
+      json<{ spaces: Space[] }>(r),
+    ),
+  kbTree: (workspaceId: string, projectId: string | null) =>
+    fetch(
+      `/api/kb/tree?workspace_id=${workspaceId}` +
+        (projectId ? `&project_id=${projectId}` : ""),
+    ).then((r) => json<{ pages: TreePage[] }>(r)),
+  movePage: (id: string, parentId: string | null, afterId?: string | null) =>
+    post(`/api/kb/articles/${id}/move`, {
+      parent_id: parentId,
+      after_id: afterId ?? null,
+    }).then((r) => json<{ moved: boolean }>(r)),
+
+  // History
+  revisions: (id: string) =>
+    fetch(`/api/kb/articles/${id}/revisions`).then((r) =>
+      json<{ revisions: Revision[] }>(r),
+    ),
+  revisionDiff: (id: string, to: number, from?: number) =>
+    fetch(
+      `/api/kb/articles/${id}/diff?to=${to}` + (from !== undefined ? `&from=${from}` : ""),
+    ).then((r) => json<RevisionDiff>(r)),
+  acceptRevision: (id: string, seq: number) =>
+    post(`/api/kb/articles/${id}/revisions/${seq}/accept`).then((r) =>
+      json<{ accepted: boolean; seq: number }>(r),
+    ),
+  discardRevision: (id: string, seq: number, note: string) =>
+    post(`/api/kb/articles/${id}/revisions/${seq}/discard`, { note }).then((r) =>
+      json<{ discarded: boolean }>(r),
+    ),
+  restoreRevision: (id: string, seq: number) =>
+    post(`/api/kb/articles/${id}/restore`, { seq }).then((r) =>
+      json<{ restored: boolean; seq: number }>(r),
+    ),
+  deleteArticle: (id: string) =>
+    fetch(`/api/kb/articles/${id}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
+  /** Ask an agent to write one. Returns the run that will fill it in. */
+  generateArticle: (body: {
+    workspace_id: string;
+    project_id: string;
+    brief: string;
+    engine?: string;
+    parent_id?: string;
+  }) =>
+    post("/api/kb/generate", body).then((r) =>
+      json<{ runId: string; articleId: string | null }>(r),
+    ),
+  reviseArticle: (
+    id: string,
+    body: { project_id: string; brief: string; engine?: string },
+  ) =>
+    post(`/api/kb/articles/${id}/generate`, body).then((r) =>
+      json<{ runId: string }>(r),
+    ),
+
+  /** Articles tagged onto a card — the agent reads them before it starts. */
+  taskArticles: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/articles`).then((r) =>
+      json<{ articles: LinkedArticle[] }>(r),
+    ),
+  setTaskArticles: (taskId: string, articleIds: string[]) =>
+    fetch(`/api/tasks/${taskId}/articles`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ article_ids: articleIds }),
+    }).then((r) => json<{ linked: number }>(r)),
+
+  // Plan-first cards
+  taskPlan: (runId: string) =>
+    fetch(`/api/runs/${runId}/plan`).then((r) => json<TaskPlan>(r)),
+  saveTaskPlan: (runId: string, content: string) =>
+    patch(`/api/runs/${runId}/plan`, { content }).then((r) =>
+      json<{ saved: boolean }>(r),
+    ),
+  approveTaskPlan: (runId: string) =>
+    post(`/api/runs/${runId}/plan/approve`).then((r) =>
+      json<{ approved: boolean }>(r),
+    ),
+  reviseTaskPlan: (runId: string, note: string) =>
+    post(`/api/runs/${runId}/plan/revise`, { note }).then((r) =>
+      json<{ revising: boolean }>(r),
+    ),
+
   taskComments: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/comments`).then((r) =>
       json<{ comments: TaskComment[]; pendingReplies: number }>(r),
@@ -544,9 +783,15 @@ export const api = {
     taskId: string,
     content: string,
     engine?: string,
+    articleIds?: string[],
     anchor?: { file_path?: string; line?: number; hunk?: string; fix?: boolean },
   ) =>
-    post(`/api/tasks/${taskId}/comments`, { content, engine, ...anchor }).then((r) =>
+    post(`/api/tasks/${taskId}/comments`, {
+      content,
+      engine,
+      article_ids: articleIds,
+      ...anchor,
+    }).then((r) =>
       json<{ id: string; runIds: string[]; fixRunId?: string }>(r),
     ),
   attachToTask: (taskId: string, attachmentIds: string[]) =>
@@ -572,7 +817,7 @@ export const api = {
   // bake-off: one brief, several attempts, keep the best
   startBakeoff: (
     taskId: string,
-    variants: { label: string; agent_id?: string; tier?: string }[],
+    variants: { label: string; agent_id?: string; tier?: string; engine?: string }[],
   ) =>
     post(`/api/tasks/${taskId}/bakeoff`, { variants }).then((r) =>
       json<{ runIds: string[] }>(r),

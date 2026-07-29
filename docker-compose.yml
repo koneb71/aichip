@@ -32,6 +32,34 @@ services:
       timeout: 5s
       retries: 10
 
+  # Object storage for knowledge-base attachments — images and files pasted
+  # into an article. Article text lives in Postgres; only the blobs come here.
+  # The knowledge base works without this, you just can't attach files.
+  minio:
+    image: minio/minio:latest
+    container_name: aichip-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AICHIP_S3_ACCESS_KEY:-aichip}
+      MINIO_ROOT_PASSWORD: ${AICHIP_S3_SECRET_KEY:-aichip-dev-secret}
+    ports:
+      # 9100/9101 on the host, so a MinIO you already run on 9000 keeps working.
+      - "${MINIO_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_PORT:-9101}:9001"
+    volumes:
+      - aichip-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # The app profile needs CLAUDE_CODE_OAUTH_TOKEN and AICHIP_PROJECTS_DIR in
+  # `.env`. They are defaulted rather than declared required, because Compose
+  # interpolates every service whatever profile you asked for — a required
+  # variable here made `docker compose up -d minio` fail too. Without a real
+  # token the container starts and reports "not logged in" on its first run.
   aichip:
     profiles: ["app"]
     build:
@@ -51,9 +79,9 @@ services:
       # The only way to authenticate without a keychain or a browser.
       # `claude setup-token` on your machine produces it. Failing loudly
       # beats starting a server whose every run dies logged-out.
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?run "claude setup-token" and put the result in .env}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       # Your code, at the same path inside and out — see the volume below.
-      AICHIP_BROWSE_ROOT: ${AICHIP_PROJECTS_DIR:?set AICHIP_PROJECTS_DIR in .env to the folder holding your projects}
+      AICHIP_BROWSE_ROOT: ${AICHIP_PROJECTS_DIR:-/workspace}
       AICHIP_MAX_CONCURRENT: ${AICHIP_MAX_CONCURRENT:-2}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     ports:
@@ -62,11 +90,12 @@ services:
       # Mounted at the *same absolute path* on both sides. A git worktree
       # records absolute paths in .git, so a repo checked out at one path on
       # the host and another in the container has a broken worktree link.
-      - ${AICHIP_PROJECTS_DIR}:${AICHIP_PROJECTS_DIR}
+      - ${AICHIP_PROJECTS_DIR:-/workspace}:${AICHIP_PROJECTS_DIR:-/workspace}
       # Worktrees and agent state. A named volume, so a container restart
       # doesn't strand half-finished work.
       - aichip-state:/home/aichip/.aichip
 
 volumes:
+  aichip-minio:
   aichip-pgdata:
   aichip-state:

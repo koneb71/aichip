@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Agent, Tier, tierColor } from "../../lib/api";
 import { StepData, renameStep, uniqueStepId } from "../../lib/workflowGraph";
 import { useTierModel } from "../../lib/models";
+import { EnginePicker, useEngines } from "../../lib/engines";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 
@@ -19,6 +20,7 @@ export function StepInspector({
   onDelete: () => void;
 }) {
   const tierModel = useTierModel();
+  const engines = useEngines();
   // The id is edited as free text but only committed when it's valid and
   // unique, so half-typed names don't orphan dependency links.
   const [draftId, setDraftId] = useState(step.id);
@@ -84,11 +86,24 @@ export function StepInspector({
                 }}
               >
                 {t}
-                <span className="block text-[10px] opacity-70">{tierModel(t)}</span>
+                <span className="block text-[10px] opacity-70">
+                  {tierModel(t, step.engine)}
+                </span>
               </button>
             ))}
           </div>
         </Field>
+
+        {!!engines && engines.length > 1 && (
+          <Field label="Engine" hint="Overrides the workflow default for this step">
+            <EnginePicker
+              value={step.engine ?? null}
+              onChange={(id) => patch({ engine: id ?? undefined })}
+              inheritLabel="Workflow default"
+              className="w-full"
+            />
+          </Field>
+        )}
 
         <Field label="Agent" hint="Supplies the system prompt and tools">
           <select

@@ -19,6 +19,22 @@ sqlx = { workspace = true }
 rand = { workspace = true }
 futures = "0.3"
 croner = "3"
+# Object storage (MinIO / any S3-compatible endpoint). SigV4 is signed by hand
+# rather than pulling an SDK: the request surface is four verbs, and an SDK
+# would also bring credential *discovery* — wandering off to read `~/.aws` or
+# instance metadata is precisely what this project promises not to do.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+# HTML sanitisation for knowledge-base bodies. Servo's sanitiser rather than
+# anything hand-rolled: article HTML arrives from a browser editor, is stored,
+# and is rendered back — the textbook stored-XSS shape.
+ammonia = "4"
+# Line diffing for the revision review UI. A hand-rolled LCS underneath a
+# "is this agent rewrite correct?" decision is exactly where a wrong diff
+# gets approved, so this is one small pure-Rust dependency worth having.
+similar = "2"
 serde_yaml = "0.9"
 
 [dev-dependencies]

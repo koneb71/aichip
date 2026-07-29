@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use super::memory;
 use super::orchestrator::{
-    next_seq, slugify, write_mcp_config_with, Orchestrator, SeqAlloc, StreamOutcome,
+    next_seq, slugify, Orchestrator, SeqAlloc, StreamOutcome,
 };
 use plan::{
     assignment_prompt, has_blocking, inspect_plan, parse_plan, plan_prompt, repair_prompt,
@@ -127,12 +127,14 @@ impl Orchestrator {
     ) -> anyhow::Result<Uuid> {
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
-             VALUES ($1, $2, $3, $4, 'queued', 'org', 'claude-code') RETURNING id",
+             SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)
+             FROM teams WHERE id = $1 RETURNING id",
         )
         .bind(team_id)
         .bind(project_id)
         .bind(goal)
         .bind(plan_approval)
+        .bind(self.default_engine())
         .fetch_one(&self.db.pool)
         .await?;
         let run_id: Uuid = row.get("id");
@@ -164,7 +166,8 @@ impl Orchestrator {
         team_id: Uuid,
     ) -> anyhow::Result<Uuid> {
         let row = sqlx::query(
-            "SELECT t.prompt, t.title, t.project_id, tm.name AS team_name, tm.pattern, tm.definition
+            "SELECT t.prompt, t.title, t.project_id, t.engine AS task_engine,
+                    tm.name AS team_name, tm.pattern, tm.definition, tm.engine AS team_engine
              FROM tasks t JOIN teams tm ON tm.id = t.team_id WHERE t.id = $1",
         )
         .bind(task_id)
@@ -174,16 +177,22 @@ impl Orchestrator {
         let project_id: Uuid = row.get("project_id");
         let goal: String = row.get("prompt");
         let pattern: String = row.get("pattern");
+        // A team that pins an engine wins over the card's, because the card's
+        // is a default nobody chose while the team's is a stated preference.
+        let engine: String = row
+            .get::<Option<String>, _>("team_engine")
+            .unwrap_or_else(|| row.get("task_engine"));
 
         if pattern == "org" {
             let run = sqlx::query(
                 "INSERT INTO runs (task_id, team_id, project_id, goal, status, trigger, engine)
-                 VALUES ($1,$2,$3,$4,'queued','task','claude-code') RETURNING id",
+                 VALUES ($1,$2,$3,$4,'queued','task',$5) RETURNING id",
             )
             .bind(task_id)
             .bind(team_id)
             .bind(project_id)
             .bind(&goal)
+            .bind(&engine)
             .fetch_one(&self.db.pool)
             .await?;
             let run_id: Uuid = run.get("id");
@@ -201,6 +210,9 @@ impl Orchestrator {
         let team_name: String = row.get("team_name");
         let title: String = row.get("title");
         let mut workflow = aichip_shared::workflow::from_team(&team_name, &pattern, &names, &goal);
+        // Dispatch reads the engine off the workflow, not the run row, so a
+        // team pinned to OpenCode has to say so here or it silently reverts.
+        workflow.defaults.engine = engine.clone();
         workflow.name = format!("{team_name} · {title}");
         workflow.validate()?;
         let yaml = serde_yaml::to_string(&workflow)?;
@@ -221,10 +233,11 @@ impl Orchestrator {
 
         let run = sqlx::query(
             "INSERT INTO runs (task_id, workflow_id, status, trigger, engine)
-             VALUES ($1,$2,'queued','task','claude-code') RETURNING id",
+             VALUES ($1,$2,'queued','task',$3) RETURNING id",
         )
         .bind(task_id)
         .bind(workflow_id)
+        .bind(&engine)
         .fetch_one(&self.db.pool)
         .await?;
         let run_id: Uuid = run.get("id");
@@ -1049,17 +1062,14 @@ impl Orchestrator {
             .await
             .unwrap_or_default();
 
-        let mcp_config_path = match (&self.mcp_base_url, ctx.engine.id()) {
-            (Some(base), "claude-code") => Some(
-                write_mcp_config_with(
-                    base,
-                    &format!("mcp/org/{}/{step_id}", ctx.run_id),
-                    step_id,
-                    &user_servers,
-                )
-                .await?,
-            ),
-            _ => None,
+        // Engine-neutral: a team member on any MCP-capable engine gets the
+        // org tools, not just Claude.
+        let mcp = aichip_shared::McpWiring {
+            aichip_url: self
+                .mcp_base_url
+                .as_ref()
+                .map(|b| format!("{b}/mcp/org/{}/{step_id}", ctx.run_id)),
+            servers: user_servers.iter().map(|s| s.to_spec()).collect(),
         };
 
         // Org runs always pass an explicit tool list, so this is never the
@@ -1088,13 +1098,15 @@ impl Orchestrator {
             cwd: ctx.worktree.clone(),
             prompt,
             model_tier: member.tier,
-            model_id: self.model_for(member.tier),
+            model_id: self.model_for(ctx.engine.id(), member.tier),
             effort,
             resume_session_id: resume,
             permission_mode,
             allowed_tools,
             append_system_prompt,
-            mcp_config_path,
+            denied_tools: vec![],
+            mcp,
+            run_key: step_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::from([
@@ -1115,13 +1127,14 @@ impl Orchestrator {
             .await?;
 
         sqlx::query(
-            "UPDATE steps SET status=$1, session_id=$2, output_text=$3, finished_at=now()
-             WHERE id=$4",
+            "UPDATE steps SET status=$1, session_id=$2, session_engine=$5, output_text=$3,
+             finished_at=now() WHERE id=$4",
         )
         .bind(outcome.status.as_str())
         .bind(&outcome.session_id)
         .bind(&outcome.output)
         .bind(step_id)
+        .bind(ctx.engine.id())
         .execute(&self.db.pool)
         .await?;
 
@@ -1215,7 +1228,7 @@ impl Orchestrator {
                  hedge or hand the decision back."
             ),
             model_tier: tier,
-            model_id: self.model_for(tier),
+            model_id: self.model_for(&engine_id, tier),
             effort: row
                 .get::<Option<String>, _>("manager_effort")
                 .and_then(|e| ReasoningEffort::parse(&e)),
@@ -1223,7 +1236,9 @@ impl Orchestrator {
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: MANAGER_TOOLS.iter().map(|s| s.to_string()).collect(),
             append_system_prompt: None,
-            mcp_config_path: None,
+            denied_tools: vec![],
+            mcp: Default::default(),
+            run_key: run_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::new(),

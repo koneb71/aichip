@@ -4,6 +4,7 @@ import { Agent, api, BakeoffVariant, Tier } from "../lib/api";
 import { isActive, statusColor, statusLabel } from "../lib/runStatus";
 import { annotateDiff } from "../lib/diff";
 import { useTierModel } from "../lib/models";
+import { useEngines } from "../lib/engines";
 
 /**
  * One brief, several attempts, side by side.
@@ -197,7 +198,9 @@ function BakeoffSetup({
   onClose: () => void;
 }) {
   const tierModel = useTierModel();
-  const [mode, setMode] = useState<"tiers" | "agents">("tiers");
+  const engines = useEngines() ?? [];
+  const [mode, setMode] = useState<"tiers" | "agents" | "engines">("tiers");
+  const [pickedEngines, setPickedEngines] = useState<string[]>(engines.map((e) => e.id));
   const [tiers, setTiers] = useState<Tier[]>(
     TIERS.filter((t) => t !== currentTier).slice(0, 1).concat(currentTier),
   );
@@ -212,10 +215,15 @@ function BakeoffSetup({
       const variants =
         mode === "tiers"
           ? tiers.map((t) => ({ label: tierModel(t), tier: t }))
-          : picked.map((id) => ({
-              label: agents.find((a) => a.id === id)?.name ?? "agent",
-              agent_id: id,
-            }));
+          : mode === "engines"
+            ? pickedEngines.map((id) => ({
+                label: engines.find((e) => e.id === id)?.label ?? id,
+                engine: id,
+              }))
+            : picked.map((id) => ({
+                label: agents.find((a) => a.id === id)?.name ?? "agent",
+                agent_id: id,
+              }));
       await api.startBakeoff(taskId, variants);
       onStarted();
     } catch (e) {
@@ -225,7 +233,8 @@ function BakeoffSetup({
     }
   };
 
-  const count = mode === "tiers" ? tiers.length : picked.length;
+  const count =
+    mode === "tiers" ? tiers.length : mode === "engines" ? pickedEngines.length : picked.length;
 
   return (
     <div>
@@ -238,22 +247,51 @@ function BakeoffSetup({
         they finish you compare the diffs and keep one.
       </p>
 
-      <div className="mt-3 flex gap-2">
-        {(["tiers", "agents"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={`rounded-lg border px-3 py-1.5 text-xs ${
-              mode === m ? "border-accent bg-accent/5 text-accent" : "border-line"
-            }`}
-          >
-            {m === "tiers" ? "Compare models" : "Compare agents"}
-          </button>
-        ))}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {(["tiers", "agents", "engines"] as const)
+          // Comparing engines needs two of them.
+          .filter((m) => m !== "engines" || engines.length > 1)
+          .map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`rounded-lg border px-3 py-1.5 text-xs ${
+                mode === m ? "border-accent bg-accent/5 text-accent" : "border-line"
+              }`}
+            >
+              {m === "tiers"
+                ? "Compare models"
+                : m === "agents"
+                  ? "Compare agents"
+                  : "Compare engines"}
+            </button>
+          ))}
       </div>
 
       <div className="mt-3 space-y-1.5">
-        {mode === "tiers"
+        {mode === "engines"
+          ? engines.map((e) => (
+              <label
+                key={e.id}
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-line p-2.5 text-sm hover:bg-panel-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={pickedEngines.includes(e.id)}
+                  onChange={(ev) =>
+                    setPickedEngines((prev) =>
+                      ev.target.checked ? [...prev, e.id] : prev.filter((x) => x !== e.id),
+                    )
+                  }
+                  className="accent-[var(--color-accent)]"
+                />
+                <span>{e.label}</span>
+                <span className="text-xs text-ink-dim">
+                  {e.providers.map((p) => p.name).join(", ") || e.version}
+                </span>
+              </label>
+            ))
+          : mode === "tiers"
           ? TIERS.map((t) => (
               <label
                 key={t}

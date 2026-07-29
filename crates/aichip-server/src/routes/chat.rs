@@ -185,7 +185,7 @@ async fn active_run(state: &AppState, chat_id: Uuid) -> Result<Option<Uuid>, Api
 #[derive(Deserialize)]
 struct SendBody {
     content: String,
-    /// "claude-code" (default) or "mock" for demos/E2E.
+    /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
     /// Ids from POST /api/projects/{id}/attachments, bound to this message.
     #[serde(default)]
@@ -254,7 +254,10 @@ async fn send(
 
     let run_id = state
         .orchestrator
-        .enqueue_chat_turn(chat_id, body.engine.as_deref().unwrap_or("claude-code"))
+        .enqueue_chat_turn(
+            chat_id,
+            body.engine.as_deref().unwrap_or(&state.orchestrator.default_engine()),
+        )
         .await
         .map_err(internal)?;
 

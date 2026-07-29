@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, OrgRunSummary, Project, Team, TeamEstimate } from "../lib/api";
+import { EnginePicker, useEngines } from "../lib/engines";
 import { useWorkspace } from "../lib/workspace";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
@@ -394,6 +395,9 @@ function TeamEditor({
     team?.definition.members ?? [],
   );
   const [manager, setManager] = useState<string>(team?.definition.manager ?? "");
+  // null = inherit from the card that summoned the team.
+  const [engine, setEngine] = useState<string | null>(team?.engine ?? null);
+  const engines = useEngines();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -413,6 +417,7 @@ function TeamEditor({
       pattern,
       definition:
         pattern === "org" ? { manager: manager || undefined, members } : { members },
+      engine,
     };
     try {
       if (team) await api.updateTeam(team.id, body);
@@ -454,6 +459,19 @@ function TeamEditor({
           placeholder="Team name"
           className="w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-accent"
         />
+
+        {!!engines && engines.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-ink-dim">
+              Run on
+            </span>
+            <EnginePicker
+              value={engine}
+              onChange={setEngine}
+              inheritLabel="Whatever the card says"
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           {PATTERNS.map((p) => (

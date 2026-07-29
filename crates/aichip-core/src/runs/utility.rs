@@ -29,7 +29,9 @@ pub async fn utility_run(
         permission_mode: PermissionMode::Reviewed,
         allowed_tools: vec![], // no tools: pure generation
         append_system_prompt: None,
-        mcp_config_path: None,
+        denied_tools: vec![],
+        mcp: Default::default(),
+        run_key: "utility".to_string(),
         extra_read_dirs: vec![],
         permission_prompt_tool: false,
         extra_env: HashMap::new(),

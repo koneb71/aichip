@@ -1,12 +1,14 @@
 //! Claude Code adapter: spawns the official `claude` binary from PATH in
 //! headless mode and normalizes its stream-json output.
 
+pub mod mcp;
 pub mod stream_parser;
 
-use crate::{Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
+use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
 use aichip_shared::{AichipEvent, PermissionMode};
 use async_trait::async_trait;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -22,7 +24,7 @@ pub const FORBIDDEN_ENV_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_OAUTH"]
 /// anything — the conditionals here (empty allowed-tools, the three-way
 /// permission-prompt guard) are the parts that have historically been easy to
 /// get subtly wrong.
-fn claude_args(spec: &RunSpec) -> Vec<OsString> {
+fn claude_args(spec: &RunSpec, mcp_config: Option<PathBuf>) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         "-p".into(),
         spec.prompt.clone().into(),
@@ -62,13 +64,20 @@ fn claude_args(spec: &RunSpec) -> Vec<OsString> {
         args.push("--allowedTools".into());
         args.push(spec.allowed_tools.join(",").into());
     }
+    // `--allowedTools` pre-approves; it does not forbid. Anything that must
+    // not run has to be named here, or the CLI will happily reach for it.
+    if !spec.denied_tools.is_empty() {
+        args.push("--disallowedTools".into());
+        args.push(spec.denied_tools.join(",").into());
+    }
     if let Some(sys) = &spec.append_system_prompt {
         args.push("--append-system-prompt".into());
         args.push(sys.clone().into());
     }
-    if let Some(mcp) = &spec.mcp_config_path {
+    let has_mcp = mcp_config.is_some();
+    if let Some(mcp) = mcp_config {
         args.push("--mcp-config".into());
-        args.push(mcp.clone().into());
+        args.push(mcp.into());
     }
     // One flag per directory: `--add-dir` is variadic, so a single flag
     // carrying several values would swallow whatever argument follows.
@@ -78,7 +87,7 @@ fn claude_args(spec: &RunSpec) -> Vec<OsString> {
         args.push(dir.clone().into());
     }
     if spec.permission_prompt_tool
-        && spec.mcp_config_path.is_some()
+        && has_mcp
         && spec.permission_mode != PermissionMode::FullAuto
     {
         args.push("--permission-prompt-tool".into());
@@ -107,6 +116,24 @@ impl Engine for ClaudeEngine {
         "claude-code"
     }
 
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // The permission proxy: the CLI parks on `mcp__aichip__approve`
+            // until the user answers in the dashboard.
+            interactive_permissions: true,
+            // `rate_limit_event` carries `resetsAt`.
+            structured_rate_limit: true,
+            resume_sessions: true,
+            // `--append-system-prompt` appends rather than replaces.
+            append_system_prompt: true,
+            fixed_model_catalog: true,
+        }
+    }
+
     async fn detect(&self) -> Option<EngineInfo> {
         let version = Command::new(&self.binary)
             .arg("--version")
@@ -120,16 +147,34 @@ impl Engine for ClaudeEngine {
         Some(EngineInfo {
             version,
             authenticated: true,
+            providers: vec![],
+            // Claude Code's catalog is fixed and lives in `MODEL_CHOICES`.
+            models: vec![],
         })
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
+        // The adapter renders its own dialect now; the orchestrator only says
+        // what should be reachable.
+        let mcp_config = if spec.mcp.is_empty() {
+            None
+        } else {
+            Some(mcp::write(&mcp::config_dir(), &spec.run_key, &spec.mcp)?)
+        };
+
         let mut cmd = Command::new(&self.binary);
-        cmd.current_dir(&spec.cwd).args(claude_args(&spec));
+        cmd.current_dir(&spec.cwd).args(claude_args(&spec, mcp_config));
+
+        // A child inherits this process's environment. The loop below only
+        // vets what we *set*, so anything aichip holds as its own secret has
+        // to be taken away explicitly or it arrives having passed no check.
+        for key in aichip_shared::AICHIP_OWN_SECRETS {
+            cmd.env_remove(key);
+        }
 
         for (k, v) in &spec.extra_env {
-            if FORBIDDEN_ENV_PREFIXES.iter().any(|p| k.starts_with(p)) {
-                anyhow::bail!("refusing to set auth-related env var {k}");
+            if aichip_shared::is_auth_env(k) {
+                anyhow::bail!("{}", aichip_shared::auth_env_refusal(k));
             }
             cmd.env(k, v);
         }
@@ -245,8 +290,10 @@ mod tests {
             resume_session_id: None,
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: vec![],
+            denied_tools: vec![],
             append_system_prompt: None,
-            mcp_config_path: None,
+            mcp: Default::default(),
+            run_key: "test".to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::new(),
@@ -254,8 +301,12 @@ mod tests {
     }
 
     /// Flatten to lossy strings; assertions read better than OsStr comparisons.
+    /// Mirrors what `start` does: a spec with wiring gets a config path, one
+    /// without gets none. Passing a bare `None` here would quietly make every
+    /// MCP-dependent assertion below vacuous.
     fn args_of(spec: &RunSpec) -> Vec<String> {
-        claude_args(spec)
+        let config = (!spec.mcp.is_empty()).then(|| PathBuf::from("/tmp/aichip-test-mcp.json"));
+        claude_args(spec, config)
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
@@ -311,7 +362,7 @@ mod tests {
         // No MCP config ⇒ no broker to talk to, so the flag is pointless.
         assert!(!args_of(&s).iter().any(|a| a == "--permission-prompt-tool"));
 
-        s.mcp_config_path = Some(PathBuf::from("/tmp/mcp.json"));
+        s.mcp.aichip_url = Some("http://127.0.0.1:4820/mcp/run/x".into());
         assert!(args_of(&s).iter().any(|a| a == "--permission-prompt-tool"));
 
         // FullAuto deliberately bypasses the broker entirely.

@@ -15,6 +15,8 @@ export interface StepData {
   agent?: string;
   /** tier name ("easy"|"medium"|"complex") or a literal model id */
   model?: string;
+  /** Overrides `defaults.engine` for this step alone. */
+  engine?: string;
   session?: "fresh" | "continue";
   parallel?: number;
   isolatedWorktrees?: boolean;
@@ -59,6 +61,7 @@ export function parseWorkflow(yaml: string): ParsedWorkflow {
         needs: Array.isArray(s?.needs) ? s.needs.filter((n: unknown) => typeof n === "string") : [],
         agent: asString(s?.agent),
         model: asString(s?.model),
+        engine: asString(s?.engine),
         session: s?.session === "continue" ? "continue" : undefined,
         parallel: typeof s?.strategy?.parallel === "number" ? s.strategy.parallel : undefined,
         isolatedWorktrees:
@@ -107,6 +110,7 @@ export function emitWorkflow(meta: WorkflowMeta, steps: StepData[]): string {
     if (step.needs.length) lines.push(`    needs: [${step.needs.join(", ")}]`);
     if (step.agent) lines.push(`    agent: ${scalar(step.agent)}`);
     if (step.model) lines.push(`    model: ${step.model}`);
+    if (step.engine) lines.push(`    engine: ${step.engine}`);
     if (step.session === "continue") lines.push("    session: continue");
     const parallel = step.parallel ?? 1;
     if (parallel > 1 || step.isolatedWorktrees) {

@@ -195,14 +195,7 @@ fn summarize_tool_result(block: &Value) -> String {
     out
 }
 
-pub fn rate_limit_signal(text: &str) -> bool {
-    let t = text.to_ascii_lowercase();
-    t.contains("rate limit")
-        || t.contains("rate_limit")
-        || t.contains("usage limit")
-        || t.contains("overloaded")
-        || t.contains("429")
-}
+pub use aichip_shared::rate_limit_signal;
 
 #[cfg(test)]
 mod tests {

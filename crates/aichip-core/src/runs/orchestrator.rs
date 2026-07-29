@@ -8,9 +8,8 @@
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
-use aichip_shared::{
+use aichip_shared::{EngineTierMapping, McpWiring, 
     AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
-    TierMapping,
 };
 use aichip_engines::{Engine, RunSpec};
 use chrono::{DateTime, Utc};
@@ -26,6 +25,7 @@ use crate::bus::EventBus;
 use crate::db::Db;
 use crate::runs::attachments;
 use crate::runs::memory;
+use crate::runs::task_plan;
 use crate::queue::rate_limit_backoff;
 use crate::worktrees::manager::WorktreeManager;
 
@@ -61,6 +61,9 @@ pub struct Variant {
     pub label: String,
     pub agent_id: Option<Uuid>,
     pub tier: Option<String>,
+    /// Which CLI runs this attempt. `None` means the card's. This is what
+    /// makes "Claude vs OpenCode on the same brief" a thing you can ask for.
+    pub engine: Option<String>,
 }
 
 /// Why the queue is, or isn't, dispatching.
@@ -78,9 +81,12 @@ pub struct Orchestrator {
     pub db: Db,
     pub bus: EventBus,
     engines: HashMap<&'static str, Arc<dyn Engine>>,
+    /// What `detect()` said at boot, kept so the engines endpoint can answer
+    /// without spawning three CLIs on every page load.
+    detected: HashMap<&'static str, aichip_engines::EngineInfo>,
     /// Tier → model routing, live rather than baked at boot: changing it in
     /// settings must affect the next run, not require a restart.
-    tiers: Arc<std::sync::RwLock<TierMapping>>,
+    tiers: Arc<std::sync::RwLock<EngineTierMapping>>,
     pub worktrees: Arc<WorktreeManager>,
     pub(crate) semaphore: Arc<Semaphore>,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
@@ -113,11 +119,42 @@ pub(crate) struct CancelState {
 
 /// An agent from the library, resolved for a step or task.
 pub(crate) struct BoundAgent {
+    pub id: Uuid,
     pub system_prompt: String,
     pub tier: ModelTier,
     pub effort: Option<ReasoningEffort>,
     pub allowed_tools: Vec<String>,
-    pub permission_preset: String,
+    /// `None` means "inherit" — nullable since migration 0020. Decoding this
+    /// as a plain `String` panics on every agent that inherits, which is now
+    /// all of them by default.
+    pub permission_preset: Option<String>,
+    /// `None` means "whatever the workflow or card says".
+    pub engine: Option<String>,
+}
+
+/// A step's permission mode, and whether it got there by being cut down.
+///
+/// The distinction matters because the two produce the same mode for very
+/// different reasons, and only one of them is something the author wrote.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct StepPermission {
+    pub mode: PermissionMode,
+    /// True when FullAuto was refused and Reviewed substituted.
+    pub downgraded: bool,
+}
+
+/// Apply the FullAuto safety gate.
+///
+/// Pure so it can be tested without a database or a worktree on disk — the
+/// gate is a safety property and deserves to be pinned down directly rather
+/// than inferred from an integration run.
+pub(crate) fn resolve_step_permission(asked: PermissionMode, gate_satisfied: bool) -> StepPermission {
+    if asked == PermissionMode::FullAuto && !gate_satisfied {
+        // Down, never up: refusing FullAuto is de-escalation and safe.
+        StepPermission { mode: PermissionMode::Reviewed, downgraded: true }
+    } else {
+        StepPermission { mode: asked, downgraded: false }
+    }
 }
 
 /// Race-free `events.seq` allocation. A workflow run has several steps
@@ -146,7 +183,8 @@ impl Orchestrator {
             db,
             bus,
             engines: HashMap::new(),
-            tiers: Arc::new(std::sync::RwLock::new(TierMapping::default())),
+            detected: HashMap::new(),
+            tiers: Arc::new(std::sync::RwLock::new(EngineTierMapping::default())),
             worktrees,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             mcp_base_url,
@@ -158,8 +196,57 @@ impl Orchestrator {
         self.engines.insert(engine.id(), engine);
     }
 
+    /// Register an engine only if its CLI is actually installed.
+    ///
+    /// An engine that isn't here is simply *not offered* — which is a far
+    /// better failure than accepting the choice and then dying at spawn time,
+    /// minutes later and nowhere near where the user made it.
+    ///
+    /// Returns what `detect()` found, so the caller can log it.
+    pub async fn register_if_available(
+        &mut self,
+        engine: Arc<dyn Engine>,
+    ) -> Option<aichip_engines::EngineInfo> {
+        let info = engine.detect().await?;
+        self.detected.insert(engine.id(), info.clone());
+        self.engines.insert(engine.id(), engine);
+        Some(info)
+    }
+
+    /// What `detect()` reported at boot. `None` for engines registered
+    /// without a probe (the mock).
+    pub fn engine_info(&self, id: &str) -> Option<&aichip_engines::EngineInfo> {
+        self.detected.get(id)
+    }
+
     pub fn engine(&self, id: &str) -> Option<Arc<dyn Engine>> {
         self.engines.get(id).cloned()
+    }
+
+    /// Every engine that was actually found at boot. Sorted by id so the UI
+    /// column order doesn't shuffle between restarts (a `HashMap` iteration
+    /// order would).
+    pub fn engines(&self) -> Vec<Arc<dyn Engine>> {
+        let mut v: Vec<_> = self.engines.values().cloned().collect();
+        v.sort_by_key(|e| e.id());
+        v
+    }
+
+    /// What to run when nothing upstream stated a preference.
+    ///
+    /// Claude Code when it's installed — it's the one engine that can do
+    /// everything aichip offers, including stopping to ask permission. Only
+    /// when it's absent does something else become the default, and then the
+    /// alternative to picking one is offering the user nothing at all.
+    pub fn default_engine(&self) -> String {
+        if self.engines.contains_key("claude-code") {
+            return "claude-code".into();
+        }
+        self.engines()
+            .into_iter()
+            .find(|e| e.id() != "mock")
+            .map(|e| e.id().to_string())
+            .unwrap_or_else(|| "claude-code".into())
     }
 
     /// Create a run for a board task and put it on the queue. A task handed
@@ -174,9 +261,14 @@ impl Orchestrator {
             return self.enqueue_task_for_team(task_id, team_id).await;
         }
 
+        // The bound agent's engine wins over the card's: an agent that names
+        // one has been deliberately configured for it, while a card's is the
+        // machine default nobody chose.
         let row = sqlx::query(
-            "INSERT INTO runs (task_id, status, trigger, engine)
-             SELECT id, 'queued', 'manual', engine FROM tasks WHERE id = $1
+            "INSERT INTO runs (task_id, status, trigger, engine, plan_approval)
+             SELECT t.id, 'queued', 'manual', COALESCE(a.engine, t.engine), t.plan_first
+             FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
+             WHERE t.id = $1
              RETURNING id",
         )
         .bind(task_id)
@@ -348,7 +440,7 @@ impl Orchestrator {
             .bind(variant.agent_id)
             .bind(variant.tier.as_deref())
             .bind(&variant.label)
-            .bind(&engine)
+            .bind(variant.engine.as_ref().unwrap_or(&engine))
             .fetch_one(&self.db.pool)
             .await?;
             let run_id: Uuid = row.get("id");
@@ -473,12 +565,27 @@ impl Orchestrator {
         workflow_id: Uuid,
         trigger: &str,
     ) -> anyhow::Result<Uuid> {
+        // The workflow's own `defaults.engine` is authoritative — dispatch
+        // reads it too. Recording it here means the activity list shows the
+        // truth for the window between queued and running, rather than
+        // whatever literal happened to be in this INSERT.
+        let engine = sqlx::query_scalar::<_, String>(
+            "SELECT source_yaml FROM workflows WHERE id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.db.pool)
+        .await?
+        .and_then(|yaml| Workflow::from_yaml(&yaml).ok())
+        .map(|w| w.defaults.engine)
+        .unwrap_or_else(|| self.default_engine());
+
         let row = sqlx::query(
             "INSERT INTO runs (workflow_id, status, trigger, engine)
-             VALUES ($1, 'queued', $2, 'claude-code') RETURNING id",
+             VALUES ($1, 'queued', $2, $3) RETURNING id",
         )
         .bind(workflow_id)
         .bind(trigger)
+        .bind(&engine)
         .fetch_one(&self.db.pool)
         .await?;
         let run_id: Uuid = row.get("id");
@@ -567,14 +674,28 @@ impl Orchestrator {
         }
     }
 
-    /// Which model a tier routes to right now.
-    pub fn model_for(&self, tier: ModelTier) -> String {
-        self.tiers.read().unwrap().model_for(tier).to_string()
+    /// Would this engine refuse this mode? Checked before a run is queued so
+    /// the answer lands where the user is standing, not forty minutes later.
+    ///
+    /// Returns the reason, or `None` when the pairing is fine. An unknown
+    /// engine is *not* an error here — dispatch reports that with a better
+    /// message than "capability check failed".
+    pub fn vet_engine(&self, engine_id: &str, mode: PermissionMode) -> Option<String> {
+        let engine = self.engine(engine_id)?;
+        aichip_engines::vet(engine.as_ref(), mode, false).err()
+    }
+
+    /// Which model this engine runs at this tier right now.
+    ///
+    /// Takes the engine because "medium" cannot mean one model globally —
+    /// `claude-opus-5` is not something OpenCode can be asked for.
+    pub fn model_for(&self, engine: &str, tier: ModelTier) -> String {
+        self.tiers.read().unwrap().model_for(engine, tier)
     }
 
     /// A snapshot, for callers that need the whole mapping. Cloned rather
     /// than lent, so no lock guard is ever held across an await.
-    pub fn tier_mapping(&self) -> TierMapping {
+    pub fn tier_mapping(&self) -> EngineTierMapping {
         self.tiers.read().unwrap().clone()
     }
 
@@ -586,17 +707,49 @@ impl Orchestrator {
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'tier_models'")
                 .fetch_optional(&self.db.pool)
                 .await?;
-        if let Some(mapping) = stored.and_then(|v| serde_json::from_value::<TierMapping>(v).ok()) {
-            *self.tiers.write().unwrap() = mapping;
+        // Which engines the user has actually configured, read off the raw
+        // JSON rather than the parsed struct: parsing fills in defaults for
+        // every engine, which would make "they chose this" indistinguishable
+        // from "we invented it".
+        let explicit: std::collections::BTreeSet<String> = stored
+            .as_ref()
+            .and_then(|v| v.as_object())
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        let mut mapping = stored
+            .and_then(|v| serde_json::from_value::<EngineTierMapping>(v).ok())
+            .unwrap_or_default();
+
+        // For an engine nobody has configured, the built-in default is a
+        // guess — and for a multi-provider engine it's usually a wrong one.
+        // The install itself knows better, so ask it.
+        for engine in self.engines() {
+            if explicit.contains(engine.id()) {
+                continue;
+            }
+            let Some(info) = self.detected.get(engine.id()) else {
+                continue;
+            };
+            if let Some(picked) = aichip_shared::pick_defaults(&info.models) {
+                tracing::info!(
+                    engine = engine.id(),
+                    medium = %picked.model_for(ModelTier::Medium),
+                    "tier defaults derived from the models this install can reach"
+                );
+                mapping.0.insert(engine.id().to_string(), picked);
+            }
         }
+        *self.tiers.write().unwrap() = mapping;
         Ok(())
     }
 
     /// Persist and apply a new routing.
-    pub async fn set_tier_mapping(&self, mapping: TierMapping) -> anyhow::Result<()> {
-        for (tier, model) in &mapping.0 {
-            if !aichip_shared::is_known_model(model) {
-                anyhow::bail!("{model} is not a model aichip offers (tier {tier:?})");
+    pub async fn set_tier_mapping(&self, mapping: EngineTierMapping) -> anyhow::Result<()> {
+        for (engine, tiers) in &mapping.0 {
+            for (tier, model) in &tiers.0 {
+                if !aichip_shared::is_known_model_for(engine, model) {
+                    anyhow::bail!("{model} is not a model {engine} can run (tier {tier:?})");
+                }
             }
         }
         self.put_setting("tier_models", serde_json::to_value(&mapping)?)
@@ -765,7 +918,9 @@ impl Orchestrator {
     /// Dispatcher: task runs and chat runs share the streaming machinery but
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
-        let row = sqlx::query("SELECT chat_id, workflow_id, team_id, comment_id FROM runs WHERE id=$1")
+        let row = sqlx::query(
+            "SELECT chat_id, workflow_id, team_id, comment_id, kb_brief FROM runs WHERE id=$1",
+        )
             .bind(run_id)
             .fetch_one(&self.db.pool)
             .await?;
@@ -779,6 +934,9 @@ impl Orchestrator {
             (_, Some(workflow_id), _, _) => self.execute_workflow_run(run_id, workflow_id).await,
             (_, _, Some(team_id), _) => self.execute_org_run(run_id, team_id).await,
             (_, _, _, Some(comment_id)) => self.execute_comment_run(run_id, comment_id).await,
+            _ if row.get::<Option<String>, _>("kb_brief").is_some() => {
+                self.execute_kb_run(run_id).await
+            }
             _ => self.execute_task_run(run_id).await,
         }
     }
@@ -788,12 +946,13 @@ impl Orchestrator {
             // A bake-off variant overrides the card: its own agent, its own
             // tier, its own worktree. COALESCE keeps every ordinary run on
             // exactly the path it was on before.
-            "SELECT r.id, r.engine, r.session_id, t.id AS task_id,
+            "SELECT r.id, r.engine, r.session_id, r.session_engine, t.id AS task_id,
                     COALESCE(r.prompt_override, t.prompt) AS prompt,
                     t.model_tier, r.tier_override,
                     COALESCE(r.agent_id, t.agent_id) AS agent_id,
                     r.variant_label, r.worktree_path AS run_worktree,
                     t.permission_mode, t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
+                    r.plan_approval, r.plan_approved_at,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
                     p.vcs,
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
@@ -813,6 +972,14 @@ impl Orchestrator {
         self.set_status(run_id, RunStatus::Starting).await?;
 
         let engine_id: String = run.get("engine");
+        // A session id is only meaningful to the engine that minted it.
+        // Handing an OpenCode `ses_…` to Claude doesn't error — it starts
+        // over with none of the context, which is the quiet kind of wrong.
+        let resume_session_id: Option<String> = run
+            .get::<Option<String>, _>("session_id")
+            .filter(|_| {
+                run.get::<Option<String>, _>("session_engine").as_deref() == Some(&engine_id)
+            });
         let engine = self
             .engine(&engine_id)
             .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
@@ -898,6 +1065,42 @@ impl Orchestrator {
             None => self.default_permission_mode().await,
         };
 
+        // Plan-first: write the plan, park, and let a person approve or
+        // rewrite it before anything changes. Both halves are ordinary runs of
+        // this same function — the phase decides what gets asked for.
+        let task_prompt: String = run.get("prompt");
+        let stored_plan = self.stored_plan(run_id).await?;
+        let phase = task_plan::decide(
+            run.get("plan_approval"),
+            match stored_plan.as_deref() {
+                Some(text) => task_plan::PlanStep::Written(text),
+                None => task_plan::PlanStep::Missing,
+            },
+            run.get::<Option<chrono::DateTime<chrono::Utc>>, _>("plan_approved_at")
+                .is_some(),
+        );
+        let planning = phase == task_plan::Phase::Plan;
+
+        // Capability gate. Checked here as well as at enqueue time because a
+        // card's mode can be edited after it was queued — and a run that
+        // can't honour its mode must fail loudly rather than quietly running
+        // with more freedom than was asked for.
+        if let Err(reason) = aichip_engines::vet(
+            engine.as_ref(),
+            permission_mode,
+            resume_session_id.is_some(),
+        ) {
+            // Persist the reason as an event, not just a status, so it shows
+            // up in the run's transcript where the user is already looking.
+            let seq = next_seq(&self.db, run_id).await?;
+            self.persist_and_publish(run_id, None, seq, &AichipEvent::RunFailed {
+                reason: reason.clone(),
+            })
+            .await?;
+            self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+            return Ok(());
+        }
+
         // FullAuto is refused outside aichip-managed worktrees and outside
         // opted-in projects — the structural safety gate.
         let full_auto_opt_in: bool = run.get("full_auto_opt_in");
@@ -922,12 +1125,15 @@ impl Orchestrator {
                 vec![]
             });
 
-        let mcp_config_path = match (&self.mcp_base_url, engine_id.as_str()) {
-            (Some(base), "claude-code") => Some(
-                write_mcp_config_with(base, &format!("mcp/run/{run_id}"), run_id, &user_servers)
-                    .await?,
-            ),
-            _ => None,
+        // No engine-id check: every engine that can do MCP now gets the same
+        // wiring, and each adapter renders it. The old `"claude-code"` match
+        // silently handed any other engine an empty config.
+        let mcp = McpWiring {
+            aichip_url: self
+                .mcp_base_url
+                .as_ref()
+                .map(|b| format!("{b}/mcp/run/{run_id}")),
+            servers: user_servers.iter().map(|s| s.to_spec()).collect(),
         };
 
         // An empty allow-list means "no --allowedTools flag", which allows
@@ -938,7 +1144,7 @@ impl Orchestrator {
             allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
         }
 
-        let model_id = self.model_for(tier);
+        let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -949,8 +1155,37 @@ impl Orchestrator {
         // re-running a task re-attaches and `tasks.prompt` keeps holding
         // exactly what the user typed.
         let atts = attachments::for_task(&self.db, task_id).await.unwrap_or_default();
-        let (prompt, extra_read_dirs) =
-            attachments::augment_prompt(&run.get::<String, _>("prompt"), &atts);
+        // What the run is actually asked for depends on the phase: draft a
+        // plan, or carry out the one that was approved. Attachments are folded
+        // into either, since a spec you were given is context for planning too.
+        let asked = match &phase {
+            task_plan::Phase::Plan => match self.plan_revision_note(run_id).await? {
+                Some(note) => task_plan::revise_prompt(
+                    &task_prompt,
+                    stored_plan.as_deref().unwrap_or(""),
+                    &note,
+                ),
+                None => task_plan::plan_prompt(&task_prompt),
+            },
+            task_plan::Phase::Work { plan: Some(plan) } => task_plan::work_prompt(
+                &task_prompt,
+                plan,
+                // Whether a human rewrote it, not whether it merely differs.
+                self.plan_was_edited(run_id).await?,
+            ),
+            task_plan::Phase::Work { plan: None } => task_prompt.clone(),
+        };
+        let (prompt, extra_read_dirs) = attachments::augment_prompt(&asked, &atts);
+        // Knowledge-base articles tagged onto the card. This is what makes
+        // tagging one worth doing: the agent is handed the runbook rather than
+        // left to infer it from the code.
+        let articles = crate::kb::for_run(&self.db, Some(task_id), None)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(%run_id, error = %e, "could not load tagged articles");
+                vec![]
+            });
+        let prompt = crate::kb::augment_prompt(&prompt, &articles);
 
         // A bound agent carries its memory into the run: what it did on this
         // project before is context, and what it does now becomes memory below.
@@ -964,15 +1199,45 @@ impl Orchestrator {
             None => None,
         };
 
+        // The work pass picks up the planning session, so the agent keeps
+        // everything it learned reading the code — but only from an engine
+        // that minted it and only if that engine can resume at all.
+        let resume_session_id = match (&phase, engine.capabilities().resume_sessions) {
+            (task_plan::Phase::Work { plan: Some(_) }, true) => self
+                .plan_session(run_id)
+                .await?
+                .filter(|(_, minted_by)| minted_by == &engine_id)
+                .map(|(sid, _)| sid)
+                .or(resume_session_id),
+            _ => resume_session_id,
+        };
+
         let spec = RunSpec {
             cwd,
             prompt,
             model_tier: tier,
             model_id,
             effort,
-            resume_session_id: run.get("session_id"),
-            permission_mode,
-            allowed_tools,
+            resume_session_id,
+            // Planning is read-only whatever the card says. A plan you are
+            // going to be asked to approve is worthless if the work already
+            // happened while it was being written — and with nothing to
+            // approve, nothing can prompt either.
+            permission_mode: if planning {
+                PermissionMode::AutoEdit
+            } else {
+                permission_mode
+            },
+            allowed_tools: if planning {
+                task_plan::PLANNING_TOOLS.iter().map(|t| t.to_string()).collect()
+            } else {
+                allowed_tools
+            },
+            denied_tools: if planning {
+                task_plan::PLANNING_DENIED.iter().map(|t| t.to_string()).collect()
+            } else {
+                vec![]
+            },
             append_system_prompt: match (agent_prompt.filter(|p| !p.is_empty()), memory_block) {
                 (Some(p), Some(m)) => Some(format!("{p}{m}")),
                 (Some(p), None) => Some(p),
@@ -980,9 +1245,11 @@ impl Orchestrator {
                 (None, Some(m)) => Some(m),
                 (None, None) => None,
             },
-            mcp_config_path,
+            mcp,
+            run_key: run_id.to_string(),
             extra_read_dirs,
-            permission_prompt_tool: true,
+            // Nothing to approve during planning, so nothing to ask about.
+            permission_prompt_tool: !planning,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
                 // Permission prompts block the MCP tools/call until the user
@@ -999,9 +1266,16 @@ impl Orchestrator {
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        // Planning doesn't finalize: a completed *plan* is not a completed
+        // run, and letting `stream_run` mark it terminal would send the card
+        // to review with nothing done.
         let outcome = self
-            .stream_run(run_id, None, &seq, engine, spec, true)
+            .stream_run(run_id, None, &seq, engine, spec, !planning)
             .await?;
+
+        if planning {
+            return self.park_for_approval(run_id, &outcome).await;
+        }
 
         if outcome.status == RunStatus::Completed {
             // Review exists to gate a diff onto the base branch. An in-place
@@ -1058,6 +1332,196 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Queue a run that writes documentation instead of code.
+    ///
+    /// `article_id` present means "revise this one"; absent means a new draft.
+    pub async fn enqueue_kb_article(
+        &self,
+        workspace_id: Uuid,
+        project_id: Uuid,
+        brief: &str,
+        engine: Option<&str>,
+        article_id: Option<Uuid>,
+        parent_id: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
+        let engine = engine
+            .map(str::to_string)
+            .unwrap_or_else(|| self.default_engine());
+        if self.engine(&engine).is_none() {
+            anyhow::bail!("{engine} isn't installed on this machine");
+        }
+        // A new article's row is created up front, so the editor has something
+        // to open the moment the run is queued rather than only once it lands.
+        let article_id = match article_id {
+            Some(id) => id,
+            None => sqlx::query_scalar(
+                "INSERT INTO kb_articles
+                    (workspace_id, project_id, parent_id, title, status, origin, position)
+                 VALUES ($1, $2, $3, $4, 'draft', 'agent',
+                         COALESCE((SELECT max(position) + 1000 FROM kb_articles
+                                    WHERE workspace_id = $1
+                                      AND parent_id IS NOT DISTINCT FROM $3), 1000))
+                 RETURNING id",
+            )
+            .bind(workspace_id)
+            .bind(project_id)
+            .bind(parent_id)
+            .bind(crate::kb::sanitize::summarize(brief, 80))
+            .fetch_one(&self.db.pool)
+            .await?,
+        };
+
+        let run_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (status, trigger, engine, kb_article_id, kb_brief, kb_project_id)
+             VALUES ('queued', 'kb', $1, $2, $3, $4) RETURNING id",
+        )
+        .bind(&engine)
+        .bind(article_id)
+        .bind(brief)
+        .bind(project_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        sqlx::query("UPDATE kb_articles SET source_run_id=$1 WHERE id=$2")
+            .bind(run_id)
+            .bind(article_id)
+            .execute(&self.db.pool)
+            .await?;
+        self.queue(run_id, 9).await?;
+        Ok(run_id)
+    }
+
+    /// Write the article, then store it.
+    ///
+    /// Read-only over the project itself — no worktree, no branch. Nothing is
+    /// being changed, so there is nothing to isolate or review, and creating a
+    /// worktree for a run that only reads would leave litter behind.
+    async fn execute_kb_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT r.engine, r.kb_brief, r.kb_article_id, p.path AS project_path,
+                    a.title, a.content_html, a.current_seq
+             FROM runs r
+             JOIN projects p ON p.id = r.kb_project_id
+             LEFT JOIN kb_articles a ON a.id = r.kb_article_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        self.set_status(run_id, RunStatus::Starting).await?;
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+
+        let brief: String = row.get::<Option<String>, _>("kb_brief").unwrap_or_default();
+        let existing: String = row.get::<Option<String>, _>("content_html").unwrap_or_default();
+        // The revision the agent is working from, captured before it starts.
+        // If a person edits the page while it runs, the review UI compares
+        // against *this* and can say the page moved on underneath it — rather
+        // than silently presenting a stale rewrite as an up-to-date one.
+        let base_seq: i32 = row.get::<Option<i32>, _>("current_seq").unwrap_or(0);
+        let prompt = if existing.trim().is_empty() {
+            crate::kb::write::prompt(&brief)
+        } else {
+            crate::kb::write::rewrite_prompt(
+                &brief,
+                &row.get::<Option<String>, _>("title").unwrap_or_default(),
+                &existing,
+            )
+        };
+
+        let tier = ModelTier::Medium;
+        let model_id = self.model_for(&engine_id, tier);
+        sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
+            .bind(&model_id)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+
+        let spec = RunSpec {
+            cwd: PathBuf::from(row.get::<String, _>("project_path")),
+            prompt,
+            model_tier: tier,
+            model_id,
+            effort: None,
+            resume_session_id: None,
+            permission_mode: PermissionMode::AutoEdit,
+            allowed_tools: crate::kb::write::TOOLS.iter().map(|t| t.to_string()).collect(),
+            denied_tools: crate::kb::write::DENIED.iter().map(|t| t.to_string()).collect(),
+            append_system_prompt: None,
+            mcp: McpWiring::default(),
+            run_key: run_id.to_string(),
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::from([("AICHIP_RUN_ID".to_string(), run_id.to_string())]),
+        };
+
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let outcome = self.stream_run(run_id, None, &seq, engine, spec, true).await?;
+        if outcome.status != RunStatus::Completed {
+            return Ok(());
+        }
+
+        let article_id: Uuid = row.get("kb_article_id");
+        let prepared =
+            crate::kb::render::prepare(&crate::kb::write::extract_html(&outcome.output));
+        if prepared.html.trim().is_empty() {
+            // A brand-new page with nothing in it is litter, not a draft:
+            // remove the placeholder rather than leaving an empty row in the
+            // tree that nobody can tell apart from a page someone meant to
+            // start. An existing page is left exactly as it was.
+            //
+            // `base_seq == 0` alone is not enough to call a page empty — a page
+            // whose body exists but whose revision log doesn't yet (a backfill
+            // that failed) also reads as 0, and deleting that would destroy
+            // somebody's writing. The body is the authority.
+            if base_seq == 0 && existing.trim().is_empty() {
+                sqlx::query("DELETE FROM kb_articles WHERE id=$1")
+                    .bind(article_id)
+                    .execute(&self.db.pool)
+                    .await?;
+            }
+            self.finish(
+                run_id,
+                RunStatus::Failed,
+                Some("the agent produced no article".into()),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let title = crate::kb::write::title_from(&prepared.html, &brief);
+        let rev = crate::kb::revisions::NewRevision {
+            title: &title,
+            html: &prepared.html,
+            text: &prepared.text,
+            author: crate::kb::revisions::Author::Agent,
+            kind: "agent",
+            base_seq: Some(base_seq),
+            run_id: Some(run_id),
+            note: "",
+        };
+
+        if base_seq == 0 && existing.trim().is_empty() {
+            // Nothing to overwrite and nobody to ask: a page that was created
+            // by asking an agent to write it *is* the agent's page, and making
+            // someone approve a proposal against a blank page is ceremony
+            // with no decision in it. It stays a draft either way.
+            //
+            // Guarded on the body as well as the pointer, so a page that has
+            // content but no revision row is treated as somebody's work rather
+            // than as an empty placeholder to write over.
+            crate::kb::revisions::save_edit(&self.db, article_id, rev).await?;
+        } else {
+            // Everything else is a proposal. This is the rule the whole
+            // revision log exists for: an agent must never replace a body a
+            // person may have written, with no copy and no diff.
+            crate::kb::revisions::propose(&self.db, article_id, rev).await?;
+        }
+        Ok(())
+    }
+
     async fn execute_chat_run(self: &Arc<Self>, run_id: Uuid, chat_id: Uuid) -> anyhow::Result<()> {
         let row = sqlx::query(
             // Lateral join rather than a scalar subquery: the turn needs the
@@ -1103,15 +1567,16 @@ impl Orchestrator {
         };
         let (user_message, extra_read_dirs) = attachments::augment_prompt(&user_message, &atts);
 
-        let mcp_config_path = match (&self.mcp_base_url, engine_id.as_str()) {
-            (Some(base), "claude-code") => {
-                Some(write_mcp_config(base, &format!("mcp/chat/{chat_id}"), run_id).await?)
-            }
-            _ => None,
+        let mcp = McpWiring {
+            aichip_url: self
+                .mcp_base_url
+                .as_ref()
+                .map(|b| format!("{b}/mcp/chat/{chat_id}")),
+            servers: vec![],
         };
 
         let tier = ModelTier::Medium;
-        let model_id = self.model_for(tier);
+        let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -1128,7 +1593,9 @@ impl Orchestrator {
             permission_mode: PermissionMode::Reviewed,
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
             append_system_prompt: Some(CHAT_SYSTEM_PROMPT.to_string()),
-            mcp_config_path,
+            mcp,
+            denied_tools: vec![],
+            run_key: run_id.to_string(),
             extra_read_dirs,
             permission_prompt_tool: false,
             extra_env: HashMap::from([("AICHIP_CHAT_ID".to_string(), chat_id.to_string())]),
@@ -1259,6 +1726,13 @@ impl Orchestrator {
         if let Some(block) = memory::render(&memories) {
             prompt.push_str(&block);
         }
+        // Articles referenced by the card or by this comment specifically —
+        // "@agent, see #runbook" has to reach the reply, or the reference is
+        // decoration.
+        let articles = crate::kb::for_run(&self.db, Some(task_id), Some(comment_id))
+            .await
+            .unwrap_or_default();
+        prompt = crate::kb::augment_prompt(&prompt, &articles);
         prompt.push_str(&format!(
             "\nThe comment mentioning you:\n{}\n\n\
              Reply as a comment on this card: concise, concrete, grounded in this \
@@ -1274,7 +1748,7 @@ impl Orchestrator {
             row.get::<String, _>("agent_tier"),
         ))
         .unwrap_or_default();
-        let model_id = self.model_for(tier);
+        let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -1305,7 +1779,9 @@ impl Orchestrator {
             // Read-only, and no MCP: a comment reply answers, it doesn't act.
             allowed_tools: vec!["Read".into(), "Grep".into(), "Glob".into()],
             append_system_prompt: Some(persona),
-            mcp_config_path: None,
+            mcp: McpWiring::default(),
+            denied_tools: vec![],
+            run_key: run_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
             extra_env: HashMap::from([("AICHIP_RUN_ID".to_string(), run_id.to_string())]),
@@ -1360,7 +1836,7 @@ impl Orchestrator {
         workflow_id: Uuid,
     ) -> anyhow::Result<()> {
         let row = sqlx::query(
-            "SELECT w.source_yaml, w.name, r.engine, r.task_id, p.id AS project_id,
+            "SELECT w.source_yaml, w.name, r.engine, r.trigger, r.task_id, p.id AS project_id,
                     p.workspace_id, p.path AS project_path, p.default_branch,
                     p.full_auto_opt_in
              FROM runs r JOIN workflows w ON w.id = r.workflow_id
@@ -1377,8 +1853,11 @@ impl Orchestrator {
         // The YAML's `defaults.engine` wins: a scheduled run is queued long
         // before we know which engine the workflow asked for.
         let engine_id = workflow.defaults.engine.clone();
-        let engine = self
-            .engine(&engine_id)
+        let trigger: String = row.get("trigger");
+        // Resolved here purely to fail fast: a workflow naming an engine this
+        // machine doesn't have should die before it creates a worktree, not
+        // three steps in. Each step resolves its own below.
+        self.engine(&engine_id)
             .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
         sqlx::query("UPDATE runs SET engine=$1 WHERE id=$2")
             .bind(&engine_id)
@@ -1405,7 +1884,10 @@ impl Orchestrator {
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
         let mut outputs = StepOutputs::new();
-        let mut sessions: HashMap<String, String> = HashMap::new();
+        // Session ids, tagged with the engine that minted them: a `continue`
+        // step whose dependency ran elsewhere must start fresh rather than
+        // hand an `ses_…` to a CLI that has never seen it.
+        let mut sessions: HashMap<String, (String, String)> = HashMap::new();
         let mut failure: Option<String> = None;
 
         'layers: for layer in workflow.layers()? {
@@ -1421,23 +1903,104 @@ impl Orchestrator {
                     .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
 
                 let agent = self.load_agent(workspace_id, step.agent.as_deref()).await?;
-                let model_id = workflow.resolve_model(step, agent.as_ref().map(|a| a.tier), &self.tier_mapping());
+                // A step may name its own engine, and so may the agent bound
+                // to it; the workflow's default is what they fall back to.
+                let step_engine_id = step
+                    .engine
+                    .clone()
+                    .or_else(|| agent.as_ref().and_then(|a| a.engine.clone()))
+                    .unwrap_or_else(|| engine_id.clone());
+                let step_engine = self
+                    .engine(&step_engine_id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown engine {step_engine_id}"))?;
+                let model_id = workflow.resolve_model(
+                    step,
+                    agent.as_ref().map(|a| a.tier),
+                    &self.tier_mapping().for_engine(&step_engine_id),
+                );
                 let prompt = aichip_shared::interpolate(&step.prompt, &outputs);
 
-                let permission_mode = self.workflow_permission_mode(
+                let resolved = self.workflow_permission_mode(
                     &workflow,
                     agent.as_ref(),
                     full_auto_opt_in,
                     &shared.path,
                 );
+                let permission_mode = resolved.mode;
+
+                // Nobody is at the keyboard at 3am. A step that stops to ask
+                // doesn't just go unanswered — it holds its concurrency permit
+                // for the whole of `execute`, so two parked scheduled runs
+                // deadlock a default `max_concurrent` of 2 until the server is
+                // restarted. Refusing is louder and recoverable; parking is a
+                // silent deadlock.
+                //
+                // Manual runs still park: someone chose to start them and can
+                // answer.
+                if trigger == "schedule" && permission_mode == PermissionMode::Reviewed {
+                    anyhow::bail!(
+                        "{}",
+                        if resolved.downgraded {
+                            format!(
+                                "step {step_id} asks for Don't-ask, which this project hasn't \
+opted into, so it falls back to asking permission — and a scheduled run has nobody to ask. \
+Turn on \"Don't ask\" for the project, or give the step Auto-edit."
+                            )
+                        } else {
+                            format!(
+                                "step {step_id} runs in Reviewed mode, which needs someone to \
+approve each tool call, and a scheduled run has nobody to ask. Give it Auto-edit, or run \
+this workflow manually."
+                            )
+                        }
+                    );
+                }
 
                 // Resume the session of the step we depend on, so a
                 // "continue" stage keeps the prior stage's context.
                 let resume = if step.session == SessionMode::Continue {
-                    step.needs.first().and_then(|n| sessions.get(n).cloned())
+                    step.needs
+                        .first()
+                        .and_then(|n| sessions.get(n))
+                        .filter(|(engine, _)| engine == &step_engine_id)
+                        .map(|(_, sid)| sid.clone())
                 } else {
                     None
                 };
+
+                // Refuse a step this engine can't honour, before it runs.
+                if let Err(reason) =
+                    aichip_engines::vet(step_engine.as_ref(), permission_mode, resume.is_some())
+                {
+                    anyhow::bail!("step {step_id}: {reason}");
+                }
+
+                // Steps used to get no MCP wiring at all while still asking
+                // for `permission_prompt_tool` — so a step that did stop to
+                // ask pointed the CLI at a server that wasn't there, and the
+                // agent's own connections were silently unavailable.
+                let user_servers = crate::mcp_servers::for_agent(&self.db, agent.as_ref().map(|a| a.id))
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(%run_id, %step_id, error=%e, "could not load step MCP servers");
+                        vec![]
+                    });
+                let mcp = McpWiring {
+                    aichip_url: self
+                        .mcp_base_url
+                        .as_ref()
+                        .map(|b| format!("{b}/mcp/run/{run_id}")),
+                    servers: user_servers.iter().map(|s| s.to_spec()).collect(),
+                };
+                // Same rule as task runs: an empty list means "no flag",
+                // which allows everything, so only extend one that exists.
+                let mut step_tools = agent
+                    .as_ref()
+                    .map(|a| a.allowed_tools.clone())
+                    .unwrap_or_default();
+                if !step_tools.is_empty() {
+                    step_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+                }
 
                 let attempts = step.parallelism();
                 let mut plans = Vec::with_capacity(attempts);
@@ -1475,7 +2038,7 @@ impl Orchestrator {
                 let results = futures::stream::iter(plans.into_iter().map(
                     |(db_step_id, step_key, cwd)| {
                         let this = self.clone();
-                        let engine = engine.clone();
+                        let engine = step_engine.clone();
                         let seq = seq.clone();
                         let spec = RunSpec {
                             cwd,
@@ -1485,14 +2048,15 @@ impl Orchestrator {
                             effort: agent.as_ref().and_then(|a| a.effort),
                             resume_session_id: resume.clone(),
                             permission_mode,
-                            allowed_tools: agent
-                                .as_ref()
-                                .map(|a| a.allowed_tools.clone())
-                                .unwrap_or_default(),
-                            append_system_prompt: agent
+                            allowed_tools: step_tools.clone(),
+                                            append_system_prompt: agent
                                 .as_ref()
                                 .and_then(|a| (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())),
-                            mcp_config_path: None,
+                            denied_tools: vec![],
+                            mcp: mcp.clone(),
+                            // Per step, not per run: concurrent steps would
+                            // otherwise write the same scratch config path.
+                            run_key: db_step_id.to_string(),
                             extra_read_dirs: vec![],
                             permission_prompt_tool: true,
                             extra_env: HashMap::from([
@@ -1517,7 +2081,7 @@ impl Orchestrator {
                 let mut step_outputs = Vec::with_capacity(results.len());
                 for (db_step_id, step_key, outcome) in results {
                     let outcome = outcome?;
-                    self.finish_step_row(db_step_id, &outcome).await?;
+                    self.finish_step_row(db_step_id, &engine_id, &outcome).await?;
                     if outcome.status != RunStatus::Completed {
                         failure = Some(format!(
                             "step '{step_key}' {}: {}",
@@ -1527,7 +2091,9 @@ impl Orchestrator {
                         break 'layers;
                     }
                     if let Some(sid) = outcome.session_id.clone() {
-                        sessions.entry(step_id.clone()).or_insert(sid);
+                        sessions
+                            .entry(step_id.clone())
+                            .or_insert((step_engine_id.clone(), sid));
                     }
                     step_outputs.push(outcome.output);
                 }
@@ -1560,6 +2126,125 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Store the plan and stop, releasing the queue slot.
+    ///
+    /// Returning is the point: a run that sat here waiting would hold its
+    /// concurrency permit for however long a person takes to read, and with a
+    /// small default that is most of the queue. Approval re-queues it, and the
+    /// phase decision then sends it to work.
+    async fn park_for_approval(
+        self: &Arc<Self>,
+        run_id: Uuid,
+        outcome: &StreamOutcome,
+    ) -> anyhow::Result<()> {
+        // A plan that never arrived is a failed run, not an empty approval
+        // prompt — there is nothing for anyone to say yes to.
+        if outcome.status != RunStatus::Completed || outcome.output.trim().is_empty() {
+            let reason = outcome.reason.clone().unwrap_or_else(|| {
+                "the planning pass produced no plan, so there is nothing to approve".to_string()
+            });
+            self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+            return Ok(());
+        }
+
+        // Replace rather than accumulate: a revised plan supersedes the one
+        // that was sent back, and two 'plan' rows would make `stored_plan`
+        // return whichever the database felt like.
+        sqlx::query("DELETE FROM steps WHERE run_id = $1 AND step_key = 'plan'")
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, session_id, session_engine,
+                                output_text, started_at, finished_at)
+             VALUES ($1, 'plan', 'completed', $2, $3, $4, now(), now())",
+        )
+        .bind(run_id)
+        .bind(&outcome.session_id)
+        .bind(sqlx::query_scalar::<_, String>("SELECT engine FROM runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(&self.db.pool)
+            .await?)
+        .bind(&outcome.output)
+        .execute(&self.db.pool)
+        .await?;
+
+        // The card stays in "running": it is not in review — there is no diff
+        // — and certainly not done. The activity view already sorts
+        // awaiting_approval to the top and lists it as a blocker.
+        self.set_status(run_id, RunStatus::AwaitingApproval).await?;
+        Ok(())
+    }
+
+    /// The plan this run has on file, if any.
+    ///
+    /// A `steps` row rather than a column on `runs`: it is a thing the agent
+    /// produced, with a session behind it, and organizations already store
+    /// their plans exactly this way.
+    async fn stored_plan(&self, run_id: Uuid) -> anyhow::Result<Option<String>> {
+        Ok(sqlx::query_scalar::<_, Option<String>>(
+            "SELECT output_text FROM steps
+             WHERE run_id = $1 AND step_key = 'plan' AND status = 'completed'",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await?
+        .flatten()
+        .filter(|t| !t.trim().is_empty()))
+    }
+
+    /// Outstanding feedback on a rejected plan, consumed as it is read.
+    ///
+    /// Cleared here rather than by the route, so a revise request survives a
+    /// crash between asking and dispatching but can never be replayed into a
+    /// second pass it wasn't meant for.
+    async fn plan_revision_note(&self, run_id: Uuid) -> anyhow::Result<Option<String>> {
+        // A CTE, because `RETURNING` hands back the *new* row — reading the
+        // column it was just cleared to would always be null.
+        Ok(sqlx::query_scalar::<_, Option<String>>(
+            "WITH prev AS (SELECT plan_note FROM runs WHERE id = $1)
+             UPDATE runs SET plan_note = NULL WHERE id = $1
+             RETURNING (SELECT plan_note FROM prev)",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await?
+        .flatten()
+        .filter(|n| !n.trim().is_empty()))
+    }
+
+    /// Did a person rewrite the plan, rather than approve what was proposed?
+    async fn plan_was_edited(&self, run_id: Uuid) -> anyhow::Result<bool> {
+        Ok(
+            sqlx::query_scalar::<_, bool>("SELECT plan_edited FROM runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+                .unwrap_or(false),
+        )
+    }
+
+    /// The session the planning pass ran in, so the work pass can pick up the
+    /// context it built while reading the code rather than re-reading it all.
+    async fn plan_session(&self, run_id: Uuid) -> anyhow::Result<Option<(String, String)>> {
+        let row = sqlx::query(
+            "SELECT session_id, session_engine FROM steps
+             WHERE run_id = $1 AND step_key = 'plan'",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        Ok(row.and_then(|r| {
+            match (
+                r.get::<Option<String>, _>("session_id"),
+                r.get::<Option<String>, _>("session_engine"),
+            ) {
+                (Some(sid), Some(engine)) => Some((sid, engine)),
+                _ => None,
+            }
+        }))
+    }
+
     async fn create_step_row(&self, run_id: Uuid, step_key: &str) -> anyhow::Result<Uuid> {
         let row = sqlx::query(
             "INSERT INTO steps (run_id, step_key, status, started_at)
@@ -1575,16 +2260,18 @@ impl Orchestrator {
     async fn finish_step_row(
         &self,
         step_id: Uuid,
+        engine_id: &str,
         outcome: &StreamOutcome,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "UPDATE steps SET status=$1, session_id=$2, output_text=$3, finished_at=now()
-             WHERE id=$4",
+            "UPDATE steps SET status=$1, session_id=$2, session_engine=$5, output_text=$3,
+             finished_at=now() WHERE id=$4",
         )
         .bind(outcome.status.as_str())
         .bind(&outcome.session_id)
         .bind(&outcome.output)
         .bind(step_id)
+        .bind(engine_id)
         .execute(&self.db.pool)
         .await?;
         Ok(())
@@ -1597,7 +2284,8 @@ impl Orchestrator {
     ) -> anyhow::Result<Option<BoundAgent>> {
         let Some(name) = name else { return Ok(None) };
         let row = sqlx::query(
-            "SELECT system_prompt, model_tier, effort, allowed_tools, permission_preset
+            "SELECT id, system_prompt, model_tier, effort, allowed_tools, permission_preset,
+                    engine
              FROM agents WHERE workspace_id=$1 AND name=$2",
         )
         .bind(workspace_id)
@@ -1605,6 +2293,7 @@ impl Orchestrator {
         .fetch_optional(&self.db.pool)
         .await?;
         Ok(row.map(|r| BoundAgent {
+            id: r.get("id"),
             system_prompt: r.get("system_prompt"),
             tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
                 .unwrap_or_default(),
@@ -1613,6 +2302,7 @@ impl Orchestrator {
                 .and_then(|e| ReasoningEffort::parse(&e)),
             allowed_tools: r.get("allowed_tools"),
             permission_preset: r.get("permission_preset"),
+            engine: r.get("engine"),
         }))
     }
 
@@ -1625,18 +2315,17 @@ impl Orchestrator {
         agent: Option<&BoundAgent>,
         full_auto_opt_in: bool,
         cwd: &std::path::Path,
-    ) -> PermissionMode {
+    ) -> StepPermission {
         let spec = agent
-            .map(|a| a.permission_preset.clone())
+            .and_then(|a| a.permission_preset.clone())
             .or_else(|| workflow.defaults.permission_mode.clone());
-        let mode = spec
+        let asked = spec
             .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok())
             .unwrap_or(PermissionMode::AutoEdit);
-        if mode == PermissionMode::FullAuto && !(full_auto_opt_in && self.worktrees.manages(cwd)) {
-            PermissionMode::Reviewed
-        } else {
-            mode
-        }
+        resolve_step_permission(
+            asked,
+            full_auto_opt_in && self.worktrees.manages(cwd),
+        )
     }
 
     /// Shared streaming loop: spawn the engine, persist+publish every event,
@@ -1695,8 +2384,10 @@ impl Orchestrator {
                         AichipEvent::RunStarted { session_id: sid, .. } => {
                             if let Some(sid) = sid {
                                 session_id = Some(sid.clone());
-                                sqlx::query("UPDATE runs SET session_id=$1 WHERE id=$2")
-                                    .bind(sid).bind(run_id)
+                                sqlx::query(
+                                    "UPDATE runs SET session_id=$1, session_engine=$2 WHERE id=$3",
+                                )
+                                    .bind(sid).bind(engine.id()).bind(run_id)
                                     .execute(&self.db.pool).await?;
                             }
                         }
@@ -1705,7 +2396,7 @@ impl Orchestrator {
                             result_text = rt.clone();
                             // Costs accumulate: a workflow run has many steps.
                             sqlx::query(
-                                "UPDATE runs SET session_id=$1,
+                                "UPDATE runs SET session_id=$1, session_engine=$6,
                                  cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0),
                                  input_tokens = input_tokens + $3,
                                  output_tokens = output_tokens + $4 WHERE id=$5")
@@ -1714,6 +2405,7 @@ impl Orchestrator {
                                 .bind(usage.input_tokens as i64)
                                 .bind(usage.output_tokens as i64)
                                 .bind(run_id)
+                                .bind(engine.id())
                                 .execute(&self.db.pool).await?;
                             outcome = Some((RunStatus::Completed, None));
                         }
@@ -1889,38 +2581,6 @@ pub(crate) async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
 
 /// Write a per-run MCP config pointing the engine at one of aichip's MCP
 /// endpoints. Lives under ~/.aichip/mcp/, keyed by run id.
-pub(crate) async fn write_mcp_config(base_url: &str, url_path: &str, run_id: Uuid) -> anyhow::Result<PathBuf> {
-    write_mcp_config_with(base_url, url_path, run_id, &[]).await
-}
-
-/// As above, plus any servers the run's agent opted into.
-///
-/// One file per run rather than a shared one: the set of servers depends on
-/// which agent is running, so two concurrent runs legitimately need
-/// different configs.
-pub(crate) async fn write_mcp_config_with(
-    base_url: &str,
-    url_path: &str,
-    run_id: Uuid,
-    extra: &[crate::mcp_servers::McpServer],
-) -> anyhow::Result<PathBuf> {
-    let dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".aichip")
-        .join("mcp");
-    tokio::fs::create_dir_all(&dir).await?;
-    let path = dir.join(format!("{run_id}.json"));
-    let mut config = serde_json::json!({
-        "mcpServers": {
-            "aichip": { "type": "http", "url": format!("{base_url}/{url_path}") }
-        }
-    });
-    crate::mcp_servers::merge_into(&mut config, extra);
-    tokio::fs::write(&path, serde_json::to_vec_pretty(&config)?).await?;
-    Ok(path)
-}
-
 /// Turn a review note into a brief for the agent.
 ///
 /// Pure so the shape can be tested without a database. Three things have to
@@ -1988,6 +2648,49 @@ pub(crate) fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gate exists so a workflow can't grant itself more freedom than the
+    /// project allows. Down, never up.
+    #[test]
+    fn full_auto_is_cut_to_reviewed_when_the_project_has_not_opted_in() {
+        let r = resolve_step_permission(PermissionMode::FullAuto, false);
+        assert_eq!(r.mode, PermissionMode::Reviewed);
+        assert!(r.downgraded, "the caller has to be able to tell this apart");
+
+        let r = resolve_step_permission(PermissionMode::FullAuto, true);
+        assert_eq!(r.mode, PermissionMode::FullAuto);
+        assert!(!r.downgraded);
+    }
+
+    /// The inverse would be a privilege escalation performed on the user's
+    /// behalf, which is exactly what the compliance rules forbid.
+    #[test]
+    fn nothing_is_ever_raised_by_the_gate() {
+        for asked in [
+            PermissionMode::Reviewed,
+            PermissionMode::AutoEdit,
+            PermissionMode::FullAuto,
+        ] {
+            for gate in [true, false] {
+                let got = resolve_step_permission(asked, gate).mode;
+                assert!(
+                    got == asked || (asked == PermissionMode::FullAuto
+                        && got == PermissionMode::Reviewed),
+                    "{asked:?} with gate={gate} became {got:?}"
+                );
+            }
+        }
+    }
+
+    /// A step that merely *asks* for Reviewed is a different story from one
+    /// that was cut down to it — the scheduled-run refusal says so, and a
+    /// person can only act on the right one.
+    #[test]
+    fn a_step_that_asked_for_reviewed_is_not_reported_as_downgraded() {
+        let r = resolve_step_permission(PermissionMode::Reviewed, false);
+        assert_eq!(r.mode, PermissionMode::Reviewed);
+        assert!(!r.downgraded);
+    }
 
     #[test]
     fn a_review_note_becomes_a_scoped_brief() {

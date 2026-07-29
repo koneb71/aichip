@@ -36,14 +36,21 @@ const PLACEHOLDER: Record<Tier, string> = {
 /**
  * A tier's model as a short label, e.g. `medium` → "Opus 5".
  *
- * Falls back to the model id when the user picked something the catalog
- * doesn't name — better a raw id than a blank chip.
+ * Takes the engine because a tier means a different model on each one —
+ * OpenCode never runs `claude-opus-5`. Most callers show a label beside
+ * something that hasn't chosen an engine yet, so it defaults to Claude Code
+ * rather than forcing every site to invent an answer.
+ *
+ * Falls back to the model id when the catalog doesn't name it — the normal
+ * case for OpenCode, whose ids (`anthropic/claude-sonnet-4-5`) are already
+ * the most informative thing we could show.
  */
-export function useTierModel(): (tier: Tier) => string {
+export function useTierModel(): (tier: Tier, engine?: string) => string {
   const settings = useContext(Ctx);
-  return (tier: Tier) => {
-    if (!settings) return PLACEHOLDER[tier];
-    const id = settings.tiers[tier];
-    return settings.choices.find((c) => c.id === id)?.label ?? id;
+  return (tier: Tier, engine = "claude-code") => {
+    const e = settings?.engines.find((x) => x.id === engine) ?? settings?.engines[0];
+    if (!e) return PLACEHOLDER[tier];
+    const id = e.tiers[tier];
+    return e.choices.find((c) => c.id === id)?.label ?? id;
   };
 }

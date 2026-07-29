@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, ChatMessage, ChatSummary } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
+import { EnginePicker, useEngines } from "../../lib/engines";
 import { useAttachments } from "../../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "../AttachmentBar";
 import { useMentionPicker } from "../MentionPicker";
@@ -14,6 +15,10 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const engines = useEngines();
+  // null = the machine default. Switching mid-chat starts a fresh session,
+  // because a session id only means something to the CLI that minted it.
+  const [engine, setEngine] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
@@ -138,7 +143,10 @@ export function ChatPanel({ projectId }: { projectId: string }) {
       },
     ]);
     try {
-      const r = await api.sendChat(chatId, content, { attachmentIds });
+      const r = await api.sendChat(chatId, content, {
+        attachmentIds,
+        engine: engine ?? undefined,
+      });
       setActiveRunId(r.runId);
       // The first message names the chat server-side — pick that title up.
       refreshChats();
@@ -335,6 +343,12 @@ export function ChatPanel({ projectId }: { projectId: string }) {
               ↑
             </motion.button>
           </div>
+          {!!engines && engines.length > 1 && (
+            <div className="mt-1.5 flex items-center justify-end gap-2">
+              <span className="text-[11px] text-ink-dim">Run on</span>
+              <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
+            </div>
+          )}
         </div>
       </div>
     </div>
