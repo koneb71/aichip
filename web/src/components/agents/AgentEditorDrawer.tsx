@@ -24,7 +24,8 @@ export function AgentEditorDrawer({
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt ?? "");
   const [tier, setTier] = useState<Tier>(agent?.modelTier ?? "medium");
   const [color, setColor] = useState(agent?.color ?? COLORS[0]);
-  const [preset, setPreset] = useState(agent?.permissionPreset ?? "reviewed");
+  // null = inherit the workspace default, which is what a new agent should do.
+  const [preset, setPreset] = useState<string | null>(agent?.permissionPreset ?? null);
   const [effort, setEffort] = useState<Effort | "">(agent?.effort ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -178,15 +179,17 @@ export function AgentEditorDrawer({
           </div>
         </Field>
         <Field label="Permissions">
-          <div className="flex gap-2">
-            {[
-              ["reviewed", "Reviewed"],
-              ["auto_edit", "Auto-edit"],
-            ].map(([value, label]) => (
+          <div className="flex flex-wrap gap-2">
+            {([
+              [null, "Workspace default"],
+              ["reviewed", "Ask first"],
+              ["auto_edit", "Edit freely"],
+              ["full_auto", "Don't ask"],
+            ] as [string | null, string][]).map(([value, label]) => (
               <button
-                key={value}
+                key={label}
                 onClick={() => setPreset(value)}
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
+                className={`rounded-lg border px-3 py-2 text-sm ${
                   preset === value
                     ? "border-accent text-accent"
                     : "border-line text-ink-dim"
@@ -195,6 +198,11 @@ export function AgentEditorDrawer({
                 {label}
               </button>
             ))}
+          </div>
+          <div className="mt-1 text-[11px] text-ink-dim">
+            An agent's own setting overrides the workspace default for any card it
+            runs. Leave it on "Workspace default" unless this agent specifically
+            needs more or less freedom than the rest.
           </div>
         </Field>
         {servers.length > 0 && (

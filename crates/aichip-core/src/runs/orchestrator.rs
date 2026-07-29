@@ -685,6 +685,28 @@ impl Orchestrator {
         self.put_setting("queue_paused", serde_json::json!(paused)).await
     }
 
+    /// How much freedom a new task gets when the caller doesn't say.
+    ///
+    /// Stored rather than hard-coded because "ask me before every command"
+    /// and "just get on with it" are both legitimate, and which one you want
+    /// is a property of how much you trust the isolation — not of the code.
+    pub async fn default_permission_mode(&self) -> PermissionMode {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM settings WHERE key = 'default_permission_mode'",
+        )
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_value::<PermissionMode>(v).ok())
+        .unwrap_or_default()
+    }
+
+    pub async fn set_default_permission_mode(&self, mode: PermissionMode) -> anyhow::Result<()> {
+        self.put_setting("default_permission_mode", serde_json::to_value(mode)?)
+            .await
+    }
+
     pub async fn daily_budget(&self) -> Option<f64> {
         sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT value FROM settings WHERE key = 'daily_budget_usd'",
@@ -864,9 +886,17 @@ impl Orchestrator {
         };
         let tier: ModelTier =
             serde_json::from_value(serde_json::Value::String(tier_str)).unwrap_or_default();
-        let mode_str: String = agent_preset.unwrap_or_else(|| run.get("permission_mode"));
-        let permission_mode: PermissionMode =
-            serde_json::from_value(serde_json::Value::String(mode_str)).unwrap_or_default();
+        // Most specific wins: the agent's own preset, else the card's, else
+        // the workspace default. Both of the first two are nullable and mean
+        // "inherit" when unset — resolved here rather than frozen at create
+        // time, so changing the default reaches work already in the backlog.
+        let permission_mode = match agent_preset
+            .or_else(|| run.get::<Option<String>, _>("permission_mode"))
+            .and_then(|m| serde_json::from_value::<PermissionMode>(serde_json::Value::String(m)).ok())
+        {
+            Some(explicit) => explicit,
+            None => self.default_permission_mode().await,
+        };
 
         // FullAuto is refused outside aichip-managed worktrees and outside
         // opted-in projects — the structural safety gate.

@@ -7,7 +7,7 @@
 
 use super::{internal, ApiError};
 use crate::AppState;
-use aichip_shared::{is_known_model, ModelTier, TierMapping, MODEL_CHOICES};
+use aichip_shared::{is_known_model, ModelTier, PermissionMode, TierMapping, MODEL_CHOICES};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -16,7 +16,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/settings/models", get(get_models).put(set_models))
+    Router::new()
+        .route("/settings/models", get(get_models).put(set_models))
+        .route("/settings/permissions", get(get_permissions).put(set_permissions))
+        .route("/settings/permissions/apply-to-agents", axum::routing::post(apply_to_agents))
 }
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
@@ -86,4 +89,67 @@ async fn set_models(
     // chosen when a run starts, and the CLI cannot be asked to switch mid
     // conversation.
     Ok(Json(json!({ "saved": true })))
+}
+
+/// How much freedom new work gets by default.
+async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
+    // How many agents pin their own mode. A bound agent's preset overrides
+    // the default, so this number is exactly "how many agents will ignore
+    // the setting above" — worth showing rather than leaving to be discovered
+    // when a run stops to ask anyway.
+    let overriding: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agents WHERE permission_preset IS NOT NULL",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
+
+    Json(json!({
+        "agentsOverriding": overriding,
+        "defaultMode": state.orchestrator.default_permission_mode().await,
+        "modes": [
+            { "id": "reviewed",  "label": "Ask me first",
+              "blurb": "Every file edit and command waits for your approval." },
+            { "id": "auto_edit", "label": "Edit freely, ask before commands",
+              "blurb": "File changes go ahead; shell commands still stop for you." },
+            { "id": "full_auto", "label": "Don't ask",
+              "blurb": "Work straight through. Needs a git project that opted in, because the run is isolated in a worktree you review before merging." },
+        ],
+    }))
+}
+
+#[derive(Deserialize)]
+struct PermissionsBody {
+    default_mode: PermissionMode,
+}
+
+async fn set_permissions(
+    State(state): State<AppState>,
+    Json(body): Json<PermissionsBody>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .set_default_permission_mode(body.default_mode)
+        .await
+        .map_err(internal)?;
+    // Note this is only the *default* for new cards. "Don't ask" still needs
+    // the per-project opt-in, and the orchestrator downgrades it outside an
+    // aichip-managed worktree regardless of what is stored here.
+    Ok(Json(json!({ "defaultMode": body.default_mode })))
+}
+
+/// Clear every agent's own preset so they all follow the workspace default.
+///
+/// Without this, changing the default appears to do nothing: most cards have
+/// an agent, and an agent's preset wins. Rather than silently rewriting
+/// agents when the default changes — which would quietly widen what a
+/// carefully-configured agent may do — this is an explicit action the user
+/// takes once.
+async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let cleared = sqlx::query("UPDATE agents SET permission_preset = NULL WHERE permission_preset IS NOT NULL")
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .rows_affected();
+    Ok(Json(json!({ "cleared": cleared })))
 }

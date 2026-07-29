@@ -70,7 +70,7 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "systemPrompt": r.get::<String, _>("system_prompt"),
         "modelTier": r.get::<String, _>("model_tier"),
         "allowedTools": r.get::<Vec<String>, _>("allowed_tools"),
-        "permissionPreset": r.get::<String, _>("permission_preset"),
+        "permissionPreset": r.get::<Option<String>, _>("permission_preset"),
         "effort": r.get::<Option<String>, _>("effort"),
         "builtin": r.get::<bool, _>("builtin"),
     })
@@ -111,8 +111,11 @@ struct AgentBody {
     model_tier: ModelTier,
     #[serde(default)]
     allowed_tools: Vec<String>,
-    #[serde(default = "default_preset")]
-    permission_preset: String,
+    /// `None` means "inherit the workspace default" — the right starting
+    /// point, because an agent describes what someone is good at, not how
+    /// much you trust the machine today.
+    #[serde(default)]
+    permission_preset: Option<String>,
     /// None leaves the CLI's own default alone.
     #[serde(default)]
     effort: Option<String>,
@@ -166,7 +169,9 @@ struct AgentPatch {
     system_prompt: Option<String>,
     model_tier: Option<ModelTier>,
     allowed_tools: Option<Vec<String>>,
-    permission_preset: Option<String>,
+    /// Present-but-null clears it back to inheriting the workspace default.
+    #[serde(default, deserialize_with = "double_option")]
+    permission_preset: Option<Option<String>>,
     /// Present-but-null clears it back to the CLI default.
     #[serde(default, deserialize_with = "double_option")]
     effort: Option<Option<String>>,
@@ -194,7 +199,7 @@ async fn update(
             color = COALESCE($3, color), description = COALESCE($4, description),
             system_prompt = COALESCE($5, system_prompt), model_tier = COALESCE($6, model_tier),
             allowed_tools = COALESCE($7, allowed_tools),
-            permission_preset = COALESCE($8, permission_preset),
+            permission_preset = CASE WHEN $12 THEN $8 ELSE permission_preset END,
             effort = CASE WHEN $10 THEN $9 ELSE effort END
          WHERE id = $11 RETURNING *",
     )
@@ -205,10 +210,11 @@ async fn update(
     .bind(body.system_prompt)
     .bind(tier)
     .bind(body.allowed_tools)
-    .bind(body.permission_preset)
+    .bind(body.permission_preset.clone().flatten())
     .bind(body.effort.clone().flatten().filter(|e| !e.is_empty()))
     .bind(body.effort.is_some())
     .bind(id)
+    .bind(body.permission_preset.is_some())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
