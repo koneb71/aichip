@@ -4,9 +4,11 @@ import { Agent, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { AgentEditorDrawer } from "../components/agents/AgentEditorDrawer";
 import { GenerateWizard } from "../components/agents/GenerateWizard";
-import { tierModel, tierColor, tierSoft } from "../lib/api";
+import { tierColor, tierSoft } from "../lib/api";
+import { useTierModel } from "../lib/models";
 
 export default function AgentsPage() {
+  const tierModel = useTierModel();
   const { active } = useWorkspace();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
@@ -68,7 +70,7 @@ export default function AgentsPage() {
                   className="rounded-full px-2 py-0.5 text-[11px]"
                   style={{ background: tierSoft[a.modelTier], color: tierColor[a.modelTier] }}
                 >
-                  {tierModel[a.modelTier]}
+                  {tierModel(a.modelTier)}
                 </span>
               </div>
             </div>

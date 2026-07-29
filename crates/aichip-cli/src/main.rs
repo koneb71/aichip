@@ -113,6 +113,10 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     orchestrator.register_engine(Arc::new(MockEngine::demo()) as Arc<dyn Engine>);
     let orchestrator = Arc::new(orchestrator);
 
+    // Model routing is the user's choice, so it has to be in place before the
+    // first run is claimed rather than applied on the one after.
+    orchestrator.load_tier_mapping().await?;
+
     let orphans = orchestrator.recover_orphans().await?;
     if orphans > 0 {
         tracing::warn!(orphans, "marked orphaned runs from previous session as failed");

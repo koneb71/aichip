@@ -6,6 +6,6 @@ pub mod workflow;
 
 pub use effort::ReasoningEffort;
 pub use events::{AichipEvent, EventEnvelope, Usage};
-pub use model_tier::{ModelTier, TierMapping};
+pub use model_tier::{is_known_model, ModelChoice, ModelTier, TierMapping, MODEL_CHOICES};
 pub use status::{PermissionMode, RunStatus};
 pub use workflow::{interpolate, SessionMode, Step, StepOutputs, Workflow};

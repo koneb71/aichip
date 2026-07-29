@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Task, tierColor, tierModel, tierSoft } from "../lib/api";
+import { Task, tierColor, tierSoft } from "../lib/api";
+import { useTierModel } from "../lib/models";
 
 const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -120,6 +121,7 @@ function TaskCard({
   task: Task;
   onSelect: (t: Task) => void;
 }) {
+  const tierModel = useTierModel();
   const accent = task.agentColor ?? tierColor[task.modelTier];
   const teamRun = !!task.teamName;
   const running = task.runStatus === "running" || task.runStatus === "starting";
@@ -160,7 +162,7 @@ function TaskCard({
             className="rounded-full px-2 py-0.5"
             style={{ background: tierSoft[task.modelTier], color: tierColor[task.modelTier] }}
           >
-            {tierModel[task.modelTier]}
+            {tierModel(task.modelTier)}
           </span>
         )}
         {task.agentName && (

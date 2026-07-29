@@ -78,7 +78,9 @@ pub struct Orchestrator {
     pub db: Db,
     pub bus: EventBus,
     engines: HashMap<&'static str, Arc<dyn Engine>>,
-    pub tiers: TierMapping,
+    /// Tier → model routing, live rather than baked at boot: changing it in
+    /// settings must affect the next run, not require a restart.
+    tiers: Arc<std::sync::RwLock<TierMapping>>,
     pub worktrees: Arc<WorktreeManager>,
     pub(crate) semaphore: Arc<Semaphore>,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
@@ -144,7 +146,7 @@ impl Orchestrator {
             db,
             bus,
             engines: HashMap::new(),
-            tiers: TierMapping::default(),
+            tiers: Arc::new(std::sync::RwLock::new(TierMapping::default())),
             worktrees,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             mcp_base_url,
@@ -565,6 +567,44 @@ impl Orchestrator {
         }
     }
 
+    /// Which model a tier routes to right now.
+    pub fn model_for(&self, tier: ModelTier) -> String {
+        self.tiers.read().unwrap().model_for(tier).to_string()
+    }
+
+    /// A snapshot, for callers that need the whole mapping. Cloned rather
+    /// than lent, so no lock guard is ever held across an await.
+    pub fn tier_mapping(&self) -> TierMapping {
+        self.tiers.read().unwrap().clone()
+    }
+
+    /// Load the user's routing from settings. Called once at boot; anything
+    /// missing or unparseable falls back to the built-in mapping rather than
+    /// leaving runs with no model at all.
+    pub async fn load_tier_mapping(&self) -> anyhow::Result<()> {
+        let stored: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'tier_models'")
+                .fetch_optional(&self.db.pool)
+                .await?;
+        if let Some(mapping) = stored.and_then(|v| serde_json::from_value::<TierMapping>(v).ok()) {
+            *self.tiers.write().unwrap() = mapping;
+        }
+        Ok(())
+    }
+
+    /// Persist and apply a new routing.
+    pub async fn set_tier_mapping(&self, mapping: TierMapping) -> anyhow::Result<()> {
+        for (tier, model) in &mapping.0 {
+            if !aichip_shared::is_known_model(model) {
+                anyhow::bail!("{model} is not a model aichip offers (tier {tier:?})");
+            }
+        }
+        self.put_setting("tier_models", serde_json::to_value(&mapping)?)
+            .await?;
+        *self.tiers.write().unwrap() = mapping;
+        Ok(())
+    }
+
     /// Is the queue paused? Read per tick rather than cached, so the pause
     /// takes effect on the next claim instead of whenever a process happens
     /// to restart.
@@ -868,7 +908,7 @@ impl Orchestrator {
             allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
         }
 
-        let model_id = self.tiers.model_for(tier).to_string();
+        let model_id = self.model_for(tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -1041,7 +1081,7 @@ impl Orchestrator {
         };
 
         let tier = ModelTier::Medium;
-        let model_id = self.tiers.model_for(tier).to_string();
+        let model_id = self.model_for(tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -1204,7 +1244,7 @@ impl Orchestrator {
             row.get::<String, _>("agent_tier"),
         ))
         .unwrap_or_default();
-        let model_id = self.tiers.model_for(tier).to_string();
+        let model_id = self.model_for(tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
@@ -1351,7 +1391,7 @@ impl Orchestrator {
                     .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
 
                 let agent = self.load_agent(workspace_id, step.agent.as_deref()).await?;
-                let model_id = workflow.resolve_model(step, agent.as_ref().map(|a| a.tier), &self.tiers);
+                let model_id = workflow.resolve_model(step, agent.as_ref().map(|a| a.tier), &self.tier_mapping());
                 let prompt = aichip_shared::interpolate(&step.prompt, &outputs);
 
                 let permission_mode = self.workflow_permission_mode(

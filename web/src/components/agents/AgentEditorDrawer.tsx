@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor, tierModel } from "../../lib/api";
+import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../../lib/api";
+import { useTierModel } from "../../lib/models";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -17,6 +18,7 @@ export function AgentEditorDrawer({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const tierModel = useTierModel();
   const [name, setName] = useState(agent?.name ?? "");
   const [description, setDescription] = useState(agent?.description ?? "");
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt ?? "");
@@ -143,7 +145,7 @@ export function AgentEditorDrawer({
                 }}
               >
                 {t}
-                <span className="block text-[11px] opacity-75">{tierModel[t]}</span>
+                <span className="block text-[11px] opacity-75">{tierModel(t)}</span>
               </button>
             ))}
           </div>

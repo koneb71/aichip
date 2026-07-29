@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Project, Team, Tier, tierColor, tierModel, tierSoft } from "../lib/api";
+import { Agent, api, Project, Team, Tier, tierColor, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar } from "./AttachmentBar";
 import { useMentionPicker } from "./MentionPicker";
+import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
+import { useTierModel } from "../lib/models";
 
 const TIERS: Tier[] = ["easy", "medium", "complex"];
 
@@ -17,6 +19,7 @@ export function NewTaskModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const tierModel = useTierModel();
   const { active } = useWorkspace();
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -163,7 +166,7 @@ export function NewTaskModal({
                   }}
                 >
                   {t}
-                  <span className="block text-[10px] opacity-75">{tierModel[t]}</span>
+                  <span className="block text-[10px] opacity-75">{tierModel(t)}</span>
                 </button>
               ))}
             </div>
@@ -172,38 +175,12 @@ export function NewTaskModal({
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
               Assign to
             </div>
-            <select
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
-              className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm"
-            >
-              <option value="">Nobody in particular</option>
-              {agents.length > 0 && (
-                <optgroup label="Agents">
-                  {agents.map((a) => (
-                    <option key={a.id} value={`agent:${a.id}`}>
-                      {a.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {teams.length > 0 && (
-                <optgroup label="Teams">
-                  {teams.map((t) => (
-                    <option key={t.id} value={`team:${t.id}`}>
-                      {t.name} ({t.pattern})
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-            {assignedTeam && (
-              <div className="mt-1 text-[11px] text-ink-dim">
-                {assignedTeam.pattern === "org"
-                  ? "The manager will split this up and delegate it."
-                  : `Runs as a ${assignedTeam.pattern}; the model tier above is ignored.`}
-              </div>
-            )}
+            <AssigneePicker
+              value={parseAssignee(assignee)}
+              agents={agents}
+              teams={teams}
+              onChange={(next) => setAssignee(assigneeValue(next))}
+            />
           </div>
         </div>
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, PendingPermission, Task, tierColor, tierModel } from "../lib/api";
+import { Agent, api, Attachment, PendingPermission, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
@@ -10,6 +10,8 @@ import { Markdown } from "./Markdown";
 import { annotateDiff, hunkText, isCommentable } from "../lib/diff";
 import { PermissionRow } from "./PermissionRow";
 import { BakeoffView } from "./BakeoffView";
+import { AssigneePicker } from "./AssigneePicker";
+import { useTierModel } from "../lib/models";
 
 export function TaskDrawer({
   task,
@@ -25,11 +27,14 @@ export function TaskDrawer({
   onChanged: () => void;
   onOpenTeamRoom?: (runId: string) => void;
 }) {
+  const tierModel = useTierModel();
   const events = useRunStream(task.runId);
   const [diff, setDiff] = useState<string | null>(null);
   // The bake-off panel: same brief, several attempts, compare and keep one.
   const [bakeoff, setBakeoff] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [reassignError, setReassignError] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
@@ -103,7 +108,21 @@ export function TaskDrawer({
       .agents(workspaceId)
       .then((r) => setAgents(r.agents))
       .catch(() => {});
+    api
+      .teams(workspaceId)
+      .then((r) => setTeams(r.teams))
+      .catch(() => {});
   }, [workspaceId]);
+
+  const reassign = async (next: { kind: "agent" | "team"; id: string } | null) => {
+    setReassignError(null);
+    try {
+      await api.reassignTask(task.id, next);
+      onChanged();
+    } catch (e) {
+      setReassignError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
 
   useEffect(() => {
     setAttachments([]);
@@ -210,7 +229,7 @@ export function TaskDrawer({
               className="rounded-full px-2 py-0.5"
               style={{ background: `${accent}22`, color: accent }}
             >
-              {tierModel[task.modelTier]}
+              {tierModel(task.modelTier)}
             </span>
             {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
             {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
@@ -219,6 +238,31 @@ export function TaskDrawer({
         <button onClick={onClose} className="text-ink-dim hover:text-ink">
           ✕
         </button>
+      </div>
+
+      <div className="border-b border-line px-5 py-3">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          Assigned to
+        </div>
+        <AssigneePicker
+          value={
+            task.teamId
+              ? { kind: "team", id: task.teamId }
+              : task.agentId
+                ? { kind: "agent", id: task.agentId }
+                : null
+          }
+          agents={agents}
+          teams={teams}
+          disabled={running}
+          disabledReason="Cancel the run to hand this card to someone else."
+          onChange={reassign}
+        />
+        {reassignError && (
+          <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+            {reassignError}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 border-b border-line px-5 py-3">

@@ -15,6 +15,7 @@ const NAV = [
   { to: "/agents", label: "Agents", icon: "◉", end: false },
   { to: "/teams", label: "Teams", icon: "◫", end: false },
   { to: "/connections", label: "Connections", icon: "⚯", end: false },
+  { to: "/settings", label: "Settings", icon: "⚙", end: false },
 ];
 
 /** `onNavigate` fires on anything that changes the route, so the narrow-screen

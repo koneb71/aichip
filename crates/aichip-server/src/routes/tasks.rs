@@ -380,10 +380,28 @@ async fn resolve_permission(
 // ---------------------------------------------------------------------------
 // Kanban: card movement, the comment thread, attaching files after creation.
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct MoveTask {
     board_column: Option<String>,
     position: Option<f64>,
+    /// Who should do this card. Three distinct requests, which is why this is
+    /// a nested option: the field absent means "leave the assignee alone",
+    /// an explicit `null` means "unassign", and an id means "reassign". A
+    /// plain `Option` collapses the first two, so `{"board_column":"done"}`
+    /// would silently unassign the card.
+    #[serde(default, deserialize_with = "present")]
+    agent_id: Option<Option<Uuid>>,
+    #[serde(default, deserialize_with = "present")]
+    team_id: Option<Option<Uuid>>,
+}
+
+/// Distinguish "field was present and null" from "field was absent".
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Drag a card. Dropping a backlog card into "running" is the drag-native way
@@ -423,14 +441,47 @@ async fn move_task(
         }
     }
 
+    // Changing hands mid-run would leave the running agent finishing work the
+    // card no longer says is theirs, and the next run would start from a
+    // different agent's memory. Cancel first.
+    let reassigning = body.agent_id.is_some() || body.team_id.is_some();
+    if reassigning && run_active {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card is being worked on — cancel the run before reassigning it".into(),
+        ));
+    }
+
+    // An agent and a team are alternatives, not a pair: `enqueue_task` hands
+    // the whole card to the team when one is set, so leaving both would mean
+    // the agent shown on the card never runs.
+    let (agent_id, team_id) = match (body.agent_id, body.team_id) {
+        (Some(Some(agent)), _) => (Some(Some(agent)), Some(None)),
+        (_, Some(Some(team))) => (Some(None), Some(Some(team))),
+        other => other,
+    };
+
+    if let Some(Some(agent_id)) = agent_id {
+        require_same_workspace(&state, id, "agents", agent_id).await?;
+    }
+    if let Some(Some(team_id)) = team_id {
+        require_same_workspace(&state, id, "teams", team_id).await?;
+    }
+
     sqlx::query(
         "UPDATE tasks SET board_column = coalesce($2, board_column),
-                          position = coalesce($3, position)
+                          position = coalesce($3, position),
+                          agent_id = CASE WHEN $4 THEN $5 ELSE agent_id END,
+                          team_id  = CASE WHEN $6 THEN $7 ELSE team_id  END
          WHERE id = $1",
     )
     .bind(id)
     .bind(&body.board_column)
     .bind(body.position)
+    .bind(agent_id.is_some())
+    .bind(agent_id.flatten())
+    .bind(team_id.is_some())
+    .bind(team_id.flatten())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -442,6 +493,37 @@ async fn move_task(
         run_id = Some(state.orchestrator.enqueue_task(id).await.map_err(internal)?);
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
+}
+
+/// Refuse an assignee from another workspace.
+///
+/// Workspaces are the boundary the rest of the app is built around — the
+/// agents list, the mention picker, the team roster are all scoped to one —
+/// and a cross-workspace id would produce a card whose assignee is invisible
+/// everywhere it should appear.
+async fn require_same_workspace(
+    state: &AppState,
+    task_id: Uuid,
+    table: &str,
+    assignee_id: Uuid,
+) -> Result<(), ApiError> {
+    // `table` is a literal from the two call sites, never user input.
+    let ok: Option<i32> = sqlx::query_scalar(&format!(
+        "SELECT 1 FROM {table} x
+         JOIN projects p ON p.workspace_id = x.workspace_id
+         JOIN tasks t ON t.project_id = p.id
+         WHERE t.id = $1 AND x.id = $2"
+    ))
+    .bind(task_id)
+    .bind(assignee_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    ok.map(|_| ()).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("that {} is not in this card's workspace", table.trim_end_matches('s')),
+    ))
 }
 
 /// Which agents does a comment speak to? An agent is mentioned when
@@ -738,8 +820,47 @@ async fn attach_to_task(
 
 #[cfg(test)]
 mod tests {
-    use super::mentioned_agents;
+    use super::{mentioned_agents, MoveTask};
     use uuid::Uuid;
+
+    /// The distinction the whole reassignment feature rests on. If an absent
+    /// field deserialized the same as an explicit null, then dragging a card
+    /// between columns — which sends only `board_column` — would quietly
+    /// unassign it.
+    #[test]
+    fn an_absent_assignee_is_not_the_same_as_a_null_one() {
+        let drag: MoveTask = serde_json::from_str(r#"{"board_column":"done"}"#).unwrap();
+        assert_eq!(drag.agent_id, None, "absent must mean leave it alone");
+        assert_eq!(drag.team_id, None);
+
+        let unassign: MoveTask = serde_json::from_str(r#"{"agent_id":null}"#).unwrap();
+        assert_eq!(unassign.agent_id, Some(None), "null must mean clear it");
+
+        let id = Uuid::new_v4();
+        let reassign: MoveTask =
+            serde_json::from_str(&format!(r#"{{"agent_id":"{id}"}}"#)).unwrap();
+        assert_eq!(reassign.agent_id, Some(Some(id)));
+    }
+
+    /// The client always sends both ids, so "give it to this team" arrives as
+    /// a team id plus a null agent — and must not be read as ambiguous.
+    #[test]
+    fn handing_a_card_to_a_team_clears_the_agent_in_the_same_request() {
+        let team = Uuid::new_v4();
+        let body: MoveTask =
+            serde_json::from_str(&format!(r#"{{"agent_id":null,"team_id":"{team}"}}"#)).unwrap();
+        assert_eq!(body.agent_id, Some(None));
+        assert_eq!(body.team_id, Some(Some(team)));
+    }
+
+    #[test]
+    fn an_empty_patch_touches_nothing() {
+        let body: MoveTask = serde_json::from_str("{}").unwrap();
+        assert!(body.board_column.is_none());
+        assert!(body.position.is_none());
+        assert_eq!(body.agent_id, None);
+        assert_eq!(body.team_id, None);
+    }
 
     #[test]
     fn mentions_match_case_insensitively_and_allow_spaces_in_names() {

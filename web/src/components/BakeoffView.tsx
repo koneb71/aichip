@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, BakeoffVariant, Tier, tierModel } from "../lib/api";
+import { Agent, api, BakeoffVariant, Tier } from "../lib/api";
 import { isActive, statusColor, statusLabel } from "../lib/runStatus";
 import { annotateDiff } from "../lib/diff";
+import { useTierModel } from "../lib/models";
 
 /**
  * One brief, several attempts, side by side.
@@ -195,6 +196,7 @@ function BakeoffSetup({
   onStarted: () => void;
   onClose: () => void;
 }) {
+  const tierModel = useTierModel();
   const [mode, setMode] = useState<"tiers" | "agents">("tiers");
   const [tiers, setTiers] = useState<Tier[]>(
     TIERS.filter((t) => t !== currentTier).slice(0, 1).concat(currentTier),
@@ -209,7 +211,7 @@ function BakeoffSetup({
     try {
       const variants =
         mode === "tiers"
-          ? tiers.map((t) => ({ label: tierModel[t], tier: t }))
+          ? tiers.map((t) => ({ label: tierModel(t), tier: t }))
           : picked.map((id) => ({
               label: agents.find((a) => a.id === id)?.name ?? "agent",
               agent_id: id,
@@ -268,7 +270,7 @@ function BakeoffSetup({
                   className="accent-[var(--color-accent)]"
                 />
                 <span className="capitalize">{t}</span>
-                <span className="text-xs text-ink-dim">{tierModel[t]}</span>
+                <span className="text-xs text-ink-dim">{tierModel(t)}</span>
               </label>
             ))
           : agents.map((a) => (
