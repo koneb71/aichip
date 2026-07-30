@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, ChatMessage, ChatSummary, Effort, Tier } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
-import { EnginePicker, useEngines } from "../../lib/engines";
 import { useAttachments } from "../../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "../AttachmentBar";
-import { TierPicker } from "../TierPicker";
-import { EffortPicker } from "../EffortPicker";
+import { ComposerSettings } from "./ComposerSettings";
 import { useMentionPicker } from "../MentionPicker";
 import { Markdown } from "../Markdown";
 
@@ -17,7 +15,6 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const engines = useEngines();
   // null = the machine default. Switching mid-chat starts a fresh session,
   // because a session id only means something to the CLI that minted it.
   const [engine, setEngine] = useState<string | null>(null);
@@ -367,16 +364,15 @@ export function ChatPanel({ projectId }: { projectId: string }) {
           {/* Which CLI, which model, and how hard it thinks. All three stick to
               the chat rather than the message — choosing "think harder" and
               having it last one turn would be a strange thing to have chosen. */}
-          <div className="mt-1.5 flex flex-wrap items-center justify-end gap-2">
-            {!!engines && engines.length > 1 && (
-              <>
-                <span className="text-[11px] text-ink-dim">Run on</span>
-                <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
-              </>
-            )}
-            <TierPicker value={tier} onChange={setTier} engine={engine ?? undefined} />
-            <EffortPicker value={effort} onChange={setEffort} />
-          </div>
+          <ComposerSettings
+            engine={engine}
+            onEngine={setEngine}
+            tier={tier}
+            onTier={setTier}
+            effort={effort}
+            onEffort={setEffort}
+            disabled={!!activeRunId}
+          />
         </div>
       </div>
     </div>
