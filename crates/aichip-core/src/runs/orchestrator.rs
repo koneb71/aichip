@@ -925,6 +925,39 @@ impl Orchestrator {
         .unwrap_or_default()
     }
 
+    /// How hard the model thinks, when nothing more specific says.
+    ///
+    /// `None` is a real answer and the default one: it leaves each CLI on its
+    /// own built-in behaviour rather than aichip picking a number on the user's
+    /// behalf. A stored value is an explicit choice to override that.
+    pub async fn default_effort(&self) -> Option<ReasoningEffort> {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM settings WHERE key = 'default_effort'",
+        )
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().and_then(ReasoningEffort::parse))
+    }
+
+    /// `None` clears it, returning every run to its CLI's own default — the
+    /// same shape as removing the budget cap rather than setting it to zero.
+    pub async fn set_default_effort(&self, effort: Option<ReasoningEffort>) -> anyhow::Result<()> {
+        match effort {
+            Some(e) => {
+                self.put_setting("default_effort", serde_json::json!(e.as_str()))
+                    .await
+            }
+            None => {
+                sqlx::query("DELETE FROM settings WHERE key = 'default_effort'")
+                    .execute(&self.db.pool)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
     pub async fn set_default_permission_mode(&self, mode: PermissionMode) -> anyhow::Result<()> {
         self.put_setting("default_permission_mode", serde_json::to_value(mode)?)
             .await
@@ -1021,7 +1054,8 @@ impl Orchestrator {
                     t.model_tier, r.tier_override,
                     COALESCE(r.agent_id, t.agent_id) AS agent_id,
                     r.variant_label, r.worktree_path AS run_worktree,
-                    t.permission_mode, t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
+                    t.permission_mode, t.effort AS task_effort,
+                    t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     r.plan_approval, r.plan_approved_at,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
                     p.vcs,
@@ -1107,10 +1141,19 @@ impl Orchestrator {
         // allowed tools, and permission preset.
         let agent_prompt: Option<String> = run.get("agent_prompt");
         let agent_tier: Option<String> = run.get("agent_tier");
-        // A bound agent's thinking budget travels with it, same as its tier.
-        let effort = run
+        // Most specific wins, the same order `permission_mode` resolves in just
+        // below: the bound agent's own budget, else the card's, else the
+        // machine default. Both of the first two are nullable and mean
+        // "inherit" — resolved here rather than at create time, so raising the
+        // default reaches work already sitting in the backlog.
+        let effort = match run
             .get::<Option<String>, _>("agent_effort")
-            .and_then(|e| ReasoningEffort::parse(&e));
+            .or_else(|| run.get::<Option<String>, _>("task_effort"))
+            .and_then(|e| ReasoningEffort::parse(&e))
+        {
+            Some(explicit) => Some(explicit),
+            None => self.default_effort().await,
+        };
         let agent_tools: Option<Vec<String>> = run.get("agent_tools");
         let agent_preset: Option<String> = run.get("agent_preset");
 
@@ -1601,7 +1644,8 @@ impl Orchestrator {
         let row = sqlx::query(
             // Lateral join rather than a scalar subquery: the turn needs the
             // message's id as well as its text, to look up its attachments.
-            "SELECT r.engine, c.session_id, c.session_engine, p.path AS project_path,
+            "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
+                    c.effort AS chat_effort, p.path AS project_path,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              JOIN projects p ON p.id = c.project_id
@@ -1650,7 +1694,20 @@ impl Orchestrator {
             servers: vec![],
         };
 
-        let tier = ModelTier::Medium;
+        // Both were hardcoded — Medium, and no effort at all — which is why the
+        // chat composer had a picker for the engine and nothing else. NULL still
+        // means inherit, resolved now rather than frozen when the chat opened.
+        let tier: ModelTier = row
+            .get::<Option<String>, _>("chat_tier")
+            .and_then(|t| serde_json::from_value(serde_json::Value::String(t)).ok())
+            .unwrap_or(ModelTier::Medium);
+        let chat_effort = match row
+            .get::<Option<String>, _>("chat_effort")
+            .and_then(|e| ReasoningEffort::parse(&e))
+        {
+            Some(explicit) => Some(explicit),
+            None => self.default_effort().await,
+        };
         let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
@@ -1663,7 +1720,7 @@ impl Orchestrator {
             prompt: user_message,
             model_tier: tier,
             model_id,
-            effort: None,
+            effort: chat_effort,
             resume_session_id: session_id,
             permission_mode: chat_permission_mode(engine.as_ref()),
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),

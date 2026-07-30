@@ -8,7 +8,8 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_shared::{
-    is_known_model_for, EngineTierMapping, ModelTier, PermissionMode, TierMapping, MODEL_CHOICES,
+    is_known_model_for, EngineTierMapping, ModelTier, PermissionMode, ReasoningEffort, TierMapping,
+    MODEL_CHOICES,
 };
 use std::collections::BTreeMap;
 use axum::extract::State;
@@ -22,6 +23,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/models", get(get_models).put(set_models))
         .route("/settings/permissions", get(get_permissions).put(set_permissions))
+        .route("/settings/effort", get(get_effort).put(set_effort))
         .route("/settings/permissions/apply-to-agents", axum::routing::post(apply_to_agents))
 }
 
@@ -175,6 +177,46 @@ async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
 #[derive(Deserialize)]
 struct PermissionsBody {
     default_mode: PermissionMode,
+}
+
+#[derive(Deserialize)]
+struct EffortBody {
+    /// Absent or null returns every run to its CLI's own default rather than
+    /// pinning one, which is a real choice and the one this ships with.
+    default_effort: Option<ReasoningEffort>,
+}
+
+async fn get_effort(State(state): State<AppState>) -> Json<Value> {
+    // Agents carrying their own budget outrank this, exactly as they do for
+    // permissions — worth counting here rather than leaving it to be discovered
+    // when a card thinks harder or less hard than the setting says.
+    let overriding: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE effort IS NOT NULL")
+        .fetch_one(&state.db.pool)
+        .await
+        .unwrap_or(0);
+    Json(json!({
+        "agentsOverriding": overriding,
+        "defaultEffort": state.orchestrator.default_effort().await,
+        "levels": [
+            { "id": "low",    "label": "Low",     "blurb": "Fast and cheap. Fine for mechanical edits." },
+            { "id": "medium", "label": "Medium",  "blurb": "A balance. Sensible for most work." },
+            { "id": "high",   "label": "High",    "blurb": "Thinks before acting. Worth it for design and debugging." },
+            { "id": "xhigh",  "label": "Extra high", "blurb": "Slower and dearer; for genuinely hard problems." },
+            { "id": "max",    "label": "Maximum", "blurb": "As much as the CLI will give. Expect long waits." }
+        ]
+    }))
+}
+
+async fn set_effort(
+    State(state): State<AppState>,
+    Json(body): Json<EffortBody>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .set_default_effort(body.default_effort)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "defaultEffort": body.default_effort })))
 }
 
 async fn set_permissions(

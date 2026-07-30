@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Project, Team, Tier, tierColor, tierSoft } from "../lib/api";
+import { Agent, api, Effort, Project, Team, Tier, tierColor, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar } from "./AttachmentBar";
@@ -9,8 +9,8 @@ import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
 import { ArticlePicker } from "./kb/ArticlePicker";
-
-const TIERS: Tier[] = ["easy", "medium", "complex"];
+import { TIERS } from "./TierPicker";
+import { EffortPicker } from "./EffortPicker";
 
 export function NewTaskModal({
   project,
@@ -32,6 +32,8 @@ export function NewTaskModal({
   const [assignee, setAssignee] = useState<string>("");
   // null = the machine default, which is what the server picks.
   const [engine, setEngine] = useState<string | null>(null);
+  // null = inherit: the agent's budget if it has one, else the machine default.
+  const [effort, setEffort] = useState<Effort | null>(null);
   const [planFirst, setPlanFirst] = useState(false);
   const [articleIds, setArticleIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -81,6 +83,7 @@ export function NewTaskModal({
         start,
         engine: engine ?? undefined,
         plan_first: planFirst,
+        effort,
         article_ids: articleIds,
         attachment_ids: att.ids,
       });
@@ -204,6 +207,13 @@ export function NewTaskModal({
             <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
           </div>
         )}
+
+        <div className="mb-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            Thinking
+          </div>
+          <EffortPicker value={effort} onChange={setEffort} />
+        </div>
 
         {!!active && (
           <div className="mb-4">

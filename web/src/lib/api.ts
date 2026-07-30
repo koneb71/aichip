@@ -82,6 +82,15 @@ export interface Task {
   engine: string;
   /** Draft a plan and wait for approval before doing any work. */
   planFirst: boolean;
+  /** This card's own thinking budget. Null means inherit. */
+  effort: Effort | null;
+  /**
+   * What the card will actually think with, and which of the three places
+   * decided it — the bound agent's budget, the card's own, or the machine
+   * default. Same precedence as permissions, surfaced for the same reason.
+   */
+  effectiveEffort: Effort | null;
+  effortSource: "agent" | "card" | "default";
 }
 
 /** A knowledge-base page. `contentHtml` is absent in list responses. */
@@ -360,6 +369,9 @@ export interface AgentMemory {
 }
 
 export interface ChatSummary {
+  /** Null means inherit — the machine default, resolved when the turn runs. */
+  modelTier: Tier | null;
+  effort: Effort | null;
   id: string;
   title: string;
   messageCount: number;
@@ -523,6 +535,15 @@ export interface EngineModels {
   defaults: Record<Tier, string>;
 }
 
+/** The machine-wide thinking budget, and who ignores it. */
+export interface EffortSettings {
+  /** Null means every run keeps its CLI's own default — the shipped choice. */
+  defaultEffort: Effort | null;
+  /** Agents pinning their own budget, which outranks this. */
+  agentsOverriding: number;
+  levels: { id: Effort; label: string; blurb: string }[];
+}
+
 export interface ModelSettings {
   engines: EngineModels[];
 }
@@ -648,6 +669,14 @@ export const api = {
     patch(`/api/projects/${projectId}`, { full_auto_opt_in: on }).then((r) =>
       json<Project>(r),
     ),
+  effortSettings: () =>
+    fetch("/api/settings/effort").then((r) => json<EffortSettings>(r)),
+  setDefaultEffort: (effort: Effort | null) =>
+    fetch("/api/settings/effort", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_effort: effort }),
+    }).then((r) => json<{ defaultEffort: Effort | null }>(r)),
   setModelSettings: (engines: Record<string, Record<Tier, string>>) =>
     fetch("/api/settings/models", {
       method: "PUT",
@@ -697,6 +726,7 @@ export const api = {
     team_id?: string | null;
     engine?: string;
     plan_first?: boolean;
+    effort?: Effort | null;
     article_ids?: string[];
     attachment_ids?: string[];
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
@@ -719,6 +749,13 @@ export const api = {
       position?: number;
       engine?: string;
       plan_first?: boolean;
+      model_tier?: Tier;
+      /**
+       * Three states, and JSON gives us all three: omit the key to leave it
+       * alone, send null to return the card to inheriting, send a value to pin
+       * one. Passing `undefined` omits it, which is what you want.
+       */
+      effort?: Effort | null;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
@@ -1105,11 +1142,18 @@ export const api = {
   sendChat: (
     chatId: string,
     content: string,
-    opts: { attachmentIds?: string[]; engine?: string } = {},
+    opts: {
+      attachmentIds?: string[];
+      engine?: string;
+      modelTier?: Tier;
+      effort?: Effort | null;
+    } = {},
   ) =>
     post(`/api/chats/${chatId}/messages`, {
       content,
       engine: opts.engine,
+      model_tier: opts.modelTier,
+      effort: opts.effort ?? undefined,
       attachment_ids: opts.attachmentIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
 };

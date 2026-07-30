@@ -16,6 +16,8 @@ import { PlanReviewPanel } from "./PlanReviewPanel";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
+import { TierPicker } from "./TierPicker";
+import { EffortPicker } from "./EffortPicker";
 
 export function TaskDrawer({
   task,
@@ -359,6 +361,43 @@ export function TaskDrawer({
             />
           </div>
         )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Model
+          </span>
+          <TierPicker
+            value={task.modelTier}
+            engine={task.engine}
+            disabled={running}
+            onChange={async (t) => {
+              await api.moveTask(task.id, { model_tier: t });
+              onChanged();
+            }}
+          />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Thinking
+          </span>
+          <EffortPicker
+            value={task.effort}
+            disabled={running}
+            // Only worth naming when it comes from somewhere other than this
+            // card — otherwise "Default (medium)" beside a card that says
+            // medium reads as if it were set twice.
+            inherited={task.effortSource === "card" ? null : task.effectiveEffort}
+            onChange={async (e) => {
+              await api.moveTask(task.id, { effort: e });
+              onChanged();
+            }}
+          />
+          {task.effortSource === "agent" && (
+            <span className="text-[11px] text-ink-dim">
+              {task.agentName
+                ? `The ${task.agentName} agent sets this and wins`
+                : "Its agent sets this and wins"}
+            </span>
+          )}
+        </div>
 
         <Permissions task={task} />
       </div>
