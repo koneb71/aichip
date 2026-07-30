@@ -242,7 +242,7 @@ function AutonomyToggle({
       title={
         error ??
         (project.fullAutoOptIn
-          ? "Agents work straight through here. Click to make them ask again."
+          ? "Agents may work straight through here — unless the agent on a card carries its own permission setting, which wins. Each card shows which applies. Click to make them ask again."
           : "Agents stop to ask before edits and commands. Click to let them work uninterrupted — the run stays in an isolated worktree you review.")
       }
       className={`rounded-full px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
@@ -251,7 +251,10 @@ function AutonomyToggle({
           : "bg-panel-2 text-ink-dim hover:text-ink"
       }`}
     >
-      {project.fullAutoOptIn ? "✓ works without asking" : "asks before acting"}
+      {/* "allows" rather than "works": this unlocks working without asking, it
+          does not guarantee it. An agent's own preset outranks the project, so
+          the unqualified promise this used to make was one it could not keep. */}
+      {project.fullAutoOptIn ? "✓ allows working without asking" : "asks before acting"}
     </button>
   );
 }

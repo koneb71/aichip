@@ -359,6 +359,8 @@ export function TaskDrawer({
             />
           </div>
         )}
+
+        <Permissions task={task} />
       </div>
 
       <div className="flex gap-2 border-b border-line px-5 py-3">
@@ -543,6 +545,44 @@ export function TaskDrawer({
         )}
       </div>
     </motion.aside>
+  );
+}
+
+/**
+ * What this card will stop to ask about, and who decided that.
+ *
+ * It reads as trivia until it isn't. The permission mode is resolved from three
+ * places — the bound agent's preset, then the card's, then the machine default —
+ * and the first one wins. So a project switched to "works without asking" goes on
+ * prompting for every command if its agent carries `reviewed`, and nothing
+ * anywhere said which of the three was in charge. The answer to "why is it still
+ * asking me" was previously a database query.
+ */
+function Permissions({ task }: { task: Task }) {
+  const says = {
+    reviewed: "Asks before editing files or running commands",
+    auto_edit: "Edits files freely · asks before running commands",
+    full_auto: "Works without asking",
+  }[task.effectiveMode];
+
+  const from = {
+    agent: task.agentName ? `set by the ${task.agentName} agent` : "set by its agent",
+    card: "set on this card",
+    default: "your default for new work",
+  }[task.permissionSource];
+
+  const asks = task.effectiveMode !== "full_auto";
+
+  return (
+    <div className="mt-3 flex items-baseline gap-2 text-[11px]">
+      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+        Permission
+      </span>
+      <span className={asks ? "text-ink" : "text-tier-easy"}>{says}</span>
+      {/* Naming the source is the whole point — it turns "why is this asking me"
+          into a place to go and change it. */}
+      <span className="text-ink-dim">· {from}</span>
+    </div>
   );
 }
 

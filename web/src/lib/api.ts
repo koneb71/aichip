@@ -61,6 +61,17 @@ export interface Task {
    * column carries position and this carries the outcome.
    */
   stepStatus: string | null;
+  /**
+   * The mode this card will actually run under, and which of the three places
+   * decided it — the bound agent's preset, the card's own, or the machine
+   * default, in that order of precedence.
+   *
+   * Surfaced because the order surprises people: a project set to work without
+   * asking still stops for permission when its agent carries its own preset,
+   * and until this there was nothing anywhere that said so.
+   */
+  effectiveMode: "reviewed" | "auto_edit" | "full_auto";
+  permissionSource: "agent" | "card" | "default";
   /** Set when the latest run was an organization run — opens the team room. */
   orgRunId: string | null;
   runId: string | null;
