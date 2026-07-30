@@ -12,9 +12,15 @@ import { api, OrgAssignment, OrgRunDetail } from "../../lib/api";
 export function PlanReview({
   run,
   onChanged,
+  onDecided,
+  onFresh,
 }: {
   run: OrgRunDetail;
   onChanged: () => void;
+  /** Hide this panel now, before the poll catches up. */
+  onDecided: () => void;
+  /** Hand the parent the state the server returned, so no poll can undo it. */
+  onFresh: (fresh: OrgRunDetail) => void;
 }) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,13 +34,30 @@ export function PlanReview({
     setBusy(what);
     setError(null);
     try {
-      if (what === "approve") await api.approvePlan(run.id);
-      else await api.rejectPlan(run.id, "you rejected the plan");
+      const fresh =
+        what === "approve"
+          ? await api.approvePlan(run.id)
+          : await api.rejectPlan(run.id, "you rejected the plan");
+      // The endpoint hands back the run it just changed, so the panel goes as
+      // soon as the request lands rather than on whichever of the 1500ms polls
+      // happens to come next — and `onFresh` makes any poll already in flight
+      // stale, which is what used to flip this panel back a second later.
+      //
+      // Both after the await, not before: the parent unmounts this panel the
+      // moment it is told, taking the error box below with it, so a failure has
+      // to be able to keep it on screen.
+      onDecided();
+      onFresh(fresh);
       onChanged();
+      // `busy` is deliberately left set. Clearing it is what made the button
+      // flip back to "Approve & start" and become clickable again while the
+      // panel was still up — the UI visibly undoing the click.
     } catch (e) {
-      setError(String(e).replace(/^Error:\s*/, ""));
-    } finally {
       setBusy(null);
+      setError(String(e).replace(/^Error:\s*/, ""));
+      // Still refresh: if this failed because the run moved on, the status alone
+      // takes the panel down and no mask is needed.
+      onChanged();
     }
   };
 
@@ -42,6 +65,7 @@ export function PlanReview({
     <motion.div
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -6 }}
       className="flex min-h-0 flex-col gap-2"
     >
       <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">

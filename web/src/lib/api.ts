@@ -961,9 +961,14 @@ export const api = {
       goal,
       review_plan: reviewPlan,
     }).then((r) => json<{ runId: string }>(r)),
-  approvePlan: (runId: string) => post(`/api/org-runs/${runId}/plan/approve`).then(json),
+  // Both answer with the run they just changed, so the caller can render the
+  // new state instead of racing its own poll for it.
+  approvePlan: (runId: string) =>
+    post(`/api/org-runs/${runId}/plan/approve`).then((r) => json<OrgRunDetail>(r)),
   rejectPlan: (runId: string, reason?: string) =>
-    post(`/api/org-runs/${runId}/plan/reject`, { reason }).then(json),
+    post(`/api/org-runs/${runId}/plan/reject`, { reason }).then((r) =>
+      json<OrgRunDetail>(r),
+    ),
   updateAssignment: (
     runId: string,
     stepId: string,
