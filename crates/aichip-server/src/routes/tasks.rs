@@ -1210,6 +1210,12 @@ async fn delete_task(
         .execute(&state.db.pool)
         .await
         .map_err(internal)?;
+    // Before the row goes: the preview row cascades away with the task, and a
+    // cascaded row is one nothing will ever look for again — the container
+    // would sit there holding its port until the next restart swept it.
+    if let Err(e) = aichip_core::previews::stop(&state.db, id).await {
+        tracing::warn!(task=%id, error=%e, "could not stop this card's preview before deleting it");
+    }
     drop_worktree(&state, id).await?;
     let done = sqlx::query("DELETE FROM tasks WHERE id=$1")
         .bind(id)

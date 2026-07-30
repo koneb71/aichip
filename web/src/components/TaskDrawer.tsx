@@ -16,6 +16,7 @@ import { PlanReviewPanel } from "./PlanReviewPanel";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
+import { PreviewPanel } from "./PreviewPanel";
 import { TierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 
@@ -291,6 +292,7 @@ export function TaskDrawer({
       <div className="max-h-[55vh] overflow-y-auto">
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
+      <PreviewPanel taskId={task.id} />
 
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">

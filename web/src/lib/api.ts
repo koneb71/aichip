@@ -149,6 +149,33 @@ export interface UsedBy {
 }
 
 
+/**
+ * A card's branch, built and running so you can look at it.
+ *
+ * `url` is present only while `status === "running"` — a link to a container
+ * that is still building is a link to a connection refused.
+ */
+export interface TaskPreview {
+  id: string;
+  taskId: string;
+  status: "building" | "running" | "stopped" | "failed";
+  url: string | null;
+  hostPort: number | null;
+  containerPort: number | null;
+  /** The Dockerfile named no port, so the one above is a guess. */
+  portAssumed: boolean;
+  error: string | null;
+}
+
+/** Whether previews are possible here at all. */
+export interface DockerStatus {
+  installed: boolean;
+  usable: boolean;
+  version?: string;
+  /** Why not, phrased for someone who now has to go and fix it. */
+  problem?: string;
+}
+
 /** Whether this machine can talk to GitHub, and as whom. No token ever crosses this. */
 export interface GitHubStatus {
   installed: boolean;
@@ -773,6 +800,20 @@ export const api = {
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
+    ),
+  // Previews
+  dockerStatus: () => fetch("/api/docker").then((r) => json<DockerStatus>(r)),
+  taskPreview: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/preview`).then((r) =>
+      json<{ preview: TaskPreview | null }>(r),
+    ),
+  startPreview: (taskId: string) =>
+    post(`/api/tasks/${taskId}/preview`).then((r) =>
+      json<{ preview: TaskPreview }>(r),
+    ),
+  stopPreview: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/preview`, { method: "DELETE" }).then((r) =>
+      json<{ stopped: boolean }>(r),
     ),
   // Knowledge base
   articles: (workspaceId: string, q?: string) =>
