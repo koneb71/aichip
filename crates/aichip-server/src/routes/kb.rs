@@ -12,7 +12,7 @@
 
 use super::{internal, ApiError};
 use crate::AppState;
-use aichip_core::kb::{diff, render, revisions, sanitize, tree};
+use aichip_core::kb::{diff, render, revisions, tree};
 use aichip_core::storage::{object_key, MAX_OBJECT_BYTES};
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -57,6 +57,7 @@ fn article_row(r: &sqlx::postgres::PgRow, with_body: bool) -> Value {
         "icon": r.get::<String, _>("icon"),
         "position": r.get::<f64, _>("position"),
         "currentSeq": r.get::<i32, _>("current_seq"),
+        "bodyVersion": r.get::<i64, _>("body_version"),
         "origin": r.get::<String, _>("origin"),
         "sourceRunId": r.get::<Option<Uuid>, _>("source_run_id"),
         "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
@@ -162,6 +163,8 @@ async fn one(
         }))
         .collect::<Vec<_>>());
 
+    page["usedBy"] = used_by(&state, id).await?;
+
     page["pendingRevision"] = match revisions::pending(&state.db, id).await.map_err(internal)? {
         Some(rev) => revision_json(&rev),
         None => Value::Null,
@@ -180,6 +183,77 @@ async fn one(
     .map_err(internal)?);
 
     Ok(Json(page))
+}
+
+/// How many referencing cards a page lists before it stops.
+///
+/// A page that thirty cards depend on has already made its point; the number is
+/// there to keep one popular runbook from rendering a screen of links nobody
+/// scrolls. The response carries the true total so the view can say what it left
+/// out rather than quietly ending the list.
+const USED_BY_LIMIT: i64 = 30;
+
+/// Which tasks depend on this page.
+///
+/// The counterpart to backlinks, and the question a wiki cannot answer about
+/// itself: `kb_links` records page→page, but a page attached to a card is a
+/// reference living entirely outside the wiki. Without this, the only way to
+/// find out whether rewriting a runbook would change what an agent gets handed
+/// was to open every card and look.
+///
+/// Attachments and comment mentions are folded into one row per task because
+/// they are the same fact to a reader — *this card uses this page* — but they
+/// are kept distinguishable, because they are not the same fact to an agent: an
+/// attachment is injected into every run on that card, while a mention reached
+/// exactly one reply.
+async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
+    let rows = sqlx::query(
+        "WITH refs AS (
+             SELECT task_id, true AS attached FROM task_articles WHERE article_id = $1
+             UNION ALL
+             SELECT c.task_id, false FROM comment_articles ca
+               JOIN task_comments c ON c.id = ca.comment_id
+              WHERE ca.article_id = $1
+         ),
+         rolled AS (
+             SELECT task_id,
+                    bool_or(attached) AS attached,
+                    count(*) FILTER (WHERE NOT attached) AS mentions
+               FROM refs GROUP BY task_id
+         )
+         SELECT t.id, t.title, t.board_column, t.project_id, t.created_at,
+                p.name AS project_name, r.attached, r.mentions,
+                count(*) OVER () AS total
+           FROM rolled r
+           JOIN tasks t ON t.id = r.task_id
+           JOIN projects p ON p.id = t.project_id
+          -- Attached first: those are the cards where this page is part of the
+          -- brief, not something somebody once linked in a reply.
+          ORDER BY r.attached DESC, t.created_at DESC
+          LIMIT $2",
+    )
+    .bind(id)
+    .bind(USED_BY_LIMIT)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let total = rows
+        .first()
+        .map(|r| r.get::<i64, _>("total"))
+        .unwrap_or(0);
+    Ok(json!({
+        "total": total,
+        "tasks": rows.iter().map(|r| json!({
+            "id": r.get::<Uuid, _>("id"),
+            "title": r.get::<String, _>("title"),
+            "projectId": r.get::<Uuid, _>("project_id"),
+            "projectName": r.get::<String, _>("project_name"),
+            "boardColumn": r.get::<String, _>("board_column"),
+            "attached": r.get::<bool, _>("attached"),
+            "mentions": r.get::<i64, _>("mentions"),
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -242,7 +316,10 @@ async fn create(
     claim_assets(&state, id, &body.asset_ids).await?;
 
     if !body.content_html.trim().is_empty() {
-        write_body(&state, id, body.title.trim(), &body.content_html, None).await?;
+        // Unguarded, and safe to be: the row was inserted two statements ago
+        // and its id has not left this function, so there is no second editor
+        // whose work this could be standing on.
+        write_body(&state, id, body.title.trim(), &body.content_html, None, None).await?;
     }
     Ok(Json(article_row(&reload(&state, id).await?, true)))
 }
@@ -256,10 +333,14 @@ struct ArticlePatch {
     /// Present-but-null files the page under the workspace-wide space.
     #[serde(default, deserialize_with = "double_option")]
     project_id: Option<Option<Uuid>>,
-    /// The revision the editor loaded. A body write without it would overwrite
-    /// whatever arrived in the meantime, which is the whole failure this
-    /// design exists to remove.
+    /// The revision the editor loaded, recorded on the new revision as what it
+    /// is a change against. It is the *diff anchor*, not the concurrency guard
+    /// — see `base_version`.
     base_seq: Option<i32>,
+    /// `bodyVersion` as the editor loaded it. A body write without it would
+    /// overwrite whatever arrived in the meantime, which is the whole failure
+    /// this design exists to remove.
+    base_version: Option<i64>,
     #[serde(default)]
     asset_ids: Vec<Uuid>,
 }
@@ -292,7 +373,7 @@ async fn update(
                 .map_err(internal)?
                 .ok_or((StatusCode::NOT_FOUND, "no such page".to_string()))?,
         };
-        write_body(&state, id, &title, html, body.base_seq).await?;
+        write_body(&state, id, &title, html, body.base_seq, body.base_version).await?;
     }
 
     // Everything that is not the body: metadata a person changes from the page
@@ -337,6 +418,7 @@ async fn write_body(
     title: &str,
     html: &str,
     base_seq: Option<i32>,
+    base_version: Option<i64>,
 ) -> Result<(), ApiError> {
     let prepared = render::prepare(html);
     let rev = revisions::NewRevision {
@@ -349,7 +431,7 @@ async fn write_body(
         run_id: None,
         note: "",
     };
-    revisions::save_edit(&state.db, id, rev).await.map_err(|e| {
+    revisions::save_edit(&state.db, id, rev, base_version).await.map_err(|e| {
         // A stale editor is a 409 the UI turns into a diff, not a 500.
         match e.downcast_ref::<revisions::Conflict>() {
             Some(c) => (StatusCode::CONFLICT, c.to_string()),

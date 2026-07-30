@@ -224,6 +224,56 @@ export default function PageView() {
             </section>
           )}
 
+          {!!page.usedBy?.tasks.length && (
+            <section className="mt-8 border-t border-line pt-5">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+                Used by
+              </h2>
+              <p className="mt-1 text-xs text-ink-dim">
+                Cards that hand this page to an agent. Editing it changes what
+                they are working from.
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {page.usedBy.tasks.map((t) => (
+                  <Link
+                    key={t.id}
+                    // Deep link, not just the board: landing on a column of
+                    // forty cards and asking someone to find the right one is
+                    // not a link, it is a hint.
+                    to={`/projects/${t.projectId}?task=${t.id}`}
+                    className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 hover:bg-panel-2"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm">{t.title}</span>
+                    <span className="shrink-0 text-[11px] text-ink-dim">
+                      {t.projectName} · {t.boardColumn}
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
+                        t.attached
+                          ? "bg-accent/10 text-accent"
+                          : "bg-panel-2 text-ink-dim"
+                      }`}
+                      title={
+                        t.attached
+                          ? "Attached to the card, so every run on it is given this page"
+                          : "Linked from a comment, so it reached one reply"
+                      }
+                    >
+                      {t.attached
+                        ? "attached"
+                        : `${t.mentions} ${t.mentions === 1 ? "mention" : "mentions"}`}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+              {page.usedBy.total > page.usedBy.tasks.length && (
+                <p className="mt-2 text-xs text-ink-dim">
+                  and {page.usedBy.total - page.usedBy.tasks.length} more
+                </p>
+              )}
+            </section>
+          )}
+
           {!!page.backlinks?.length && (
             <section className="mt-8 border-t border-line pt-5">
               <h2 className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">

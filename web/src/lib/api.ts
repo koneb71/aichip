@@ -72,15 +72,44 @@ export interface Article {
   projectId: string | null;
   icon: string;
   position: number;
-  /** The newest accepted revision — also the token a save must match. */
+  /** The newest accepted revision. A label, not a lock. */
   currentSeq: number;
+  /**
+   * The token a save must match. Not `currentSeq`, which holds still while
+   * rapid autosaves coalesce into one revision — so two editors both matched it
+   * and the second silently overwrote the first.
+   */
+  bodyVersion: number;
   contentHtml?: string;
   // Present only on the single-page read.
   breadcrumb?: { id: string; title: string; icon: string }[];
   children?: { id: string; title: string; icon: string; summary: string }[];
   backlinks?: { id: string; title: string; icon: string }[];
+  usedBy?: UsedBy;
   pendingRevision?: Revision | null;
   writing?: boolean;
+}
+
+/**
+ * The board cards that depend on this page.
+ *
+ * `total` is the true count; `tasks` is capped server-side, so a page every card
+ * references says how many it is not showing instead of pretending the list is
+ * the whole story.
+ */
+export interface UsedBy {
+  total: number;
+  tasks: {
+    id: string;
+    title: string;
+    projectId: string;
+    projectName: string;
+    boardColumn: string;
+    /** Attached to the card, so every run on it is handed this page. */
+    attached: boolean;
+    /** How many comments linked it — a mention reaches one reply, not the card. */
+    mentions: number;
+  }[];
 }
 
 /** One entry in a page's history. */
@@ -674,8 +703,10 @@ export const api = {
       status?: string;
       icon?: string;
       project_id?: string | null;
-      /** Required whenever content_html is sent. */
+      /** What the new revision diffs against. */
       base_seq?: number;
+      /** The concurrency guard. Required whenever content_html is sent. */
+      base_version?: number;
       asset_ids?: string[];
     },
   ) => {

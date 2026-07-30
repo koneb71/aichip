@@ -8,12 +8,15 @@
 //! documentation run silently replaced a page someone had carefully written,
 //! with no copy, no diff and no trace.
 //!
-//! Two invariants hold the whole thing up:
+//! Three invariants hold the whole thing up:
 //!
 //! 1. `kb_articles.current_seq` equals the highest **accepted** seq, and never
-//!    decreases. It doubles as the optimistic-concurrency token.
+//!    decreases.
 //! 2. Every write allocates its seq while holding a row lock on the article,
 //!    so two concurrent saves cannot mint the same one.
+//! 3. `kb_articles.body_version` advances on every accepted body write, and it
+//!    — not `current_seq` — is the optimistic-concurrency token. See
+//!    [`save_edit`] for why the two cannot be the same number.
 
 use crate::db::Db;
 use sqlx::{Postgres, Row, Transaction};
@@ -65,11 +68,18 @@ pub struct NewRevision<'a> {
     pub note: &'a str,
 }
 
-/// Two saves inside this window by the same author collapse into one revision.
+/// Two human saves inside this window collapse into one revision.
 ///
 /// The editor autosaves on a debounce, so without this a ten-minute writing
 /// session leaves eighty rows and the history view becomes unreadable — which
 /// is the same as having no history.
+///
+/// Note what this does *not* check: which person is saving. There is no users
+/// table, so every human save looks alike, and two different people editing the
+/// same page within five minutes would collapse into one row. What keeps that
+/// from destroying anything is the `base_version` guard in [`save_edit`] — the
+/// second saver is refused before ever reaching this query. Weakening that
+/// guard re-opens data loss here, not merely a messy history.
 const COALESCE_SECONDS: i64 = 300;
 
 /// Somebody else changed the page since this edit began.
@@ -91,17 +101,33 @@ impl std::error::Error for Conflict {}
 
 /// Write a human edit: accepted immediately, and it becomes the live body.
 ///
-/// `base_seq` is the revision the editor loaded. When it no longer matches,
-/// this refuses rather than overwriting — the caller shows a diff instead.
+/// `base_version` is `kb_articles.body_version` as the editor loaded it. When it
+/// no longer matches, this refuses rather than overwriting — the caller shows a
+/// diff instead. Pass `None` only where there is genuinely nothing to race with
+/// (the boot-time import).
+///
+/// **It is deliberately not `base_seq`, and that distinction is the whole point
+/// of the column.** `current_seq` looks like a version number and behaves like
+/// one right up until a save coalesces, at which point the revision is rewritten
+/// in place and the pointer stays put. Two editors that both loaded revision 5
+/// therefore both still matched 5 after the first one saved: the second was
+/// waved through, replaced the first person's text, and left no second row to
+/// recover it from. `body_version` advances on every accepted write, coalesced
+/// or not, so the second saver is refused.
+///
+/// `rev.base_seq` survives, but only as the diff anchor — which revision this
+/// one is a change *against*. It no longer guards anything.
 pub async fn save_edit(
     db: &Db,
     article_id: Uuid,
     rev: NewRevision<'_>,
+    base_version: Option<i64>,
 ) -> anyhow::Result<i32> {
     let mut tx = db.pool.begin().await?;
-    let current = lock_current_seq(&mut tx, article_id).await?;
-    if let Some(base) = rev.base_seq {
-        if base != current {
+    let head = lock_head(&mut tx, article_id).await?;
+    let current = head.seq;
+    if let Some(base) = base_version {
+        if base != head.version {
             return Err(Conflict { current_seq: current }.into());
         }
     }
@@ -150,7 +176,7 @@ pub async fn propose(
     rev: NewRevision<'_>,
 ) -> anyhow::Result<i32> {
     let mut tx = db.pool.begin().await?;
-    let current = lock_current_seq(&mut tx, article_id).await?;
+    let current = lock_head(&mut tx, article_id).await?.seq;
     // Any earlier pending proposal for this page is superseded rather than
     // deleted: two banners stacked up would make the page unreviewable, and
     // the trail should still show that a proposal existed.
@@ -176,7 +202,7 @@ pub async fn propose(
 /// forward, and the trail says exactly what happened.
 pub async fn accept(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<i32> {
     let mut tx = db.pool.begin().await?;
-    let current = lock_current_seq(&mut tx, article_id).await?;
+    let current = lock_head(&mut tx, article_id).await?.seq;
 
     // Locked, not merely read: without the row lock a concurrent discard
     // between this SELECT and the UPDATE below would be silently undone and
@@ -272,7 +298,7 @@ pub async fn discard(db: &Db, article_id: Uuid, seq: i32, note: &str) -> anyhow:
 /// the pointer would make it a record of what someone wishes had happened.
 pub async fn restore(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<i32> {
     let mut tx = db.pool.begin().await?;
-    let current = lock_current_seq(&mut tx, article_id).await?;
+    let current = lock_head(&mut tx, article_id).await?.seq;
     let row = sqlx::query(
         "SELECT title, content_html, content_text FROM kb_revisions
          WHERE article_id=$1 AND seq=$2",
@@ -368,20 +394,30 @@ fn to_revision(r: &sqlx::postgres::PgRow) -> Revision {
     }
 }
 
+/// Where the page stands: the live revision, and the token that guards it.
+struct Head {
+    seq: i32,
+    version: i64,
+}
+
 /// Take the article's row lock and read the live pointer under it.
 ///
 /// Every seq is allocated through here. Without the lock two concurrent saves
 /// both read the same `current_seq`, both write `current_seq + 1`, and one
 /// loses to a primary-key violation — or worse, to a silent overwrite.
-async fn lock_current_seq(
+async fn lock_head(
     tx: &mut Transaction<'_, Postgres>,
     article_id: Uuid,
-) -> anyhow::Result<i32> {
-    sqlx::query_scalar("SELECT current_seq FROM kb_articles WHERE id=$1 FOR UPDATE")
+) -> anyhow::Result<Head> {
+    let row = sqlx::query("SELECT current_seq, body_version FROM kb_articles WHERE id=$1 FOR UPDATE")
         .bind(article_id)
         .fetch_optional(&mut **tx)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("no such page"))
+        .ok_or_else(|| anyhow::anyhow!("no such page"))?;
+    Ok(Head {
+        seq: row.get("current_seq"),
+        version: row.get("body_version"),
+    })
 }
 
 async fn insert(
@@ -425,6 +461,11 @@ async fn insert(
 }
 
 /// Make a revision the live body.
+///
+/// The single place `body_version` moves, which is why it can be trusted as the
+/// concurrency token: every path that changes what a reader sees — a save, a
+/// coalesced autosave, an accepted proposal, a restore — comes through here, and
+/// none of them can advance the body without advancing the token with it.
 async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     article_id: Uuid,
@@ -437,7 +478,8 @@ async fn apply(
     sqlx::query(
         "UPDATE kb_articles
             SET title=$2, content_html=$3, content_text=$4, summary=$5,
-                origin=$6, current_seq=$7, updated_at=now()
+                origin=$6, current_seq=$7, body_version=body_version+1,
+                updated_at=now()
           WHERE id=$1",
     )
     .bind(article_id)
