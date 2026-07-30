@@ -287,6 +287,34 @@ async fn doctor() -> anyhow::Result<()> {
         }
     }
 
+    // GitHub is optional — everything works without it — so a missing `gh` is
+    // reported with a dot rather than a cross, the same way an uninstalled
+    // engine is. An *expired* login is different: `gh` is right there and every
+    // command it runs will fail, so it says which account and why.
+    match aichip_core::github::detect().await {
+        None => println!("· gh: not installed — GitHub features won't be offered"),
+        Some(info) if info.usable() => {
+            let who = info
+                .active()
+                .map(|a| format!(" — {} on {}", a.login, a.host))
+                .unwrap_or_default();
+            println!("✓ gh: {}{who}", info.version);
+        }
+        Some(info) => {
+            // `!` rather than `✗`, and `ok` is deliberately left alone: aichip
+            // is completely usable without GitHub, so this must not fail a
+            // setup check or contradict the "All good" at the end. It is a
+            // thing to know, not a thing that is broken.
+            println!("! gh: {} — not logged in", info.version);
+            for account in &info.accounts {
+                if let Some(problem) = &account.problem {
+                    println!("    {} on {}: {problem}", account.login, account.host);
+                }
+            }
+            println!("    GitHub features stay hidden until: gh auth login");
+        }
+    }
+
     let mut found = 0;
     for engine in real_engines() {
         match engine.detect().await {

@@ -138,6 +138,22 @@ export interface UsedBy {
   }[];
 }
 
+
+/** Whether this machine can talk to GitHub, and as whom. No token ever crosses this. */
+export interface GitHubStatus {
+  installed: boolean;
+  usable: boolean;
+  version?: string;
+  accounts: {
+    host: string;
+    login: string;
+    active: boolean;
+    valid: boolean;
+    /** gh's own words for why this login can't be used. */
+    problem: string | null;
+  }[];
+}
+
 /** One entry in a page's history. */
 export interface Revision {
   seq: number;
@@ -577,6 +593,10 @@ const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
 export const api = {
+  // Probed live rather than cached: `gh auth login` happens in a terminal
+  // while aichip is running, and this is what tells you to go and do it.
+  github: () => fetch("/api/github").then((r) => json<GitHubStatus>(r)),
+
   // workspaces
   workspaces: () =>
     fetch("/api/workspaces").then((r) => json<{ workspaces: Workspace[] }>(r)),
