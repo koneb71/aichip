@@ -3,8 +3,8 @@ import { Agent, Tier, tierColor } from "../../lib/api";
 import { StepData, renameStep, uniqueStepId } from "../../lib/workflowGraph";
 import { useTierModel } from "../../lib/models";
 import { EnginePicker, useEngines } from "../../lib/engines";
+import { TIERS } from "../TierPicker";
 
-const TIERS: Tier[] = ["easy", "medium", "complex"];
 
 export function StepInspector({
   step,

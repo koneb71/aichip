@@ -1,7 +1,7 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
 use aichip_core::runs::orchestrator::Variant;
-use aichip_shared::{ModelTier, PermissionMode};
+use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -59,7 +59,13 @@ async fn list(
                 t.parent_id, parent.title AS parent_title,
                 COALESCE(kids.total, 0) AS child_count,
                 COALESCE(kids.resolved, 0) AS child_resolved,
-                s.status AS step_status,
+                s.status AS step_status, t.effort AS card_effort,
+                COALESCE(a.effort, t.effort,
+                         (SELECT value #>> '{}' FROM settings WHERE key = 'default_effort'))
+                    AS effective_effort,
+                CASE WHEN a.effort IS NOT NULL THEN 'agent'
+                     WHEN t.effort IS NOT NULL THEN 'card'
+                     ELSE 'default' END AS effort_source,
                 -- The mode this card will actually run under, and which of the
                 -- three places decided it. Resolved here in exactly the order
                 -- the orchestrator resolves it (orchestrator.rs:1090) so the
@@ -125,6 +131,9 @@ async fn list(
                 // "dropped" — things the four columns have no room for.
                 "stepStatus": r.get::<Option<String>, _>("step_status"),
                 "effectiveMode": r.get::<String, _>("effective_mode"),
+                "effort": r.get::<Option<String>, _>("card_effort"),
+                "effectiveEffort": r.get::<Option<String>, _>("effective_effort"),
+                "effortSource": r.get::<String, _>("effort_source"),
                 "permissionSource": r.get::<String, _>("permission_source"),
                 "orgRunId": r.get::<Option<Uuid>, _>("run_team_id")
                     .and(r.get::<Option<Uuid>, _>("run_id")),
@@ -162,6 +171,9 @@ struct CreateTask {
     /// work happens.
     #[serde(default)]
     plan_first: bool,
+    /// Omitted inherits: the bound agent's budget if it has one, else the
+    /// machine default, resolved when the run dispatches.
+    effort: Option<ReasoningEffort>,
     /// Knowledge-base articles the agent should read before starting.
     #[serde(default)]
     article_ids: Vec<Uuid>,
@@ -182,8 +194,8 @@ async fn create(
         .permission_mode
         .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first, effort)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9,$10) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -194,6 +206,7 @@ async fn create(
     .bind(body.agent_id)
     .bind(body.team_id)
     .bind(body.plan_first)
+    .bind(body.effort.map(|e| e.as_str().to_string()))
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -510,6 +523,14 @@ struct MoveTask {
     /// Absent leaves it alone.
     #[serde(default)]
     plan_first: Option<bool>,
+    /// Absent leaves it alone. Cards always have a tier, so unlike the assignee
+    /// there is no "clear it" case.
+    #[serde(default)]
+    model_tier: Option<ModelTier>,
+    /// Nested, because all three states are meaningful: absent means "leave it",
+    /// an explicit null means "go back to inheriting", and a value pins one.
+    #[serde(default, deserialize_with = "present")]
+    effort: Option<Option<ReasoningEffort>>,
 }
 
 /// Distinguish "field was present and null" from "field was absent".
@@ -608,7 +629,9 @@ async fn move_task(
                           agent_id = CASE WHEN $4 THEN $5 ELSE agent_id END,
                           team_id  = CASE WHEN $6 THEN $7 ELSE team_id  END,
                           engine   = coalesce($8, engine),
-                          plan_first = coalesce($9, plan_first)
+                          plan_first = coalesce($9, plan_first),
+                          model_tier = coalesce($10, model_tier),
+                          effort = CASE WHEN $11 THEN $12 ELSE effort END
          WHERE id = $1",
     )
     .bind(id)
@@ -620,6 +643,9 @@ async fn move_task(
     .bind(team_id.flatten())
     .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
     .bind(body.plan_first)
+    .bind(body.model_tier.map(|t| serde_json::to_value(t).ok()).flatten().and_then(|v| v.as_str().map(str::to_string)))
+    .bind(body.effort.is_some())
+    .bind(body.effort.flatten().map(|e| e.as_str().to_string()))
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;

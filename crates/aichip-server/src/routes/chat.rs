@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_shared::{ModelTier, ReasoningEffort};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
@@ -25,7 +26,7 @@ async fn list_chats(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT c.id, c.title, c.updated_at,
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
          FROM chats c WHERE c.project_id=$1 ORDER BY c.updated_at DESC",
     )
@@ -39,6 +40,8 @@ async fn list_chats(
             json!({
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
+                "modelTier": r.get::<Option<String>, _>("model_tier"),
+                "effort": r.get::<Option<String>, _>("effort"),
                 "messageCount": r.get::<i64, _>("message_count"),
                 "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
             })
@@ -187,6 +190,13 @@ struct SendBody {
     content: String,
     /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
+    /// Which model, and how hard it thinks. Both stick to the chat rather than
+    /// the message: picking "think harder" and having it last exactly one turn
+    /// would be a strange thing to have chosen.
+    /// Typed, so a client that invents a level is a 422 rather than a row the
+    /// orchestrator has to shrug at when the turn actually runs.
+    model_tier: Option<ModelTier>,
+    effort: Option<ReasoningEffort>,
     /// Ids from POST /api/projects/{id}/attachments, bound to this message.
     #[serde(default)]
     attachment_ids: Vec<Uuid>,
@@ -202,6 +212,22 @@ async fn send(
     if body.content.trim().is_empty() && body.attachment_ids.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "message is empty".into()));
     }
+    // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
+    // client that only sends `content` does not silently reset the choice.
+    if body.model_tier.is_some() || body.effort.is_some() {
+        sqlx::query(
+            "UPDATE chats SET model_tier = coalesce($2, model_tier),
+                              effort = coalesce($3, effort)
+             WHERE id = $1",
+        )
+        .bind(chat_id)
+        .bind(body.model_tier.and_then(|t| serde_json::to_value(t).ok()).and_then(|v| v.as_str().map(str::to_string)))
+        .bind(body.effort.map(|e| e.as_str().to_string()))
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    }
+
     // Serialize turns: --resume forks sessions, so two concurrent turns
     // would race on chats.session_id.
     if active_run(&state, chat_id).await?.is_some() {

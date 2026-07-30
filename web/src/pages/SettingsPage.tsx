@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -29,9 +29,11 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [perms, setPerms] = useState<PermissionSettings | null>(null);
+  const [effort, setEffort] = useState<EffortSettings | null>(null);
 
   useEffect(() => {
     api.permissionSettings().then(setPerms).catch(() => {});
+    api.effortSettings().then(setEffort).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -128,6 +130,53 @@ export default function SettingsPage() {
             >
               Make them follow this setting
             </button>
+          </div>
+        )}
+      </div>
+
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+        Thinking
+      </h2>
+      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+        How hard the model works before it answers. Separate from which model —
+        the same model can think for a second or for several minutes, and the
+        second one costs a great deal more.
+      </p>
+      <div className="mt-3 max-w-2xl space-y-2">
+        <EffortChoice
+          checked={effort?.defaultEffort == null}
+          label="Leave it to the CLI"
+          blurb="Whatever claude or opencode does on its own. This is what aichip ships with."
+          onPick={async () => {
+            setEffort((e) => (e ? { ...e, defaultEffort: null } : e));
+            await api.setDefaultEffort(null);
+          }}
+        />
+        {effort?.levels.map((l) => (
+          <EffortChoice
+            key={l.id}
+            checked={effort.defaultEffort === l.id}
+            label={l.label}
+            blurb={l.blurb}
+            onPick={async () => {
+              setEffort({ ...effort, defaultEffort: l.id });
+              await api.setDefaultEffort(l.id);
+            }}
+          />
+        ))}
+        <p className="text-[11px] text-ink-dim">
+          Resolved when a run starts, not when a card is made — so raising this
+          reaches work already sitting in the backlog. A card or its agent can
+          still pin its own.
+        </p>
+        {!!effort?.agentsOverriding && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            <span className="font-semibold">
+              {effort.agentsOverriding} agent
+              {effort.agentsOverriding === 1 ? "" : "s"} set their own
+            </span>{" "}
+            — an agent's budget outranks this, the same way its permission preset
+            does. Change those on the agent itself.
           </div>
         )}
       </div>
@@ -244,6 +293,39 @@ export default function SettingsPage() {
  * server still validates the `provider/model` shape, which catches the one
  * mistake people actually make: pasting a Claude id into this field.
  */
+/** One radio in the thinking list. Same shape as a permission mode. */
+function EffortChoice({
+  checked,
+  label,
+  blurb,
+  onPick,
+}: {
+  checked: boolean;
+  label: string;
+  blurb: string;
+  onPick: () => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${
+        checked ? "border-accent bg-accent/5" : "border-line bg-panel"
+      }`}
+    >
+      <input
+        type="radio"
+        name="default-effort"
+        checked={checked}
+        onChange={onPick}
+        className="mt-0.5 accent-[var(--color-accent)]"
+      />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="mt-0.5 block text-xs text-ink-dim">{blurb}</span>
+      </span>
+    </label>
+  );
+}
+
 function TierField({
   engine,
   value,

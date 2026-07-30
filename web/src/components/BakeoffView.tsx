@@ -5,6 +5,7 @@ import { isActive, statusColor, statusLabel } from "../lib/runStatus";
 import { annotateDiff } from "../lib/diff";
 import { useTierModel } from "../lib/models";
 import { useEngines } from "../lib/engines";
+import { TIERS } from "./TierPicker";
 
 /**
  * One brief, several attempts, side by side.
@@ -181,7 +182,6 @@ export function BakeoffView({
   );
 }
 
-const TIERS: Tier[] = ["easy", "medium", "complex"];
 
 /** Choosing what to compare. Two attempts minimum — one isn't a comparison. */
 function BakeoffSetup({
