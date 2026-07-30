@@ -43,6 +43,46 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
     "mcp__aichip__list_agents",
 ];
 
+/// Named explicitly rather than left to the allow-list.
+///
+/// `--allowedTools` pre-*approves*; it does not forbid. Anything the chat
+/// assistant must never reach has to be denied by name or the CLI will happily
+/// pick it up — and the assistant runs in the user's real checkout, not a
+/// worktree, so an edit here would land straight on their files.
+pub const CHAT_DENIED_TOOLS: &[&str] = &[
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Bash",
+];
+
+/// The weakest permission mode this engine can actually honour for a read-only
+/// tool set.
+///
+/// The chat assistant cannot edit anything: its whole surface is Read/Grep/Glob
+/// plus aichip's own task tools, with the mutating tools denied above. So there
+/// is nothing here for a human to review, and asking for review is not caution
+/// — on an engine that cannot pause and ask, it is silence.
+///
+/// This used to be a flat `Reviewed`, which is why chat looked broken on
+/// OpenCode: with no way to answer a prompt mid-run it rejects every tool call,
+/// so the assistant could not read the repository or reach its own tools and
+/// fell back to asking the user what they were working on. `vet` exists to
+/// refuse exactly that pairing, and this was the one caller that never ran it.
+fn chat_permission_mode(engine: &dyn aichip_engines::Engine) -> PermissionMode {
+    if engine.capabilities().interactive_permissions {
+        // Claude: the allow-list has already pre-approved the read tools, so
+        // nothing prompts. AutoEdit rather than FullAuto keeps the dangerous
+        // flag off a run that has no business editing anything.
+        PermissionMode::AutoEdit
+    } else {
+        // OpenCode: approve-everything is the only setting it has, and
+        // "everything" here is bounded by the denials above.
+        PermissionMode::FullAuto
+    }
+}
+
 const CHAT_SYSTEM_PROMPT: &str = "You are the aichip project assistant embedded in a workspace \
 dashboard. You can inspect this repository (Read/Grep/Glob) but you cannot edit it directly. \
 To do coding work, create a task with mcp__aichip__create_task (set start=true to launch it \
@@ -1625,11 +1665,11 @@ impl Orchestrator {
             model_id,
             effort: None,
             resume_session_id: session_id,
-            permission_mode: PermissionMode::Reviewed,
+            permission_mode: chat_permission_mode(engine.as_ref()),
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
             append_system_prompt: Some(CHAT_SYSTEM_PROMPT.to_string()),
             mcp,
-            denied_tools: vec![],
+            denied_tools: CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect(),
             run_key: run_id.to_string(),
             extra_read_dirs,
             permission_prompt_tool: false,
@@ -2690,6 +2730,42 @@ pub(crate) fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chat assistant must never be handed a mode its engine cannot honour.
+    ///
+    /// This is the bug this test was written for: chat passed a flat `Reviewed`,
+    /// and an engine that cannot pause to ask answers that by rejecting every
+    /// tool call. The assistant went quiet — no repository access, no task
+    /// tools — and asked the user what they were working on, which reads as
+    /// "it can't see my project" rather than "it was refused".
+    #[test]
+    fn chat_never_asks_an_engine_to_review_when_it_cannot() {
+        for engine in [
+            &aichip_engines::claude::ClaudeEngine::default() as &dyn aichip_engines::Engine,
+            &aichip_engines::opencode::OpenCodeEngine::default() as &dyn aichip_engines::Engine,
+        ] {
+            let mode = chat_permission_mode(engine);
+            assert_ne!(mode, PermissionMode::Reviewed, "{}", engine.label());
+            assert!(
+                aichip_engines::vet(engine, mode, false).is_ok(),
+                "{} cannot honour {mode:?}",
+                engine.label()
+            );
+        }
+    }
+
+    /// Approve-everything is only safe because "everything" is a short list.
+    #[test]
+    fn the_chat_assistant_cannot_reach_a_tool_that_writes() {
+        for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"] {
+            assert!(
+                CHAT_DENIED_TOOLS.contains(&tool),
+                "{tool} must be denied by name — an allow-list only pre-approves, \
+                 it does not forbid, and chat runs in the real checkout"
+            );
+            assert!(!CHAT_ALLOWED_TOOLS.contains(&tool));
+        }
+    }
 
     /// The gate exists so a workflow can't grant itself more freedom than the
     /// project allows. Down, never up.
