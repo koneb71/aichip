@@ -157,9 +157,42 @@ function TaskCard({
       {waiting && (
         <span className="absolute right-3 top-3 text-xs text-amber-600">⏸ approval</span>
       )}
+      {/* Which epic this belongs to, above its own title — a sub-ticket read on
+          its own says what to do but not what it is part of. */}
+      {task.parentTitle && (
+        <div className="mb-0.5 truncate pr-5 text-[11px] text-ink-dim" title={task.parentTitle}>
+          ↳ {task.parentTitle}
+        </div>
+      )}
       <div className="pr-5 text-sm font-medium leading-snug">{task.title}</div>
       {running && <CardActivity runId={task.runId} />}
+
+      {/* An epic's own progress. Derived from the children's columns, so it
+          still reads correctly long after the run that created them is gone. */}
+      {task.childCount > 0 && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between text-[11px] text-ink-dim">
+            <span>
+              {task.childResolved} of {task.childCount} done
+            </span>
+            {task.childResolved === task.childCount && <span>✓</span>}
+          </div>
+          <div className="mt-1 h-1 overflow-hidden rounded-full bg-panel-2">
+            <motion.div
+              className="h-full rounded-full"
+              style={{ background: accent }}
+              initial={false}
+              animate={{
+                width: `${(task.childResolved / task.childCount) * 100}%`,
+              }}
+              transition={{ type: "spring", stiffness: 200, damping: 30 }}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">
+        <StepOutcome status={task.stepStatus} />
         {!teamRun && (
           <span
             className="rounded-full px-2 py-0.5"
@@ -187,6 +220,33 @@ function TaskCard({
         {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
       </div>
     </motion.button>
+  );
+}
+
+/**
+ * What became of the assignment behind this card.
+ *
+ * Only for the outcomes a column cannot express. "Done" and "in progress" are
+ * already said by which column the card is in; repeating them here would be
+ * noise. A failure parked in Review looks identical to finished work waiting to
+ * be read — this is the difference.
+ */
+function StepOutcome({ status }: { status: string | null }) {
+  if (status !== "failed" && status !== "canceled" && status !== "skipped") return null;
+  const failed = status !== "skipped";
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 font-medium ${
+        failed ? "bg-red-50 text-danger" : "bg-panel-2 text-ink-dim"
+      }`}
+      title={
+        failed
+          ? "This assignment did not finish. Open it to see how far it got."
+          : "The manager dropped this assignment — nothing was done."
+      }
+    >
+      {status === "failed" ? "failed" : status === "canceled" ? "canceled" : "dropped"}
+    </span>
   );
 }
 

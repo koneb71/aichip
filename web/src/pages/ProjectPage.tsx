@@ -187,6 +187,8 @@ export default function ProjectPage() {
             onClose={() => openTask(null)}
             onChanged={refresh}
             onOpenTeamRoom={setTeamRoom}
+            boardTasks={tasks}
+            onOpenTask={openTask}
           />
         )}
         {teamRoom && (

@@ -23,6 +23,8 @@ export function TaskDrawer({
   onClose,
   onChanged,
   onOpenTeamRoom,
+  boardTasks = [],
+  onOpenTask,
 }: {
   task: Task;
   /** Bounds which agents a bake-off may choose between. */
@@ -30,6 +32,9 @@ export function TaskDrawer({
   onClose: () => void;
   onChanged: () => void;
   onOpenTeamRoom?: (runId: string) => void;
+  /** The project's cards, so an epic can list its own without a second fetch. */
+  boardTasks?: Task[];
+  onOpenTask?: (t: Task) => void;
 }) {
   const tierModel = useTierModel();
   const engines = useEngines();
@@ -282,6 +287,7 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
+      <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
 
       <div className="border-b border-line px-5 py-3">
@@ -539,6 +545,75 @@ export function TaskDrawer({
     </motion.aside>
   );
 }
+
+/**
+ * Where this card sits in an epic — either as the epic, or as one of its parts.
+ *
+ * Both directions are shown from the same panel because they are the same
+ * question asked from two ends. Reading a sub-ticket, "what is this part of" is
+ * the missing context; reading an epic, "what is left" is.
+ */
+function EpicPanel({
+  task,
+  boardTasks,
+  onOpenTask,
+}: {
+  task: Task;
+  boardTasks: Task[];
+  onOpenTask?: (t: Task) => void;
+}) {
+  const parent = task.parentId
+    ? boardTasks.find((t) => t.id === task.parentId)
+    : undefined;
+  const children = boardTasks.filter((t) => t.parentId === task.id);
+  if (!parent && children.length === 0) return null;
+
+  return (
+    <div className="border-b border-line px-5 py-3">
+      {parent && (
+        <button
+          onClick={() => onOpenTask?.(parent)}
+          disabled={!onOpenTask}
+          className="text-[11px] text-ink-dim hover:text-accent disabled:hover:text-ink-dim"
+        >
+          ↳ part of <span className="font-medium">{parent.title}</span>
+        </button>
+      )}
+      {children.length > 0 && (
+        <>
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Sub-tasks · {children.filter((c) => resolved(c)).length} of {children.length} done
+          </div>
+          <div className="space-y-1">
+            {children.map((child) => (
+              <button
+                key={child.id}
+                onClick={() => onOpenTask?.(child)}
+                disabled={!onOpenTask}
+                className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-line"
+              >
+                <span className="min-w-0 flex-1 truncate">{child.title}</span>
+                {child.agentName && (
+                  <span className="shrink-0 text-[10px] text-ink-dim">{child.agentName}</span>
+                )}
+                <span
+                  className={`shrink-0 text-[10px] ${
+                    child.stepStatus === "failed" ? "text-danger" : "text-ink-dim"
+                  }`}
+                >
+                  {child.stepStatus === "failed" ? "failed" : child.boardColumn}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Reached an end state a person would call finished-with. */
+const resolved = (t: Task) => t.boardColumn === "review" || t.boardColumn === "done";
 
 /**
  * The diff, with a comment gutter.

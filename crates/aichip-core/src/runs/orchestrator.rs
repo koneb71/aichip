@@ -252,6 +252,28 @@ impl Orchestrator {
     /// Create a run for a board task and put it on the queue. A task handed
     /// to a team runs as that team instead of a single agent.
     pub async fn enqueue_task(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        // The last line of defence against two agents in one checkout.
+        //
+        // A sub-ticket's work is already running under a step of its epic's run,
+        // and starting it again would put a second agent in the same worktree
+        // with a second writer for the card's column. The routes refuse this
+        // with a 409, but they are not the only door: dropping a card into
+        // "In Progress", Retry, and the chat MCP's `start_task` all arrive here
+        // directly.
+        let live: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM steps s JOIN runs r ON r.id = s.run_id
+                  WHERE s.task_id = $1
+                    AND s.status IN ('queued','starting','running','waiting_permission','rate_limited')
+                    AND r.status NOT IN ('completed','failed','canceled'))",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        if live {
+            anyhow::bail!("a teammate is already working on this sub-task as part of its epic");
+        }
+
         let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
@@ -643,6 +665,14 @@ impl Orchestrator {
         // a failed team run still animate a teammate as "working…".
         settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
         tx.commit().await?;
+        // And so do the cards those steps stand for — otherwise a restart leaves
+        // a column of sub-tickets stuck at "In Progress" with nothing behind
+        // them, which is the same lie `settle_steps` exists to prevent.
+        for run_id in &orphans {
+            if let Err(e) = crate::runs::org::epic::mirror_run(&self.db, *run_id).await {
+                tracing::warn!(%run_id, error=%e, "could not update this run's sub-task cards");
+            }
+        }
         Ok(orphans.len() as u64)
     }
 
@@ -2496,6 +2526,13 @@ this workflow manually."
         // leaves step rows non-terminal under a terminal run. Normally a no-op.
         settle_steps(&mut tx, &[run_id], status).await?;
         tx.commit().await?;
+        // Every ending comes through here — completion, cancellation, a crash in
+        // `execute`, a planning failure — which is why the epic mirror hangs off
+        // `finish` rather than off the end of `work_phase`. A no-op unless the
+        // run has steps with cards.
+        if let Err(e) = crate::runs::org::epic::mirror_run(&self.db, run_id).await {
+            tracing::warn!(%run_id, error=%e, "could not update this run's sub-task cards");
+        }
         Ok(())
     }
 
