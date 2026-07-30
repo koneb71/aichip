@@ -1231,7 +1231,6 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
-    assert_parked(&state, run_id).await?;
     if body.note.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1242,15 +1241,26 @@ async fn revise_plan(
     // feedback, so it can answer the objection rather than start from nothing.
     // A written-but-unapproved plan re-plans rather than runs, which is what
     // makes leaving the row safe.
-    sqlx::query(
+    //
+    // The status check is in the WHERE clause rather than a separate read
+    // beforehand. Checking and then writing unconditionally leaves a window in
+    // which the run is approved and dispatched between the two, and this would
+    // then re-queue a run that was already working.
+    let updated = sqlx::query(
         "UPDATE runs SET plan_note = $2, plan_edited = FALSE, status = 'queued'
-         WHERE id = $1",
+         WHERE id = $1 AND status = 'awaiting_approval'",
     )
     .bind(run_id)
     .bind(body.note.trim())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    if updated.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "this run is not waiting for approval".into(),
+        ));
+    }
     state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
     Ok(Json(json!({ "revising": true })))
 }
