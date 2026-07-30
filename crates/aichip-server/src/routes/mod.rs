@@ -6,6 +6,7 @@ pub mod engines;
 pub mod kb;
 pub mod files;
 pub mod fs;
+pub mod github;
 pub mod mcp_servers;
 pub mod orgs;
 pub mod projects;
@@ -47,6 +48,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(mcp_servers::router())
         .merge(settings::router())
         .merge(engines::router())
+        .merge(github::router())
         .merge(kb::router())
 }
 

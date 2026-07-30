@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, McpServer, McpTestResult } from "../lib/api";
+import { api, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 
 /**
@@ -14,6 +14,68 @@ import { useWorkspace } from "../lib/workspace";
  * Nothing here touches credentials. aichip spawns the official CLI and hands
  * it a `--mcp-config` file, which is the same thing you'd write by hand.
  */
+/**
+ * GitHub, which is a connection but not an MCP server.
+ *
+ * It sits above the server list rather than in it because there is nothing to
+ * configure — aichip drives the `gh` CLI you already have, so the only question
+ * is whether it is installed and logged in. There is no field to fill in and no
+ * token to paste, which is the point.
+ *
+ * Re-checked on every visit, because `gh auth login` happens in a terminal
+ * while aichip is running, and telling someone to go and run it is most of what
+ * this card is for.
+ */
+function GitHubCard() {
+  const [state, setState] = useState<GitHubStatus | null>(null);
+  useEffect(() => {
+    api.github().then(setState).catch(() => {});
+  }, []);
+  if (!state) return null;
+
+  const account = state.accounts.find((a) => a.active) ?? state.accounts[0];
+  const problem = account?.problem;
+
+  return (
+    <div className="mt-6 max-w-4xl rounded-xl border border-line bg-panel p-4">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="text-sm font-semibold">GitHub</span>
+        {state.usable ? (
+          <span className="rounded-full bg-tier-easy-soft px-2 py-0.5 text-[11px] text-tier-easy">
+            ✓ {account?.login} on {account?.host}
+          </span>
+        ) : (
+          <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-ink-dim">
+            {state.installed ? "not logged in" : "gh not installed"}
+          </span>
+        )}
+      </div>
+
+      <p className="mt-1.5 max-w-xl text-xs text-ink-dim">
+        {state.usable
+          ? "Clone a repo, open a pull request from a finished task, and pull issues in as cards. aichip runs your own gh CLI and never sees a token."
+          : state.installed
+            ? "aichip drives the gh CLI you already have, so there is no token to paste here — it just needs to be logged in."
+            : "Install the GitHub CLI and log in, and cloning, pull requests and issue import become available. aichip never handles a token of its own."}
+      </p>
+
+      {/* `gh`'s own words. "Not logged in" alone would send someone to re-auth
+          without saying that their token was revoked rather than missing. */}
+      {problem && (
+        <p className="mt-1.5 text-xs text-danger">
+          {account?.login} on {account?.host}: {problem}
+        </p>
+      )}
+
+      {!state.usable && (
+        <code className="mt-2 inline-block rounded-md bg-panel-2 px-2 py-1 text-[11px]">
+          {state.installed ? "gh auth login" : "brew install gh && gh auth login"}
+        </code>
+      )}
+    </div>
+  );
+}
+
 export default function ConnectionsPage() {
   const { active } = useWorkspace();
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -44,6 +106,8 @@ export default function ConnectionsPage() {
           + Connect a server
         </button>
       </div>
+
+      <GitHubCard />
 
       <div className="mt-6 grid max-w-4xl gap-3">
         {servers.map((s) => (
