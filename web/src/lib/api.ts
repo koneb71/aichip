@@ -46,6 +46,21 @@ export interface Task {
   teamId: string | null;
   teamName: string | null;
   teamPattern: string | null;
+  /** The epic this is a sub-ticket of, if any. */
+  parentId: string | null;
+  parentTitle: string | null;
+  /**
+   * Sub-tickets under this card. `childCount > 0` is what makes a card an epic
+   * — it is derived rather than stored, so it cannot disagree with the board.
+   */
+  childCount: number;
+  childResolved: number;
+  /**
+   * The raw status of the assignment this card came from, when it came from one.
+   * The four board columns have nowhere to put "failed" or "dropped", so the
+   * column carries position and this carries the outcome.
+   */
+  stepStatus: string | null;
   /** Set when the latest run was an organization run — opens the team room. */
   orgRunId: string | null;
   runId: string | null;
