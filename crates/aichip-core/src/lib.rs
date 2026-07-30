@@ -3,6 +3,7 @@ pub mod db;
 pub mod github;
 pub mod kb;
 pub mod mcp_servers;
+pub mod previews;
 pub mod queue;
 pub mod runs;
 pub mod scheduler;

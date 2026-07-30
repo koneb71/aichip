@@ -164,6 +164,12 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // first run is claimed rather than applied on the one after.
     orchestrator.load_tier_mapping().await?;
     orchestrator.load_tier_efforts().await?;
+    // Previews do not survive a restart, and the containers from the last one
+    // are still holding their ports. Settled against Docker rather than the
+    // table, so a container no row claims is swept rather than orphaned.
+    if let Err(e) = aichip_core::previews::reconcile(&db).await {
+        tracing::warn!(error=%e, "could not reconcile previews with docker");
+    }
 
     let orphans = orchestrator.recover_orphans().await?;
     if orphans > 0 {
