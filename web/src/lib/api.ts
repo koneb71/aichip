@@ -85,12 +85,13 @@ export interface Task {
   /** This card's own thinking budget. Null means inherit. */
   effort: Effort | null;
   /**
-   * What the card will actually think with, and which of the three places
-   * decided it — the bound agent's budget, the card's own, or the machine
-   * default. Same precedence as permissions, surfaced for the same reason.
+   * What the card will actually think with, and which of the four places
+   * decided it — the bound agent's budget, the card's own, its tier on the
+   * engine it runs on, or the machine default. Surfaced for the same reason
+   * `permissionSource` is: the order is not guessable from any one screen.
    */
   effectiveEffort: Effort | null;
-  effortSource: "agent" | "card" | "default";
+  effortSource: "agent" | "card" | "tier" | "default";
 }
 
 /** A knowledge-base page. `contentHtml` is absent in list responses. */
@@ -533,6 +534,8 @@ export interface EngineModels {
   providers: { name: string; auth: string }[];
   tiers: Record<Tier, string>;
   defaults: Record<Tier, string>;
+  /** How hard each tier thinks here. Null means the tier pins nothing. */
+  efforts: Record<Tier, Effort | null>;
 }
 
 /** The machine-wide thinking budget, and who ignores it. */
@@ -677,11 +680,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ default_effort: effort }),
     }).then((r) => json<{ defaultEffort: Effort | null }>(r)),
-  setModelSettings: (engines: Record<string, Record<Tier, string>>) =>
+  setModelSettings: (
+    engines: Record<string, Record<Tier, string>>,
+    efforts: Record<string, Record<Tier, Effort | null>>,
+  ) =>
     fetch("/api/settings/models", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ engines }),
+      body: JSON.stringify({ engines, efforts }),
     }).then((r) => json<{ saved: boolean }>(r)),
 
   // MCP servers the user connects

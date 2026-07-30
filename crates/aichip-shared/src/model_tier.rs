@@ -1,3 +1,4 @@
+use crate::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -139,6 +140,31 @@ impl Default for EngineTierMapping {
             ("claude-code".to_string(), Self::defaults_for("claude-code")),
             ("opencode".to_string(), Self::defaults_for("opencode")),
         ]))
+    }
+}
+
+/// How hard each tier thinks, per engine.
+///
+/// Deliberately a separate map from `EngineTierMapping` rather than a second
+/// field on it. A tier answers two questions — which model, and how long it
+/// gets to use it — but they are set at different times and by different
+/// people, and folding them together would have changed the stored shape of a
+/// setting every install already has.
+///
+/// A tier with no entry inherits: the machine-wide default if one is set,
+/// otherwise whatever the CLI does on its own. So an empty map is the shipped
+/// state and means "nothing pinned anywhere", not "nothing configured yet".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EngineTierEffort(pub BTreeMap<String, BTreeMap<ModelTier, ReasoningEffort>>);
+
+impl EngineTierEffort {
+    pub fn effort_for(&self, engine: &str, tier: ModelTier) -> Option<ReasoningEffort> {
+        self.0.get(engine).and_then(|t| t.get(&tier)).copied()
+    }
+
+    /// One engine's row, empty when it has none.
+    pub fn for_engine(&self, engine: &str) -> BTreeMap<ModelTier, ReasoningEffort> {
+        self.0.get(engine).cloned().unwrap_or_default()
     }
 }
 
@@ -369,5 +395,46 @@ mod per_engine_tests {
     fn claude_still_validates_against_its_catalog() {
         assert!(is_known_model_for("claude-code", "claude-opus-5"));
         assert!(!is_known_model_for("claude-code", "gpt-5"));
+    }
+
+    #[test]
+    fn a_tier_with_no_effort_inherits_rather_than_defaulting() {
+        // The shipped state: nothing pinned anywhere. `None` here has to mean
+        // "ask the next place", not "low" — a silent floor would be the one
+        // outcome nobody chose.
+        let empty = EngineTierEffort::default();
+        assert_eq!(empty.effort_for("claude-code", ModelTier::Complex), None);
+
+        let mut e = EngineTierEffort::default();
+        e.0.insert(
+            "claude-code".to_string(),
+            BTreeMap::from([(ModelTier::Complex, ReasoningEffort::Max)]),
+        );
+        assert_eq!(
+            e.effort_for("claude-code", ModelTier::Complex),
+            Some(ReasoningEffort::Max)
+        );
+        // Set on one tier, silent on its siblings and on other engines.
+        assert_eq!(e.effort_for("claude-code", ModelTier::Easy), None);
+        assert_eq!(e.effort_for("opencode", ModelTier::Complex), None);
+    }
+
+    #[test]
+    fn tier_efforts_survive_a_round_trip_through_settings() {
+        let mut e = EngineTierEffort::default();
+        e.0.insert(
+            "opencode".to_string(),
+            BTreeMap::from([
+                (ModelTier::Easy, ReasoningEffort::Low),
+                (ModelTier::Complex, ReasoningEffort::XHigh),
+            ]),
+        );
+        let back: EngineTierEffort =
+            serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
+        assert_eq!(
+            back.effort_for("opencode", ModelTier::Complex),
+            Some(ReasoningEffort::XHigh)
+        );
+        assert_eq!(back.effort_for("opencode", ModelTier::Medium), None);
     }
 }

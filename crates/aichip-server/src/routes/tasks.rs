@@ -39,6 +39,13 @@ struct TaskFilter {
     project_id: Option<Uuid>,
 }
 
+/// A stored level, or none. Anything unparseable is treated as unset rather
+/// than as an error: a row that predates a level being renamed should inherit,
+/// not break the board.
+fn parse_effort(stored: Option<String>) -> Option<ReasoningEffort> {
+    stored.as_deref().and_then(ReasoningEffort::parse)
+}
+
 async fn list(
     State(state): State<AppState>,
     Query(filter): Query<TaskFilter>,
@@ -60,12 +67,7 @@ async fn list(
                 COALESCE(kids.total, 0) AS child_count,
                 COALESCE(kids.resolved, 0) AS child_resolved,
                 s.status AS step_status, t.effort AS card_effort,
-                COALESCE(a.effort, t.effort,
-                         (SELECT value #>> '{}' FROM settings WHERE key = 'default_effort'))
-                    AS effective_effort,
-                CASE WHEN a.effort IS NOT NULL THEN 'agent'
-                     WHEN t.effort IS NOT NULL THEN 'card'
-                     ELSE 'default' END AS effort_source,
+                a.effort AS agent_effort,
                 -- The mode this card will actually run under, and which of the
                 -- three places decided it. Resolved here in exactly the order
                 -- the orchestrator resolves it (orchestrator.rs:1090) so the
@@ -106,9 +108,25 @@ async fn list(
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
+    // Effort is the one thing here the database cannot settle on its own: the
+    // tier's budget depends on which engine the card resolved to, and that
+    // mapping lives in a settings blob rather than a column. Both halves are
+    // read once for the whole list rather than per row.
+    let tier_efforts = state.orchestrator.tier_efforts();
+    let machine_default = state.orchestrator.default_effort().await;
     let tasks: Vec<Value> = rows
         .iter()
         .map(|r| {
+            // The same function the orchestrator resolves with, so the board
+            // cannot disagree with what the run actually does.
+            let tier = serde_json::from_value(Value::String(r.get("model_tier")))
+                .unwrap_or_default();
+            let (effective_effort, effort_source) = aichip_shared::resolve_effort(
+                parse_effort(r.get("agent_effort")),
+                parse_effort(r.get("card_effort")),
+                tier_efforts.effort_for(&r.get::<String, _>("engine"), tier),
+                machine_default,
+            );
             json!({
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
@@ -132,8 +150,8 @@ async fn list(
                 "stepStatus": r.get::<Option<String>, _>("step_status"),
                 "effectiveMode": r.get::<String, _>("effective_mode"),
                 "effort": r.get::<Option<String>, _>("card_effort"),
-                "effectiveEffort": r.get::<Option<String>, _>("effective_effort"),
-                "effortSource": r.get::<String, _>("effort_source"),
+                "effectiveEffort": effective_effort.map(|e| e.as_str()),
+                "effortSource": effort_source.as_str(),
                 "permissionSource": r.get::<String, _>("permission_source"),
                 "orgRunId": r.get::<Option<Uuid>, _>("run_team_id")
                     .and(r.get::<Option<Uuid>, _>("run_id")),

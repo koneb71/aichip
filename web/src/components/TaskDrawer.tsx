@@ -390,11 +390,18 @@ export function TaskDrawer({
               onChanged();
             }}
           />
+          {/* Where "Default" actually came from. Silent when the card sets it
+              itself, since the picker already says so. */}
           {task.effortSource === "agent" && (
             <span className="text-[11px] text-ink-dim">
               {task.agentName
-                ? `The ${task.agentName} agent sets this and wins`
-                : "Its agent sets this and wins"}
+                ? `set by the ${task.agentName} agent, which outranks this card`
+                : "set by its agent, which outranks this card"}
+            </span>
+          )}
+          {task.effortSource === "tier" && (
+            <span className="text-[11px] text-ink-dim">
+              from the {task.modelTier} tier on {task.engine}
             </span>
           )}
         </div>
