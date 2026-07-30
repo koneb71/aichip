@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, Effort, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { EffortPicker } from "../components/EffortPicker";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -18,13 +19,19 @@ const TIERS: { key: Tier; label: string; when: string }[] = [
 
 /** `{engine_id: {easy, medium, complex}}` — what the Save button sends. */
 type Draft = Record<string, Record<Tier, string>>;
+/** The same shape for how hard each tier thinks. Null means inherit. */
+type EffortDraft = Record<string, Record<Tier, Effort | null>>;
 
 const asDraft = (s: ModelSettings): Draft =>
   Object.fromEntries(s.engines.map((e) => [e.id, { ...e.tiers }]));
 
+const asEffortDraft = (s: ModelSettings): EffortDraft =>
+  Object.fromEntries(s.engines.map((e) => [e.id, { ...e.efforts }]));
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [effortDraft, setEffortDraft] = useState<EffortDraft | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,6 +49,7 @@ export default function SettingsPage() {
       .then((s) => {
         setSettings(s);
         setDraft(asDraft(s));
+        setEffortDraft(asEffortDraft(s));
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -49,17 +57,24 @@ export default function SettingsPage() {
   const dirty =
     !!draft &&
     !!settings &&
-    settings.engines.some((e) => TIERS.some((t) => draft[e.id]?.[t.key] !== e.tiers[t.key]));
+    settings.engines.some((e) =>
+      TIERS.some(
+        (t) =>
+          draft[e.id]?.[t.key] !== e.tiers[t.key] ||
+          (effortDraft?.[e.id]?.[t.key] ?? null) !== (e.efforts[t.key] ?? null),
+      ),
+    );
 
   const save = async () => {
     if (!draft) return;
     setBusy(true);
     setError(null);
     try {
-      await api.setModelSettings(draft);
+      await api.setModelSettings(draft, effortDraft ?? {});
       const fresh = await api.modelSettings();
       setSettings(fresh);
       setDraft(asDraft(fresh));
+      setEffortDraft(asEffortDraft(fresh));
       setSaved(true);
       // Labels elsewhere in the app come from a provider loaded at startup,
       // so a reload is the honest way to make every chip agree at once.
@@ -165,9 +180,10 @@ export default function SettingsPage() {
           />
         ))}
         <p className="text-[11px] text-ink-dim">
-          Resolved when a run starts, not when a card is made — so raising this
-          reaches work already sitting in the backlog. A card or its agent can
-          still pin its own.
+          The fallback, for any tier that doesn't set one of its own below. A
+          card or its agent still outranks both. Resolved when a run starts
+          rather than when a card is made, so raising this reaches work already
+          sitting in the backlog.
         </p>
         {!!effort?.agentsOverriding && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
@@ -207,21 +223,41 @@ export default function SettingsPage() {
                   className="card-shadow rounded-xl border border-line bg-panel p-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">{tier.label}</div>
                       <div className="mt-0.5 text-xs text-ink-dim">{tier.when}</div>
                     </div>
-                    <TierField
-                      engine={engine}
-                      value={draft?.[engine.id]?.[tier.key] ?? ""}
-                      onChange={(v) =>
-                        setDraft((d) =>
-                          d
-                            ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
-                            : d,
-                        )
-                      }
-                    />
+                    {/* Kept on one line: a tier reads as a single choice, and
+                        having the budget wrap under the model on some rows and
+                        not others made them look like different controls. */}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <TierField
+                        engine={engine}
+                        value={draft?.[engine.id]?.[tier.key] ?? ""}
+                        onChange={(v) =>
+                          setDraft((d) =>
+                            d
+                              ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
+                              : d,
+                          )
+                        }
+                      />
+                      {/* Beside the model rather than in its own section: a
+                          tier answers both questions at once, and "Complex"
+                          meaning Opus at low effort is a choice worth being
+                          able to see in one glance. */}
+                      <EffortPicker
+                        value={effortDraft?.[engine.id]?.[tier.key] ?? null}
+                        inherited={effort?.defaultEffort ?? null}
+                        onChange={(v) =>
+                          setEffortDraft((d) =>
+                            d
+                              ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
+                              : d,
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                   {draft && (
                     <div className="mt-2 text-[11px] text-ink-dim">

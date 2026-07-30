@@ -8,7 +8,7 @@
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
-use aichip_shared::{EngineTierMapping, McpWiring, 
+use aichip_shared::{EngineTierEffort, EngineTierMapping, McpWiring, 
     AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
 };
 use aichip_engines::{Engine, RunSpec};
@@ -127,6 +127,7 @@ pub struct Orchestrator {
     /// Tier → model routing, live rather than baked at boot: changing it in
     /// settings must affect the next run, not require a restart.
     tiers: Arc<std::sync::RwLock<EngineTierMapping>>,
+    tier_efforts: Arc<std::sync::RwLock<EngineTierEffort>>,
     pub worktrees: Arc<WorktreeManager>,
     pub(crate) semaphore: Arc<Semaphore>,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
@@ -225,6 +226,7 @@ impl Orchestrator {
             engines: HashMap::new(),
             detected: HashMap::new(),
             tiers: Arc::new(std::sync::RwLock::new(EngineTierMapping::default())),
+            tier_efforts: Arc::new(std::sync::RwLock::new(EngineTierEffort::default())),
             worktrees,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             mcp_base_url,
@@ -813,6 +815,57 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// How hard each tier thinks, per engine. A snapshot, for the same reason
+    /// `tier_mapping` returns one.
+    pub fn tier_efforts(&self) -> EngineTierEffort {
+        self.tier_efforts.read().unwrap().clone()
+    }
+
+    /// Unlike the model mapping there is nothing to invent when this is
+    /// missing: no entry means inherit, which is a real answer.
+    pub async fn load_tier_efforts(&self) -> anyhow::Result<()> {
+        let stored: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'tier_efforts'")
+                .fetch_optional(&self.db.pool)
+                .await?;
+        let map = stored
+            .and_then(|v| serde_json::from_value::<EngineTierEffort>(v).ok())
+            .unwrap_or_default();
+        *self.tier_efforts.write().unwrap() = map;
+        Ok(())
+    }
+
+    pub async fn set_tier_efforts(&self, efforts: EngineTierEffort) -> anyhow::Result<()> {
+        self.put_setting("tier_efforts", serde_json::to_value(&efforts)?)
+            .await?;
+        *self.tier_efforts.write().unwrap() = efforts;
+        Ok(())
+    }
+
+    /// The budget a run should actually think with.
+    ///
+    /// Four places can have an opinion and the most specific wins: whatever was
+    /// pinned on the bound agent or the card, then what this engine's tier
+    /// says, then the machine default, then the CLI's own. Every step is
+    /// resolved when the run starts rather than frozen at create time, so
+    /// changing any of them reaches work already sitting in the backlog.
+    ///
+    /// One function rather than three copies, because the three call sites —
+    /// a card, a chat turn, a teammate's reply — drifted apart the last time
+    /// they were written out separately.
+    pub async fn resolve_effort(
+        &self,
+        agent: Option<ReasoningEffort>,
+        card: Option<ReasoningEffort>,
+        engine: &str,
+        tier: ModelTier,
+    ) -> Option<ReasoningEffort> {
+        // Bound out of the expression so no lock guard is alive across the
+        // await below.
+        let from_tier = self.tier_efforts.read().unwrap().effort_for(engine, tier);
+        aichip_shared::resolve_effort(agent, card, from_tier, self.default_effort().await).0
+    }
+
     /// Persist and apply a new routing.
     pub async fn set_tier_mapping(&self, mapping: EngineTierMapping) -> anyhow::Result<()> {
         for (engine, tiers) in &mapping.0 {
@@ -1141,19 +1194,14 @@ impl Orchestrator {
         // allowed tools, and permission preset.
         let agent_prompt: Option<String> = run.get("agent_prompt");
         let agent_tier: Option<String> = run.get("agent_tier");
-        // Most specific wins, the same order `permission_mode` resolves in just
-        // below: the bound agent's own budget, else the card's, else the
-        // machine default. Both of the first two are nullable and mean
-        // "inherit" — resolved here rather than at create time, so raising the
-        // default reaches work already sitting in the backlog.
-        let effort = match run
+        // Resolved below, once the tier is known — see `resolve_effort` for
+        // the order these two sit in and what they fall through to.
+        let agent_effort = run
             .get::<Option<String>, _>("agent_effort")
-            .or_else(|| run.get::<Option<String>, _>("task_effort"))
-            .and_then(|e| ReasoningEffort::parse(&e))
-        {
-            Some(explicit) => Some(explicit),
-            None => self.default_effort().await,
-        };
+            .and_then(|e| ReasoningEffort::parse(&e));
+        let card_effort = run
+            .get::<Option<String>, _>("task_effort")
+            .and_then(|e| ReasoningEffort::parse(&e));
         let agent_tools: Option<Vec<String>> = run.get("agent_tools");
         let agent_preset: Option<String> = run.get("agent_preset");
 
@@ -1166,6 +1214,9 @@ impl Orchestrator {
         };
         let tier: ModelTier =
             serde_json::from_value(serde_json::Value::String(tier_str)).unwrap_or_default();
+        let effort = self
+            .resolve_effort(agent_effort, card_effort, &engine_id, tier)
+            .await;
         // Most specific wins: the agent's own preset, else the card's, else
         // the workspace default. Both of the first two are nullable and mean
         // "inherit" when unset — resolved here rather than frozen at create
@@ -1701,13 +1752,15 @@ impl Orchestrator {
             .get::<Option<String>, _>("chat_tier")
             .and_then(|t| serde_json::from_value(serde_json::Value::String(t)).ok())
             .unwrap_or(ModelTier::Medium);
-        let chat_effort = match row
-            .get::<Option<String>, _>("chat_effort")
-            .and_then(|e| ReasoningEffort::parse(&e))
-        {
-            Some(explicit) => Some(explicit),
-            None => self.default_effort().await,
-        };
+        let chat_effort = self
+            .resolve_effort(
+                None,
+                row.get::<Option<String>, _>("chat_effort")
+                    .and_then(|e| ReasoningEffort::parse(&e)),
+                &engine_id,
+                tier,
+            )
+            .await;
         let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
@@ -1888,9 +1941,18 @@ impl Orchestrator {
             .await?;
 
         let system_prompt: String = row.get("system_prompt");
-        let reply_effort = row
-            .get::<Option<String>, _>("agent_effort")
-            .and_then(|e| ReasoningEffort::parse(&e));
+        // A teammate replying used to be the one path that ignored everything
+        // but its own agent's budget — so a tier set to think hard did nothing
+        // in the surface where several agents talk at once.
+        let reply_effort = self
+            .resolve_effort(
+                row.get::<Option<String>, _>("agent_effort")
+                    .and_then(|e| ReasoningEffort::parse(&e)),
+                None,
+                &engine_id,
+                tier,
+            )
+            .await;
         let persona = format!(
             "You are {agent_name}, an agent on this project's kanban board.{}",
             if system_prompt.is_empty() {
