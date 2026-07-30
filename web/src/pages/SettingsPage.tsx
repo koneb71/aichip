@@ -25,8 +25,14 @@ type EffortDraft = Record<string, Record<Tier, Effort | null>>;
 const asDraft = (s: ModelSettings): Draft =>
   Object.fromEntries(s.engines.map((e) => [e.id, { ...e.tiers }]));
 
+const NO_EFFORTS: Record<Tier, Effort | null> = {
+  easy: null,
+  medium: null,
+  complex: null,
+};
+
 const asEffortDraft = (s: ModelSettings): EffortDraft =>
-  Object.fromEntries(s.engines.map((e) => [e.id, { ...e.efforts }]));
+  Object.fromEntries(s.engines.map((e) => [e.id, { ...NO_EFFORTS, ...e.efforts }]));
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
@@ -37,10 +43,20 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [perms, setPerms] = useState<PermissionSettings | null>(null);
   const [effort, setEffort] = useState<EffortSettings | null>(null);
+  /**
+   * The running binary is older than this page.
+   *
+   * Not a hypothetical: the dashboard is served from disk, so a server left
+   * running from before a release serves the new page and then answers its
+   * calls with an API that has never heard of them. Worth naming, because the
+   * alternative is a Thinking section with one lonely option and a Save button
+   * that discards what you just set.
+   */
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     api.permissionSettings().then(setPerms).catch(() => {});
-    api.effortSettings().then(setEffort).catch(() => {});
+    api.effortSettings().then(setEffort).catch(() => setStale(true));
   }, []);
 
   useEffect(() => {
@@ -61,7 +77,7 @@ export default function SettingsPage() {
       TIERS.some(
         (t) =>
           draft[e.id]?.[t.key] !== e.tiers[t.key] ||
-          (effortDraft?.[e.id]?.[t.key] ?? null) !== (e.efforts[t.key] ?? null),
+          (effortDraft?.[e.id]?.[t.key] ?? null) !== (e.efforts?.[t.key] ?? null),
       ),
     );
 
@@ -158,15 +174,18 @@ export default function SettingsPage() {
         second one costs a great deal more.
       </p>
       <div className="mt-3 max-w-2xl space-y-2">
-        <EffortChoice
-          checked={effort?.defaultEffort == null}
-          label="Leave it to the CLI"
-          blurb="Whatever claude or opencode does on its own. This is what aichip ships with."
-          onPick={async () => {
-            setEffort((e) => (e ? { ...e, defaultEffort: null } : e));
-            await api.setDefaultEffort(null);
-          }}
-        />
+        {stale && <StaleServer />}
+        {!stale && (
+          <EffortChoice
+            checked={effort?.defaultEffort == null}
+            label="Leave it to the CLI"
+            blurb="Whatever claude or opencode does on its own. This is what aichip ships with."
+            onPick={async () => {
+              setEffort((e) => (e ? { ...e, defaultEffort: null } : e));
+              await api.setDefaultEffort(null);
+            }}
+          />
+        )}
         {effort?.levels.map((l) => (
           <EffortChoice
             key={l.id}
@@ -179,12 +198,14 @@ export default function SettingsPage() {
             }}
           />
         ))}
-        <p className="text-[11px] text-ink-dim">
-          The fallback, for any tier that doesn't set one of its own below. A
-          card or its agent still outranks both. Resolved when a run starts
-          rather than when a card is made, so raising this reaches work already
-          sitting in the backlog.
-        </p>
+        {!stale && (
+          <p className="text-[11px] text-ink-dim">
+            The fallback, for any tier that doesn't set one of its own below. A
+            card or its agent still outranks both. Resolved when a run starts
+            rather than when a card is made, so raising this reaches work
+            already sitting in the backlog.
+          </p>
+        )}
         {!!effort?.agentsOverriding && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
             <span className="font-semibold">
@@ -249,6 +270,9 @@ export default function SettingsPage() {
                       <EffortPicker
                         value={effortDraft?.[engine.id]?.[tier.key] ?? null}
                         inherited={effort?.defaultEffort ?? null}
+                        // Not merely useless against an older server — it would
+                        // take the change, enable Save, and drop it.
+                        disabled={stale}
                         onChange={(v) =>
                           setEffortDraft((d) =>
                             d
@@ -329,6 +353,25 @@ export default function SettingsPage() {
  * server still validates the `provider/model` shape, which catches the one
  * mistake people actually make: pasting a Claude id into this field.
  */
+/**
+ * Said once, where the missing controls would have been.
+ *
+ * Deliberately not a toast or a console warning: the failure mode this
+ * replaces is a page that looks like it works and quietly drops what you set.
+ */
+function StaleServer() {
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+      <span className="font-semibold">
+        This server is older than this page.
+      </span>{" "}
+      It was started before thinking budgets existed, so it can't store one —
+      the dashboard is served from disk, which is why the two can disagree.
+      Restart aichip and reload.
+    </div>
+  );
+}
+
 /** One radio in the thinking list. Same shape as a permission mode. */
 function EffortChoice({
   checked,

@@ -534,8 +534,15 @@ export interface EngineModels {
   providers: { name: string; auth: string }[];
   tiers: Record<Tier, string>;
   defaults: Record<Tier, string>;
-  /** How hard each tier thinks here. Null means the tier pins nothing. */
-  efforts: Record<Tier, Effort | null>;
+  /**
+   * How hard each tier thinks here. Null means the tier pins nothing.
+   *
+   * Optional because the dashboard is served from disk while the binary that
+   * answers these calls is whatever is still running — a server started before
+   * this field existed serves the new page and then omits it. Typed honestly
+   * so the compiler makes every reader handle that.
+   */
+  efforts?: Record<Tier, Effort | null>;
 }
 
 /** The machine-wide thinking budget, and who ignores it. */
