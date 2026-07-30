@@ -60,6 +60,21 @@ async fn list(
                 COALESCE(kids.total, 0) AS child_count,
                 COALESCE(kids.resolved, 0) AS child_resolved,
                 s.status AS step_status,
+                -- The mode this card will actually run under, and which of the
+                -- three places decided it. Resolved here in exactly the order
+                -- the orchestrator resolves it (orchestrator.rs:1090) so the
+                -- board cannot disagree with what the run does.
+                --
+                -- Worth showing at all because the precedence surprises people:
+                -- a project set to work without asking still prompts when the
+                -- bound agent carries its own preset, and nothing said so.
+                COALESCE(a.permission_preset, t.permission_mode,
+                         (SELECT value #>> '{}' FROM settings
+                           WHERE key = 'default_permission_mode'),
+                         'reviewed') AS effective_mode,
+                CASE WHEN a.permission_preset IS NOT NULL THEN 'agent'
+                     WHEN t.permission_mode IS NOT NULL THEN 'card'
+                     ELSE 'default' END AS permission_source,
                 r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
                 r.team_id AS run_team_id
          FROM tasks t
@@ -109,6 +124,8 @@ async fn list(
                 // The raw assignment status, so the card can say "failed" or
                 // "dropped" — things the four columns have no room for.
                 "stepStatus": r.get::<Option<String>, _>("step_status"),
+                "effectiveMode": r.get::<String, _>("effective_mode"),
+                "permissionSource": r.get::<String, _>("permission_source"),
                 "orgRunId": r.get::<Option<Uuid>, _>("run_team_id")
                     .and(r.get::<Option<Uuid>, _>("run_id")),
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
