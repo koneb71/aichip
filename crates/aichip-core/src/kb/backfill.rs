@@ -71,9 +71,10 @@ async fn one(db: &Db, id: Uuid, title: &str, html: &str) -> anyhow::Result<()> {
         run_id: None,
         note: "the page as it stood before history was kept",
     };
-    // `save_edit` with no base_seq: this is the first revision, so there is
-    // nothing to conflict with, and it writes content_text, summary, the
-    // current_seq pointer and the backlinks in one transaction.
-    super::revisions::save_edit(db, id, rev).await?;
+    // `save_edit` unguarded: this runs at boot, before the server accepts a
+    // request, so there is no concurrent editor to conflict with. It writes
+    // content_text, summary, the current_seq pointer and the backlinks in one
+    // transaction.
+    super::revisions::save_edit(db, id, rev, None).await?;
     Ok(())
 }

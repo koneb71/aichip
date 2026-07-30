@@ -1512,7 +1512,12 @@ impl Orchestrator {
             // Guarded on the body as well as the pointer, so a page that has
             // content but no revision row is treated as somebody's work rather
             // than as an empty placeholder to write over.
-            crate::kb::revisions::save_edit(&self.db, article_id, rev).await?;
+            //
+            // `Some(0)` rather than `None`, because `existing` was read long
+            // before this line — a whole agent run ago. If somebody started
+            // typing on the placeholder while the run was in flight the page is
+            // no longer blank, and this refuses instead of erasing them.
+            crate::kb::revisions::save_edit(&self.db, article_id, rev, Some(0)).await?;
         } else {
             // Everything else is a proposal. This is the rule the whole
             // revision log exists for: an agent must never replace a body a

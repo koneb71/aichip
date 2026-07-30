@@ -38,9 +38,17 @@ export default function PageEditor() {
   const [assetIds, setAssetIds] = useState<string[]>([]);
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
 
-  // The revision this edit began from. A save that doesn't carry it is a save
-  // that can silently overwrite whatever arrived in the meantime.
+  // Where the page stood when this edit began. A save that doesn't carry it is
+  // a save that can silently overwrite whatever arrived in the meantime.
+  //
+  // Two numbers, because they answer different questions. `baseSeq` is the
+  // revision to diff against when showing what changed. `baseVersion` is the
+  // guard — and it has to be a separate counter, because rapid autosaves
+  // coalesce into the revision they are extending, leaving `currentSeq` exactly
+  // where it was. Guarding on the revision number let a second tab match it and
+  // overwrite the first with no conflict at all.
   const baseSeq = useRef<number>(0);
+  const baseVersion = useRef<number>(0);
   const dirty = useRef(false);
 
   useEffect(() => {
@@ -51,6 +59,7 @@ export default function PageEditor() {
       setPage(p);
       setTitle(p.title);
       baseSeq.current = p.currentSeq;
+      baseVersion.current = p.bodyVersion;
       // A draft left by a refused save is restored rather than lost — a
       // conflict must never cost someone their typing.
       const stashed = localStorage.getItem(DRAFT_KEY(p.id));
@@ -73,9 +82,11 @@ export default function PageEditor() {
         title: title.trim() || "Untitled",
         content_html: html,
         base_seq: baseSeq.current,
+        base_version: baseVersion.current,
         asset_ids: assetIds,
       });
       baseSeq.current = updated.currentSeq;
+      baseVersion.current = updated.bodyVersion;
       localStorage.removeItem(DRAFT_KEY(pageId));
       setSave({ kind: "saved" });
       reload();
@@ -148,7 +159,15 @@ export default function PageEditor() {
             </div>
             <p className="mt-1 text-xs text-amber-900/80">
               Your version is safe — it is still in the editor below and will
-              survive a reload. Here is what changed underneath it.
+              survive a reload.{" "}
+              {save.diff
+                ? "Here is what changed underneath it."
+                : // No diff when the other save folded into the revision this
+                  // one started from: coalescing rewrites that revision in
+                  // place, so the text it used to hold is genuinely gone and
+                  // there is nothing honest to show. Better to say so than to
+                  // render an empty box under a promise.
+                  "Their change went into the same revision yours started from, so there is no before-and-after to show."}
             </p>
             {save.diff && (
               <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-line bg-panel">
@@ -162,6 +181,7 @@ export default function PageEditor() {
                   // deliberate, and the only thing that discards their edit.
                   const fresh = await api.article(page.id);
                   baseSeq.current = fresh.currentSeq;
+                  baseVersion.current = fresh.bodyVersion;
                   dirty.current = true;
                   await persist();
                 }}
