@@ -49,6 +49,14 @@ pub struct Preview {
     /// at is worse than telling them it is old, and "what did it look like
     /// before?" is a real question.
     pub stale: bool,
+    /// The image is still on disk, so starting this again is a wake of a few
+    /// seconds rather than a rebuild of several minutes. Worth saying: the
+    /// button means something different in each case.
+    pub can_wake: bool,
+    /// The name this answers to. Only the label — the dashboard builds the URL,
+    /// because the port to put in it is the one aichip is being *served* on and
+    /// the core has no business knowing that. The browser already does.
+    pub slug: Option<String>,
     pub error: Option<String>,
 }
 
@@ -60,6 +68,72 @@ pub struct Preview {
 /// "the machine running your editor stops responding". Slice 4 makes it a
 /// setting; until then a wrong constant is much cheaper than no constant.
 pub const MAX_LIVE: i64 = 3;
+
+/// The hostname suffix previews answer on. Duplicated nowhere: the server's
+/// proxy imports this, so the name it routes and the name the UI shows cannot
+/// drift apart.
+pub const PREVIEW_SUFFIX: &str = ".preview.localhost";
+
+/// How long a preview nobody has looked at stays up.
+pub const IDLE_MINUTES: i64 = 30;
+
+/// The two numbers that decide whether previews are safe to forget about.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Limits {
+    pub max_live: i64,
+    /// Zero means never idle-stop, which is a real choice for someone who
+    /// leaves one open all day on purpose.
+    pub idle_minutes: i64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_live: MAX_LIVE,
+            idle_minutes: IDLE_MINUTES,
+        }
+    }
+}
+
+pub async fn limits(db: &Db) -> Limits {
+    let stored: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'preview_limits'")
+            .fetch_optional(&db.pool)
+            .await
+            .ok()
+            .flatten();
+    let d = Limits::default();
+    let Some(v) = stored else { return d };
+    Limits {
+        // Clamped rather than trusted: a zero here would make the Build button
+        // permanently refuse, and there is no way back from that in the UI.
+        max_live: v.get("max_live").and_then(|x| x.as_i64()).unwrap_or(d.max_live).clamp(1, 20),
+        idle_minutes: v
+            .get("idle_minutes")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(d.idle_minutes)
+            .clamp(0, 24 * 60),
+    }
+}
+
+pub async fn set_limits(db: &Db, next: Limits) -> anyhow::Result<Limits> {
+    let next = Limits {
+        max_live: next.max_live.clamp(1, 20),
+        idle_minutes: next.idle_minutes.clamp(0, 24 * 60),
+    };
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('preview_limits', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(serde_json::json!({
+        "max_live": next.max_live,
+        "idle_minutes": next.idle_minutes,
+    }))
+    .execute(&db.pool)
+    .await?;
+    Ok(next)
+}
 
 /// Where this task's work lives on disk.
 ///
@@ -99,7 +173,7 @@ fn free_port() -> anyhow::Result<u16> {
 pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
     let row = sqlx::query(
         "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
-                p.port_assumed, p.error, p.container_id,
+                p.port_assumed, p.error, p.container_id, p.image_kept, p.slug,
                 -- Any run that started after this was built means the branch
                 -- has moved on. Cheaper than a column, and it cannot fall out
                 -- of step with the runs it is describing.
@@ -117,8 +191,17 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
     // nothing would notice until the next restart, leaving the card offering a
     // link to a closed port. Checked here rather than on a timer because this
     // is read when someone opens the card, which is exactly when it matters.
+    // Reading the card is the only "someone is looking at this" signal there
+    // is — the drawer does not poll a running preview, and the browser tab
+    // showing the container never talks to aichip at all. It is a coarse
+    // signal, so the idle window is measured in tens of minutes rather than
+    // minutes: the cost of being wrong is a rebuild, not lost work.
     if let Some(r) = &row {
         if r.get::<String, _>("status") == "running" {
+            let _ = sqlx::query("UPDATE previews SET last_seen_at = now() WHERE id = $1")
+                .bind(r.get::<Uuid, _>("id"))
+                .execute(&db.pool)
+                .await;
             let container: Option<String> = r.get("container_id");
             let name = container.unwrap_or_else(|| recipe::container_name(&r.get("id")));
             if !docker::is_running(&name).await {
@@ -151,6 +234,11 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
             container_port: r.get("container_port"),
             port_assumed: r.get("port_assumed"),
             stale: r.get("stale"),
+            // Only meaningful when it is not already up.
+            can_wake: r.get::<bool, _>("image_kept") && status != "running",
+            slug: r
+                .get::<Option<String>, _>("slug")
+                .filter(|_| status == "running"),
             error: r.get("error"),
             status,
         }
@@ -191,13 +279,22 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     .bind(task_id)
     .fetch_all(&db.pool)
     .await?;
-    if live.len() as i64 >= MAX_LIVE {
+    let limits = limits(db).await;
+    if live.len() as i64 >= limits.max_live {
         anyhow::bail!(
             "{} previews are already running, which is the limit — each one holds \
              2 GB and 2 CPUs of this machine. Stop one first: {}.",
             live.len(),
             live.join(", ")
         );
+    }
+
+    // Wake before rebuild. An idle-stopped preview kept its image, so putting
+    // it back is a `docker run` rather than a `docker build` — seconds instead
+    // of minutes, and byte-for-byte what was there before rather than a fresh
+    // build of a branch that may have moved on in the meantime.
+    if let Some(woken) = wake(db, task_id, port.number).await? {
+        return Ok(woken);
     }
 
     let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM tasks WHERE id = $1")
@@ -230,6 +327,20 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
             .ok_or_else(|| anyhow::anyhow!("a preview is already starting for this card"));
     };
 
+    // Named after the card and keyed to the card, so a rebuild keeps the name.
+    // Written as a second statement only because the insert above may have lost
+    // its race, in which case there is no row of ours to name.
+    let title: String = sqlx::query_scalar("SELECT title FROM tasks WHERE id = $1")
+        .bind(task_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap_or_default();
+    sqlx::query("UPDATE previews SET slug = $2 WHERE id = $1")
+        .bind(id)
+        .bind(recipe::slug(&title, &task_id))
+        .execute(&db.pool)
+        .await?;
+
     let pool = db.pool.clone();
     tokio::spawn(async move {
         if let Err(e) = build_and_run(&pool, id, &source, port.number).await {
@@ -240,6 +351,141 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     get(db, task_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("preview vanished immediately after being created"))
+}
+
+/// Put an idle preview back, if its image is still there.
+///
+/// Returns `None` when there is nothing to wake, so the caller falls through to
+/// a normal build. Checks Docker for the image rather than trusting the column:
+/// `docker image prune` is a thing people run, and aichip is not told.
+async fn wake(db: &Db, task_id: Uuid, container_port: u16) -> anyhow::Result<Option<Preview>> {
+    let row = sqlx::query(
+        "SELECT id, image, container_port FROM previews
+          WHERE task_id = $1 AND status = 'idle' AND image_kept
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+
+    let id: Uuid = row.get("id");
+    let tag = row
+        .get::<Option<String>, _>("image")
+        .unwrap_or_else(|| recipe::image_tag(&id));
+    if !docker::image_exists(&tag).await {
+        // Someone reclaimed it behind our back. Say so in the row rather than
+        // silently rebuilding under a status that claims to be a wake.
+        sqlx::query("UPDATE previews SET image_kept = FALSE WHERE id = $1")
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+        return Ok(None);
+    }
+
+    // A woken preview gets a new port: the old one may well have been taken by
+    // something else in the meantime, and a stale port in the row would send
+    // someone to whatever is there now.
+    let host_port = free_port()?;
+    let port = row
+        .get::<Option<i32>, _>("container_port")
+        .map(|p| p as u16)
+        .unwrap_or(container_port);
+    // The old container is gone by definition, but its name may linger if the
+    // idle stop lost a race.
+    docker::remove(&recipe::container_name(&id)).await;
+    let container = docker::run(&tag, &recipe::container_name(&id), host_port, port)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    sqlx::query(
+        "UPDATE previews SET status='running', container_id=$2, host_port=$3,
+                             started_at=now(), last_seen_at=now(), error=NULL
+          WHERE id=$1",
+    )
+    .bind(id)
+    .bind(&container)
+    .bind(host_port as i32)
+    .execute(&db.pool)
+    .await?;
+
+    tracing::info!(preview=%id, "woke an idle preview from its kept image");
+    get(db, task_id).await
+}
+
+/// Stop previews nobody has looked at for a while, keeping their images.
+///
+/// The container is what costs memory; the image only costs disk. Keeping the
+/// image is what makes this safe to do automatically — the cost of being wrong
+/// is a few seconds when you come back, not a rebuild.
+pub async fn sweep_idle(db: &Db) -> anyhow::Result<u64> {
+    let limits = limits(db).await;
+    if limits.idle_minutes == 0 {
+        return Ok(0);
+    }
+    let rows = sqlx::query(
+        "UPDATE previews SET status='idle', stopped_at=now(), image_kept=TRUE,
+                error='stopped after nobody looked at it for a while'
+          WHERE status='running'
+            AND COALESCE(last_seen_at, started_at, created_at)
+                  < now() - make_interval(mins => $1::int)
+      RETURNING id, container_id",
+    )
+    .bind(limits.idle_minutes as i32)
+    .fetch_all(&db.pool)
+    .await?;
+
+    for row in &rows {
+        let id: Uuid = row.get("id");
+        if let Some(c) = row.get::<Option<String>, _>("container_id") {
+            docker::remove(&c).await;
+        }
+        docker::remove(&recipe::container_name(&id)).await;
+    }
+    if !rows.is_empty() {
+        tracing::info!(count = rows.len(), "idle previews stopped; images kept for a fast wake");
+    }
+    Ok(rows.len() as u64)
+}
+
+/// The sweeper loop. One minute is far finer than the idle window, which keeps
+/// the check cheap and the stop close to when it was earned.
+pub async fn idle_loop(db: Db) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        if let Err(e) = sweep_idle(&db).await {
+            tracing::warn!(error=%e, "idle preview sweep failed");
+        }
+    }
+}
+
+/// What previews are costing on disk, and what could be reclaimed.
+pub async fn disk(db: &Db) -> anyhow::Result<(u64, i64)> {
+    let reclaimable: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM previews WHERE image_kept AND status <> 'running'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap_or(0);
+    Ok((docker::image_disk_bytes().await, reclaimable))
+}
+
+/// Drop every kept image that nothing is running from.
+///
+/// Explicit rather than automatic: reclaiming an image turns the next wake back
+/// into a full rebuild, and that is a trade the person looking at the disk
+/// figure should get to make.
+pub async fn reclaim_disk(db: &Db) -> anyhow::Result<u64> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "UPDATE previews SET image_kept = FALSE
+          WHERE image_kept AND status <> 'running' RETURNING id",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    for id in &ids {
+        docker::remove_image(&recipe::image_tag(id)).await;
+    }
+    Ok(ids.len() as u64)
 }
 
 async fn build_and_run(
@@ -276,7 +522,8 @@ async fn build_and_run(
 
     sqlx::query(
         "UPDATE previews SET status='running', container_id=$2, image=$3,
-                             host_port=$4, started_at=now()
+                             host_port=$4, started_at=now(), last_seen_at=now(),
+                             image_kept=TRUE
           WHERE id=$1 AND status='building'",
     )
     .bind(id)
@@ -311,8 +558,8 @@ async fn fail(pool: &sqlx::PgPool, id: Uuid, why: &str) {
 /// or the card offers Stop forever and never Preview.
 pub async fn stop(db: &Db, task_id: Uuid) -> anyhow::Result<bool> {
     let row = sqlx::query(
-        "UPDATE previews SET status='stopped', stopped_at=now()
-          WHERE task_id=$1 AND status IN ('building','running')
+        "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
+          WHERE task_id=$1 AND status IN ('building','running','idle')
       RETURNING id, container_id, image",
     )
     .bind(task_id)

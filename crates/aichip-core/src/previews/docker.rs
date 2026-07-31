@@ -136,6 +136,61 @@ pub async fn remove(container: &str) {
         .await;
 }
 
+/// Does this image still exist? Waking a preview depends on the answer, and
+/// a `docker rmi` run by the user is not something aichip is told about.
+pub async fn image_exists(tag: &str) -> bool {
+    Command::new(DOCKER)
+        .args(["image", "inspect", tag])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Total bytes of every preview image on disk.
+///
+/// Asked of Docker rather than tracked as we go: images are shared, layers are
+/// deduplicated, and a number aichip computed itself would be confidently wrong
+/// in a way the user could not check.
+pub async fn image_disk_bytes() -> u64 {
+    Command::new(DOCKER)
+        .args([
+            "images",
+            "--filter",
+            &format!("label={OWNER_LABEL}=1"),
+            "--format",
+            "{{.Size}}",
+            "--no-trunc",
+        ])
+        .output()
+        .await
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| parse_size(l.trim()))
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// Docker prints sizes as "123MB" / "1.2GB". Parsed rather than asked for in
+/// bytes because `docker images` has no such format.
+fn parse_size(text: &str) -> Option<u64> {
+    let cut = text.find(|c: char| c.is_ascii_alphabetic())?;
+    let (number, unit) = text.split_at(cut);
+    let number: f64 = number.trim().parse().ok()?;
+    let scale = match unit.trim().to_ascii_uppercase().as_str() {
+        "B" => 1.0,
+        "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        "TB" => 1e12,
+        _ => return None,
+    };
+    Some((number * scale) as u64)
+}
+
 /// Remove a built image once nothing points at it. Ignores "still in use".
 pub async fn remove_image(tag: &str) {
     let _ = Command::new(DOCKER).args(["rmi", "--force", tag]).output().await;
@@ -180,6 +235,18 @@ fn tail(text: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_dockers_own_size_spelling() {
+        assert_eq!(parse_size("123MB"), Some(123_000_000));
+        assert_eq!(parse_size("1.2GB"), Some(1_200_000_000));
+        assert_eq!(parse_size("512B"), Some(512));
+        // Docker sometimes pads; a number with no unit is not a size.
+        assert_eq!(parse_size(" 4.5 GB "), Some(4_500_000_000));
+        assert_eq!(parse_size("123"), None);
+        assert_eq!(parse_size(""), None);
+        assert_eq!(parse_size("N/A"), None);
+    }
 
     #[test]
     fn tail_keeps_the_end_which_is_where_the_error_is() {

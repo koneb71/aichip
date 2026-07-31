@@ -178,6 +178,9 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     tokio::spawn(orchestrator.clone().run_loop());
     tokio::spawn(aichip_core::Scheduler::new(db.clone(), orchestrator.clone()).run_loop());
     tokio::spawn(sweep_attachments(db.clone()));
+    // Previews nobody is looking at stop themselves, keeping their images so
+    // coming back costs seconds rather than a rebuild.
+    tokio::spawn(aichip_core::previews::idle_loop(db.clone()));
 
     // Object storage, when it's configured. The bucket is created on boot so
     // a fresh MinIO needs no manual setup step; a failure here is logged and

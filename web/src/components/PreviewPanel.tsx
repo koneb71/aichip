@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, DockerStatus, TaskPreview } from "../lib/api";
+import { api, DockerStatus, previewUrl, TaskPreview } from "../lib/api";
 
 /**
  * See the branch, not the diff.
@@ -85,7 +85,11 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
             disabled={busy || (!!docker && !docker.usable)}
             className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
           >
-            {preview?.status === "failed" ? "Try again" : "Build & run"}
+            {preview?.status === "failed"
+              ? "Try again"
+              : preview?.canWake
+                ? "Wake it"
+                : "Build & run"}
           </motion.button>
         )}
         {alive && (
@@ -133,15 +137,15 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
         </div>
       )}
 
-      {live && preview.url && (
+      {live && previewUrl(preview) && (
         <div className="flex flex-wrap items-baseline gap-2">
           <a
-            href={preview.url}
+            href={previewUrl(preview)!}
             target="_blank"
             rel="noreferrer"
             className="text-sm font-medium text-accent hover:underline"
           >
-            {preview.url}
+            {previewUrl(preview)!.replace(/^https?:\/\//, "")}
           </a>
           {/* Said rather than acted on. Killing what someone is looking at
               because an agent started working is worse than telling them the
@@ -177,8 +181,11 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
 
       {!alive && !error && preview?.status !== "failed" && (
         <div className="text-[11px] text-ink-dim">
-          Builds this card's branch from its own Dockerfile and serves it on a
-          port of its own. Runs on this machine only.
+          {preview?.canWake
+            ? // Worth distinguishing: the button costs seconds here and minutes
+              // otherwise, and people plan around which one it is.
+              "Stopped because nobody was looking at it. Its image is still here, so waking it takes a few seconds."
+            : "Builds this card's branch from its own Dockerfile and serves it at a name of its own. Runs on this machine only."}
         </div>
       )}
     </div>
