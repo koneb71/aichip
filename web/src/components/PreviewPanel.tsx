@@ -89,13 +89,29 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
           </motion.button>
         )}
         {alive && (
-          <button
-            onClick={stop}
-            disabled={busy}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
-          >
-            Stop
-          </button>
+          <div className="flex items-center gap-1.5">
+            {live && preview.stale && (
+              <button
+                onClick={async () => {
+                  // Stop then start: one preview per card is the rule the
+                  // database enforces, so a rebuild is genuinely both.
+                  await stop();
+                  await start();
+                }}
+                disabled={busy}
+                className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
+              >
+                Rebuild
+              </button>
+            )}
+            <button
+              onClick={stop}
+              disabled={busy}
+              className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          </div>
         )}
       </div>
 
@@ -127,6 +143,15 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
           >
             {preview.url}
           </a>
+          {/* Said rather than acted on. Killing what someone is looking at
+              because an agent started working is worse than telling them the
+              page is from before that — and "what did it look like before?" is
+              a question worth being able to answer. */}
+          {preview.stale && (
+            <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-900">
+              built before the latest run — rebuild to see current work
+            </span>
+          )}
           {/* Said out loud, because the symptom of a wrong guess is a blank
               page — which reads as a broken branch rather than a wrong port. */}
           {preview.portAssumed && (
