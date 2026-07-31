@@ -203,7 +203,10 @@ export function previewUrl(p: TaskPreview): string | null {
  * is approving code, and the UI shows the whole text rather than a summary.
  */
 export interface PreviewRecipe {
+  /** The file's text, whichever kind it is. */
   dockerfile: string;
+  /** What the agent decided this project needs. */
+  kind: "dockerfile" | "compose";
   status: "proposed" | "approved";
   /** A person rewrote it rather than approving what was proposed. */
   edited: boolean;

@@ -202,23 +202,54 @@ async fn how(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<(How, r
                 recipe::PortSource::Exposed
             },
         };
-        return Ok((How::Stack(plan, path), port));
+        // The directory, not the file: it is what every relative build context
+        // and bind mount inside resolves against.
+        let dir = path.parent().unwrap_or(source).to_path_buf();
+        return Ok((How::Stack(plan, dir), port));
     }
 
-    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
-    let recipe_text = match &own {
-        Some(_) => None,
-        None => sqlx::query_scalar(
-            "SELECT dockerfile FROM preview_recipes
-              WHERE project_id = $1 AND status = 'approved'",
-        )
-        .bind(project_id)
-        .fetch_optional(&db.pool)
-        .await?,
+    if let Some(own) = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok() {
+        let port = recipe::plan(Some(&own)).map_err(|e| anyhow::anyhow!(e.message()))?;
+        return Ok((How::Single(None), port));
+    }
+
+    // Nothing in the branch. An approved recipe is the last resort — and only
+    // an approved one, since a proposal is agent-written code nobody has read.
+    let row = sqlx::query(
+        "SELECT dockerfile, kind FROM preview_recipes
+          WHERE project_id = $1 AND status = 'approved'",
+    )
+    .bind(project_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else {
+        return Err(anyhow::anyhow!(recipe::NoRecipe::NoDockerfile.message()));
     };
-    let dockerfile = own.or_else(|| recipe_text.clone());
-    let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
-    Ok((How::Single(recipe_text), port))
+
+    let text: String = row.get("dockerfile");
+    let kind = recipe_writer::Kind::parse(&row.get::<String, _>("kind"))
+        .unwrap_or(recipe_writer::Kind::Dockerfile);
+    match kind {
+        // An agent-written stack goes through exactly the same treatment as one
+        // found in the repo: ports stripped, everything namespaced. Nothing
+        // about having written it ourselves makes it safer.
+        recipe_writer::Kind::Compose => {
+            let plan = compose::plan(&text).map_err(|e| anyhow::anyhow!(e.message()))?;
+            let port = recipe::Port {
+                number: plan.container_port,
+                source: if plan.port_assumed {
+                    recipe::PortSource::Assumed
+                } else {
+                    recipe::PortSource::Exposed
+                },
+            };
+            Ok((How::Stack(plan, source.to_path_buf()), port))
+        }
+        recipe_writer::Kind::Dockerfile => {
+            let port = recipe::plan(Some(&text)).map_err(|e| anyhow::anyhow!(e.message()))?;
+            Ok((How::Single(Some(text)), port))
+        }
+    }
 }
 
 /// Which preview: a card's, or a project's base branch.
@@ -607,18 +638,6 @@ async fn compose_file_for(id: Uuid, contents: &str) -> std::io::Result<PathBuf> 
     Ok(path)
 }
 
-/// This project's recipe, but only once a person has approved it.
-async fn approved_recipe(db: &Db, task_id: Uuid) -> anyhow::Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT r.dockerfile FROM preview_recipes r
-           JOIN tasks t ON t.project_id = r.project_id
-          WHERE t.id = $1 AND r.status = 'approved'",
-    )
-    .bind(task_id)
-    .fetch_optional(&db.pool)
-    .await?)
-}
-
 /// Put an idle preview back, if its image is still there.
 ///
 /// Returns `None` when there is nothing to wake, so the caller falls through to
@@ -775,13 +794,12 @@ async fn build_and_run(
 
     // A stack takes a different path entirely: compose builds, starts and wires
     // its own services, so there is no single image and no `docker run`.
-    if let How::Stack(plan, original) = &build {
+    if let How::Stack(plan, project_dir) = &build {
         let host_port = free_port().map_err(|e| format!("no free port: {e}"))?;
         let rendered = compose_file_for(id, &plan.render(host_port))
             .await
             .map_err(|e| format!("could not write the compose file: {e}"))?;
-        let project_dir = original.parent().unwrap_or(source).to_path_buf();
-        docker::compose_up(&rendered, &project_dir, &recipe::container_name(&id)).await?;
+        docker::compose_up(&rendered, project_dir, &recipe::container_name(&id)).await?;
 
         sqlx::query(
             "UPDATE previews SET status='running', host_port=$2, started_at=now(),

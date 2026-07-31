@@ -3,12 +3,17 @@ import { motion } from "framer-motion";
 import { api, PreviewRecipe } from "../lib/api";
 
 /**
- * A Dockerfile an agent wrote, shown in full before anything builds it.
+ * What an agent decided this project needs, shown in full before it is built.
  *
- * The gate is the feature. A Dockerfile is not configuration: `RUN` executes
- * arbitrary commands on this machine, with the network, while the image is
- * built. So the whole text is shown, editable, and nothing runs until someone
- * presses the button that says so.
+ * The agent chooses: a Dockerfile when one container serves the whole thing, a
+ * compose file when the project cannot start without a database or a separate
+ * API. Which it picked is worth showing — a stack takes longer to build and
+ * runs more than what you opened.
+ *
+ * The gate is the feature. Neither file is configuration: `RUN` executes
+ * arbitrary commands on this machine while the image is built, and compose can
+ * ask for volumes and services besides. So the whole text is shown, editable,
+ * and nothing runs until someone presses the button that says so.
  *
  * Editing and approving are one action deliberately — approving "the current
  * proposal" by reference would leave a window where the text that gets built
@@ -82,8 +87,9 @@ export function RecipeGate({
           {busy ? "Reading the project…" : "Write one for me"}
         </motion.button>
         <div className="mt-1 text-[11px] text-ink-dim">
-          An agent reads this project and proposes a Dockerfile. You read it
-          before anything is built.
+          An agent reads this project and decides what it needs — a Dockerfile if
+          one container will do, a compose stack if it genuinely won't. You read
+          it before anything is built.
         </div>
         {error && (
           <div className="mt-1 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
@@ -99,11 +105,21 @@ export function RecipeGate({
 
   return (
     <div className="mt-1.5 space-y-1.5">
+      <div className="flex flex-wrap items-baseline gap-2 text-[11px]">
+        <span className="rounded-md bg-line/60 px-1.5 py-0.5 uppercase tracking-wide text-ink-dim">
+          {recipe.kind === "compose" ? "compose stack" : "dockerfile"}
+        </span>
+        <span className="text-ink-dim">
+          {recipe.kind === "compose"
+            ? "The agent decided one container isn't enough. Its declared host ports are ignored — the preview publishes one, on loopback."
+            : "The agent decided one container serves this."}
+        </span>
+      </div>
       {!approved && (
         <div className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
-          <span className="font-semibold">An agent wrote this.</span> Its RUN
-          lines will execute on this machine when the image is built. Read it,
-          change anything you like, then approve.
+          <span className="font-semibold">An agent wrote this.</span> Its build
+          steps execute on this machine. Read it, change anything you like, then
+          approve.
         </div>
       )}
       <textarea

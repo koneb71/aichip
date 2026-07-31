@@ -129,7 +129,7 @@ async fn get_recipe(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
-        "SELECT dockerfile, status, edited FROM preview_recipes WHERE project_id = $1",
+        "SELECT dockerfile, kind, status, edited FROM preview_recipes WHERE project_id = $1",
     )
     .bind(project_id)
     .fetch_optional(&state.db.pool)
@@ -138,6 +138,7 @@ async fn get_recipe(
     Ok(Json(json!({
         "recipe": row.map(|r| json!({
             "dockerfile": r.get::<String, _>("dockerfile"),
+            "kind": r.get::<String, _>("kind"),
             "status": r.get::<String, _>("status"),
             "edited": r.get::<bool, _>("edited"),
         })),
@@ -182,10 +183,11 @@ async fn propose_recipe(
     .await
     .map_err(internal)?;
 
-    let Some(dockerfile) = aichip_core::previews::recipe_writer::extract(&reply) else {
+    let Some((kind, text)) = aichip_core::previews::recipe_writer::extract(&reply) else {
         return Err((
             StatusCode::BAD_GATEWAY,
-            "The agent did not return a Dockerfile. Try again, or write one yourself              and put it in the project."
+            "The agent returned neither a Dockerfile nor a compose file. Try again, \
+             or write one yourself and put it in the project."
                 .into(),
         ));
     };
@@ -193,20 +195,27 @@ async fn propose_recipe(
     // Replaces any previous proposal, and resets approval: text nobody has read
     // must never inherit the approval given to different text.
     sqlx::query(
-        "INSERT INTO preview_recipes (project_id, dockerfile, status, edited, approved_at)
-         VALUES ($1, $2, 'proposed', FALSE, NULL)
+        "INSERT INTO preview_recipes (project_id, dockerfile, kind, status, edited, approved_at)
+         VALUES ($1, $2, $3, 'proposed', FALSE, NULL)
          ON CONFLICT (project_id) DO UPDATE
-            SET dockerfile = EXCLUDED.dockerfile, status = 'proposed',
-                edited = FALSE, approved_at = NULL, created_at = now()",
+            SET dockerfile = EXCLUDED.dockerfile, kind = EXCLUDED.kind,
+                status = 'proposed', edited = FALSE, approved_at = NULL,
+                created_at = now()",
     )
     .bind(project_id)
-    .bind(&dockerfile)
+    .bind(&text)
+    .bind(kind.as_str())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
 
     Ok(Json(json!({
-        "recipe": { "dockerfile": dockerfile, "status": "proposed", "edited": false },
+        "recipe": {
+            "dockerfile": text,
+            "kind": kind.as_str(),
+            "status": "proposed",
+            "edited": false,
+        },
     })))
 }
 
@@ -224,15 +233,17 @@ async fn approve_recipe(
     Json(body): Json<ApproveBody>,
 ) -> Result<Json<Value>, ApiError> {
     let text = body.dockerfile.trim().to_string();
-    if !text
-        .lines()
-        .any(|l| l.trim_start().to_ascii_uppercase().starts_with("FROM "))
-    {
+    // Re-derived from the text being approved rather than taken from the
+    // proposal: a person may have rewritten a Dockerfile into a stack, and what
+    // gets built has to match what was read.
+    let Some((kind, _)) = aichip_core::previews::recipe_writer::extract(&text) else {
         return Err((
             StatusCode::BAD_REQUEST,
-            "That is not a Dockerfile — it has no FROM line.".into(),
+            "That is neither a Dockerfile (no FROM line) nor a compose file \
+             (no services)."
+                .into(),
         ));
-    }
+    };
     let edited: bool = sqlx::query_scalar(
         "SELECT dockerfile IS DISTINCT FROM $2 FROM preview_recipes WHERE project_id = $1",
     )
@@ -244,20 +255,21 @@ async fn approve_recipe(
     .unwrap_or(true);
 
     sqlx::query(
-        "INSERT INTO preview_recipes (project_id, dockerfile, status, edited, approved_at)
-         VALUES ($1, $2, 'approved', $3, now())
+        "INSERT INTO preview_recipes (project_id, dockerfile, kind, status, edited, approved_at)
+         VALUES ($1, $2, $3, 'approved', $4, now())
          ON CONFLICT (project_id) DO UPDATE
-            SET dockerfile = EXCLUDED.dockerfile, status = 'approved',
-                edited = EXCLUDED.edited, approved_at = now()",
+            SET dockerfile = EXCLUDED.dockerfile, kind = EXCLUDED.kind,
+                status = 'approved', edited = EXCLUDED.edited, approved_at = now()",
     )
     .bind(project_id)
     .bind(&text)
+    .bind(kind.as_str())
     .bind(edited)
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
 
-    Ok(Json(json!({ "approved": true, "edited": edited })))
+    Ok(Json(json!({ "approved": true, "edited": edited, "kind": kind.as_str() })))
 }
 
 /// Everything this project has running, plus what it is costing.

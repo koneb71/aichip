@@ -192,11 +192,12 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
 
       <div className="mt-6 max-w-3xl">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
-          Dockerfile
+          How this gets built
         </div>
         <p className="mb-1.5 text-xs text-ink-dim">
-          Used when a branch has none of its own. An agent can write one; you
-          read it before anything builds it.
+          Used when a branch has no Dockerfile and no compose file of its own. An
+          agent reads the project and decides which it needs; you read that
+          before anything builds it.
         </p>
         <RecipeGate projectId={projectId} onApproved={refresh} />
       </div>
