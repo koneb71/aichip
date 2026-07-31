@@ -22,6 +22,7 @@
 //! database. Nothing here creates a network or a named volume, which is what
 //! keeps a preview from colliding with the compose stacks the user already runs.
 
+pub mod compose;
 pub mod docker;
 pub mod recipe;
 pub mod recipe_writer;
@@ -61,6 +62,9 @@ pub struct Preview {
     /// because the port to put in it is the one aichip is being *served* on and
     /// the core has no business knowing that. The browser already does.
     pub slug: Option<String>,
+    /// A whole compose stack rather than one container. Worth saying: the
+    /// build takes longer, and what is running is more than what you opened.
+    pub is_stack: bool,
     pub error: Option<String>,
 }
 
@@ -173,6 +177,50 @@ fn free_port() -> anyhow::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+/// How a source directory gets built.
+///
+/// Compose wins when both are present: a project with a stack *and* a root
+/// Dockerfile almost always uses that Dockerfile as one service of the stack,
+/// so building it alone gives you a front end talking to nothing.
+enum How {
+    Stack(compose::Plan, PathBuf),
+    Single(Option<String>),
+}
+
+async fn how(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<(How, recipe::Port)> {
+    for name in compose::COMPOSE_FILES {
+        let path = source.join(name);
+        let Ok(text) = tokio::fs::read_to_string(&path).await else {
+            continue;
+        };
+        let plan = compose::plan(&text).map_err(|e| anyhow::anyhow!(e.message()))?;
+        let port = recipe::Port {
+            number: plan.container_port,
+            source: if plan.port_assumed {
+                recipe::PortSource::Assumed
+            } else {
+                recipe::PortSource::Exposed
+            },
+        };
+        return Ok((How::Stack(plan, path), port));
+    }
+
+    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
+    let recipe_text = match &own {
+        Some(_) => None,
+        None => sqlx::query_scalar(
+            "SELECT dockerfile FROM preview_recipes
+              WHERE project_id = $1 AND status = 'approved'",
+        )
+        .bind(project_id)
+        .fetch_optional(&db.pool)
+        .await?,
+    };
+    let dockerfile = own.or_else(|| recipe_text.clone());
+    let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
+    Ok((How::Single(recipe_text), port))
+}
+
 /// Which preview: a card's, or a project's base branch.
 ///
 /// One enum rather than two parallel families of function. Everything after the
@@ -220,6 +268,7 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
     let row = sqlx::query(
         "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
                 p.port_assumed, p.error, p.container_id, p.image_kept, p.slug,
+                p.compose_file,
                 -- Any run that started after this was built means the branch
                 -- has moved on. A base preview has no card, so it is never
                 -- stale in this sense: main moving is not something a run did.
@@ -243,13 +292,22 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
                 .bind(id)
                 .execute(&db.pool)
                 .await;
-            let container: Option<String> = r.get("container_id");
-            let name = container.unwrap_or_else(|| recipe::container_name(&id));
             // A container can die on its own — out of memory, a crash minutes
             // in — and nothing would notice until the next restart, leaving a
             // link to a closed port. Checked when someone reads it, which is
             // exactly when it matters.
-            if !docker::is_running(&name).await {
+            //
+            // A stack has to be asked differently: compose names its containers
+            // `<project>-<service>-1`, so looking for our own container name
+            // finds nothing and would kill a healthy stack on first read.
+            let alive = if r.get::<Option<String>, _>("compose_file").is_some() {
+                docker::compose_running(&recipe::container_name(&id)).await
+            } else {
+                let container: Option<String> = r.get("container_id");
+                let name = container.unwrap_or_else(|| recipe::container_name(&id));
+                docker::is_running(&name).await
+            };
+            if !alive {
                 sqlx::query(
                     "UPDATE previews SET status='stopped', stopped_at=now(),
                             image_kept=FALSE,
@@ -283,6 +341,7 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
             slug: r
                 .get::<Option<String>, _>("slug")
                 .filter(|_| status == "running"),
+            is_stack: r.get::<Option<String>, _>("compose_file").is_some(),
             error: r.get("error"),
             status,
         }
@@ -297,7 +356,7 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
 pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<Value>> {
     let rows = sqlx::query(
         "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
-                p.port_assumed, p.error, p.image_kept, p.slug,
+                p.port_assumed, p.error, p.image_kept, p.slug, p.compose_file,
                 t.title AS task_title,
                 COALESCE((SELECT true FROM runs r
                            WHERE r.task_id = p.task_id AND r.created_at > p.created_at
@@ -334,6 +393,7 @@ pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<V
                 "canWake": r.get::<bool, _>("image_kept") && status != "running",
                 "slug": r.get::<Option<String>, _>("slug")
                     .filter(|_| status == "running"),
+                "isStack": r.get::<Option<String>, _>("compose_file").is_some(),
                 "error": r.get::<Option<String>, _>("error"),
             })
         })
@@ -358,19 +418,7 @@ pub async fn start_base(db: &Db, project_id: Uuid) -> anyhow::Result<Preview> {
         anyhow::bail!("this project's folder is gone from disk ({path})");
     }
 
-    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
-    let recipe_text = match &own {
-        Some(_) => None,
-        None => sqlx::query_scalar(
-            "SELECT dockerfile FROM preview_recipes
-              WHERE project_id = $1 AND status = 'approved'",
-        )
-        .bind(project_id)
-        .fetch_optional(&db.pool)
-        .await?,
-    };
-    let dockerfile = own.clone().or_else(|| recipe_text.clone());
-    let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
+    let (build, port) = how(db, &source, project_id).await?;
 
     // Base previews share the cap with card previews on purpose: they cost the
     // same memory, and "the machine is full" does not care what a container is
@@ -423,7 +471,7 @@ pub async fn start_base(db: &Db, project_id: Uuid) -> anyhow::Result<Preview> {
 
     let pool = db.pool.clone();
     tokio::spawn(async move {
-        if let Err(e) = build_and_run(&pool, id, &source, port.number, recipe_text).await {
+        if let Err(e) = build_and_run(&pool, id, &source, port.number, build).await {
             fail(&pool, id, &e).await;
         }
     });
@@ -448,21 +496,16 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
             source.display()
         );
     }
-
-    // Read the recipe before claiming the row: a branch with no Dockerfile
-    // should say so immediately rather than leaving a failed row behind.
-    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
-
-    // A branch's own Dockerfile always wins. Only when there is none do we look
-    // for an approved recipe — and only an *approved* one: a proposal is
-    // agent-written code that nobody has read yet, and `RUN` executes on this
-    // machine. See `recipe_writer` for why that gate is not negotiable.
-    let recipe_text = match &own {
-        Some(_) => None,
-        None => approved_recipe(db, task_id).await?,
-    };
-    let dockerfile = own.clone().or_else(|| recipe_text.clone());
-    let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
+    // A stack if the branch has one, otherwise its Dockerfile, otherwise an
+    // approved recipe — and only an *approved* one, since a proposal is
+    // agent-written code nobody has read and `RUN` executes on this machine.
+    // Read before the row is claimed, so a branch with nothing to build says
+    // so immediately rather than leaving a failed row behind.
+    let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM tasks WHERE id = $1")
+        .bind(task_id)
+        .fetch_one(&db.pool)
+        .await?;
+    let (build, port) = how(db, &source, project_id).await?;
 
     // Checked before the row is claimed, and named in the message: "too many
     // previews" with no way to see which ones is a dead end, and the cards
@@ -492,11 +535,6 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     if let Some(woken) = wake(db, Which::Card(task_id), port.number).await? {
         return Ok(woken);
     }
-
-    let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM tasks WHERE id = $1")
-        .bind(task_id)
-        .fetch_one(&db.pool)
-        .await?;
 
     // The partial unique index is what makes a double-click safe: the second
     // insert loses rather than starting a second container nothing points at.
@@ -539,7 +577,7 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
 
     let pool = db.pool.clone();
     tokio::spawn(async move {
-        if let Err(e) = build_and_run(&pool, id, &source, port.number, recipe_text).await {
+        if let Err(e) = build_and_run(&pool, id, &source, port.number, build).await {
             fail(&pool, id, &e).await;
         }
     });
@@ -547,6 +585,26 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     get(db, task_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("preview vanished immediately after being created"))
+}
+
+/// The rewritten file a preview project name implies.
+fn compose_path_for_name(project: &str) -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join(".aichip").join("previews").join(format!("{project}.yaml"))
+}
+
+/// Where a preview's rewritten compose file lives.
+///
+/// Under aichip's own directory, never in the branch: a preview must not add a
+/// file to the diff someone is reviewing, and the rewrite is aichip's business
+/// rather than the project's.
+async fn compose_file_for(id: Uuid, contents: &str) -> std::io::Result<PathBuf> {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    let dir = home.join(".aichip").join("previews");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join(format!("{}.yaml", recipe::container_name(&id)));
+    tokio::fs::write(&path, contents).await?;
+    Ok(path)
 }
 
 /// This project's recipe, but only once a person has approved it.
@@ -710,13 +768,41 @@ async fn build_and_run(
     id: Uuid,
     source: &Path,
     container_port: u16,
-    // An approved recipe, when the branch has no Dockerfile of its own.
-    dockerfile: Option<String>,
+    build: How,
 ) -> Result<(), String> {
     let tag = recipe::image_tag(&id);
     let name = recipe::container_name(&id);
 
-    docker::build(source, &tag, dockerfile.as_deref()).await?;
+    // A stack takes a different path entirely: compose builds, starts and wires
+    // its own services, so there is no single image and no `docker run`.
+    if let How::Stack(plan, original) = &build {
+        let host_port = free_port().map_err(|e| format!("no free port: {e}"))?;
+        let rendered = compose_file_for(id, &plan.render(host_port))
+            .await
+            .map_err(|e| format!("could not write the compose file: {e}"))?;
+        let project_dir = original.parent().unwrap_or(source).to_path_buf();
+        docker::compose_up(&rendered, &project_dir, &recipe::container_name(&id)).await?;
+
+        sqlx::query(
+            "UPDATE previews SET status='running', host_port=$2, started_at=now(),
+                                 last_seen_at=now(), image_kept=FALSE,
+                                 compose_file=$3, compose_dir=$4
+              WHERE id=$1 AND status='building'",
+        )
+        .bind(id)
+        .bind(host_port as i32)
+        .bind(rendered.to_string_lossy().to_string())
+        .bind(project_dir.to_string_lossy().to_string())
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let How::Single(recipe_text) = &build else {
+        unreachable!("the stack arm returns above")
+    };
+    docker::build(source, &tag, recipe_text.as_deref()).await?;
 
     // Asked for after the build, not before: a build takes minutes, and a port
     // reserved at the start of one is a port held against the rest of the
@@ -789,14 +875,14 @@ async fn stop_which(db: &Db, which: Which) -> anyhow::Result<bool> {
         Which::Card(task_id) => sqlx::query(
             "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
               WHERE task_id=$1 AND status IN ('building','running','idle')
-          RETURNING id, container_id, image",
+          RETURNING id, container_id, image, compose_file, compose_dir",
         )
         .bind(task_id),
         Which::Base(project_id) => sqlx::query(
             "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
               WHERE project_id=$1 AND task_id IS NULL
                 AND status IN ('building','running','idle')
-          RETURNING id, container_id, image",
+          RETURNING id, container_id, image, compose_file, compose_dir",
         )
         .bind(project_id),
     }
@@ -808,6 +894,21 @@ async fn stop_which(db: &Db, which: Which) -> anyhow::Result<bool> {
     // status write has no container id, but the container is named after the
     // row and is very much there.
     let id: Uuid = row.get("id");
+    // A stack has no single container. `down --volumes` is safe here only
+    // because compose namespaces everything under the preview's project name,
+    // so it can reach nothing the user's own stacks created.
+    if let (Some(file), Some(dir)) = (
+        row.get::<Option<String>, _>("compose_file"),
+        row.get::<Option<String>, _>("compose_dir"),
+    ) {
+        docker::compose_down(
+            Path::new(&file),
+            Path::new(&dir),
+            &recipe::container_name(&id),
+        )
+        .await;
+        let _ = tokio::fs::remove_file(&file).await;
+    }
     if let Some(container) = row.get::<Option<String>, _>("container_id") {
         docker::remove(&container).await;
     }
@@ -838,21 +939,45 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
     let alive = docker::list_owned().await;
 
     let rows = sqlx::query(
-        "SELECT id, container_id FROM previews WHERE status IN ('building','running')",
+        "SELECT id, container_id, compose_file, compose_dir
+           FROM previews WHERE status IN ('building','running')",
     )
     .fetch_all(&db.pool)
     .await?;
 
+    let stacks = docker::list_owned_stacks().await;
     let mut claimed = std::collections::HashSet::new();
+    let mut claimed_stacks = std::collections::HashSet::new();
     let mut dead = Vec::new();
+    let mut dead_stacks = Vec::new();
     for row in &rows {
         let id: Uuid = row.get("id");
         let name = recipe::container_name(&id);
-        if alive.contains(&name) && docker::is_running(&name).await {
+        // A stack is asked of compose; a single container of docker. Getting
+        // this the wrong way round declares a healthy stack dead, which is
+        // exactly what the first version of the liveness check did.
+        if let (Some(file), Some(dir)) = (
+            row.get::<Option<String>, _>("compose_file"),
+            row.get::<Option<String>, _>("compose_dir"),
+        ) {
+            if docker::compose_running(&name).await {
+                claimed_stacks.insert(name);
+            } else {
+                dead.push(id);
+                dead_stacks.push((file, dir, name));
+            }
+        } else if alive.contains(&name) && docker::is_running(&name).await {
             claimed.insert(name);
         } else {
             dead.push(id);
         }
+    }
+
+    // Whatever is left of a stack that died: its network and any container that
+    // outlived its siblings.
+    for (file, dir, name) in &dead_stacks {
+        docker::compose_down(Path::new(file), Path::new(dir), name).await;
+        let _ = tokio::fs::remove_file(file).await;
     }
 
     // Reclaim each dead row's image as well as its row. Settling the status
@@ -878,6 +1003,18 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
         .await?
         .rows_affected()
     };
+
+    // A stack no live row claims. Taken down through compose rather than
+    // container by container, so its network and volumes go with it.
+    for name in stacks {
+        if !claimed_stacks.contains(&name) {
+            // By name alone. The rewritten file may already be gone, and an
+            // earlier version passed it as the project *directory*, which
+            // compose rejects — so the stack survived every sweep.
+            docker::compose_down_project(&name).await;
+            let _ = tokio::fs::remove_file(compose_path_for_name(&name)).await;
+        }
+    }
 
     // Anything wearing our label that no live row claims. The label is what
     // makes this safe — a container the user started themselves cannot match.
