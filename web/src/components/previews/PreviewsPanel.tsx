@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, DockerStatus, ProjectPreview } from "../../lib/api";
 import { RecipeGate } from "../RecipeGate";
+import { PreviewLogs } from "./PreviewLogs";
 
 /**
  * Everything this project has running, in one place.
@@ -21,6 +22,8 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
   const [reclaimable, setReclaimable] = useState(0);
   const [docker, setDocker] = useState<DockerStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Which row has its logs open. One at a time — they are tall. */
+  const [showing, setShowing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(
@@ -129,8 +132,8 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
         )}
 
         {rows.map((r) => (
+          <div key={r.id}>
           <Row
-            key={r.id}
             title={r.title}
             badge={r.taskId === null ? "base branch" : undefined}
             badge2={r.isStack ? "stack" : undefined}
@@ -177,9 +180,26 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                     Stop
                   </button>
                 )}
+                {/* Offered on every row, not only failures: a preview that
+                    built fine and serves the wrong thing is the case with no
+                    error message at all. */}
+                <button
+                  onClick={() => setShowing(showing === r.id ? null : r.id)}
+                  className="rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+                >
+                  {showing === r.id ? "hide logs" : "logs"}
+                </button>
               </div>
             }
           />
+          {showing === r.id && (
+            <PreviewLogs
+              previewId={r.id}
+              live={r.status === "building"}
+              onClose={() => setShowing(null)}
+            />
+          )}
+          </div>
         ))}
 
         {rows.length === 0 && (

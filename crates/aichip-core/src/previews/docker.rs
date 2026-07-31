@@ -39,7 +39,14 @@ pub async fn detect() -> Option<Result<String, String>> {
 /// `dockerfile` is `None` for a branch that has its own, and `Some` for an
 /// approved recipe — which is fed on stdin rather than written into the
 /// worktree, so a preview never adds a file to the diff under review.
-pub async fn build(context: &Path, tag: &str, dockerfile: Option<&str>) -> Result<(), String> {
+pub async fn build(
+    context: &Path,
+    tag: &str,
+    dockerfile: Option<&str>,
+    // Everything docker prints is kept here, so a failed build can be read
+    // past the last twenty lines the card has room for.
+    log: &Path,
+) -> Result<(), String> {
     let mut cmd = Command::new(DOCKER);
     cmd.arg("build")
         // The branch is the build context and nothing else is.
@@ -70,10 +77,19 @@ pub async fn build(context: &Path, tag: &str, dockerfile: Option<&str>) -> Resul
         }
     }
     .map_err(|e| format!("could not run docker: {e}"))?;
+    // Written whether it succeeded or not: a build that worked but produced
+    // warnings is worth being able to read too.
+    let full = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = tokio::fs::write(log, &full).await;
+
     if out.status.success() {
         return Ok(());
     }
-    // Docker writes build progress to stderr, including the failing step.
+    // The tail is what the card shows; the file above is the whole thing.
     Err(tail(&String::from_utf8_lossy(&out.stderr), 20))
 }
 
@@ -174,6 +190,7 @@ pub async fn compose_up(
     file: &Path,
     project_dir: &Path,
     project: &str,
+    log: &Path,
 ) -> Result<(), String> {
     let out = Command::new(DOCKER)
         .args(["compose", "-f"])
@@ -189,10 +206,30 @@ pub async fn compose_up(
         .output()
         .await
         .map_err(|e| format!("could not run docker compose: {e}"))?;
+    let full = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = tokio::fs::write(log, &full).await;
     if out.status.success() {
         return Ok(());
     }
     Err(tail(&String::from_utf8_lossy(&out.stderr), 20))
+}
+
+/// Every service's output in a stack, prefixed with which service said it.
+pub async fn compose_logs(project: &str, lines: u32) -> String {
+    Command::new(DOCKER)
+        .args(["compose", "-p", project, "logs", "--tail", &lines.to_string()])
+        .output()
+        .await
+        .map(|o| {
+            let mut all = String::from_utf8_lossy(&o.stdout).into_owned();
+            all.push_str(&String::from_utf8_lossy(&o.stderr));
+            all.trim().to_string()
+        })
+        .unwrap_or_default()
 }
 
 /// Take a stack down knowing only its project name.

@@ -20,6 +20,7 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/docker", get(docker_status))
+        .route("/previews/{id}/logs", get(logs))
         .route("/previews/limits", get(get_limits).put(set_limits))
         .route("/previews/disk", get(disk).delete(reclaim))
         .route("/projects/{id}/previews", get(list_for_project))
@@ -62,6 +63,21 @@ async fn docker_status() -> Json<Value> {
             "version": version,
         })),
     }
+}
+
+/// What this preview printed while it was built, and since.
+///
+/// Two halves because they fail differently: a build log explains an image that
+/// never came out, runtime output explains a container that built fine and then
+/// refused to serve — which is the case the tail on the card cannot show.
+async fn logs(
+    State(state): State<AppState>,
+    Path(preview_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let (build, runtime) = aichip_core::previews::logs(&state.db, preview_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(Json(json!({ "build": build, "runtime": runtime })))
 }
 
 /// The two numbers that decide whether previews are safe to forget about,

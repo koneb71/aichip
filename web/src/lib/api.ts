@@ -919,6 +919,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dockerfile }),
     }).then((r) => json<{ approved: boolean; edited: boolean }>(r)),
+  previewLogs: (previewId: string) =>
+    fetch(`/api/previews/${previewId}/logs`).then((r) =>
+      json<{ build: string; runtime: string }>(r),
+    ),
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),
