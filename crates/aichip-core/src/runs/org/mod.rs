@@ -16,6 +16,7 @@
 //! parallel exactly when the manager declared non-overlapping file scopes
 //! and no dependency between them — see `schedule`.
 
+pub mod epic;
 pub mod plan;
 pub mod replan;
 pub mod roster;
@@ -66,8 +67,20 @@ pub const MAX_CONSULTS_PER_STEP: i64 = 3;
 
 /// Steps that are the manager thinking, not work assigned to anyone. Slashes
 /// rather than underscores so the SQL `LIKE` needs no escaping.
-const NOT_AN_ASSIGNMENT: &str = "step_key NOT IN ('plan','plan_repair','review') \
+pub(super) const NOT_AN_ASSIGNMENT: &str = "step_key NOT IN ('plan','plan_repair','review') \
      AND step_key NOT LIKE 'replan/%' AND step_key NOT LIKE 'triage/%'";
+
+/// A board that has fallen behind is not worth failing a run over, but it is
+/// worth saying out loud.
+///
+/// The first version swallowed this with `.ok()`, and a malformed `UPDATE …
+/// FROM` then left every sub-task card sitting in Backlog while its assignment
+/// ran to completion — with nothing anywhere to say why.
+fn log_mirror(result: anyhow::Result<()>, step_id: Uuid) {
+    if let Err(e) = result {
+        tracing::warn!(%step_id, error=%e, "could not update this assignment's card");
+    }
+}
 
 /// A dependency's report is worth reading in full; everyone else's is worth
 /// one line. Unbounded accumulation used to put every prior assignment's
@@ -575,6 +588,19 @@ impl Orchestrator {
         let mut added = 0usize;
 
         loop {
+            // Put the plan on the board before anyone starts on it.
+            //
+            // Here rather than at the end of planning, because `work_phase` is
+            // reached only once the plan is accepted — whether that was an
+            // explicit approval or a run with no approval gate at all. Rejecting
+            // a plan therefore leaves no tickets behind. Re-running each pass
+            // also picks up assignments a re-plan added, with no extra wiring.
+            if let Err(e) = epic::reconcile(&self.db, ctx.run_id).await {
+                // Worth saying out loud, but not worth failing the run over: the
+                // work can proceed perfectly well with the board out of date.
+                tracing::warn!(run_id=%ctx.run_id, error=%e, "could not put the plan on the board");
+            }
+
             let all = self.load_assignments(ctx.run_id).await?;
             let satisfied: HashSet<String> = all
                 .iter()
@@ -848,6 +874,7 @@ impl Orchestrator {
                         .bind(step_id)
                         .execute(&self.db.pool)
                         .await?;
+                    log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
                     self.post(ctx.run_id, Some(step_id), &manager.name, None, "status",
                               &format!("Dropped \"{key}\" — no longer needed.")).await?;
                 }
@@ -869,15 +896,22 @@ impl Orchestrator {
                         .map(|t| format!(" — now with {t}"))
                         .unwrap_or_default();
                     let rewritten = brief.map(|b| format!("\n\n{b}")).unwrap_or_default();
+                    let note = format!("Revised \"{key}\"{moved}{rewritten}");
                     self.post(
                         ctx.run_id,
                         Some(step_id),
                         &manager.name,
                         assignee.as_deref(),
                         "assignment",
-                        &format!("Revised \"{key}\"{moved}{rewritten}"),
+                        &note,
                     )
                     .await?;
+                    // Told to the card, not written over it. The manager may
+                    // have rewritten a brief that somebody has since edited by
+                    // hand, and silently replacing their words with the model's
+                    // is the worst outcome available — so the card keeps what it
+                    // says and gains a comment explaining what changed.
+                    epic::note_revision(&self.db, step_id, &manager.name, &note).await.ok();
                 }
                 Mutation::Add(task) => {
                     let assignee = resolve_assignee(workers, &task.assignee)
@@ -1121,6 +1155,9 @@ impl Orchestrator {
             .bind(step_id)
             .execute(&self.db.pool)
             .await?;
+        // The step's card follows it immediately rather than at the next pass of
+        // the batch loop, which can hold for as long as the assignment takes.
+        log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
 
         let outcome = self
             .stream_run(ctx.run_id, Some(step_id), &ctx.seq, ctx.engine.clone(), spec, false)
@@ -1137,6 +1174,7 @@ impl Orchestrator {
         .bind(ctx.engine.id())
         .execute(&self.db.pool)
         .await?;
+        log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
 
         Ok(outcome)
     }

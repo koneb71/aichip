@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Tier, tierColor, tierSoft } from "../../lib/api";
 import { StepData } from "../../lib/workflowGraph";
 import { useTierModel } from "../../lib/models";
+import { TIERS } from "../TierPicker";
 
 export interface StepNodeData extends Record<string, unknown> {
   step: StepData;
@@ -11,12 +12,13 @@ export interface StepNodeData extends Record<string, unknown> {
   attempts?: number;
 }
 
-const TIERS = new Set(["easy", "medium", "complex"]);
+/** A step's `model` is either a tier name or a literal model id. */
+const IS_TIER = new Set<string>(TIERS);
 
 export function StepNode({ data, selected }: NodeProps & { data: StepNodeData }) {
   const tierModel = useTierModel();
   const { step, status, attempts } = data;
-  const tier = TIERS.has(step.model ?? "") ? (step.model as Tier) : undefined;
+  const tier = IS_TIER.has(step.model ?? "") ? (step.model as Tier) : undefined;
   const accent = tier ? tierColor[tier] : "var(--color-ink-dim)";
   const running = status === "running" || status === "starting";
   const parallel = step.parallel ?? 1;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { AgentDraft, api, Tier, tierColor, tierSoft } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
+import { TIERS } from "../TierPicker";
 
 type Phase = "describe" | "generating" | "review";
 
@@ -135,7 +136,7 @@ export function GenerateWizard({
                         color: tierColor[(d.model_tier ?? "medium") as Tier],
                       }}
                     >
-                      {(["easy", "medium", "complex"] as Tier[]).map((t) => (
+                      {TIERS.map((t) => (
                         <option key={t} value={t}>
                           {tierModel(t)}
                         </option>

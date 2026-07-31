@@ -16,6 +16,9 @@ import { PlanReviewPanel } from "./PlanReviewPanel";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
+import { PreviewPanel } from "./PreviewPanel";
+import { TierPicker } from "./TierPicker";
+import { EffortPicker } from "./EffortPicker";
 
 export function TaskDrawer({
   task,
@@ -23,6 +26,8 @@ export function TaskDrawer({
   onClose,
   onChanged,
   onOpenTeamRoom,
+  boardTasks = [],
+  onOpenTask,
 }: {
   task: Task;
   /** Bounds which agents a bake-off may choose between. */
@@ -30,6 +35,9 @@ export function TaskDrawer({
   onClose: () => void;
   onChanged: () => void;
   onOpenTeamRoom?: (runId: string) => void;
+  /** The project's cards, so an epic can list its own without a second fetch. */
+  boardTasks?: Task[];
+  onOpenTask?: (t: Task) => void;
 }) {
   const tierModel = useTierModel();
   const engines = useEngines();
@@ -282,7 +290,9 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
+      <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
+      <PreviewPanel taskId={task.id} projectId={task.projectId} />
 
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
@@ -353,6 +363,52 @@ export function TaskDrawer({
             />
           </div>
         )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Model
+          </span>
+          <TierPicker
+            value={task.modelTier}
+            engine={task.engine}
+            disabled={running}
+            onChange={async (t) => {
+              await api.moveTask(task.id, { model_tier: t });
+              onChanged();
+            }}
+          />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Thinking
+          </span>
+          <EffortPicker
+            value={task.effort}
+            disabled={running}
+            // Only worth naming when it comes from somewhere other than this
+            // card — otherwise "Default (medium)" beside a card that says
+            // medium reads as if it were set twice.
+            inherited={task.effortSource === "card" ? null : task.effectiveEffort}
+            onChange={async (e) => {
+              await api.moveTask(task.id, { effort: e });
+              onChanged();
+            }}
+          />
+          {/* Where "Default" actually came from. Silent when the card sets it
+              itself, since the picker already says so. */}
+          {task.effortSource === "agent" && (
+            <span className="text-[11px] text-ink-dim">
+              {task.agentName
+                ? `set by the ${task.agentName} agent, which outranks this card`
+                : "set by its agent, which outranks this card"}
+            </span>
+          )}
+          {task.effortSource === "tier" && (
+            <span className="text-[11px] text-ink-dim">
+              from the {task.modelTier} tier on {task.engine}
+            </span>
+          )}
+        </div>
+
+        <Permissions task={task} />
       </div>
 
       <div className="flex gap-2 border-b border-line px-5 py-3">
@@ -539,6 +595,113 @@ export function TaskDrawer({
     </motion.aside>
   );
 }
+
+/**
+ * What this card will stop to ask about, and who decided that.
+ *
+ * It reads as trivia until it isn't. The permission mode is resolved from three
+ * places — the bound agent's preset, then the card's, then the machine default —
+ * and the first one wins. So a project switched to "works without asking" goes on
+ * prompting for every command if its agent carries `reviewed`, and nothing
+ * anywhere said which of the three was in charge. The answer to "why is it still
+ * asking me" was previously a database query.
+ */
+function Permissions({ task }: { task: Task }) {
+  const says = {
+    reviewed: "Asks before editing files or running commands",
+    auto_edit: "Edits files freely · asks before running commands",
+    full_auto: "Works without asking",
+  }[task.effectiveMode];
+
+  const from = {
+    agent: task.agentName ? `set by the ${task.agentName} agent` : "set by its agent",
+    card: "set on this card",
+    default: "your default for new work",
+  }[task.permissionSource];
+
+  const asks = task.effectiveMode !== "full_auto";
+
+  return (
+    <div className="mt-3 flex items-baseline gap-2 text-[11px]">
+      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+        Permission
+      </span>
+      <span className={asks ? "text-ink" : "text-tier-easy"}>{says}</span>
+      {/* Naming the source is the whole point — it turns "why is this asking me"
+          into a place to go and change it. */}
+      <span className="text-ink-dim">· {from}</span>
+    </div>
+  );
+}
+
+/**
+ * Where this card sits in an epic — either as the epic, or as one of its parts.
+ *
+ * Both directions are shown from the same panel because they are the same
+ * question asked from two ends. Reading a sub-ticket, "what is this part of" is
+ * the missing context; reading an epic, "what is left" is.
+ */
+function EpicPanel({
+  task,
+  boardTasks,
+  onOpenTask,
+}: {
+  task: Task;
+  boardTasks: Task[];
+  onOpenTask?: (t: Task) => void;
+}) {
+  const parent = task.parentId
+    ? boardTasks.find((t) => t.id === task.parentId)
+    : undefined;
+  const children = boardTasks.filter((t) => t.parentId === task.id);
+  if (!parent && children.length === 0) return null;
+
+  return (
+    <div className="border-b border-line px-5 py-3">
+      {parent && (
+        <button
+          onClick={() => onOpenTask?.(parent)}
+          disabled={!onOpenTask}
+          className="text-[11px] text-ink-dim hover:text-accent disabled:hover:text-ink-dim"
+        >
+          ↳ part of <span className="font-medium">{parent.title}</span>
+        </button>
+      )}
+      {children.length > 0 && (
+        <>
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Sub-tasks · {children.filter((c) => resolved(c)).length} of {children.length} done
+          </div>
+          <div className="space-y-1">
+            {children.map((child) => (
+              <button
+                key={child.id}
+                onClick={() => onOpenTask?.(child)}
+                disabled={!onOpenTask}
+                className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-line"
+              >
+                <span className="min-w-0 flex-1 truncate">{child.title}</span>
+                {child.agentName && (
+                  <span className="shrink-0 text-[10px] text-ink-dim">{child.agentName}</span>
+                )}
+                <span
+                  className={`shrink-0 text-[10px] ${
+                    child.stepStatus === "failed" ? "text-danger" : "text-ink-dim"
+                  }`}
+                >
+                  {child.stepStatus === "failed" ? "failed" : child.boardColumn}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Reached an end state a person would call finished-with. */
+const resolved = (t: Task) => t.boardColumn === "review" || t.boardColumn === "done";
 
 /**
  * The diff, with a comment gutter.

@@ -1,7 +1,7 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
 use aichip_core::runs::orchestrator::Variant;
-use aichip_shared::{ModelTier, PermissionMode};
+use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -39,21 +39,63 @@ struct TaskFilter {
     project_id: Option<Uuid>,
 }
 
+/// A stored level, or none. Anything unparseable is treated as unset rather
+/// than as an error: a row that predates a level being renamed should inherit,
+/// not break the board.
+fn parse_effort(stored: Option<String>) -> Option<ReasoningEffort> {
+    stored.as_deref().and_then(ReasoningEffort::parse)
+}
+
 async fn list(
     State(state): State<AppState>,
     Query(filter): Query<TaskFilter>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
+        // The epic columns ride along on the one query the board already makes.
+        // Counting children per card from the client would be an N+1 over a list
+        // that refreshes every 2.5 seconds.
+        //
+        // The roll-up counts `board_column`, not step status, on purpose: it has
+        // to keep telling the truth after the org run — and its steps — have been
+        // deleted, which is exactly when someone is looking back at what an epic
+        // turned into.
         "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch, t.position,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 a.name AS agent_name, a.color AS agent_color,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
+                t.parent_id, parent.title AS parent_title,
+                COALESCE(kids.total, 0) AS child_count,
+                COALESCE(kids.resolved, 0) AS child_resolved,
+                s.status AS step_status, t.effort AS card_effort,
+                a.effort AS agent_effort,
+                -- The mode this card will actually run under, and which of the
+                -- three places decided it. Resolved here in exactly the order
+                -- the orchestrator resolves it (orchestrator.rs:1090) so the
+                -- board cannot disagree with what the run does.
+                --
+                -- Worth showing at all because the precedence surprises people:
+                -- a project set to work without asking still prompts when the
+                -- bound agent carries its own preset, and nothing said so.
+                COALESCE(a.permission_preset, t.permission_mode,
+                         (SELECT value #>> '{}' FROM settings
+                           WHERE key = 'default_permission_mode'),
+                         'reviewed') AS effective_mode,
+                CASE WHEN a.permission_preset IS NOT NULL THEN 'agent'
+                     WHEN t.permission_mode IS NOT NULL THEN 'card'
+                     ELSE 'default' END AS permission_source,
                 r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
                 r.team_id AS run_team_id
          FROM tasks t
          JOIN projects p ON p.id = t.project_id
          LEFT JOIN agents a ON a.id = t.agent_id
          LEFT JOIN teams tm ON tm.id = t.team_id
+         LEFT JOIN tasks parent ON parent.id = t.parent_id
+         LEFT JOIN steps s ON s.task_id = t.id
+         LEFT JOIN LATERAL (
+             SELECT count(*) AS total,
+                    count(*) FILTER (WHERE board_column IN ('review','done')) AS resolved
+             FROM tasks c WHERE c.parent_id = t.id
+         ) kids ON TRUE
          LEFT JOIN LATERAL (
              SELECT * FROM runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
          ) r ON TRUE
@@ -66,9 +108,25 @@ async fn list(
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
+    // Effort is the one thing here the database cannot settle on its own: the
+    // tier's budget depends on which engine the card resolved to, and that
+    // mapping lives in a settings blob rather than a column. Both halves are
+    // read once for the whole list rather than per row.
+    let tier_efforts = state.orchestrator.tier_efforts();
+    let machine_default = state.orchestrator.default_effort().await;
     let tasks: Vec<Value> = rows
         .iter()
         .map(|r| {
+            // The same function the orchestrator resolves with, so the board
+            // cannot disagree with what the run actually does.
+            let tier = serde_json::from_value(Value::String(r.get("model_tier")))
+                .unwrap_or_default();
+            let (effective_effort, effort_source) = aichip_shared::resolve_effort(
+                parse_effort(r.get("agent_effort")),
+                parse_effort(r.get("card_effort")),
+                tier_efforts.effort_for(&r.get::<String, _>("engine"), tier),
+                machine_default,
+            );
             json!({
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
@@ -83,6 +141,18 @@ async fn list(
                 "teamId": r.get::<Option<Uuid>, _>("team_id"),
                 "teamName": r.get::<Option<String>, _>("team_name"),
                 "teamPattern": r.get::<Option<String>, _>("team_pattern"),
+                "parentId": r.get::<Option<Uuid>, _>("parent_id"),
+                "parentTitle": r.get::<Option<String>, _>("parent_title"),
+                "childCount": r.get::<i64, _>("child_count"),
+                "childResolved": r.get::<i64, _>("child_resolved"),
+                // The raw assignment status, so the card can say "failed" or
+                // "dropped" — things the four columns have no room for.
+                "stepStatus": r.get::<Option<String>, _>("step_status"),
+                "effectiveMode": r.get::<String, _>("effective_mode"),
+                "effort": r.get::<Option<String>, _>("card_effort"),
+                "effectiveEffort": effective_effort.map(|e| e.as_str()),
+                "effortSource": effort_source.as_str(),
+                "permissionSource": r.get::<String, _>("permission_source"),
                 "orgRunId": r.get::<Option<Uuid>, _>("run_team_id")
                     .and(r.get::<Option<Uuid>, _>("run_id")),
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
@@ -119,6 +189,9 @@ struct CreateTask {
     /// work happens.
     #[serde(default)]
     plan_first: bool,
+    /// Omitted inherits: the bound agent's budget if it has one, else the
+    /// machine default, resolved when the run dispatches.
+    effort: Option<ReasoningEffort>,
     /// Knowledge-base articles the agent should read before starting.
     #[serde(default)]
     article_ids: Vec<Uuid>,
@@ -139,8 +212,8 @@ async fn create(
         .permission_mode
         .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first, effort)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9,$10) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -151,6 +224,7 @@ async fn create(
     .bind(body.agent_id)
     .bind(body.team_id)
     .bind(body.plan_first)
+    .bind(body.effort.map(|e| e.as_str().to_string()))
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -204,11 +278,18 @@ async fn start(
     Ok(Json(json!({ "runId": run_id })))
 }
 
-/// Refuse to queue a card its engine cannot honour.
+/// Refuse to queue a card its engine cannot honour, or that is already being
+/// worked on as part of an epic.
 ///
 /// The same check runs again at dispatch, but doing it here means the user
 /// sees the reason on the click that caused it rather than as a failed run.
 async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
+    if step_is_live(state, task_id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "a teammate is already working on this sub-task as part of its epic".into(),
+        ));
+    }
     let row = sqlx::query(
         "SELECT COALESCE(a.engine, t.engine) AS engine,
                 COALESCE(a.permission_preset, t.permission_mode) AS mode
@@ -460,6 +541,14 @@ struct MoveTask {
     /// Absent leaves it alone.
     #[serde(default)]
     plan_first: Option<bool>,
+    /// Absent leaves it alone. Cards always have a tier, so unlike the assignee
+    /// there is no "clear it" case.
+    #[serde(default)]
+    model_tier: Option<ModelTier>,
+    /// Nested, because all three states are meaningful: absent means "leave it",
+    /// an explicit null means "go back to inheriting", and a value pins one.
+    #[serde(default, deserialize_with = "present")]
+    effort: Option<Option<ReasoningEffort>>,
 }
 
 /// Distinguish "field was present and null" from "field was absent".
@@ -480,7 +569,7 @@ async fn move_task(
     Json(body): Json<MoveTask>,
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
-        "SELECT t.board_column,
+        "SELECT t.board_column, t.parent_id,
                 (SELECT status FROM runs WHERE task_id = t.id
                  ORDER BY created_at DESC LIMIT 1) AS run_status
          FROM tasks t WHERE t.id=$1",
@@ -491,10 +580,14 @@ async fn move_task(
     .map_err(internal)?
     .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
     let current: String = row.get("board_column");
+    // Two ways a card can be busy, and a sub-ticket is only ever the second.
+    // Its work happens under a step in the *epic's* run, so it has no run of its
+    // own and `run_status` says nothing about it — which used to leave every
+    // guard below wide open for exactly the cards the system is writing to.
     let run_active = matches!(
         row.get::<Option<String>, _>("run_status").as_deref(),
         Some("queued" | "starting" | "running" | "waiting_permission" | "rate_limited")
-    );
+    ) || step_is_live(&state, id).await?;
 
     if let Some(column) = &body.board_column {
         if !["backlog", "running", "review", "done"].contains(&column.as_str()) {
@@ -516,6 +609,19 @@ async fn move_task(
         return Err((
             StatusCode::CONFLICT,
             "this card is being worked on — cancel the run before reassigning it".into(),
+        ));
+    }
+
+    // One level of hierarchy, deliberately. A sub-ticket handed to a team would
+    // become an epic of its own: its grandchildren's worktrees would nest inside
+    // its parent's, the epic's progress count would double-count it, and a
+    // single goal could fan out without bound.
+    // `.flatten()`, because the field is a nested option: an explicit null means
+    // "take the team off", which is never the thing to refuse.
+    if body.team_id.flatten().is_some() && row.get::<Option<Uuid>, _>("parent_id").is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            "a sub-task can't be handed to a team — split the epic instead".into(),
         ));
     }
 
@@ -541,7 +647,9 @@ async fn move_task(
                           agent_id = CASE WHEN $4 THEN $5 ELSE agent_id END,
                           team_id  = CASE WHEN $6 THEN $7 ELSE team_id  END,
                           engine   = coalesce($8, engine),
-                          plan_first = coalesce($9, plan_first)
+                          plan_first = coalesce($9, plan_first),
+                          model_tier = coalesce($10, model_tier),
+                          effort = CASE WHEN $11 THEN $12 ELSE effort END
          WHERE id = $1",
     )
     .bind(id)
@@ -553,6 +661,9 @@ async fn move_task(
     .bind(team_id.flatten())
     .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
     .bind(body.plan_first)
+    .bind(body.model_tier.map(|t| serde_json::to_value(t).ok()).flatten().and_then(|v| v.as_str().map(str::to_string)))
+    .bind(body.effort.is_some())
+    .bind(body.effort.flatten().map(|e| e.as_str().to_string()))
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -977,6 +1088,26 @@ mod tests {
 // ---------------------------------------------------------------------------
 // Deleting and retrying a card.
 
+/// True while an org run owns this card through a live assignment.
+///
+/// The companion to `run_is_active`, and necessary because a sub-ticket has no
+/// run of its own: an epic's work happens under steps of the *epic's* run. Every
+/// "is this card busy" check needs both, or the one class of card the system
+/// writes to is the one class nothing protects.
+async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1 FROM steps s JOIN runs r ON r.id = s.run_id
+              WHERE s.task_id = $1
+                AND s.status IN ('queued','starting','running','waiting_permission','rate_limited')
+                AND r.status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(task_id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)
+}
+
 /// True when the task's latest run is still live.
 async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
     let row = sqlx::query(
@@ -1012,6 +1143,26 @@ async fn drop_worktree(state: &AppState, task_id: Uuid) -> Result<(), ApiError> 
         row.get::<Option<String>, _>("worktree_path"),
         row.get::<Option<String>, _>("branch"),
     ) {
+        // An epic and its sub-tickets share one checkout, so removing it because
+        // one of them is being deleted would pull the ground out from under the
+        // others. Forget it on this row and leave the directory alone.
+        let shared: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM tasks WHERE worktree_path = $1 AND id <> $2)",
+        )
+        .bind(&path)
+        .bind(task_id)
+        .fetch_one(&state.db.pool)
+        .await
+        .map_err(internal)?;
+        if shared {
+            sqlx::query("UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE id=$1")
+                .bind(task_id)
+                .execute(&state.db.pool)
+                .await
+                .map_err(internal)?;
+            return Ok(());
+        }
+
         let wt = aichip_core::worktrees::manager::Worktree { path: path.into(), branch };
         // Best effort: a worktree the user already deleted by hand must not
         // block deleting the card.
@@ -1041,11 +1192,29 @@ async fn delete_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    if run_is_active(&state, id).await? {
+    if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
             "the agent is still working on this card — cancel the run first".into(),
         ));
+    }
+    // Sub-tickets share the epic's checkout, so they must stop pointing at it
+    // before it is removed. Without this, deleting an epic leaves a column of
+    // cards whose "diff" is a directory that no longer exists.
+    //
+    // The rows themselves survive: `parent_id` is ON DELETE SET NULL, because a
+    // sub-ticket is real work with its own comments and history, and tidying the
+    // epic away should not take it with them.
+    sqlx::query("UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE parent_id=$1")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    // Before the row goes: the preview row cascades away with the task, and a
+    // cascaded row is one nothing will ever look for again — the container
+    // would sit there holding its port until the next restart swept it.
+    if let Err(e) = aichip_core::previews::stop(&state.db, id).await {
+        tracing::warn!(task=%id, error=%e, "could not stop this card's preview before deleting it");
     }
     drop_worktree(&state, id).await?;
     let done = sqlx::query("DELETE FROM tasks WHERE id=$1")
@@ -1083,7 +1252,7 @@ async fn retry(
     Path(id): Path<Uuid>,
     body: Option<Json<Retry>>,
 ) -> Result<Json<Value>, ApiError> {
-    if run_is_active(&state, id).await? {
+    if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
             "this card is already running — cancel it before retrying".into(),
@@ -1231,7 +1400,6 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
-    assert_parked(&state, run_id).await?;
     if body.note.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1242,15 +1410,26 @@ async fn revise_plan(
     // feedback, so it can answer the objection rather than start from nothing.
     // A written-but-unapproved plan re-plans rather than runs, which is what
     // makes leaving the row safe.
-    sqlx::query(
+    //
+    // The status check is in the WHERE clause rather than a separate read
+    // beforehand. Checking and then writing unconditionally leaves a window in
+    // which the run is approved and dispatched between the two, and this would
+    // then re-queue a run that was already working.
+    let updated = sqlx::query(
         "UPDATE runs SET plan_note = $2, plan_edited = FALSE, status = 'queued'
-         WHERE id = $1",
+         WHERE id = $1 AND status = 'awaiting_approval'",
     )
     .bind(run_id)
     .bind(body.note.trim())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    if updated.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "this run is not waiting for approval".into(),
+        ));
+    }
     state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
     Ok(Json(json!({ "revising": true })))
 }

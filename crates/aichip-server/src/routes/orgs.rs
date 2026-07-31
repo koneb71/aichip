@@ -131,6 +131,16 @@ async fn detail(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    Ok(Json(build_detail(&state, run_id).await?))
+}
+
+/// The same payload, callable from the endpoints that change a run.
+///
+/// Approving used to answer `{"approved": true}` and leave the client to find
+/// out what happened from its next poll — which is a race it could lose, and did:
+/// a GET issued before the status changed could land after it and put the review
+/// panel back. Handing back the new state closes that.
+async fn build_detail(state: &AppState, run_id: Uuid) -> Result<Value, ApiError> {
     let run = sqlx::query(
         "SELECT r.id, r.status, r.goal, r.cost_usd, r.error_reason, r.created_at,
                 t.id AS team_id, t.name AS team_name, t.definition, p.workspace_id
@@ -202,7 +212,7 @@ async fn detail(
     .await
     .map_err(internal)?;
 
-    Ok(Json(json!({
+    Ok(json!({
         "id": run.get::<Uuid, _>("id"),
         "teamId": run.get::<Uuid, _>("team_id"),
         "teamName": run.get::<String, _>("team_name"),
@@ -238,7 +248,7 @@ async fn detail(
             "content": r.get::<String, _>("content"),
             "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
         })).collect::<Vec<_>>(),
-    })))
+    }))
 }
 
 type AgentBits = (String, String, String);
@@ -312,7 +322,9 @@ async fn approve_plan(
         .post(run_id, None, "system", None, "status", "Plan approved — starting work.")
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "approved": true })))
+    // The updated run, not a bare ack: the caller can then render the new state
+    // without racing its own poll for it.
+    Ok(Json(build_detail(&state, run_id).await?))
 }
 
 #[derive(Deserialize)]
@@ -326,11 +338,29 @@ async fn reject_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Reject>,
 ) -> Result<Json<Value>, ApiError> {
-    assert_parked(&state, run_id).await?;
     let reason = body
         .reason
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| "the plan was rejected".to_string());
+    // The status check and the write are one statement, on purpose. Reading it
+    // first and then writing unconditionally leaves a window in which the
+    // executor picks the run up between the two, and this would then cancel a
+    // run that had already started working.
+    let updated = sqlx::query(
+        "UPDATE runs SET status='canceled', error_reason=$2, finished_at=now()
+         WHERE id=$1 AND status='awaiting_approval'",
+    )
+    .bind(run_id)
+    .bind(&reason)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if updated.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "this run is not waiting for approval".into(),
+        ));
+    }
     sqlx::query(
         "UPDATE steps SET status='skipped', finished_at=now()
          WHERE run_id=$1 AND status='queued'",
@@ -339,20 +369,12 @@ async fn reject_plan(
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
-    sqlx::query(
-        "UPDATE runs SET status='canceled', error_reason=$2, finished_at=now() WHERE id=$1",
-    )
-    .bind(run_id)
-    .bind(&reason)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
     state
         .orchestrator
         .post(run_id, None, "system", None, "status", &format!("Run canceled — {reason}"))
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "canceled": true })))
+    Ok(Json(build_detail(&state, run_id).await?))
 }
 
 #[derive(Deserialize)]

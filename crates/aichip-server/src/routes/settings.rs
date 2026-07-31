@@ -8,7 +8,8 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_shared::{
-    is_known_model_for, EngineTierMapping, ModelTier, PermissionMode, TierMapping, MODEL_CHOICES,
+    is_known_model_for, EngineTierEffort, EngineTierMapping, ModelTier, PermissionMode,
+    ReasoningEffort, TierMapping, MODEL_CHOICES,
 };
 use std::collections::BTreeMap;
 use axum::extract::State;
@@ -22,11 +23,13 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/models", get(get_models).put(set_models))
         .route("/settings/permissions", get(get_permissions).put(set_permissions))
+        .route("/settings/effort", get(get_effort).put(set_effort))
         .route("/settings/permissions/apply-to-agents", axum::routing::post(apply_to_agents))
 }
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
     let mapping = state.orchestrator.tier_mapping();
+    let efforts = state.orchestrator.tier_efforts();
     // One column per engine that is actually installed. An engine the user
     // doesn't have is not worth asking them to configure.
     let engines = state
@@ -66,6 +69,10 @@ async fn get_models(State(state): State<AppState>) -> Json<Value> {
                     .unwrap_or_default(),
                 "tiers": tiers_json(&current),
                 "defaults": tiers_json(&defaults),
+                // How hard each tier thinks on this engine. Null means the tier
+                // pins nothing and inherits — the shipped state, and a real
+                // answer rather than an unconfigured one.
+                "efforts": efforts_json(&efforts.for_engine(e.id())),
             })
         })
         .collect::<Vec<_>>();
@@ -80,10 +87,33 @@ fn tiers_json(m: &TierMapping) -> Value {
     })
 }
 
+fn efforts_json(m: &BTreeMap<ModelTier, ReasoningEffort>) -> Value {
+    json!({
+        "easy": m.get(&ModelTier::Easy).map(|e| e.as_str()),
+        "medium": m.get(&ModelTier::Medium).map(|e| e.as_str()),
+        "complex": m.get(&ModelTier::Complex).map(|e| e.as_str()),
+    })
+}
+
 #[derive(Deserialize)]
 struct ModelsBody {
     /// `{engine_id: {easy, medium, complex}}`.
     engines: BTreeMap<String, TierRow>,
+    /// The same shape, but every level is nullable and null means "inherit".
+    /// Separate from `engines` so a client that only routes models can leave
+    /// it out entirely and change nothing.
+    #[serde(default)]
+    efforts: BTreeMap<String, EffortRow>,
+}
+
+#[derive(Deserialize, Default)]
+struct EffortRow {
+    #[serde(default)]
+    easy: Option<ReasoningEffort>,
+    #[serde(default)]
+    medium: Option<ReasoningEffort>,
+    #[serde(default)]
+    complex: Option<ReasoningEffort>,
 }
 
 #[derive(Deserialize)]
@@ -133,9 +163,39 @@ async fn set_models(
         );
     }
 
+    // Validated in the same pass as the models, so an unknown engine is one
+    // rejection rather than a half-applied save.
+    let mut effort_map = BTreeMap::new();
+    for (engine, row) in body.efforts {
+        if state.orchestrator.engine(&engine).is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("\"{engine}\" is not an engine this machine has"),
+            ));
+        }
+        let tiers: BTreeMap<ModelTier, ReasoningEffort> = [
+            (ModelTier::Easy, row.easy),
+            (ModelTier::Medium, row.medium),
+            (ModelTier::Complex, row.complex),
+        ]
+        .into_iter()
+        // A tier that pins nothing is stored as absent, not as a null — so
+        // "inherit" has one representation and the map stays readable.
+        .filter_map(|(tier, effort)| effort.map(|e| (tier, e)))
+        .collect();
+        if !tiers.is_empty() {
+            effort_map.insert(engine, tiers);
+        }
+    }
+
     state
         .orchestrator
         .set_tier_mapping(EngineTierMapping(mapping))
+        .await
+        .map_err(internal)?;
+    state
+        .orchestrator
+        .set_tier_efforts(EngineTierEffort(effort_map))
         .await
         .map_err(internal)?;
 
@@ -175,6 +235,46 @@ async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
 #[derive(Deserialize)]
 struct PermissionsBody {
     default_mode: PermissionMode,
+}
+
+#[derive(Deserialize)]
+struct EffortBody {
+    /// Absent or null returns every run to its CLI's own default rather than
+    /// pinning one, which is a real choice and the one this ships with.
+    default_effort: Option<ReasoningEffort>,
+}
+
+async fn get_effort(State(state): State<AppState>) -> Json<Value> {
+    // Agents carrying their own budget outrank this, exactly as they do for
+    // permissions — worth counting here rather than leaving it to be discovered
+    // when a card thinks harder or less hard than the setting says.
+    let overriding: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE effort IS NOT NULL")
+        .fetch_one(&state.db.pool)
+        .await
+        .unwrap_or(0);
+    Json(json!({
+        "agentsOverriding": overriding,
+        "defaultEffort": state.orchestrator.default_effort().await,
+        "levels": [
+            { "id": "low",    "label": "Low",     "blurb": "Fast and cheap. Fine for mechanical edits." },
+            { "id": "medium", "label": "Medium",  "blurb": "A balance. Sensible for most work." },
+            { "id": "high",   "label": "High",    "blurb": "Thinks before acting. Worth it for design and debugging." },
+            { "id": "xhigh",  "label": "Extra high", "blurb": "Slower and dearer; for genuinely hard problems." },
+            { "id": "max",    "label": "Maximum", "blurb": "As much as the CLI will give. Expect long waits." }
+        ]
+    }))
+}
+
+async fn set_effort(
+    State(state): State<AppState>,
+    Json(body): Json<EffortBody>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .set_default_effort(body.default_effort)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "defaultEffort": body.default_effort })))
 }
 
 async fn set_permissions(
