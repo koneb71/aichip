@@ -943,8 +943,12 @@ export const api = {
    * credential straight to `gh`, and `gh` stores it. What comes back is a
    * one-time code whose whole purpose is to be shown.
    */
-  connectGitHub: () =>
-    post("/api/github/connect").then((r) => json<GitHubConnect>(r)),
+  githubScopes: () =>
+    fetch("/api/github/scopes").then((r) =>
+      json<{ required: string[]; optional: { name: string; what: string }[] }>(r),
+    ),
+  connectGitHub: (scopes: string[] = []) =>
+    post("/api/github/connect", { scopes }).then((r) => json<GitHubConnect>(r)),
   githubConnectStatus: (id: string) =>
     fetch(`/api/github/connect/${id}`).then((r) =>
       json<GitHubConnectProgress>(r),

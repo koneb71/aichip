@@ -17,11 +17,28 @@ use serde_json::{json, Value};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/github", get(status))
+        .route("/github/scopes", get(scopes))
         .route("/github/connect", axum::routing::post(connect))
         .route(
             "/github/connect/{id}",
             get(connect_status).delete(cancel_connect),
         )
+}
+
+/// What signing in will ask for, so it can be said before the button is pressed.
+///
+/// The required set is `gh`'s, not ours — it refuses to go below `repo`,
+/// `read:org` and `gist`. Stating that is more useful than a switch that
+/// pretends otherwise.
+async fn scopes() -> Json<Value> {
+    use aichip_core::github::connect::{OPTIONAL_SCOPES, REQUIRED_SCOPES};
+    Json(json!({
+        "required": REQUIRED_SCOPES,
+        "optional": OPTIONAL_SCOPES
+            .iter()
+            .map(|(name, what)| json!({ "name": name, "what": what }))
+            .collect::<Vec<_>>(),
+    }))
 }
 
 /// Begin GitHub's device flow and hand back the code to show.
@@ -33,8 +50,20 @@ pub fn router() -> Router<AppState> {
 /// A field to paste a personal access token into would have been fewer moving
 /// parts and is deliberately not what this is: aichip does not receive, carry
 /// or store credentials for any provider.
-async fn connect() -> Result<Json<Value>, super::ApiError> {
-    let started = aichip_core::github::connect::start()
+#[derive(serde::Deserialize, Default)]
+struct ConnectBody {
+    /// Beyond what `gh` already requires. Absent means "nothing extra", which
+    /// is the default and the right one — organisation access is granted per
+    /// organisation on GitHub's own page, not widened from here.
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+async fn connect(
+    body: Option<Json<ConnectBody>>,
+) -> Result<Json<Value>, super::ApiError> {
+    let scopes = body.map(|Json(b)| b.scopes).unwrap_or_default();
+    let started = aichip_core::github::connect::start(&scopes)
         .await
         .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(serde_json::to_value(started).unwrap_or(Value::Null)))
