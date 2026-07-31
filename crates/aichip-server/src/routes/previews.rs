@@ -19,6 +19,8 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/docker", get(docker_status))
+        .route("/previews/limits", get(get_limits).put(set_limits))
+        .route("/previews/disk", get(disk).delete(reclaim))
         .route(
             "/tasks/{id}/preview",
             get(current).post(start).delete(stop),
@@ -50,6 +52,65 @@ async fn docker_status() -> Json<Value> {
             "version": version,
         })),
     }
+}
+
+/// The two numbers that decide whether previews are safe to forget about,
+/// alongside what they are currently costing.
+async fn get_limits(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let limits = aichip_core::previews::limits(&state.db).await;
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM previews WHERE status IN ('building','running')",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
+    Ok(Json(json!({
+        "maxLive": limits.max_live,
+        "idleMinutes": limits.idle_minutes,
+        "live": live,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct LimitsBody {
+    max_live: i64,
+    /// Zero means never idle-stop.
+    idle_minutes: i64,
+}
+
+async fn set_limits(
+    State(state): State<AppState>,
+    Json(body): Json<LimitsBody>,
+) -> Result<Json<Value>, ApiError> {
+    // Clamped in the core rather than rejected here: a slider that refuses is
+    // worse than one that stops at its own end.
+    let saved = aichip_core::previews::set_limits(
+        &state.db,
+        aichip_core::previews::Limits {
+            max_live: body.max_live,
+            idle_minutes: body.idle_minutes,
+        },
+    )
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({
+        "maxLive": saved.max_live,
+        "idleMinutes": saved.idle_minutes,
+    })))
+}
+
+async fn disk(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let (bytes, reclaimable) = aichip_core::previews::disk(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "bytes": bytes, "reclaimable": reclaimable })))
+}
+
+async fn reclaim(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let freed = aichip_core::previews::reclaim_disk(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "reclaimed": freed })))
 }
 
 async fn current(

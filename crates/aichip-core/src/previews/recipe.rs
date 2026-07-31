@@ -129,6 +129,43 @@ pub fn container_name(preview_id: &uuid::Uuid) -> String {
     format!("aichip-preview-{}", short(preview_id))
 }
 
+/// The hostname label a preview answers to: `fix-the-login-a1b2c3`.
+///
+/// Built from the card's title so the address bar says what you are looking at,
+/// and suffixed with part of the **task** id — not the preview's. That is the
+/// whole point: a rebuild makes a new preview row, and if the name came from
+/// that row it would change every time, which is exactly the problem with the
+/// port that this exists to solve. Keyed to the card, the tab you left open
+/// keeps working across rebuilds, wakes and restarts.
+///
+/// Everything that is not a DNS label character is dropped rather than escaped
+/// — a hostname is not a place to round-trip user text.
+pub fn slug(title: &str, task_id: &uuid::Uuid) -> String {
+    let mut label = String::new();
+    let mut last_dash = true;
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            label.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !label.is_empty() {
+            label.push('-');
+            last_dash = true;
+        }
+    }
+    // A DNS label is 63 characters; leaving room for the suffix keeps the whole
+    // thing legal without having to think about it again.
+    let trimmed: String = label.trim_matches('-').chars().take(40).collect();
+    let trimmed = trimmed.trim_end_matches('-');
+    let tail = &short(task_id)[..6];
+    if trimmed.is_empty() {
+        // A title of nothing but punctuation is rare but real, and a hostname
+        // starting with `-` is not a hostname.
+        format!("preview-{tail}")
+    } else {
+        format!("{trimmed}-{tail}")
+    }
+}
+
 fn short(id: &uuid::Uuid) -> String {
     id.simple().to_string()[..12].to_string()
 }
@@ -198,6 +235,41 @@ mod tests {
                 source: PortSource::Exposed
             })
         );
+    }
+
+    #[test]
+    fn the_name_is_keyed_to_the_card_so_a_rebuild_keeps_it() {
+        // The regression this exists for: deriving from the preview row made
+        // the name change on every rebuild, which is the problem ports already
+        // had. Two different previews of the same card must share a name.
+        let task = uuid::Uuid::parse_str("0191f3c2-1111-7000-8000-abcdefabcdef").unwrap();
+        assert_eq!(slug("Fix the login", &task), slug("Fix the login", &task));
+        let other = uuid::Uuid::parse_str("0191aaaa-2222-7000-8000-abcdefabcdef").unwrap();
+        assert_ne!(slug("Fix the login", &task), slug("Fix the login", &other));
+    }
+
+    #[test]
+    fn slugs_are_legal_hostname_labels() {
+        let id = uuid::Uuid::parse_str("0191f3c2-1111-7000-8000-abcdefabcdef").unwrap();
+        assert_eq!(slug("Fix the login", &id), "fix-the-login-0191f3");
+        // Case, punctuation and runs of separators all collapse.
+        assert_eq!(slug("Fix  THE   login!!", &id), "fix-the-login-0191f3");
+        assert_eq!(slug("feat/add-oauth", &id), "feat-add-oauth-0191f3");
+        // Leading and trailing separators would make an illegal label.
+        assert_eq!(slug("  -- trim me -- ", &id), "trim-me-0191f3");
+        // A title with nothing usable in it still has to produce a hostname.
+        assert_eq!(slug("!!! ???", &id), "preview-0191f3");
+        assert_eq!(slug("", &id), "preview-0191f3");
+        // Non-ASCII is dropped rather than transliterated; the id still makes
+        // it addressable.
+        assert_eq!(slug("日本語", &id), "preview-0191f3");
+        // Long titles stay inside a DNS label.
+        let long = slug(&"a".repeat(200), &id);
+        assert!(long.len() < 63, "{} chars", long.len());
+        for s in [slug("Fix the login", &id), long] {
+            assert!(s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            assert!(!s.starts_with('-') && !s.ends_with('-'));
+        }
     }
 
     #[test]

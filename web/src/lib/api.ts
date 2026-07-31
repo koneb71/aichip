@@ -166,7 +166,32 @@ export interface TaskPreview {
   portAssumed: boolean;
   /** The card was worked on after this was built, so it is serving history. */
   stale: boolean;
+  /** Its image is still on disk, so starting again is a wake, not a rebuild. */
+  canWake: boolean;
+  /**
+   * The hostname label this answers to, while it is running.
+   *
+   * Prefer this over `url`: a port is asked of the OS on every start, so the
+   * port URL changes under a bookmark, and every preview on 127.0.0.1 shares
+   * one cookie jar. `previewUrl()` builds the address.
+   */
+  slug: string | null;
   error: string | null;
+}
+
+/**
+ * Where to send someone for a preview.
+ *
+ * The port is this page's own — aichip proxies preview hostnames on the port it
+ * is already served on, so the browser's location is the authority on it and
+ * the server never has to be told which port it is behind.
+ */
+export function previewUrl(p: TaskPreview): string | null {
+  if (p.slug) {
+    const port = window.location.port ? `:${window.location.port}` : "";
+    return `http://${p.slug}.preview.localhost${port}`;
+  }
+  return p.url;
 }
 
 /** Whether previews are possible here at all. */
@@ -804,6 +829,24 @@ export const api = {
       json<{ moved: boolean; runId: string | null }>(r),
     ),
   // Previews
+  previewLimits: () =>
+    fetch("/api/previews/limits").then((r) =>
+      json<{ maxLive: number; idleMinutes: number; live: number }>(r),
+    ),
+  setPreviewLimits: (maxLive: number, idleMinutes: number) =>
+    fetch("/api/previews/limits", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_live: maxLive, idle_minutes: idleMinutes }),
+    }).then((r) => json<{ maxLive: number; idleMinutes: number }>(r)),
+  previewDisk: () =>
+    fetch("/api/previews/disk").then((r) =>
+      json<{ bytes: number; reclaimable: number }>(r),
+    ),
+  reclaimPreviewDisk: () =>
+    fetch("/api/previews/disk", { method: "DELETE" }).then((r) =>
+      json<{ reclaimed: number }>(r),
+    ),
   dockerStatus: () => fetch("/api/docker").then((r) => json<DockerStatus>(r)),
   taskPreview: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/preview`).then((r) =>

@@ -1,4 +1,5 @@
 pub mod mcp;
+pub mod preview_proxy;
 pub mod routes;
 pub mod ws;
 
@@ -40,6 +41,14 @@ pub fn app(state: AppState) -> Router {
 
     router
         .layer(middleware::from_fn(reject_non_local_callers))
+        // Outside the loopback check on purpose: a preview hostname is handled
+        // here in full and never reaches the dashboard router, so widening what
+        // `Host` values are accepted does not widen what can reach the API.
+        // See `preview_proxy` for why the suffix match is safe.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            preview_proxy::route_previews,
+        ))
         .with_state(state)
 }
 
@@ -51,7 +60,7 @@ const LOCAL_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
 /// Written out rather than `split(':').next()`, which the previous version used
 /// and which is wrong for IPv6: `"[::1]:4820".split(':').next()` is `"["`, so
 /// the `[::1]` arm of the old allowlist had never once matched.
-fn bare_host(value: &str) -> &str {
+pub(crate) fn bare_host(value: &str) -> &str {
     let authority = value.rsplit_once("://").map_or(value, |(_, rest)| rest);
     let authority = authority.split('/').next().unwrap_or("");
     match authority.strip_prefix('[') {
