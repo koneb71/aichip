@@ -157,7 +157,8 @@ export interface UsedBy {
  */
 export interface TaskPreview {
   id: string;
-  taskId: string;
+  /** Null for a project's base-branch preview, which belongs to no card. */
+  taskId: string | null;
   status: "building" | "running" | "stopped" | "failed";
   url: string | null;
   hostPort: number | null;
@@ -841,6 +842,19 @@ export const api = {
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
+    ),
+  /** The project's base branch, running — what a card's changes compare to. */
+  basePreview: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview`).then((r) =>
+      json<{ preview: TaskPreview | null }>(r),
+    ),
+  startBasePreview: (projectId: string) =>
+    post(`/api/projects/${projectId}/preview`).then((r) =>
+      json<{ preview: TaskPreview }>(r),
+    ),
+  stopBasePreview: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview`, { method: "DELETE" }).then((r) =>
+      json<{ stopped: boolean }>(r),
     ),
   /** A Dockerfile an agent wrote for a project that has none. */
   previewRecipe: (projectId: string) =>
