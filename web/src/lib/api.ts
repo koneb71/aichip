@@ -209,6 +209,24 @@ export interface PreviewRecipe {
   edited: boolean;
 }
 
+/** One row in a project's Previews tab. */
+export interface ProjectPreview {
+  id: string;
+  /** Null for the base branch, which belongs to no card. */
+  taskId: string | null;
+  /** The card's title, or "main". */
+  title: string;
+  status: "building" | "running" | "idle" | "failed";
+  url: string | null;
+  hostPort: number | null;
+  containerPort: number | null;
+  portAssumed: boolean;
+  stale: boolean;
+  canWake: boolean;
+  slug: string | null;
+  error: string | null;
+}
+
 /** Whether previews are possible here at all. */
 export interface DockerStatus {
   installed: boolean;
@@ -842,6 +860,16 @@ export const api = {
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
+    ),
+  projectPreviews: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/previews`).then((r) =>
+      json<{
+        previews: ProjectPreview[];
+        live: number;
+        maxLive: number;
+        diskBytes: number;
+        reclaimable: number;
+      }>(r),
     ),
   /** The project's base branch, running — what a card's changes compare to. */
   basePreview: (projectId: string) =>

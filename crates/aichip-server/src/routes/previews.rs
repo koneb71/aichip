@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/docker", get(docker_status))
         .route("/previews/limits", get(get_limits).put(set_limits))
         .route("/previews/disk", get(disk).delete(reclaim))
+        .route("/projects/{id}/previews", get(list_for_project))
         .route(
             "/projects/{id}/preview",
             get(current_base).post(start_base).delete(stop_base),
@@ -257,6 +258,36 @@ async fn approve_recipe(
     .map_err(internal)?;
 
     Ok(Json(json!({ "approved": true, "edited": edited })))
+}
+
+/// Everything this project has running, plus what it is costing.
+async fn list_for_project(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let previews = aichip_core::previews::list_for_project(&state.db, project_id)
+        .await
+        .map_err(internal)?;
+    let limits = aichip_core::previews::limits(&state.db).await;
+    let (bytes, reclaimable) = aichip_core::previews::disk(&state.db)
+        .await
+        .unwrap_or((0, 0));
+    // Counted across every project, not just this one: the cap is a property of
+    // the machine, and a tab that says "2 of 3" while another project holds the
+    // third would be lying.
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM previews WHERE status IN ('building','running')",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
+    Ok(Json(json!({
+        "previews": previews,
+        "live": live,
+        "maxLive": limits.max_live,
+        "diskBytes": bytes,
+        "reclaimable": reclaimable,
+    })))
 }
 
 /// The project's base-branch preview — what a card's changes are compared to.

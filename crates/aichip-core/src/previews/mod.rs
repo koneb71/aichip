@@ -27,6 +27,7 @@ pub mod recipe;
 pub mod recipe_writer;
 
 use crate::db::Db;
+use serde_json::Value;
 use sqlx::Row;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -286,6 +287,57 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
             status,
         }
     }))
+}
+
+/// Every preview this project has, base branch first.
+///
+/// One query rather than one per card: the tab shows them together, and the
+/// point of showing them together is that they compete for the same three
+/// slots and the same disk.
+pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<Value>> {
+    let rows = sqlx::query(
+        "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
+                p.port_assumed, p.error, p.image_kept, p.slug,
+                t.title AS task_title,
+                COALESCE((SELECT true FROM runs r
+                           WHERE r.task_id = p.task_id AND r.created_at > p.created_at
+                           LIMIT 1), false) AS stale
+           FROM previews p
+           LEFT JOIN tasks t ON t.id = p.task_id
+          WHERE p.project_id = $1
+            AND p.status IN ('building','running','idle','failed')
+          -- Base branch first: it is the thing everything else is compared to.
+          ORDER BY (p.task_id IS NOT NULL), p.created_at DESC",
+    )
+    .bind(project_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let status: String = r.get("status");
+            let host_port = r.get::<Option<i32>, _>("host_port");
+            serde_json::json!({
+                "id": r.get::<Uuid, _>("id"),
+                "taskId": r.get::<Option<Uuid>, _>("task_id"),
+                // The base preview has no card, so it names itself.
+                "title": r.get::<Option<String>, _>("task_title")
+                    .unwrap_or_else(|| "main".to_string()),
+                "status": status,
+                "url": host_port.filter(|_| status == "running")
+                    .map(|p| format!("http://127.0.0.1:{p}")),
+                "hostPort": host_port,
+                "containerPort": r.get::<Option<i32>, _>("container_port"),
+                "portAssumed": r.get::<bool, _>("port_assumed"),
+                "stale": r.get::<bool, _>("stale"),
+                "canWake": r.get::<bool, _>("image_kept") && status != "running",
+                "slug": r.get::<Option<String>, _>("slug")
+                    .filter(|_| status == "running"),
+                "error": r.get::<Option<String>, _>("error"),
+            })
+        })
+        .collect())
 }
 
 /// Preview the branch cards merge into.
