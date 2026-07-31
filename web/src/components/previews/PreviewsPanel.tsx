@@ -133,6 +133,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
             key={r.id}
             title={r.title}
             badge={r.taskId === null ? "base branch" : undefined}
+            badge2={r.isStack ? "stack" : undefined}
             subtitle={detail(r)}
             action={
               <div className="flex items-center gap-1.5">
@@ -206,11 +207,14 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
 function Row({
   title,
   badge,
+  badge2,
   subtitle,
   action,
 }: {
   title: string;
   badge?: string;
+  /** e.g. "stack" — several services, not one container. */
+  badge2?: string;
   subtitle: React.ReactNode;
   action: React.ReactNode;
 }) {
@@ -219,11 +223,14 @@ function Row({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate text-sm font-semibold">{title}</span>
-          {badge && (
-            <span className="rounded-md bg-line/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-dim">
-              {badge}
+          {[badge, badge2].filter(Boolean).map((b) => (
+            <span
+              key={b}
+              className="rounded-md bg-line/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-dim"
+            >
+              {b}
             </span>
-          )}
+          ))}
         </div>
         <div className="mt-0.5 text-[11px] text-ink-dim">{subtitle}</div>
       </div>
@@ -234,7 +241,10 @@ function Row({
 
 /** What this row's state actually means, in a line. */
 function detail(r: ProjectPreview): React.ReactNode {
-  if (r.status === "building") return "Building — the first one takes a few minutes.";
+  if (r.status === "building")
+    return r.isStack
+      ? "Building the stack — every service, so this takes a while."
+      : "Building — the first one takes a few minutes.";
   if (r.status === "failed")
     return (
       <span className="text-danger">

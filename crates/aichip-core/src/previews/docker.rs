@@ -160,6 +160,84 @@ pub async fn remove(container: &str) {
         .await;
 }
 
+/// Bring a stack up, namespaced so it cannot touch anything the user runs.
+///
+/// `--project-name` is the safety property. Compose prefixes networks, volumes
+/// and container names with it, so a preview's `app` network and `backend-data`
+/// volume are its own — it cannot join the user's real ones, and `down -v`
+/// later cannot delete them.
+///
+/// `--project-directory` points at the branch, because the rewritten file lives
+/// in a temp path and every `build.context` and bind mount in it is relative to
+/// the original.
+pub async fn compose_up(
+    file: &Path,
+    project_dir: &Path,
+    project: &str,
+) -> Result<(), String> {
+    let out = Command::new(DOCKER)
+        .args(["compose", "-f"])
+        .arg(file)
+        .arg("--project-directory")
+        .arg(project_dir)
+        .args(["-p", project])
+        // The one loopback binding is already in the file — `compose up` has
+        // no `--publish`, which is why the file is rewritten rather than
+        // overridden. Named services are *not* passed: a stack is the point,
+        // so its dependencies come up too.
+        .args(["up", "--detach", "--build", "--remove-orphans", "--wait"])
+        .output()
+        .await
+        .map_err(|e| format!("could not run docker compose: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(tail(&String::from_utf8_lossy(&out.stderr), 20))
+}
+
+/// Take a stack down knowing only its project name.
+///
+/// Compose tracks a running project by name, so the file it came up with is not
+/// needed — which matters for a stack nothing in the database claims any more,
+/// where the rewritten file may already be gone.
+pub async fn compose_down_project(project: &str) {
+    let _ = Command::new(DOCKER)
+        .args(["compose", "-p", project, "down", "--volumes", "--remove-orphans"])
+        .output()
+        .await;
+}
+
+/// Is this stack still up?
+///
+/// Asked of compose rather than of a container name: compose names containers
+/// `<project>-<service>-1`, so looking for `aichip-preview-<id>` finds nothing
+/// and would declare a perfectly healthy stack dead. That is not hypothetical —
+/// it is what the first version of this did.
+pub async fn compose_running(project: &str) -> bool {
+    Command::new(DOCKER)
+        .args(["compose", "-p", project, "ps", "--status", "running", "-q"])
+        .output()
+        .await
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Take a stack down, and its networks and volumes with it.
+///
+/// `--volumes` is safe *because* of the project namespace: it removes only
+/// volumes compose created under this preview's name, never the user's.
+pub async fn compose_down(file: &Path, project_dir: &Path, project: &str) {
+    let _ = Command::new(DOCKER)
+        .args(["compose", "-f"])
+        .arg(file)
+        .arg("--project-directory")
+        .arg(project_dir)
+        .args(["-p", project])
+        .args(["down", "--volumes", "--remove-orphans"])
+        .output()
+        .await;
+}
+
 /// Does this image still exist? Waking a preview depends on the answer, and
 /// a `docker rmi` run by the user is not something aichip is told about.
 pub async fn image_exists(tag: &str) -> bool {
@@ -218,6 +296,26 @@ fn parse_size(text: &str) -> Option<u64> {
 /// Remove a built image once nothing points at it. Ignores "still in use".
 pub async fn remove_image(tag: &str) {
     let _ = Command::new(DOCKER).args(["rmi", "--force", tag]).output().await;
+}
+
+/// Every preview *stack* compose currently knows about, by project name.
+///
+/// Compose containers carry no label of ours, so the container sweep cannot see
+/// them at all. Found by project-name prefix instead — which is safe for the
+/// same reason the label is: nothing the user starts is called this.
+pub async fn list_owned_stacks() -> Vec<String> {
+    Command::new(DOCKER)
+        .args(["compose", "ls", "--all", "--format", "json"])
+        .output()
+        .await
+        .ok()
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| e.get("Name")?.as_str().map(str::to_string))
+        .filter(|n| n.starts_with("aichip-preview-"))
+        .collect()
 }
 
 /// Every preview container Docker currently knows about, by name.

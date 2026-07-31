@@ -224,6 +224,7 @@ export interface ProjectPreview {
   stale: boolean;
   canWake: boolean;
   slug: string | null;
+  isStack: boolean;
   error: string | null;
 }
 
