@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { AnimatePresence } from "framer-motion";
 import { api, Project, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -29,10 +29,34 @@ export default function ProjectPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showNew, setShowNew] = useState(false);
-  const [selected, setSelected] = useState<Task | null>(null);
   const [tab, setTab] = useState<Tab>("board");
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
   const narrow = useMediaQuery(NARROW);
+
+  // Which card is open lives in the URL, not in state.
+  //
+  // That makes a card addressable — the knowledge base links straight to one,
+  // and back/forward and a pasted link all work. Deriving the open card from
+  // the URL rather than mirroring it into state is deliberate: the board
+  // refreshes every 2.5s, and two sources of truth for "what is open" is how you
+  // get a drawer that reopens itself after you close it.
+  const [params, setParams] = useSearchParams();
+  const selected = tasks.find((t) => t.id === params.get("task")) ?? null;
+  const openTask = useCallback(
+    (task: Task | null) =>
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (task) next.set("task", task.id);
+          else next.delete("task");
+          return next;
+        },
+        // Opening a card is not a place you should have to press Back out of
+        // twice — it replaces the entry rather than stacking one per click.
+        { replace: true },
+      ),
+    [setParams],
+  );
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -127,7 +151,7 @@ export default function ProjectPage() {
                   {moveError}
                 </div>
               )}
-              <Board tasks={tasks} onSelect={setSelected} onMove={move} />
+              <Board tasks={tasks} onSelect={openTask} onMove={move} />
             </>
           )}
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
@@ -136,9 +160,17 @@ export default function ProjectPage() {
         </div>
       </div>
 
+      {/* Keyed because AnimatePresence tracks children by key, and these three
+          conditional siblings appear and disappear independently — two can be
+          on screen at once. Unkeyed, it has only child order to go on.
+
+          The drawer's key is constant rather than the task id, so opening a
+          different card is a prop change that keeps the panel's scroll and tab
+          where they were, instead of tearing it down and sliding a new one in. */}
       <AnimatePresence>
         {showNew && project && (
           <NewTaskModal
+            key="new-task"
             project={project}
             onClose={() => setShowNew(false)}
             onCreated={() => {
@@ -149,15 +181,18 @@ export default function ProjectPage() {
         )}
         {selected && (
           <TaskDrawer
-            task={tasks.find((t) => t.id === selected.id) ?? selected}
+            key="task-drawer"
+            task={selected}
             workspaceId={project?.workspaceId ?? ""}
-            onClose={() => setSelected(null)}
+            onClose={() => openTask(null)}
             onChanged={refresh}
             onOpenTeamRoom={setTeamRoom}
+            boardTasks={tasks}
+            onOpenTask={openTask}
           />
         )}
         {teamRoom && (
-          <OrgRunView runId={teamRoom} onClose={() => setTeamRoom(null)} />
+          <OrgRunView key="team-room" runId={teamRoom} onClose={() => setTeamRoom(null)} />
         )}
       </AnimatePresence>
     </div>
@@ -207,7 +242,7 @@ function AutonomyToggle({
       title={
         error ??
         (project.fullAutoOptIn
-          ? "Agents work straight through here. Click to make them ask again."
+          ? "Agents may work straight through here — unless the agent on a card carries its own permission setting, which wins. Each card shows which applies. Click to make them ask again."
           : "Agents stop to ask before edits and commands. Click to let them work uninterrupted — the run stays in an isolated worktree you review.")
       }
       className={`rounded-full px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
@@ -216,7 +251,10 @@ function AutonomyToggle({
           : "bg-panel-2 text-ink-dim hover:text-ink"
       }`}
     >
-      {project.fullAutoOptIn ? "✓ works without asking" : "asks before acting"}
+      {/* "allows" rather than "works": this unlocks working without asking, it
+          does not guarantee it. An agent's own preset outranks the project, so
+          the unqualified promise this used to make was one it could not keep. */}
+      {project.fullAutoOptIn ? "✓ allows working without asking" : "asks before acting"}
     </button>
   );
 }

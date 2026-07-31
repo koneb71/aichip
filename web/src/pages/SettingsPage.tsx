@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, Effort, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { EffortPicker } from "../components/EffortPicker";
+import { PreviewSettings } from "../components/PreviewSettings";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -18,20 +20,44 @@ const TIERS: { key: Tier; label: string; when: string }[] = [
 
 /** `{engine_id: {easy, medium, complex}}` — what the Save button sends. */
 type Draft = Record<string, Record<Tier, string>>;
+/** The same shape for how hard each tier thinks. Null means inherit. */
+type EffortDraft = Record<string, Record<Tier, Effort | null>>;
 
 const asDraft = (s: ModelSettings): Draft =>
   Object.fromEntries(s.engines.map((e) => [e.id, { ...e.tiers }]));
 
+const NO_EFFORTS: Record<Tier, Effort | null> = {
+  easy: null,
+  medium: null,
+  complex: null,
+};
+
+const asEffortDraft = (s: ModelSettings): EffortDraft =>
+  Object.fromEntries(s.engines.map((e) => [e.id, { ...NO_EFFORTS, ...e.efforts }]));
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [effortDraft, setEffortDraft] = useState<EffortDraft | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [perms, setPerms] = useState<PermissionSettings | null>(null);
+  const [effort, setEffort] = useState<EffortSettings | null>(null);
+  /**
+   * The running binary is older than this page.
+   *
+   * Not a hypothetical: the dashboard is served from disk, so a server left
+   * running from before a release serves the new page and then answers its
+   * calls with an API that has never heard of them. Worth naming, because the
+   * alternative is a Thinking section with one lonely option and a Save button
+   * that discards what you just set.
+   */
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     api.permissionSettings().then(setPerms).catch(() => {});
+    api.effortSettings().then(setEffort).catch(() => setStale(true));
   }, []);
 
   useEffect(() => {
@@ -40,6 +66,7 @@ export default function SettingsPage() {
       .then((s) => {
         setSettings(s);
         setDraft(asDraft(s));
+        setEffortDraft(asEffortDraft(s));
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -47,17 +74,24 @@ export default function SettingsPage() {
   const dirty =
     !!draft &&
     !!settings &&
-    settings.engines.some((e) => TIERS.some((t) => draft[e.id]?.[t.key] !== e.tiers[t.key]));
+    settings.engines.some((e) =>
+      TIERS.some(
+        (t) =>
+          draft[e.id]?.[t.key] !== e.tiers[t.key] ||
+          (effortDraft?.[e.id]?.[t.key] ?? null) !== (e.efforts?.[t.key] ?? null),
+      ),
+    );
 
   const save = async () => {
     if (!draft) return;
     setBusy(true);
     setError(null);
     try {
-      await api.setModelSettings(draft);
+      await api.setModelSettings(draft, effortDraft ?? {});
       const fresh = await api.modelSettings();
       setSettings(fresh);
       setDraft(asDraft(fresh));
+      setEffortDraft(asEffortDraft(fresh));
       setSaved(true);
       // Labels elsewhere in the app come from a provider loaded at startup,
       // so a reload is the honest way to make every chip agree at once.
@@ -133,6 +167,61 @@ export default function SettingsPage() {
       </div>
 
       <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+        Thinking
+      </h2>
+      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+        How hard the model works before it answers. Separate from which model —
+        the same model can think for a second or for several minutes, and the
+        second one costs a great deal more.
+      </p>
+      <div className="mt-3 max-w-2xl space-y-2">
+        {stale && <StaleServer />}
+        {!stale && (
+          <EffortChoice
+            checked={effort?.defaultEffort == null}
+            label="Leave it to the CLI"
+            blurb="Whatever claude or opencode does on its own. This is what aichip ships with."
+            onPick={async () => {
+              setEffort((e) => (e ? { ...e, defaultEffort: null } : e));
+              await api.setDefaultEffort(null);
+            }}
+          />
+        )}
+        {effort?.levels.map((l) => (
+          <EffortChoice
+            key={l.id}
+            checked={effort.defaultEffort === l.id}
+            label={l.label}
+            blurb={l.blurb}
+            onPick={async () => {
+              setEffort({ ...effort, defaultEffort: l.id });
+              await api.setDefaultEffort(l.id);
+            }}
+          />
+        ))}
+        {!stale && (
+          <p className="text-[11px] text-ink-dim">
+            The fallback, for any tier that doesn't set one of its own below. A
+            card or its agent still outranks both. Resolved when a run starts
+            rather than when a card is made, so raising this reaches work
+            already sitting in the backlog.
+          </p>
+        )}
+        {!!effort?.agentsOverriding && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            <span className="font-semibold">
+              {effort.agentsOverriding} agent
+              {effort.agentsOverriding === 1 ? "" : "s"} set their own
+            </span>{" "}
+            — an agent's budget outranks this, the same way its permission preset
+            does. Change those on the agent itself.
+          </div>
+        )}
+      </div>
+
+      <PreviewSettings />
+
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Models
       </h2>
       <p className="mt-1 max-w-2xl text-sm text-ink-dim">
@@ -158,21 +247,44 @@ export default function SettingsPage() {
                   className="card-shadow rounded-xl border border-line bg-panel p-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">{tier.label}</div>
                       <div className="mt-0.5 text-xs text-ink-dim">{tier.when}</div>
                     </div>
-                    <TierField
-                      engine={engine}
-                      value={draft?.[engine.id]?.[tier.key] ?? ""}
-                      onChange={(v) =>
-                        setDraft((d) =>
-                          d
-                            ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
-                            : d,
-                        )
-                      }
-                    />
+                    {/* Kept on one line: a tier reads as a single choice, and
+                        having the budget wrap under the model on some rows and
+                        not others made them look like different controls. */}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <TierField
+                        engine={engine}
+                        value={draft?.[engine.id]?.[tier.key] ?? ""}
+                        onChange={(v) =>
+                          setDraft((d) =>
+                            d
+                              ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
+                              : d,
+                          )
+                        }
+                      />
+                      {/* Beside the model rather than in its own section: a
+                          tier answers both questions at once, and "Complex"
+                          meaning Opus at low effort is a choice worth being
+                          able to see in one glance. */}
+                      <EffortPicker
+                        value={effortDraft?.[engine.id]?.[tier.key] ?? null}
+                        inherited={effort?.defaultEffort ?? null}
+                        // Not merely useless against an older server — it would
+                        // take the change, enable Save, and drop it.
+                        disabled={stale}
+                        onChange={(v) =>
+                          setEffortDraft((d) =>
+                            d
+                              ? { ...d, [engine.id]: { ...d[engine.id], [tier.key]: v } }
+                              : d,
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                   {draft && (
                     <div className="mt-2 text-[11px] text-ink-dim">
@@ -244,6 +356,58 @@ export default function SettingsPage() {
  * server still validates the `provider/model` shape, which catches the one
  * mistake people actually make: pasting a Claude id into this field.
  */
+/**
+ * Said once, where the missing controls would have been.
+ *
+ * Deliberately not a toast or a console warning: the failure mode this
+ * replaces is a page that looks like it works and quietly drops what you set.
+ */
+function StaleServer() {
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+      <span className="font-semibold">
+        This server is older than this page.
+      </span>{" "}
+      It was started before thinking budgets existed, so it can't store one —
+      the dashboard is served from disk, which is why the two can disagree.
+      Restart aichip and reload.
+    </div>
+  );
+}
+
+/** One radio in the thinking list. Same shape as a permission mode. */
+function EffortChoice({
+  checked,
+  label,
+  blurb,
+  onPick,
+}: {
+  checked: boolean;
+  label: string;
+  blurb: string;
+  onPick: () => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${
+        checked ? "border-accent bg-accent/5" : "border-line bg-panel"
+      }`}
+    >
+      <input
+        type="radio"
+        name="default-effort"
+        checked={checked}
+        onChange={onPick}
+        className="mt-0.5 accent-[var(--color-accent)]"
+      />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="mt-0.5 block text-xs text-ink-dim">{blurb}</span>
+      </span>
+    </label>
+  );
+}
+
 function TierField({
   engine,
   value,

@@ -22,13 +22,35 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
   const feedRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
+  /**
+   * Runs whose plan has been decided here, masking what the poll still reports.
+   *
+   * A Set keyed by run, not a boolean: this view is rendered with a constant key
+   * and takes its run as a prop, so a boolean would follow you to the next team
+   * room and hide a plan that really is waiting.
+   */
+  const [decided, setDecided] = useState<Set<string>>(new Set());
+
+  // Last request wins, not last response. Two 1500ms polls can overlap, and
+  // without this an older response lands after a newer one and writes stale
+  // state back — which is how approving a plan could put the review panel back
+  // on screen a second later.
+  const seq = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++seq.current;
     try {
-      setRun(await api.orgRun(runId));
+      const fresh = await api.orgRun(runId);
+      if (mine === seq.current) setRun(fresh);
     } catch {
       /* transient */
     }
   }, [runId]);
+
+  /** Apply a response we already hold, and make any in-flight poll stale. */
+  const adopt = useCallback((fresh: OrgRunDetail) => {
+    seq.current++;
+    setRun(fresh);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -50,7 +72,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
   // Narrow on purpose: a parked run is not "working", so the typing
   // indicator must not fire while it waits on the user.
   const live = isWorking(run?.status);
-  const needsReview = run?.status === "awaiting_approval";
+  const needsReview = run?.status === "awaiting_approval" && !decided.has(runId);
 
   // A plan waiting on approval is the whole point of having the modal open, so
   // it wins the pane on a narrow screen rather than hiding behind a tab.
@@ -135,31 +157,48 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
         {show("tasks") && (
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-line p-3 lg:flex-none lg:border-l">
             {!narrow && <SectionLabel>Assignments</SectionLabel>}
+            {/* Keyed and inside AnimatePresence so the review panel leaves the
+                way it arrived. As a bare ternary it popped out of existence the
+                instant the status changed, which read as a glitch rather than
+                as the plan having been accepted. */}
             <div className="mt-2 flex flex-col gap-2">
-              {needsReview ? (
-                <PlanReview run={run} onChanged={refresh} />
-              ) : (
-                <>
-                  <AnimatePresence initial={false}>
-                    {run.assignments
-                      .filter((a) => a.kind === "assignment")
-                      .map((a) => (
-                        <AssignmentCard
-                          key={a.id}
-                          assignment={a}
-                          color={colorOf(run.roster, a.assignee ?? "")}
-                          runEnded={isTerminal(run.status)}
-                          events={events}
-                        />
-                      ))}
-                  </AnimatePresence>
-                  {run.assignments.every((a) => a.kind === "manager") && (
-                    <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
-                      The manager is still working out the plan…
-                    </div>
-                  )}
-                </>
-              )}
+              <AnimatePresence mode="wait" initial={false}>
+                {needsReview ? (
+                  <PlanReview
+                    key="plan"
+                    run={run}
+                    onDecided={() => setDecided((s) => new Set(s).add(runId))}
+                    onChanged={refresh}
+                    onFresh={adopt}
+                  />
+                ) : (
+                  <motion.div
+                    key="list"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex flex-col gap-2"
+                  >
+                    <AnimatePresence initial={false}>
+                      {run.assignments
+                        .filter((a) => a.kind === "assignment")
+                        .map((a) => (
+                          <AssignmentCard
+                            key={a.id}
+                            assignment={a}
+                            color={colorOf(run.roster, a.assignee ?? "")}
+                            runEnded={isTerminal(run.status)}
+                            events={events}
+                          />
+                        ))}
+                    </AnimatePresence>
+                    {run.assignments.every((a) => a.kind === "manager") && (
+                      <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
+                        The manager is still working out the plan…
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         )}

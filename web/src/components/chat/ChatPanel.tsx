@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, ChatMessage, ChatSummary } from "../../lib/api";
+import { api, ChatMessage, ChatSummary, Effort, Tier } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
-import { EnginePicker, useEngines } from "../../lib/engines";
 import { useAttachments } from "../../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "../AttachmentBar";
+import { ComposerSettings } from "./ComposerSettings";
 import { useMentionPicker } from "../MentionPicker";
 import { Markdown } from "../Markdown";
 
@@ -15,10 +15,12 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const engines = useEngines();
   // null = the machine default. Switching mid-chat starts a fresh session,
   // because a session id only means something to the CLI that minted it.
   const [engine, setEngine] = useState<string | null>(null);
+  // Seeded from the chat once it loads, then owned here — see the composer.
+  const [tier, setTier] = useState<Tier>("medium");
+  const [effort, setEffort] = useState<Effort | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
@@ -61,6 +63,20 @@ export function ChatPanel({ projectId }: { projectId: string }) {
     api.openChat(projectId).then((r) => setChatId(r.id)).catch(() => {});
     refreshChats();
   }, [projectId, refreshChats]);
+
+  // A conversation remembers what it was last run with, so reopening it picks
+  // up where you left off rather than snapping back to the defaults. Guarded by
+  // the ref so a routine refresh of the chat list can't undo a choice you made
+  // in the composer but haven't sent yet.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chatId || seededFor.current === chatId) return;
+    const chat = chats.find((c) => c.id === chatId);
+    if (!chat) return;
+    seededFor.current = chatId;
+    setTier(chat.modelTier ?? "medium");
+    setEffort(chat.effort);
+  }, [chatId, chats]);
 
   // Switching conversations must drop the previous thread's messages and
   // stream, or the old run's text bleeds into the new chat.
@@ -146,6 +162,8 @@ export function ChatPanel({ projectId }: { projectId: string }) {
       const r = await api.sendChat(chatId, content, {
         attachmentIds,
         engine: engine ?? undefined,
+        modelTier: tier,
+        effort,
       });
       setActiveRunId(r.runId);
       // The first message names the chat server-side — pick that title up.
@@ -343,12 +361,18 @@ export function ChatPanel({ projectId }: { projectId: string }) {
               ↑
             </motion.button>
           </div>
-          {!!engines && engines.length > 1 && (
-            <div className="mt-1.5 flex items-center justify-end gap-2">
-              <span className="text-[11px] text-ink-dim">Run on</span>
-              <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
-            </div>
-          )}
+          {/* Which CLI, which model, and how hard it thinks. All three stick to
+              the chat rather than the message — choosing "think harder" and
+              having it last one turn would be a strange thing to have chosen. */}
+          <ComposerSettings
+            engine={engine}
+            onEngine={setEngine}
+            tier={tier}
+            onTier={setTier}
+            effort={effort}
+            onEffort={setEffort}
+            disabled={!!activeRunId}
+          />
         </div>
       </div>
     </div>

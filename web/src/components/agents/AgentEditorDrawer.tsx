@@ -3,8 +3,8 @@ import { motion } from "framer-motion";
 import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
 import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../lib/engines";
+import { TIERS } from "../TierPicker";
 
-const TIERS: Tier[] = ["easy", "medium", "complex"];
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
 

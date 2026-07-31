@@ -8,7 +8,7 @@
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
-use aichip_shared::{EngineTierMapping, McpWiring, 
+use aichip_shared::{EngineTierEffort, EngineTierMapping, McpWiring, 
     AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
 };
 use aichip_engines::{Engine, RunSpec};
@@ -42,6 +42,46 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
     "mcp__aichip__get_task_status",
     "mcp__aichip__list_agents",
 ];
+
+/// Named explicitly rather than left to the allow-list.
+///
+/// `--allowedTools` pre-*approves*; it does not forbid. Anything the chat
+/// assistant must never reach has to be denied by name or the CLI will happily
+/// pick it up — and the assistant runs in the user's real checkout, not a
+/// worktree, so an edit here would land straight on their files.
+pub const CHAT_DENIED_TOOLS: &[&str] = &[
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Bash",
+];
+
+/// The weakest permission mode this engine can actually honour for a read-only
+/// tool set.
+///
+/// The chat assistant cannot edit anything: its whole surface is Read/Grep/Glob
+/// plus aichip's own task tools, with the mutating tools denied above. So there
+/// is nothing here for a human to review, and asking for review is not caution
+/// — on an engine that cannot pause and ask, it is silence.
+///
+/// This used to be a flat `Reviewed`, which is why chat looked broken on
+/// OpenCode: with no way to answer a prompt mid-run it rejects every tool call,
+/// so the assistant could not read the repository or reach its own tools and
+/// fell back to asking the user what they were working on. `vet` exists to
+/// refuse exactly that pairing, and this was the one caller that never ran it.
+fn chat_permission_mode(engine: &dyn aichip_engines::Engine) -> PermissionMode {
+    if engine.capabilities().interactive_permissions {
+        // Claude: the allow-list has already pre-approved the read tools, so
+        // nothing prompts. AutoEdit rather than FullAuto keeps the dangerous
+        // flag off a run that has no business editing anything.
+        PermissionMode::AutoEdit
+    } else {
+        // OpenCode: approve-everything is the only setting it has, and
+        // "everything" here is bounded by the denials above.
+        PermissionMode::FullAuto
+    }
+}
 
 const CHAT_SYSTEM_PROMPT: &str = "You are the aichip project assistant embedded in a workspace \
 dashboard. You can inspect this repository (Read/Grep/Glob) but you cannot edit it directly. \
@@ -87,6 +127,7 @@ pub struct Orchestrator {
     /// Tier → model routing, live rather than baked at boot: changing it in
     /// settings must affect the next run, not require a restart.
     tiers: Arc<std::sync::RwLock<EngineTierMapping>>,
+    tier_efforts: Arc<std::sync::RwLock<EngineTierEffort>>,
     pub worktrees: Arc<WorktreeManager>,
     pub(crate) semaphore: Arc<Semaphore>,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
@@ -185,6 +226,7 @@ impl Orchestrator {
             engines: HashMap::new(),
             detected: HashMap::new(),
             tiers: Arc::new(std::sync::RwLock::new(EngineTierMapping::default())),
+            tier_efforts: Arc::new(std::sync::RwLock::new(EngineTierEffort::default())),
             worktrees,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             mcp_base_url,
@@ -252,6 +294,28 @@ impl Orchestrator {
     /// Create a run for a board task and put it on the queue. A task handed
     /// to a team runs as that team instead of a single agent.
     pub async fn enqueue_task(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        // The last line of defence against two agents in one checkout.
+        //
+        // A sub-ticket's work is already running under a step of its epic's run,
+        // and starting it again would put a second agent in the same worktree
+        // with a second writer for the card's column. The routes refuse this
+        // with a 409, but they are not the only door: dropping a card into
+        // "In Progress", Retry, and the chat MCP's `start_task` all arrive here
+        // directly.
+        let live: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM steps s JOIN runs r ON r.id = s.run_id
+                  WHERE s.task_id = $1
+                    AND s.status IN ('queued','starting','running','waiting_permission','rate_limited')
+                    AND r.status NOT IN ('completed','failed','canceled'))",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        if live {
+            anyhow::bail!("a teammate is already working on this sub-task as part of its epic");
+        }
+
         let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
@@ -643,6 +707,14 @@ impl Orchestrator {
         // a failed team run still animate a teammate as "working…".
         settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
         tx.commit().await?;
+        // And so do the cards those steps stand for — otherwise a restart leaves
+        // a column of sub-tickets stuck at "In Progress" with nothing behind
+        // them, which is the same lie `settle_steps` exists to prevent.
+        for run_id in &orphans {
+            if let Err(e) = crate::runs::org::epic::mirror_run(&self.db, *run_id).await {
+                tracing::warn!(%run_id, error=%e, "could not update this run's sub-task cards");
+            }
+        }
         Ok(orphans.len() as u64)
     }
 
@@ -741,6 +813,57 @@ impl Orchestrator {
         }
         *self.tiers.write().unwrap() = mapping;
         Ok(())
+    }
+
+    /// How hard each tier thinks, per engine. A snapshot, for the same reason
+    /// `tier_mapping` returns one.
+    pub fn tier_efforts(&self) -> EngineTierEffort {
+        self.tier_efforts.read().unwrap().clone()
+    }
+
+    /// Unlike the model mapping there is nothing to invent when this is
+    /// missing: no entry means inherit, which is a real answer.
+    pub async fn load_tier_efforts(&self) -> anyhow::Result<()> {
+        let stored: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'tier_efforts'")
+                .fetch_optional(&self.db.pool)
+                .await?;
+        let map = stored
+            .and_then(|v| serde_json::from_value::<EngineTierEffort>(v).ok())
+            .unwrap_or_default();
+        *self.tier_efforts.write().unwrap() = map;
+        Ok(())
+    }
+
+    pub async fn set_tier_efforts(&self, efforts: EngineTierEffort) -> anyhow::Result<()> {
+        self.put_setting("tier_efforts", serde_json::to_value(&efforts)?)
+            .await?;
+        *self.tier_efforts.write().unwrap() = efforts;
+        Ok(())
+    }
+
+    /// The budget a run should actually think with.
+    ///
+    /// Four places can have an opinion and the most specific wins: whatever was
+    /// pinned on the bound agent or the card, then what this engine's tier
+    /// says, then the machine default, then the CLI's own. Every step is
+    /// resolved when the run starts rather than frozen at create time, so
+    /// changing any of them reaches work already sitting in the backlog.
+    ///
+    /// One function rather than three copies, because the three call sites —
+    /// a card, a chat turn, a teammate's reply — drifted apart the last time
+    /// they were written out separately.
+    pub async fn resolve_effort(
+        &self,
+        agent: Option<ReasoningEffort>,
+        card: Option<ReasoningEffort>,
+        engine: &str,
+        tier: ModelTier,
+    ) -> Option<ReasoningEffort> {
+        // Bound out of the expression so no lock guard is alive across the
+        // await below.
+        let from_tier = self.tier_efforts.read().unwrap().effort_for(engine, tier);
+        aichip_shared::resolve_effort(agent, card, from_tier, self.default_effort().await).0
     }
 
     /// Persist and apply a new routing.
@@ -855,6 +978,39 @@ impl Orchestrator {
         .unwrap_or_default()
     }
 
+    /// How hard the model thinks, when nothing more specific says.
+    ///
+    /// `None` is a real answer and the default one: it leaves each CLI on its
+    /// own built-in behaviour rather than aichip picking a number on the user's
+    /// behalf. A stored value is an explicit choice to override that.
+    pub async fn default_effort(&self) -> Option<ReasoningEffort> {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM settings WHERE key = 'default_effort'",
+        )
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().and_then(ReasoningEffort::parse))
+    }
+
+    /// `None` clears it, returning every run to its CLI's own default — the
+    /// same shape as removing the budget cap rather than setting it to zero.
+    pub async fn set_default_effort(&self, effort: Option<ReasoningEffort>) -> anyhow::Result<()> {
+        match effort {
+            Some(e) => {
+                self.put_setting("default_effort", serde_json::json!(e.as_str()))
+                    .await
+            }
+            None => {
+                sqlx::query("DELETE FROM settings WHERE key = 'default_effort'")
+                    .execute(&self.db.pool)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
     pub async fn set_default_permission_mode(&self, mode: PermissionMode) -> anyhow::Result<()> {
         self.put_setting("default_permission_mode", serde_json::to_value(mode)?)
             .await
@@ -951,7 +1107,8 @@ impl Orchestrator {
                     t.model_tier, r.tier_override,
                     COALESCE(r.agent_id, t.agent_id) AS agent_id,
                     r.variant_label, r.worktree_path AS run_worktree,
-                    t.permission_mode, t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
+                    t.permission_mode, t.effort AS task_effort,
+                    t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     r.plan_approval, r.plan_approved_at,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
                     p.vcs,
@@ -1037,9 +1194,13 @@ impl Orchestrator {
         // allowed tools, and permission preset.
         let agent_prompt: Option<String> = run.get("agent_prompt");
         let agent_tier: Option<String> = run.get("agent_tier");
-        // A bound agent's thinking budget travels with it, same as its tier.
-        let effort = run
+        // Resolved below, once the tier is known — see `resolve_effort` for
+        // the order these two sit in and what they fall through to.
+        let agent_effort = run
             .get::<Option<String>, _>("agent_effort")
+            .and_then(|e| ReasoningEffort::parse(&e));
+        let card_effort = run
+            .get::<Option<String>, _>("task_effort")
             .and_then(|e| ReasoningEffort::parse(&e));
         let agent_tools: Option<Vec<String>> = run.get("agent_tools");
         let agent_preset: Option<String> = run.get("agent_preset");
@@ -1053,6 +1214,9 @@ impl Orchestrator {
         };
         let tier: ModelTier =
             serde_json::from_value(serde_json::Value::String(tier_str)).unwrap_or_default();
+        let effort = self
+            .resolve_effort(agent_effort, card_effort, &engine_id, tier)
+            .await;
         // Most specific wins: the agent's own preset, else the card's, else
         // the workspace default. Both of the first two are nullable and mean
         // "inherit" when unset — resolved here rather than frozen at create
@@ -1512,7 +1676,12 @@ impl Orchestrator {
             // Guarded on the body as well as the pointer, so a page that has
             // content but no revision row is treated as somebody's work rather
             // than as an empty placeholder to write over.
-            crate::kb::revisions::save_edit(&self.db, article_id, rev).await?;
+            //
+            // `Some(0)` rather than `None`, because `existing` was read long
+            // before this line — a whole agent run ago. If somebody started
+            // typing on the placeholder while the run was in flight the page is
+            // no longer blank, and this refuses instead of erasing them.
+            crate::kb::revisions::save_edit(&self.db, article_id, rev, Some(0)).await?;
         } else {
             // Everything else is a proposal. This is the rule the whole
             // revision log exists for: an agent must never replace a body a
@@ -1526,7 +1695,8 @@ impl Orchestrator {
         let row = sqlx::query(
             // Lateral join rather than a scalar subquery: the turn needs the
             // message's id as well as its text, to look up its attachments.
-            "SELECT r.engine, c.session_id, c.session_engine, p.path AS project_path,
+            "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
+                    c.effort AS chat_effort, p.path AS project_path,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              JOIN projects p ON p.id = c.project_id
@@ -1575,7 +1745,22 @@ impl Orchestrator {
             servers: vec![],
         };
 
-        let tier = ModelTier::Medium;
+        // Both were hardcoded — Medium, and no effort at all — which is why the
+        // chat composer had a picker for the engine and nothing else. NULL still
+        // means inherit, resolved now rather than frozen when the chat opened.
+        let tier: ModelTier = row
+            .get::<Option<String>, _>("chat_tier")
+            .and_then(|t| serde_json::from_value(serde_json::Value::String(t)).ok())
+            .unwrap_or(ModelTier::Medium);
+        let chat_effort = self
+            .resolve_effort(
+                None,
+                row.get::<Option<String>, _>("chat_effort")
+                    .and_then(|e| ReasoningEffort::parse(&e)),
+                &engine_id,
+                tier,
+            )
+            .await;
         let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
@@ -1588,13 +1773,13 @@ impl Orchestrator {
             prompt: user_message,
             model_tier: tier,
             model_id,
-            effort: None,
+            effort: chat_effort,
             resume_session_id: session_id,
-            permission_mode: PermissionMode::Reviewed,
+            permission_mode: chat_permission_mode(engine.as_ref()),
             allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
             append_system_prompt: Some(CHAT_SYSTEM_PROMPT.to_string()),
             mcp,
-            denied_tools: vec![],
+            denied_tools: CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect(),
             run_key: run_id.to_string(),
             extra_read_dirs,
             permission_prompt_tool: false,
@@ -1756,9 +1941,18 @@ impl Orchestrator {
             .await?;
 
         let system_prompt: String = row.get("system_prompt");
-        let reply_effort = row
-            .get::<Option<String>, _>("agent_effort")
-            .and_then(|e| ReasoningEffort::parse(&e));
+        // A teammate replying used to be the one path that ignored everything
+        // but its own agent's budget — so a tier set to think hard did nothing
+        // in the surface where several agents talk at once.
+        let reply_effort = self
+            .resolve_effort(
+                row.get::<Option<String>, _>("agent_effort")
+                    .and_then(|e| ReasoningEffort::parse(&e)),
+                None,
+                &engine_id,
+                tier,
+            )
+            .await;
         let persona = format!(
             "You are {agent_name}, an agent on this project's kanban board.{}",
             if system_prompt.is_empty() {
@@ -2491,6 +2685,13 @@ this workflow manually."
         // leaves step rows non-terminal under a terminal run. Normally a no-op.
         settle_steps(&mut tx, &[run_id], status).await?;
         tx.commit().await?;
+        // Every ending comes through here — completion, cancellation, a crash in
+        // `execute`, a planning failure — which is why the epic mirror hangs off
+        // `finish` rather than off the end of `work_phase`. A no-op unless the
+        // run has steps with cards.
+        if let Err(e) = crate::runs::org::epic::mirror_run(&self.db, run_id).await {
+            tracing::warn!(%run_id, error=%e, "could not update this run's sub-task cards");
+        }
         Ok(())
     }
 
@@ -2648,6 +2849,42 @@ pub(crate) fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chat assistant must never be handed a mode its engine cannot honour.
+    ///
+    /// This is the bug this test was written for: chat passed a flat `Reviewed`,
+    /// and an engine that cannot pause to ask answers that by rejecting every
+    /// tool call. The assistant went quiet — no repository access, no task
+    /// tools — and asked the user what they were working on, which reads as
+    /// "it can't see my project" rather than "it was refused".
+    #[test]
+    fn chat_never_asks_an_engine_to_review_when_it_cannot() {
+        for engine in [
+            &aichip_engines::claude::ClaudeEngine::default() as &dyn aichip_engines::Engine,
+            &aichip_engines::opencode::OpenCodeEngine::default() as &dyn aichip_engines::Engine,
+        ] {
+            let mode = chat_permission_mode(engine);
+            assert_ne!(mode, PermissionMode::Reviewed, "{}", engine.label());
+            assert!(
+                aichip_engines::vet(engine, mode, false).is_ok(),
+                "{} cannot honour {mode:?}",
+                engine.label()
+            );
+        }
+    }
+
+    /// Approve-everything is only safe because "everything" is a short list.
+    #[test]
+    fn the_chat_assistant_cannot_reach_a_tool_that_writes() {
+        for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"] {
+            assert!(
+                CHAT_DENIED_TOOLS.contains(&tool),
+                "{tool} must be denied by name — an allow-list only pre-approves, \
+                 it does not forbid, and chat runs in the real checkout"
+            );
+            assert!(!CHAT_ALLOWED_TOOLS.contains(&tool));
+        }
+    }
 
     /// The gate exists so a workflow can't grant itself more freedom than the
     /// project allows. Down, never up.

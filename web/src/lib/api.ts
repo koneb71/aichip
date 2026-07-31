@@ -46,6 +46,32 @@ export interface Task {
   teamId: string | null;
   teamName: string | null;
   teamPattern: string | null;
+  /** The epic this is a sub-ticket of, if any. */
+  parentId: string | null;
+  parentTitle: string | null;
+  /**
+   * Sub-tickets under this card. `childCount > 0` is what makes a card an epic
+   * — it is derived rather than stored, so it cannot disagree with the board.
+   */
+  childCount: number;
+  childResolved: number;
+  /**
+   * The raw status of the assignment this card came from, when it came from one.
+   * The four board columns have nowhere to put "failed" or "dropped", so the
+   * column carries position and this carries the outcome.
+   */
+  stepStatus: string | null;
+  /**
+   * The mode this card will actually run under, and which of the three places
+   * decided it — the bound agent's preset, the card's own, or the machine
+   * default, in that order of precedence.
+   *
+   * Surfaced because the order surprises people: a project set to work without
+   * asking still stops for permission when its agent carries its own preset,
+   * and until this there was nothing anywhere that said so.
+   */
+  effectiveMode: "reviewed" | "auto_edit" | "full_auto";
+  permissionSource: "agent" | "card" | "default";
   /** Set when the latest run was an organization run — opens the team room. */
   orgRunId: string | null;
   runId: string | null;
@@ -56,6 +82,16 @@ export interface Task {
   engine: string;
   /** Draft a plan and wait for approval before doing any work. */
   planFirst: boolean;
+  /** This card's own thinking budget. Null means inherit. */
+  effort: Effort | null;
+  /**
+   * What the card will actually think with, and which of the four places
+   * decided it — the bound agent's budget, the card's own, its tier on the
+   * engine it runs on, or the machine default. Surfaced for the same reason
+   * `permissionSource` is: the order is not guessable from any one screen.
+   */
+  effectiveEffort: Effort | null;
+  effortSource: "agent" | "card" | "tier" | "default";
 }
 
 /** A knowledge-base page. `contentHtml` is absent in list responses. */
@@ -72,15 +108,129 @@ export interface Article {
   projectId: string | null;
   icon: string;
   position: number;
-  /** The newest accepted revision — also the token a save must match. */
+  /** The newest accepted revision. A label, not a lock. */
   currentSeq: number;
+  /**
+   * The token a save must match. Not `currentSeq`, which holds still while
+   * rapid autosaves coalesce into one revision — so two editors both matched it
+   * and the second silently overwrote the first.
+   */
+  bodyVersion: number;
   contentHtml?: string;
   // Present only on the single-page read.
   breadcrumb?: { id: string; title: string; icon: string }[];
   children?: { id: string; title: string; icon: string; summary: string }[];
   backlinks?: { id: string; title: string; icon: string }[];
+  usedBy?: UsedBy;
   pendingRevision?: Revision | null;
   writing?: boolean;
+}
+
+/**
+ * The board cards that depend on this page.
+ *
+ * `total` is the true count; `tasks` is capped server-side, so a page every card
+ * references says how many it is not showing instead of pretending the list is
+ * the whole story.
+ */
+export interface UsedBy {
+  total: number;
+  tasks: {
+    id: string;
+    title: string;
+    projectId: string;
+    projectName: string;
+    boardColumn: string;
+    /** Attached to the card, so every run on it is handed this page. */
+    attached: boolean;
+    /** How many comments linked it — a mention reaches one reply, not the card. */
+    mentions: number;
+  }[];
+}
+
+
+/**
+ * A card's branch, built and running so you can look at it.
+ *
+ * `url` is present only while `status === "running"` — a link to a container
+ * that is still building is a link to a connection refused.
+ */
+export interface TaskPreview {
+  id: string;
+  /** Null for a project's base-branch preview, which belongs to no card. */
+  taskId: string | null;
+  status: "building" | "running" | "stopped" | "failed";
+  url: string | null;
+  hostPort: number | null;
+  containerPort: number | null;
+  /** The Dockerfile named no port, so the one above is a guess. */
+  portAssumed: boolean;
+  /** The card was worked on after this was built, so it is serving history. */
+  stale: boolean;
+  /** Its image is still on disk, so starting again is a wake, not a rebuild. */
+  canWake: boolean;
+  /**
+   * The hostname label this answers to, while it is running.
+   *
+   * Prefer this over `url`: a port is asked of the OS on every start, so the
+   * port URL changes under a bookmark, and every preview on 127.0.0.1 shares
+   * one cookie jar. `previewUrl()` builds the address.
+   */
+  slug: string | null;
+  error: string | null;
+}
+
+/**
+ * Where to send someone for a preview.
+ *
+ * The port is this page's own — aichip proxies preview hostnames on the port it
+ * is already served on, so the browser's location is the authority on it and
+ * the server never has to be told which port it is behind.
+ */
+export function previewUrl(p: TaskPreview): string | null {
+  if (p.slug) {
+    const port = window.location.port ? `:${window.location.port}` : "";
+    return `http://${p.slug}.preview.localhost${port}`;
+  }
+  return p.url;
+}
+
+/**
+ * A build recipe for a project with no Dockerfile of its own.
+ *
+ * `proposed` means an agent wrote it and nobody has read it. Nothing builds a
+ * proposal — a Dockerfile's RUN lines execute on this machine, so approving one
+ * is approving code, and the UI shows the whole text rather than a summary.
+ */
+export interface PreviewRecipe {
+  dockerfile: string;
+  status: "proposed" | "approved";
+  /** A person rewrote it rather than approving what was proposed. */
+  edited: boolean;
+}
+
+/** Whether previews are possible here at all. */
+export interface DockerStatus {
+  installed: boolean;
+  usable: boolean;
+  version?: string;
+  /** Why not, phrased for someone who now has to go and fix it. */
+  problem?: string;
+}
+
+/** Whether this machine can talk to GitHub, and as whom. No token ever crosses this. */
+export interface GitHubStatus {
+  installed: boolean;
+  usable: boolean;
+  version?: string;
+  accounts: {
+    host: string;
+    login: string;
+    active: boolean;
+    valid: boolean;
+    /** gh's own words for why this login can't be used. */
+    problem: string | null;
+  }[];
 }
 
 /** One entry in a page's history. */
@@ -289,6 +439,9 @@ export interface AgentMemory {
 }
 
 export interface ChatSummary {
+  /** Null means inherit — the machine default, resolved when the turn runs. */
+  modelTier: Tier | null;
+  effort: Effort | null;
   id: string;
   title: string;
   messageCount: number;
@@ -450,6 +603,24 @@ export interface EngineModels {
   providers: { name: string; auth: string }[];
   tiers: Record<Tier, string>;
   defaults: Record<Tier, string>;
+  /**
+   * How hard each tier thinks here. Null means the tier pins nothing.
+   *
+   * Optional because the dashboard is served from disk while the binary that
+   * answers these calls is whatever is still running — a server started before
+   * this field existed serves the new page and then omits it. Typed honestly
+   * so the compiler makes every reader handle that.
+   */
+  efforts?: Record<Tier, Effort | null>;
+}
+
+/** The machine-wide thinking budget, and who ignores it. */
+export interface EffortSettings {
+  /** Null means every run keeps its CLI's own default — the shipped choice. */
+  defaultEffort: Effort | null;
+  /** Agents pinning their own budget, which outranks this. */
+  agentsOverriding: number;
+  levels: { id: Effort; label: string; blurb: string }[];
 }
 
 export interface ModelSettings {
@@ -522,6 +693,10 @@ const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
 export const api = {
+  // Probed live rather than cached: `gh auth login` happens in a terminal
+  // while aichip is running, and this is what tells you to go and do it.
+  github: () => fetch("/api/github").then((r) => json<GitHubStatus>(r)),
+
   // workspaces
   workspaces: () =>
     fetch("/api/workspaces").then((r) => json<{ workspaces: Workspace[] }>(r)),
@@ -573,11 +748,22 @@ export const api = {
     patch(`/api/projects/${projectId}`, { full_auto_opt_in: on }).then((r) =>
       json<Project>(r),
     ),
-  setModelSettings: (engines: Record<string, Record<Tier, string>>) =>
+  effortSettings: () =>
+    fetch("/api/settings/effort").then((r) => json<EffortSettings>(r)),
+  setDefaultEffort: (effort: Effort | null) =>
+    fetch("/api/settings/effort", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_effort: effort }),
+    }).then((r) => json<{ defaultEffort: Effort | null }>(r)),
+  setModelSettings: (
+    engines: Record<string, Record<Tier, string>>,
+    efforts: Record<string, Record<Tier, Effort | null>>,
+  ) =>
     fetch("/api/settings/models", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ engines }),
+      body: JSON.stringify({ engines, efforts }),
     }).then((r) => json<{ saved: boolean }>(r)),
 
   // MCP servers the user connects
@@ -622,6 +808,7 @@ export const api = {
     team_id?: string | null;
     engine?: string;
     plan_first?: boolean;
+    effort?: Effort | null;
     article_ids?: string[];
     attachment_ids?: string[];
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
@@ -644,10 +831,77 @@ export const api = {
       position?: number;
       engine?: string;
       plan_first?: boolean;
+      model_tier?: Tier;
+      /**
+       * Three states, and JSON gives us all three: omit the key to leave it
+       * alone, send null to return the card to inheriting, send a value to pin
+       * one. Passing `undefined` omits it, which is what you want.
+       */
+      effort?: Effort | null;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
+    ),
+  /** The project's base branch, running — what a card's changes compare to. */
+  basePreview: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview`).then((r) =>
+      json<{ preview: TaskPreview | null }>(r),
+    ),
+  startBasePreview: (projectId: string) =>
+    post(`/api/projects/${projectId}/preview`).then((r) =>
+      json<{ preview: TaskPreview }>(r),
+    ),
+  stopBasePreview: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview`, { method: "DELETE" }).then((r) =>
+      json<{ stopped: boolean }>(r),
+    ),
+  /** A Dockerfile an agent wrote for a project that has none. */
+  previewRecipe: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview-recipe`).then((r) =>
+      json<{ recipe: PreviewRecipe | null }>(r),
+    ),
+  proposeRecipe: (projectId: string) =>
+    post(`/api/projects/${projectId}/preview-recipe`).then((r) =>
+      json<{ recipe: PreviewRecipe }>(r),
+    ),
+  approveRecipe: (projectId: string, dockerfile: string) =>
+    fetch(`/api/projects/${projectId}/preview-recipe`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dockerfile }),
+    }).then((r) => json<{ approved: boolean; edited: boolean }>(r)),
+  // Previews
+  previewLimits: () =>
+    fetch("/api/previews/limits").then((r) =>
+      json<{ maxLive: number; idleMinutes: number; live: number }>(r),
+    ),
+  setPreviewLimits: (maxLive: number, idleMinutes: number) =>
+    fetch("/api/previews/limits", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_live: maxLive, idle_minutes: idleMinutes }),
+    }).then((r) => json<{ maxLive: number; idleMinutes: number }>(r)),
+  previewDisk: () =>
+    fetch("/api/previews/disk").then((r) =>
+      json<{ bytes: number; reclaimable: number }>(r),
+    ),
+  reclaimPreviewDisk: () =>
+    fetch("/api/previews/disk", { method: "DELETE" }).then((r) =>
+      json<{ reclaimed: number }>(r),
+    ),
+  dockerStatus: () => fetch("/api/docker").then((r) => json<DockerStatus>(r)),
+  taskPreview: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/preview`).then((r) =>
+      json<{ preview: TaskPreview | null }>(r),
+    ),
+  startPreview: (taskId: string) =>
+    post(`/api/tasks/${taskId}/preview`).then((r) =>
+      json<{ preview: TaskPreview }>(r),
+    ),
+  stopPreview: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/preview`, { method: "DELETE" }).then((r) =>
+      json<{ stopped: boolean }>(r),
     ),
   // Knowledge base
   articles: (workspaceId: string, q?: string) =>
@@ -674,8 +928,10 @@ export const api = {
       status?: string;
       icon?: string;
       project_id?: string | null;
-      /** Required whenever content_html is sent. */
+      /** What the new revision diffs against. */
       base_seq?: number;
+      /** The concurrency guard. Required whenever content_html is sent. */
+      base_version?: number;
       asset_ids?: string[];
     },
   ) => {
@@ -930,9 +1186,14 @@ export const api = {
       goal,
       review_plan: reviewPlan,
     }).then((r) => json<{ runId: string }>(r)),
-  approvePlan: (runId: string) => post(`/api/org-runs/${runId}/plan/approve`).then(json),
+  // Both answer with the run they just changed, so the caller can render the
+  // new state instead of racing its own poll for it.
+  approvePlan: (runId: string) =>
+    post(`/api/org-runs/${runId}/plan/approve`).then((r) => json<OrgRunDetail>(r)),
   rejectPlan: (runId: string, reason?: string) =>
-    post(`/api/org-runs/${runId}/plan/reject`, { reason }).then(json),
+    post(`/api/org-runs/${runId}/plan/reject`, { reason }).then((r) =>
+      json<OrgRunDetail>(r),
+    ),
   updateAssignment: (
     runId: string,
     stepId: string,
@@ -1023,11 +1284,18 @@ export const api = {
   sendChat: (
     chatId: string,
     content: string,
-    opts: { attachmentIds?: string[]; engine?: string } = {},
+    opts: {
+      attachmentIds?: string[];
+      engine?: string;
+      modelTier?: Tier;
+      effort?: Effort | null;
+    } = {},
   ) =>
     post(`/api/chats/${chatId}/messages`, {
       content,
       engine: opts.engine,
+      model_tier: opts.modelTier,
+      effort: opts.effort ?? undefined,
       attachment_ids: opts.attachmentIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
 };

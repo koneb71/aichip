@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, TaskPlan } from "../lib/api";
 import { Markdown } from "./Markdown";
@@ -27,22 +27,40 @@ export function PlanReviewPanel({
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState<"approve" | "revise" | "save" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Runs this panel has already acted on.
+   *
+   * A Set keyed by run rather than a boolean, and that is not stylistic: the
+   * task drawer is rendered with a constant key, so opening a different card is
+   * a prop change, not a remount. A boolean set while looking at card A would
+   * hide card B's plan, which is still genuinely waiting.
+   */
+  const [settled, setSettled] = useState<Set<string>>(new Set());
+  /** Bumped after every action to re-read the plan the server now has. */
+  const [reloads, setReloads] = useState(0);
+
+  const load = useCallback(
+    () => api.taskPlan(runId).catch(() => null),
+    [runId],
+  );
 
   useEffect(() => {
     let live = true;
-    api
-      .taskPlan(runId)
-      .then((p) => live && setPlan(p))
-      .catch(() => {});
+    load().then((p) => live && p && setPlan(p));
     return () => {
       live = false;
     };
-  }, [runId]);
+  }, [load, reloads]);
 
   if (!plan?.content) return null;
 
   const editing = draft !== null;
   const dirty = editing && draft.trim() !== plan.content.trim();
+  // The server cannot tell this component to hide, and nothing else refetches
+  // it. Without the local mask the amber panel stayed on screen after a
+  // successful approve, offering a button whose second press was a guaranteed
+  // 409 for a run that had already started.
+  const awaiting = plan.awaitingApproval && !settled.has(runId);
 
   const act = async (
     kind: "approve" | "revise" | "save",
@@ -50,13 +68,37 @@ export function PlanReviewPanel({
   ) => {
     setBusy(kind);
     setError(null);
+    // Optimistic, and before the await deliberately: the panel goes away on the
+    // click rather than whenever a round trip happens to land.
+    setSettled((s) => new Set(s).add(runId));
     try {
       await fn();
       onChanged();
+      // Leave the editor and the feedback box behind, so re-opening the card
+      // shows the agreed plan rather than a half-typed draft of it.
+      setDraft(null);
+      setAsking(false);
+      setNote("");
+      // Deliberately does NOT clear `busy` — clearing it is what re-armed the
+      // button. The panel is gone either way; the server's own answer arrives
+      // through the reload below and takes over from the optimistic hide.
+      setReloads((n) => n + 1);
     } catch (e) {
-      setError(String(e).replace(/^Error:\s*/, ""));
-    } finally {
       setBusy(null);
+      // Ask the server before deciding whether to put the panel back. A 409
+      // means this run is genuinely no longer parked, so re-showing an Approve
+      // button would only earn the same 409; a network failure means nothing
+      // happened and the panel — and the error — must return.
+      const fresh = await load();
+      if (fresh) setPlan(fresh);
+      if (!fresh || fresh.awaitingApproval) {
+        setSettled((s) => {
+          const next = new Set(s);
+          next.delete(runId);
+          return next;
+        });
+        setError(String(e).replace(/^Error:\s*/, ""));
+      }
     }
   };
 
@@ -68,7 +110,7 @@ export function PlanReviewPanel({
       await api.approveTaskPlan(runId);
     });
 
-  if (!plan.awaitingApproval) {
+  if (!awaiting) {
     return (
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">

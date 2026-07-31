@@ -37,10 +37,21 @@ export default function ActivityPage() {
     }
   }
 
-  const live = data?.live ?? [];
+  // Runs stopped from this page, masking what the 4s poll still reports.
+  //
+  // Without it, pressing stop leaves the row sitting there for up to four
+  // seconds looking exactly as it did — which reads as "the button did
+  // nothing", and invites a second press.
+  const [stopped, setStopped] = useState<Set<string>>(new Set());
+  const stop = (runId: string) => {
+    setStopped((s) => new Set(s).add(runId));
+    load();
+  };
+
+  const live = (data?.live ?? []).filter((r) => !stopped.has(r.id));
   const working = live.filter((r) => isWorking(r.status));
   const queued = live.filter((r) => r.status === "queued");
-  const blocked = data?.blocked ?? [];
+  const blocked = (data?.blocked ?? []).filter((b) => !stopped.has(b.runId));
 
   return (
     <div className="h-full overflow-y-auto p-8">
@@ -149,6 +160,7 @@ export default function ActivityPage() {
                   key={`${b.runId}-plan-${i}`}
                   blocker={b}
                   onOpenOrg={() => setOrgRun(b.runId)}
+                  onStopped={() => stop(b.runId)}
                 />
               ),
             )}
@@ -165,7 +177,12 @@ export default function ActivityPage() {
           <div className="flex flex-col gap-2">
             <AnimatePresence initial={false}>
               {live.map((run) => (
-                <RunRow key={run.id} run={run} onOpenOrg={() => setOrgRun(run.id)} />
+                <RunRow
+                  key={run.id}
+                  run={run}
+                  onOpenOrg={() => setOrgRun(run.id)}
+                  onStopped={() => stop(run.id)}
+                />
               ))}
             </AnimatePresence>
           </div>
@@ -329,7 +346,87 @@ function NotifyToggle() {
   );
 }
 
-function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void }) {
+/**
+ * Stop a run, from the page that shows you it is running.
+ *
+ * Two presses rather than one. Everything on this page is long-lived and
+ * expensive — the whole reason to look at it is that something has been going
+ * for hours — and a single misplaced click throwing away that work, next to a
+ * row you clicked to *open*, is not a trade worth making.
+ */
+function StopRun({
+  runId,
+  what,
+  onStopped,
+}: {
+  runId: string;
+  /** Named in the confirmation, so it is obvious which row is about to stop. */
+  what: string;
+  onStopped: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (error) {
+    return (
+      <span className="shrink-0 text-[11px] text-danger" title={error}>
+        couldn’t stop it
+      </span>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        onClick={() => setConfirming(true)}
+        title={`Stop ${what}`}
+        aria-label={`Stop ${what}`}
+        className="shrink-0 rounded-lg px-2 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-danger"
+      >
+        ✕
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <button
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await api.cancelRun(runId);
+            // Only after it worked: the row disappears on success, so an error
+            // shown in its place needs the row to still be there.
+            onStopped();
+          } catch (e) {
+            setError(String(e).replace(/^Error:\s*/, ""));
+          }
+        }}
+        className="rounded-lg bg-danger px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
+      >
+        {busy ? "Stopping…" : "Stop it"}
+      </button>
+      <button
+        onClick={() => setConfirming(false)}
+        className="rounded-lg px-2 py-1 text-xs text-ink-dim hover:text-ink"
+      >
+        Keep going
+      </button>
+    </span>
+  );
+}
+
+function RunRow({
+  run,
+  onOpenOrg,
+  onStopped,
+}: {
+  run: ActivityRun;
+  onOpenOrg: () => void;
+  onStopped: () => void;
+}) {
   const engines = useEngines();
   // Naming the engine only earns its space once there's more than one; the
   // model always does.
@@ -377,8 +474,10 @@ function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void })
     </>
   );
 
-  const className =
-    "card-shadow flex w-full items-center gap-3 rounded-xl border border-line bg-panel px-4 py-3 text-left hover:bg-panel-2";
+  // The card is the container and the clickable region sits inside it, rather
+  // than the card *being* a link. Stop has to live on the row, and a button
+  // nested inside a link is neither valid nor operable by keyboard.
+  const open = "flex min-w-0 flex-1 items-center gap-3 text-left";
 
   return (
     <motion.div
@@ -386,18 +485,20 @@ function RunRow({ run, onOpenOrg }: { run: ActivityRun; onOpenOrg: () => void })
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
+      className="card-shadow flex items-center gap-2 rounded-xl border border-line bg-panel py-3 pl-4 pr-2"
     >
       {run.isOrg ? (
-        <button onClick={onOpenOrg} className={className}>
+        <button onClick={onOpenOrg} className={open}>
           {body}
         </button>
       ) : run.projectId ? (
-        <Link to={`/projects/${run.projectId}`} className={className}>
+        <Link to={`/projects/${run.projectId}`} className={open}>
           {body}
         </Link>
       ) : (
-        <div className={className}>{body}</div>
+        <div className={open}>{body}</div>
       )}
+      <StopRun runId={run.id} what={run.label} onStopped={onStopped} />
     </motion.div>
   );
 }
@@ -509,12 +610,13 @@ function LiveAction({ runId }: { runId: string }) {
 function PlanBlocker({
   blocker,
   onOpenOrg,
+  onStopped,
 }: {
   blocker: Blocker;
   onOpenOrg: () => void;
+  onStopped: () => void;
 }) {
-  const className =
-    "card-shadow flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50/60 px-4 py-3 text-left hover:bg-amber-50";
+  const open = "flex min-w-0 flex-1 items-center gap-3 text-left";
   const body = (
     <>
       <span className="text-lg">◧</span>
@@ -526,24 +628,27 @@ function PlanBlocker({
       </div>
     </>
   );
-  if (blocker.isOrg) {
-    return (
-      <motion.button
-        initial={{ opacity: 0, x: -6 }}
-        animate={{ opacity: 1, x: 0 }}
-        onClick={onOpenOrg}
-        className={className}
-      >
-        {body}
-      </motion.button>
-    );
-  }
-  if (blocker.projectId) {
-    return (
-      <Link to={`/projects/${blocker.projectId}`} className={className}>
-        {body}
-      </Link>
-    );
-  }
-  return <div className={className}>{body}</div>;
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -6 }}
+      animate={{ opacity: 1, x: 0 }}
+      className="card-shadow flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50/60 py-3 pl-4 pr-2"
+    >
+      {blocker.isOrg ? (
+        <button onClick={onOpenOrg} className={open}>
+          {body}
+        </button>
+      ) : blocker.projectId ? (
+        <Link to={`/projects/${blocker.projectId}`} className={open}>
+          {body}
+        </Link>
+      ) : (
+        <div className={open}>{body}</div>
+      )}
+      {/* Turning a plan down is a real answer to "waiting on you", and the one
+          this row could not give. Reviewing it elsewhere and never coming back
+          is how a run sits here for seven hours. */}
+      <StopRun runId={blocker.runId} what={blocker.label} onStopped={onStopped} />
+    </motion.div>
+  );
 }
