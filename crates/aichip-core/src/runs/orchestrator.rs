@@ -2606,6 +2606,27 @@ this workflow manually."
                         AichipEvent::RunFailed { reason } => {
                             outcome = Some((RunStatus::Failed, Some(reason.clone())));
                         }
+                        AichipEvent::UsageStatus {
+                            limit_type,
+                            status,
+                            resets_at,
+                            using_overage,
+                        } => {
+                            // Telemetry, never an outcome — it must not touch
+                            // `outcome`, or a healthy ping would end the run.
+                            if let Err(e) = crate::usage::record(
+                                &self.db,
+                                engine.id(),
+                                limit_type,
+                                status,
+                                *resets_at,
+                                *using_overage,
+                            )
+                            .await
+                            {
+                                tracing::warn!(error=%e, "could not record plan usage");
+                            }
+                        }
                         AichipEvent::RateLimited { reset_at, message } => {
                             self.requeue_rate_limited(run_id, *reset_at).await?;
                             outcome = Some((RunStatus::RateLimited, Some(message.clone())));

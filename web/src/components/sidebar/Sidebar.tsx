@@ -7,6 +7,7 @@ import { isWorking } from "../../lib/runStatus";
 import { useWorkspace } from "../../lib/workspace";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SearchPalette } from "./SearchPalette";
+import { UsageChip } from "../UsageChip";
 
 const NAV = [
   { to: "/", label: "Home", icon: "⌂", end: true },
@@ -101,7 +102,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         </>
       )}
 
-      <div className="mt-auto px-2 text-[11px] leading-relaxed text-ink-dim/70">
+      <div className="mt-auto" />
+      <UsageChip />
+      <div className="px-2 text-[11px] leading-relaxed text-ink-dim/70">
         Runs on your own Claude Code login.
         <br />
         No API keys, ever.

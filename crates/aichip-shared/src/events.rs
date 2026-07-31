@@ -57,6 +57,23 @@ pub enum AichipEvent {
         reset_at: Option<DateTime<Utc>>,
         message: String,
     },
+    /// Where the user's plan stands, as the CLI itself reports it.
+    ///
+    /// Emitted for *every* `rate_limit_event`, including the routine ones,
+    /// because "you have used most of your week" is only useful before it
+    /// becomes "you are blocked". Previously the allowed case was discarded and
+    /// the first thing anyone learned about their usage was a failed run.
+    ///
+    /// Telemetry, never an outcome: it does not stop or fail anything.
+    UsageStatus {
+        /// `five_hour`, `seven_day` — the CLI's own vocabulary.
+        limit_type: String,
+        /// `allowed` | `warning` | `blocked`.
+        status: String,
+        resets_at: Option<DateTime<Utc>>,
+        /// The plan has spilled into paid overage.
+        using_overage: bool,
+    },
 }
 
 /// An event bound to a specific run, as persisted and sent over the WS.

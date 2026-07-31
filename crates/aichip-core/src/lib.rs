@@ -9,6 +9,7 @@ pub mod runs;
 pub mod scheduler;
 pub mod storage;
 pub mod tasks;
+pub mod usage;
 pub mod worktrees;
 
 pub use bus::EventBus;
