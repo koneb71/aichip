@@ -90,7 +90,7 @@ struct StatusJson {
 
 #[derive(Deserialize)]
 struct HostEntry {
-    /// "valid" when the token works; otherwise "error" (or anything else new,
+    /// "success" when the token works; otherwise "error" (or anything else new,
     /// which is treated as not working rather than assumed fine).
     #[serde(default)]
     state: String,
@@ -133,10 +133,19 @@ fn parse_accounts(json: &str) -> Vec<Account> {
                 host: host.clone(),
                 login: e.login,
                 active: e.active,
-                valid: e.state == "valid",
-                problem: (e.state != "valid").then(|| {
-                    e.error
-                        .unwrap_or_else(|| "this login is not usable".to_string())
+                // `gh` says "success", not "valid". Guessing that word wrong
+                // is what made a perfectly good login report as unusable, and
+                // it stayed hidden because the only account here to test
+                // against was genuinely broken — the healthy path was never
+                // once exercised. The fixture below is real output.
+                valid: e.state == "success",
+                problem: (e.state != "success").then(|| {
+                    // gh's own words when it has them; otherwise name the state
+                    // it reported, so an unfamiliar one is diagnosable rather
+                    // than a shrug.
+                    e.error.clone().unwrap_or_else(|| {
+                        format!("gh reports this login as \"{}\"", e.state)
+                    })
                 }),
             })
         })
@@ -151,6 +160,56 @@ fn parse_accounts(json: &str) -> Vec<Account> {
 mod tests {
     use super::*;
 
+    /// Real output from gh 2.96.0 on 2026-07-31, with one working account and
+    /// one expired one on the same host.
+    ///
+    /// This fixture exists because every test here used to describe a *failed*
+    /// login, so the word `gh` uses for a healthy one was never checked — and
+    /// it is "success", not "valid". A perfectly good sign-in reported as
+    /// unusable, and no test noticed.
+    const MIXED: &str = r#"{"hosts":{"github.com":[
+        {"state":"success","active":true,"host":"github.com","login":"koneb71",
+         "tokenSource":"keyring","scopes":"gist, read:org, repo","gitProtocol":"ssh"},
+        {"state":"error","error":"HTTP 401: Bad credentials (https://api.github.com/)",
+         "active":false,"host":"github.com","login":"vaconeiell",
+         "tokenSource":"default","gitProtocol":"ssh"}]}}"#;
+
+    #[test]
+    fn a_working_login_is_recognised_as_working() {
+        let accounts = parse_accounts(MIXED);
+        let good = accounts.iter().find(|a| a.login == "koneb71").unwrap();
+        assert!(good.valid, "gh said state=success; this must be usable");
+        assert!(good.active);
+        assert_eq!(good.problem, None);
+
+        // ...and the broken one alongside it is still reported as broken,
+        // with gh's own words rather than ours.
+        let bad = accounts.iter().find(|a| a.login == "vaconeiell").unwrap();
+        assert!(!bad.valid);
+        assert!(bad.problem.as_deref().unwrap().contains("401"));
+    }
+
+    #[test]
+    fn one_working_account_makes_the_install_usable() {
+        // The question the whole card hangs on: a broken account sitting
+        // beside a good one must not make GitHub unavailable.
+        let info = GitHubInfo {
+            version: "gh version 2.96.0".into(),
+            accounts: parse_accounts(MIXED),
+        };
+        assert!(info.usable());
+        assert_eq!(info.active().unwrap().login, "koneb71");
+    }
+
+    #[test]
+    fn an_unfamiliar_state_says_which_one_rather_than_shrugging() {
+        let odd = r#"{"hosts":{"github.com":[{"state":"pending","active":true,
+            "host":"github.com","login":"someone","gitProtocol":"ssh"}]}}"#;
+        let a = &parse_accounts(odd)[0];
+        assert!(!a.valid);
+        assert!(a.problem.as_deref().unwrap().contains("pending"));
+    }
+
     /// The exact shape this machine produced with an expired token.
     const EXPIRED: &str = r#"{"hosts":{"github.com":[{
         "state":"error",
@@ -159,7 +218,7 @@ mod tests {
         "tokenSource":"keyring","gitProtocol":"https"}]}}"#;
 
     const WORKING: &str = r#"{"hosts":{"github.com":[{
-        "state":"valid","active":true,"host":"github.com","login":"someone",
+        "state":"success","active":true,"host":"github.com","login":"someone",
         "tokenSource":"keyring","gitProtocol":"ssh","scopes":"repo, read:org"}]}}"#;
 
     #[test]
@@ -185,7 +244,7 @@ mod tests {
     fn an_unknown_state_is_not_treated_as_working() {
         // A future `gh` inventing a third state must fail closed: offering
         // GitHub actions that then fail is worse than not offering them.
-        let odd = WORKING.replace(r#""state":"valid""#, r#""state":"expired_soon""#);
+        let odd = WORKING.replace(r#""state":"success""#, r#""state":"expired_soon""#);
         assert!(!parse_accounts(&odd)[0].valid);
     }
 
@@ -198,8 +257,8 @@ mod tests {
     #[test]
     fn several_hosts_come_out_in_a_stable_order() {
         let two = r#"{"hosts":{
-            "github.com":[{"state":"valid","active":true,"login":"b"}],
-            "ghe.example":[{"state":"valid","active":false,"login":"a"}]}}"#;
+            "github.com":[{"state":"success","active":true,"login":"b"}],
+            "ghe.example":[{"state":"success","active":false,"login":"a"}]}}"#;
         let got: Vec<_> = parse_accounts(two).iter().map(|a| a.host.clone()).collect();
         assert_eq!(got, vec!["ghe.example", "github.com"]);
     }
