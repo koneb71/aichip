@@ -42,6 +42,8 @@ use uuid::Uuid;
 pub struct Pending {
     child: Child,
     started: std::time::Instant,
+    /// Everything `gh` has said, for explaining a flow that did not finish.
+    said: std::sync::Arc<Mutex<String>>,
 }
 
 /// GitHub expires a device code after fifteen minutes; a process still polling
@@ -147,30 +149,46 @@ pub async fn start(extra: &[String]) -> anyhow::Result<Started> {
         .take()
         .ok_or_else(|| anyhow::anyhow!("gh produced no output to read"))?;
 
-    // Read until the code appears rather than to EOF: the process stays alive
-    // for the whole flow, so waiting for it to finish would wait forever.
-    let mut reader = BufReader::new(stderr).lines();
-    let mut seen = String::new();
-    let found = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        while let Ok(Some(line)) = reader.next_line().await {
-            seen.push_str(&line);
-            seen.push('\n');
-            if let Some(pair) = parse_prompt(&seen) {
-                return Some(pair);
+    // Drained for the whole life of the process, in a task that outlives this
+    // function.
+    //
+    // This is not tidiness. Reading the code with a reader that then goes out
+    // of scope closes the read end of the pipe, and `gh` writes to stderr again
+    // the moment the person authorises — "Authentication complete". Writing to
+    // a closed pipe kills it, so the process that was about to receive the
+    // token died at exactly the moment it was granted. GitHub said yes and
+    // nothing was ever stored.
+    let said = std::sync::Arc::new(Mutex::new(String::new()));
+    let collecting = said.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        let mut tx = Some(tx);
+        while let Ok(Some(line)) = lines.next_line().await {
+            let found = {
+                let mut buf = collecting.lock().unwrap();
+                buf.push_str(&line);
+                buf.push('\n');
+                parse_prompt(&buf)
+            };
+            if let Some(pair) = found {
+                if let Some(tx) = tx.take() {
+                    let _ = tx.send(pair);
+                }
             }
         }
-        None
-    })
-    .await;
+    });
 
-    let Ok(Some((code, url))) = found else {
+    let found = tokio::time::timeout(std::time::Duration::from_secs(20), rx).await;
+    let Ok(Ok((code, url))) = found else {
         let _ = child.kill().await;
+        let seen = said.lock().unwrap().trim().to_string();
         anyhow::bail!(
             "gh did not offer a sign-in code.{}",
-            if seen.trim().is_empty() {
+            if seen.is_empty() {
                 String::new()
             } else {
-                format!(" It said: {}", seen.trim())
+                format!(" It said: {seen}")
             }
         );
     };
@@ -181,6 +199,7 @@ pub async fn start(extra: &[String]) -> anyhow::Result<Started> {
         Pending {
             child,
             started: std::time::Instant::now(),
+            said,
         },
     );
     Ok(Started { id, code, url })
@@ -216,17 +235,30 @@ pub async fn poll(id: Uuid) -> Progress {
 
     match exited {
         None => Progress::Waiting,
-        Some(ok) => {
-            registry().lock().unwrap().remove(&id);
-            // `gh` exiting zero is not proof: the authoritative answer is
-            // whether it can now speak to GitHub, which is what `detect` asks
-            // by running `gh auth status`.
-            let usable = super::detect().await.is_some_and(|i| i.usable());
-            if ok && usable {
+        Some(_exit_ok) => {
+            let said = registry()
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .map(|p| p.said.lock().unwrap().trim().to_string())
+                .unwrap_or_default();
+
+            // Whether `gh` can now speak to GitHub is the whole question, and
+            // it is the only thing that answers it. The exit code is
+            // deliberately ignored: a `gh` that stored the token and then died
+            // on the way out is logged in, and reporting failure would send
+            // someone to do again what has already worked.
+            if super::detect().await.is_some_and(|i| i.usable()) {
                 Progress::Connected
             } else {
                 Progress::Failed {
-                    reason: "sign-in did not complete. Try again.".into(),
+                    reason: if said.is_empty() {
+                        "sign-in did not complete. Try again.".into()
+                    } else {
+                        // gh's own last words beat any sentence written here.
+                        said.lines().rev().take(3).collect::<Vec<_>>()
+                            .into_iter().rev().collect::<Vec<_>>().join(" ")
+                    },
                 }
             }
         }
