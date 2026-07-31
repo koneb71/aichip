@@ -386,7 +386,8 @@ async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
 /// slots and the same disk.
 pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<Value>> {
     let rows = sqlx::query(
-        "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
+        "SELECT DISTINCT ON (p.task_id)
+                p.id, p.task_id, p.status, p.host_port, p.container_port,
                 p.port_assumed, p.error, p.image_kept, p.slug, p.compose_file,
                 t.title AS task_title,
                 COALESCE((SELECT true FROM runs r
@@ -396,14 +397,17 @@ pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<V
            LEFT JOIN tasks t ON t.id = p.task_id
           WHERE p.project_id = $1
             AND p.status IN ('building','running','idle','failed')
-          -- Base branch first: it is the thing everything else is compared to.
-          ORDER BY (p.task_id IS NOT NULL), p.created_at DESC",
+          -- One row per target, newest first. Without the DISTINCT a card that
+          -- failed and was then rebuilt appears twice — two rows with the same
+          -- name and different states, which reads as a bug in the thing being
+          -- previewed rather than in this list.
+          ORDER BY p.task_id NULLS FIRST, p.created_at DESC",
     )
     .bind(project_id)
     .fetch_all(&db.pool)
     .await?;
 
-    Ok(rows
+    let mut out: Vec<Value> = rows
         .iter()
         .map(|r| {
             let status: String = r.get("status");
@@ -428,7 +432,11 @@ pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<V
                 "error": r.get::<Option<String>, _>("error"),
             })
         })
-        .collect())
+        .collect();
+    // Base branch first: it is the thing everything else is compared against.
+    // Done here because `DISTINCT ON` dictates the SQL ordering.
+    out.sort_by_key(|v| v.get("taskId").is_some_and(|t| !t.is_null()));
+    Ok(out)
 }
 
 /// Preview the branch cards merge into.
@@ -618,6 +626,71 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
         .ok_or_else(|| anyhow::anyhow!("preview vanished immediately after being created"))
 }
 
+/// Where a preview's build output is kept.
+///
+/// A file rather than a database column: build logs are megabytes, they are
+/// only read while someone is looking at that one preview, and a row that big
+/// would be carried by every query that touches the table.
+pub fn build_log_path(id: Uuid) -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join(".aichip")
+        .join("previews")
+        .join(format!("{}.log", recipe::container_name(&id)))
+}
+
+/// Where a failed stack's own output is kept.
+///
+/// Written at the moment of failure, because the containers are removed
+/// immediately afterwards and `compose logs` cannot speak for a project that
+/// is gone. This file is the only remaining record of why.
+pub fn output_log_path(id: Uuid) -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join(".aichip")
+        .join("previews")
+        .join(format!("{}.out", recipe::container_name(&id)))
+}
+
+/// What this preview has printed: how it was built, and what it has said since.
+///
+/// Both halves matter and they fail differently. A build log explains an image
+/// that never came out; runtime output explains a container that started and
+/// then refused to serve — which is the case the tail on the card cannot show,
+/// because by then the build succeeded.
+pub async fn logs(db: &Db, preview_id: Uuid) -> anyhow::Result<(String, String)> {
+    let row = sqlx::query(
+        "SELECT container_id, compose_file, status FROM previews WHERE id = $1",
+    )
+    .bind(preview_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else {
+        anyhow::bail!("no such preview");
+    };
+
+    let build = tokio::fs::read_to_string(build_log_path(preview_id))
+        .await
+        .unwrap_or_default();
+
+    let name = recipe::container_name(&preview_id);
+    let mut runtime = if row.get::<Option<String>, _>("compose_file").is_some() {
+        docker::compose_logs(&name, 400).await
+    } else {
+        let container = row
+            .get::<Option<String>, _>("container_id")
+            .unwrap_or_else(|| name.clone());
+        docker::logs(&container, 400).await
+    };
+    // Docker has nothing to say about containers that are gone, so fall back to
+    // what was kept when they died. Otherwise the failure people most want to
+    // read is the one with no output at all.
+    if runtime.trim().is_empty() {
+        runtime = tokio::fs::read_to_string(output_log_path(preview_id))
+            .await
+            .unwrap_or_default();
+    }
+    Ok((build, runtime))
+}
+
 /// The rewritten file a preview project name implies.
 fn compose_path_for_name(project: &str) -> PathBuf {
     let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
@@ -791,6 +864,9 @@ async fn build_and_run(
 ) -> Result<(), String> {
     let tag = recipe::image_tag(&id);
     let name = recipe::container_name(&id);
+    if let Some(dir) = build_log_path(id).parent() {
+        let _ = tokio::fs::create_dir_all(dir).await;
+    }
 
     // A stack takes a different path entirely: compose builds, starts and wires
     // its own services, so there is no single image and no `docker run`.
@@ -799,18 +875,53 @@ async fn build_and_run(
         let rendered = compose_file_for(id, &plan.render(host_port))
             .await
             .map_err(|e| format!("could not write the compose file: {e}"))?;
-        docker::compose_up(&rendered, project_dir, &recipe::container_name(&id)).await?;
+        // Recorded *before* the stack comes up, not after. A stack that fails
+        // half way is still a stack: without this the row does not know it, so
+        // its logs fall through to the single-container path and `stop` cannot
+        // reach it through compose — leaving containers nothing can clean up.
+        sqlx::query(
+            "UPDATE previews SET compose_file=$2, compose_dir=$3 WHERE id=$1",
+        )
+        .bind(id)
+        .bind(rendered.to_string_lossy().to_string())
+        .bind(project_dir.to_string_lossy().to_string())
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let project = recipe::container_name(&id);
+        if let Err(e) =
+            docker::compose_up(&rendered, project_dir, &project, &build_log_path(id)).await
+        {
+            // Compose's own stderr is progress noise — "Container Starting",
+            // "exited (1)" — and never says *why*. The reason is in whatever
+            // the service printed on its way down, so that is what the card
+            // gets. This is the difference between "exited (1)" and
+            // "host not found in upstream".
+            // Kept before the stack is torn down, because `compose logs` has
+            // nothing to say about a project that no longer exists — and the
+            // whole point of a failed preview is being able to read why.
+            let said = docker::compose_logs(&project, 400).await;
+            if !said.is_empty() {
+                let _ = tokio::fs::write(output_log_path(id), &said).await;
+            }
+            // A stack that never came up is not worth keeping: its containers
+            // are useless and nothing offers to stop them, so they would sit
+            // there until the next restart swept them.
+            docker::compose_down(&rendered, project_dir, &project).await;
+
+            let tail: String = said.lines().rev().take(6).collect::<Vec<_>>()
+                .into_iter().rev().collect::<Vec<_>>().join("\n");
+            return Err(if tail.is_empty() { e } else { format!("{e}\n\n{tail}") });
+        }
 
         sqlx::query(
             "UPDATE previews SET status='running', host_port=$2, started_at=now(),
-                                 last_seen_at=now(), image_kept=FALSE,
-                                 compose_file=$3, compose_dir=$4
+                                 last_seen_at=now(), image_kept=FALSE
               WHERE id=$1 AND status='building'",
         )
         .bind(id)
         .bind(host_port as i32)
-        .bind(rendered.to_string_lossy().to_string())
-        .bind(project_dir.to_string_lossy().to_string())
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -820,7 +931,7 @@ async fn build_and_run(
     let How::Single(recipe_text) = &build else {
         unreachable!("the stack arm returns above")
     };
-    docker::build(source, &tag, recipe_text.as_deref()).await?;
+    docker::build(source, &tag, recipe_text.as_deref(), &build_log_path(id)).await?;
 
     // Asked for after the build, not before: a build takes minutes, and a port
     // reserved at the start of one is a port held against the rest of the
