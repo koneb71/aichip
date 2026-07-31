@@ -208,6 +208,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         orchestrator,
         permissions: PermissionBroker::new(bus),
         storage,
+        file_writes: Default::default(),
     };
     let app = aichip_server::app(state);
 

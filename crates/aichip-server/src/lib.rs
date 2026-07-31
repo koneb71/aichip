@@ -20,6 +20,13 @@ pub struct AppState {
     /// configured, which is a normal state: articles work without it, and the
     /// upload endpoint says so rather than failing obscurely.
     pub storage: Option<aichip_core::storage::Storage>,
+    /// Serializes file saves from the Files tab.
+    ///
+    /// A save is read-hash-compare-write, and without a lock two of them can
+    /// interleave so the second lands on bytes the first never saw — exactly
+    /// the clobber `baseHash` exists to prevent. Saves are human-paced, so one
+    /// lock for all of them is free.
+    pub file_writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn app(state: AppState) -> Router {

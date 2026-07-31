@@ -23,7 +23,7 @@ pub fn router() -> Router<AppState> {
 ///
 /// `$HOME` when run normally. In a container `$HOME` is the container's, not
 /// yours, so `AICHIP_BROWSE_ROOT` points it at wherever your code is mounted.
-fn browse_root() -> PathBuf {
+pub(crate) fn browse_root() -> PathBuf {
     std::env::var_os("AICHIP_BROWSE_ROOT")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
