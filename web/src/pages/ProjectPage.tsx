@@ -157,7 +157,9 @@ export default function ProjectPage() {
             </>
           )}
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
-          {activeTab === "files" && <FilesPanel projectId={projectId} />}
+          {activeTab === "files" && (
+            <FilesPanel projectId={projectId} tasks={tasks} />
+          )}
           {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
           {activeTab === "chat" && <ChatPanel projectId={projectId} />}
         </div>

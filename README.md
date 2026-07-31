@@ -110,6 +110,11 @@ touches your working copy, and that worktree is also what produces the diff you
 review before anything is merged back. A repository is the price of that
 safety, so aichip creates one rather than asking you to.
 
+The Files tab is an editor and does save — to your checkout, and to a card's
+worktree so you can fix up what an agent produced before merging it. That is
+you writing your own files, deliberately; the guarantee above is about agents,
+and it is unchanged.
+
 A folder occasionally can't have its own repository — most often because it sits
 inside another one, where nesting a second repo would confuse every later git
 command. Those projects still work, but their tasks **edit the folder directly**:

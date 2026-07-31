@@ -76,6 +76,13 @@ Mid-run permission prompts flow: engine → `--permission-prompt-tool mcp__aichi
 
 Board tasks run in an isolated git worktree so an agent never touches the working copy, and that worktree produces the reviewable diff. A project that can't have its own repo (e.g. nested inside another) edits in place — no worktree, no diff, no undo, and full-auto is refused there regardless of project settings.
 
+The Files tab writes to both trees — the checkout and a card's worktree — when
+a **person** saves. That does not weaken the rule above, which is about agents:
+they still only ever work in a worktree, which is what keeps a run reviewable.
+The write path carries its own gates (no `.git`, a root allow-list, a content
+hash, and a header no cross-origin request can set); they are documented at the
+top of [crates/aichip-server/src/routes/files.rs](crates/aichip-server/src/routes/files.rs).
+
 Attachments live under `~/.aichip/attachments/` and are granted via `--add-dir`, deliberately never copied into a worktree (an agent running `git add -A` would commit them).
 
 ## Testing

@@ -521,6 +521,41 @@ export interface FileContent {
   binary: boolean;
   /** null when the file is binary or too large to send. */
   content: string | null;
+  /**
+   * The version token a save must quote back — sha256 of the exact bytes.
+   *
+   * Null exactly when `content` is, which makes it the single flag the save
+   * button keys on: no hash, nothing to save against.
+   */
+  hash: string | null;
+  /** Why this tree cannot be written, if it cannot. */
+  readOnly: string | null;
+}
+
+/**
+ * Which tree a file request is about.
+ *
+ * A card's worktree is the tree its diff is computed from, so an edit there is
+ * an edit to the change you are about to merge.
+ */
+export type Tree =
+  | { kind: "project"; id: string }
+  | { kind: "task"; id: string };
+
+const treeBase = (t: Tree) =>
+  t.kind === "project" ? `/api/projects/${t.id}` : `/api/tasks/${t.id}`;
+
+/** What the server says when a save lands on bytes you never saw. */
+export interface FileConflict {
+  error: string;
+  currentHash: string;
+  currentContent: string;
+}
+
+export class FileConflictError extends Error {
+  constructor(readonly conflict: FileConflict) {
+    super(conflict.error);
+  }
 }
 
 export interface SearchHit {
@@ -1306,15 +1341,45 @@ export const api = {
   orgRun: (runId: string) =>
     fetch(`/api/org-runs/${runId}`).then((r) => json<OrgRunDetail>(r)),
 
-  // project files (read-only viewer)
-  files: (projectId: string, path?: string) =>
+  // project and worktree files
+  files: (tree: Tree, path?: string) =>
     fetch(
-      `/api/projects/${projectId}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      `${treeBase(tree)}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`,
     ).then((r) => json<FileListing>(r)),
-  file: (projectId: string, path: string) =>
-    fetch(`/api/projects/${projectId}/file?path=${encodeURIComponent(path)}`).then((r) =>
+  file: (tree: Tree, path: string) =>
+    fetch(`${treeBase(tree)}/file?path=${encodeURIComponent(path)}`).then((r) =>
       json<FileContent>(r),
     ),
+  /**
+   * Save, quoting the hash the file had when it was opened.
+   *
+   * `baseHash` is not optional in spirit: pass what you were given, or `null`
+   * only when creating a file that does not exist. A 409 means the bytes moved
+   * underneath you and is thrown as `FileConflictError` rather than flattened
+   * into a bare message, because the UI has something useful to do with it.
+   */
+  saveFile: (tree: Tree, path: string, content: string, baseHash: string | null) =>
+    fetch(`${treeBase(tree)}/file`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        // A header a cross-origin simple request cannot set. There is no CORS
+        // layer, so the preflight for it is never answered.
+        "X-Aichip-Write": "1",
+      },
+      body: JSON.stringify({ path, content, base_hash: baseHash }),
+    }).then(async (r) => {
+      if (r.status === 409) {
+        const text = await r.text();
+        try {
+          throw new FileConflictError(JSON.parse(text) as FileConflict);
+        } catch (e) {
+          if (e instanceof FileConflictError) throw e;
+          throw new Error(text);
+        }
+      }
+      return json<{ path: string; size: number; hash: string }>(r);
+    }),
 
   // attachments
   uploadAttachments: (projectId: string, files: File[]) => {

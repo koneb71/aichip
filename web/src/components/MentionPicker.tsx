@@ -97,7 +97,7 @@ export function useMentionPicker({
     setLines(null);
     setLineNote(null);
     api
-      .file(projectId, linePath)
+      .file({ kind: "project", id: projectId }, linePath)
       .then((f) => {
         if (stale) return;
         // Nothing to point at in a binary or oversized file.
