@@ -9,7 +9,7 @@ pub mod workflow;
 
 pub use effort::{resolve_effort, EffortSource, ReasoningEffort};
 pub use env_guard::{auth_env_refusal, is_auth_env, AICHIP_OWN_SECRETS};
-pub use rate_limit::rate_limit_signal;
+pub use rate_limit::{rate_limit_signal, LimitStatus};
 pub use events::{AichipEvent, EventEnvelope, Usage};
 pub use mcp::{McpServerSpec, McpTransport, McpWiring};
 pub use model_tier::{

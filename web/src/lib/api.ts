@@ -231,6 +231,22 @@ export interface ProjectPreview {
   error: string | null;
 }
 
+/**
+ * One of the user's plan limits, as their own CLI reported it.
+ *
+ * Not fetched from Anthropic — aichip holds no credential. This is telemetry
+ * the CLI prints while it works, so it is as fresh as the last run.
+ */
+export interface PlanLimit {
+  engine: string;
+  /** `five_hour`, `seven_day` — the CLI's own vocabulary. */
+  limitType: string;
+  status: "allowed" | "warning" | "blocked";
+  resetsAt: string | null;
+  usingOverage: boolean;
+  updatedAt: string;
+}
+
 /** Whether previews are possible here at all. */
 export interface DockerStatus {
   installed: boolean;
@@ -903,6 +919,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dockerfile }),
     }).then((r) => json<{ approved: boolean; edited: boolean }>(r)),
+  usage: () =>
+    fetch("/api/usage").then((r) =>
+      json<{ limits: PlanLimit[]; worst: string | null }>(r),
+    ),
   // Previews
   previewLimits: () =>
     fetch("/api/previews/limits").then((r) =>

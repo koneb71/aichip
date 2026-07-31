@@ -32,10 +32,8 @@ pub fn parse_line(line: &str) -> Vec<AichipEvent> {
 /// being throttled and the queue should back off until `resetsAt`.
 fn parse_rate_limit_event(v: &Value) -> Vec<AichipEvent> {
     let info = v.get("rate_limit_info").cloned().unwrap_or(Value::Null);
-    let status = info.get("status").and_then(Value::as_str).unwrap_or("allowed");
-    if status == "allowed" {
-        return vec![];
-    }
+    let raw = info.get("status").and_then(Value::as_str).unwrap_or("allowed");
+    let status = aichip_shared::LimitStatus::parse(raw);
     let reset_at = info
         .get("resetsAt")
         .and_then(Value::as_i64)
@@ -44,10 +42,31 @@ fn parse_rate_limit_event(v: &Value) -> Vec<AichipEvent> {
         .get("rateLimitType")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    vec![AichipEvent::RateLimited {
-        reset_at,
-        message: format!("rate limit ({limit_type}) status: {status}"),
-    }]
+    let using_overage = info
+        .get("isUsingOverage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // Always reported, whatever the status. This is the only place the user's
+    // plan position is visible at all, and discarding the healthy case is what
+    // made a failed run the first news anyone had of it.
+    let mut out = vec![AichipEvent::UsageStatus {
+        limit_type: limit_type.to_string(),
+        status: status.as_str().to_string(),
+        resets_at: reset_at,
+        using_overage,
+    }];
+
+    // Only an actual refusal stops the run. `allowed_warning` is the CLI
+    // saying "still serving you, but not for much longer" — abandoning work
+    // on that is throwing away budget the user still has.
+    if status.blocks() {
+        out.push(AichipEvent::RateLimited {
+            reset_at,
+            message: format!("rate limit ({limit_type}) status: {raw}"),
+        });
+    }
+    out
 }
 
 fn parse_system(v: &Value) -> Vec<AichipEvent> {
@@ -278,18 +297,55 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_event_allowed_is_telemetry_only() {
+    fn a_warning_reports_usage_without_stopping_the_run() {
+        // The regression that cost real work: `allowed_warning` produced a
+        // RateLimited event, which aborts a utility run outright.
+        let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1785183600,"rateLimitType":"seven_day"},"session_id":"s1"}"#;
+        let events = parse_line(line);
+        assert!(
+            !events.iter().any(|e| matches!(e, AichipEvent::RateLimited { .. })),
+            "a warning must not stop the run: {events:?}"
+        );
+        assert!(matches!(
+            &events[0],
+            AichipEvent::UsageStatus { status, limit_type, .. }
+                if status == "warning" && limit_type == "seven_day"
+        ));
+    }
+
+    #[test]
+    fn a_healthy_ping_is_reported_rather_than_discarded() {
         // Shape recorded from claude CLI 2.1.205 on 2026-07-28.
+        //
+        // This used to produce nothing at all, which is why the first news
+        // anyone had of their plan position was a run that failed. It is
+        // telemetry — it must still not stop anything.
         let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1785183600,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false},"session_id":"s1"}"#;
-        assert!(parse_line(line).is_empty());
+        let events = parse_line(line);
+        assert!(!events.iter().any(|e| matches!(e, AichipEvent::RateLimited { .. })));
+        match &events[..] {
+            [AichipEvent::UsageStatus { limit_type, status, resets_at, using_overage }] => {
+                assert_eq!(limit_type, "five_hour");
+                assert_eq!(status, "allowed");
+                assert_eq!(resets_at.unwrap().timestamp(), 1785183600);
+                assert!(!using_overage);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]
     fn rate_limit_event_blocked_carries_reset_time() {
         let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1785183600,"rateLimitType":"five_hour"},"session_id":"s1"}"#;
         let events = parse_line(line);
+        // Both: the position is recorded *and* the run is stopped. Reporting
+        // usage must not have cost us the backoff.
         match &events[..] {
-            [AichipEvent::RateLimited { reset_at, message }] => {
+            [
+                AichipEvent::UsageStatus { status, .. },
+                AichipEvent::RateLimited { reset_at, message },
+            ] => {
+                assert_eq!(status, "blocked");
                 assert_eq!(reset_at.unwrap().timestamp(), 1785183600);
                 assert!(message.contains("five_hour"));
             }
