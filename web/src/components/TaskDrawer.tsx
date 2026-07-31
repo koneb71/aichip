@@ -292,7 +292,7 @@ export function TaskDrawer({
       <div className="max-h-[55vh] overflow-y-auto">
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
-      <PreviewPanel taskId={task.id} />
+      <PreviewPanel taskId={task.id} projectId={task.projectId} />
 
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">

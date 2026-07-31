@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use sqlx::Row;
 use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
@@ -21,6 +22,10 @@ pub fn router() -> Router<AppState> {
         .route("/docker", get(docker_status))
         .route("/previews/limits", get(get_limits).put(set_limits))
         .route("/previews/disk", get(disk).delete(reclaim))
+        .route(
+            "/projects/{id}/preview-recipe",
+            get(get_recipe).post(propose_recipe).put(approve_recipe),
+        )
         .route(
             "/tasks/{id}/preview",
             get(current).post(start).delete(stop),
@@ -111,6 +116,143 @@ async fn reclaim(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "reclaimed": freed })))
+}
+
+/// The project's recipe and whether anyone has approved it.
+async fn get_recipe(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(
+        "SELECT dockerfile, status, edited FROM preview_recipes WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({
+        "recipe": row.map(|r| json!({
+            "dockerfile": r.get::<String, _>("dockerfile"),
+            "status": r.get::<String, _>("status"),
+            "edited": r.get::<bool, _>("edited"),
+        })),
+    })))
+}
+
+/// Ask an agent to write one. Stored as a proposal — never built.
+async fn propose_recipe(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let path: String = sqlx::query_scalar("SELECT path FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+
+    // Gathered here rather than by the agent: it gets no tools and never runs
+    // in the project, so what it saw is exactly what the reviewer can see, and
+    // a file in the repository cannot talk it into anything on the way past.
+    let survey = aichip_core::previews::recipe_writer::survey(std::path::Path::new(&path))
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("could not read the project: {e}")))?;
+
+    let engine_id = state.orchestrator.default_engine();
+    let engine = state
+        .orchestrator
+        .engine(&engine_id)
+        .ok_or((StatusCode::PRECONDITION_FAILED, "no engine available".to_string()))?;
+    let model_id = state
+        .orchestrator
+        .model_for(&engine_id, aichip_shared::ModelTier::Complex);
+
+    let reply = aichip_core::runs::utility::utility_run(
+        engine,
+        model_id,
+        aichip_core::previews::recipe_writer::prompt(&survey),
+        Some(aichip_shared::ReasoningEffort::High),
+        std::time::Duration::from_secs(240),
+    )
+    .await
+    .map_err(internal)?;
+
+    let Some(dockerfile) = aichip_core::previews::recipe_writer::extract(&reply) else {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "The agent did not return a Dockerfile. Try again, or write one yourself              and put it in the project."
+                .into(),
+        ));
+    };
+
+    // Replaces any previous proposal, and resets approval: text nobody has read
+    // must never inherit the approval given to different text.
+    sqlx::query(
+        "INSERT INTO preview_recipes (project_id, dockerfile, status, edited, approved_at)
+         VALUES ($1, $2, 'proposed', FALSE, NULL)
+         ON CONFLICT (project_id) DO UPDATE
+            SET dockerfile = EXCLUDED.dockerfile, status = 'proposed',
+                edited = FALSE, approved_at = NULL, created_at = now()",
+    )
+    .bind(project_id)
+    .bind(&dockerfile)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(json!({
+        "recipe": { "dockerfile": dockerfile, "status": "proposed", "edited": false },
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct ApproveBody {
+    /// The text being approved. Sent back in full rather than approving "the
+    /// current proposal" by reference, so an edit and an approval are one act
+    /// and there is no window where a different text gets the nod.
+    dockerfile: String,
+}
+
+async fn approve_recipe(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<ApproveBody>,
+) -> Result<Json<Value>, ApiError> {
+    let text = body.dockerfile.trim().to_string();
+    if !text
+        .lines()
+        .any(|l| l.trim_start().to_ascii_uppercase().starts_with("FROM "))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "That is not a Dockerfile — it has no FROM line.".into(),
+        ));
+    }
+    let edited: bool = sqlx::query_scalar(
+        "SELECT dockerfile IS DISTINCT FROM $2 FROM preview_recipes WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .bind(&text)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .unwrap_or(true);
+
+    sqlx::query(
+        "INSERT INTO preview_recipes (project_id, dockerfile, status, edited, approved_at)
+         VALUES ($1, $2, 'approved', $3, now())
+         ON CONFLICT (project_id) DO UPDATE
+            SET dockerfile = EXCLUDED.dockerfile, status = 'approved',
+                edited = EXCLUDED.edited, approved_at = now()",
+    )
+    .bind(project_id)
+    .bind(&text)
+    .bind(edited)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(json!({ "approved": true, "edited": edited })))
 }
 
 async fn current(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, DockerStatus, previewUrl, TaskPreview } from "../lib/api";
+import { RecipeGate } from "./RecipeGate";
 
 /**
  * See the branch, not the diff.
@@ -14,7 +15,13 @@ import { api, DockerStatus, previewUrl, TaskPreview } from "../lib/api";
  * has nothing left to report and polling it forever is just noise on a page
  * that already refreshes every 2.5 seconds.
  */
-export function PreviewPanel({ taskId }: { taskId: string }) {
+export function PreviewPanel({
+  taskId,
+  projectId,
+}: {
+  taskId: string;
+  projectId: string;
+}) {
   const [preview, setPreview] = useState<TaskPreview | null>(null);
   const [docker, setDocker] = useState<DockerStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,6 +78,9 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
 
   const live = preview?.status === "running";
   const alive = live || building;
+  // Matched on the message because it is the message the server sends; the
+  // alternative is an error code nobody reads, for one case.
+  const noDockerfile = !alive && !!error?.includes("no Dockerfile");
 
   return (
     <div className="border-b border-line px-5 py-3">
@@ -177,6 +187,13 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
         <div className="mt-1 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
           {error}
         </div>
+      )}
+
+      {/* The one failure with a way out: no Dockerfile is a thing an agent can
+          fix, and it is the state most projects start in. Shown only for that
+          error, so the gate does not appear next to unrelated build failures. */}
+      {noDockerfile && (
+        <RecipeGate projectId={projectId} onApproved={start} />
       )}
 
       {!alive && !error && preview?.status !== "failed" && (

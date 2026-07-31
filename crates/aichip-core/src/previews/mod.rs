@@ -24,6 +24,7 @@
 
 pub mod docker;
 pub mod recipe;
+pub mod recipe_writer;
 
 use crate::db::Db;
 use sqlx::Row;
@@ -263,9 +264,17 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
 
     // Read the recipe before claiming the row: a branch with no Dockerfile
     // should say so immediately rather than leaving a failed row behind.
-    let dockerfile = tokio::fs::read_to_string(source.join("Dockerfile"))
-        .await
-        .ok();
+    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
+
+    // A branch's own Dockerfile always wins. Only when there is none do we look
+    // for an approved recipe — and only an *approved* one: a proposal is
+    // agent-written code that nobody has read yet, and `RUN` executes on this
+    // machine. See `recipe_writer` for why that gate is not negotiable.
+    let recipe_text = match &own {
+        Some(_) => None,
+        None => approved_recipe(db, task_id).await?,
+    };
+    let dockerfile = own.clone().or_else(|| recipe_text.clone());
     let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
 
     // Checked before the row is claimed, and named in the message: "too many
@@ -343,7 +352,7 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
 
     let pool = db.pool.clone();
     tokio::spawn(async move {
-        if let Err(e) = build_and_run(&pool, id, &source, port.number).await {
+        if let Err(e) = build_and_run(&pool, id, &source, port.number, recipe_text).await {
             fail(&pool, id, &e).await;
         }
     });
@@ -351,6 +360,18 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     get(db, task_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("preview vanished immediately after being created"))
+}
+
+/// This project's recipe, but only once a person has approved it.
+async fn approved_recipe(db: &Db, task_id: Uuid) -> anyhow::Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT r.dockerfile FROM preview_recipes r
+           JOIN tasks t ON t.project_id = r.project_id
+          WHERE t.id = $1 AND r.status = 'approved'",
+    )
+    .bind(task_id)
+    .fetch_optional(&db.pool)
+    .await?)
 }
 
 /// Put an idle preview back, if its image is still there.
@@ -493,11 +514,13 @@ async fn build_and_run(
     id: Uuid,
     source: &Path,
     container_port: u16,
+    // An approved recipe, when the branch has no Dockerfile of its own.
+    dockerfile: Option<String>,
 ) -> Result<(), String> {
     let tag = recipe::image_tag(&id);
     let name = recipe::container_name(&id);
 
-    docker::build(source, &tag).await?;
+    docker::build(source, &tag, dockerfile.as_deref()).await?;
 
     // Asked for after the build, not before: a build takes minutes, and a port
     // reserved at the start of one is a port held against the rest of the

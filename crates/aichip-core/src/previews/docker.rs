@@ -36,16 +36,40 @@ pub async fn detect() -> Option<Result<String, String>> {
 
 /// Build an image from a worktree. Returns the tail of the build log on
 /// failure, which is the part that says what actually went wrong.
-pub async fn build(context: &Path, tag: &str) -> Result<(), String> {
-    let out = Command::new(DOCKER)
-        .arg("build")
+/// `dockerfile` is `None` for a branch that has its own, and `Some` for an
+/// approved recipe — which is fed on stdin rather than written into the
+/// worktree, so a preview never adds a file to the diff under review.
+pub async fn build(context: &Path, tag: &str, dockerfile: Option<&str>) -> Result<(), String> {
+    let mut cmd = Command::new(DOCKER);
+    cmd.arg("build")
         // The branch is the build context and nothing else is.
         .args(["-t", tag])
-        .args(["--label", &format!("{OWNER_LABEL}=1")])
-        .arg(context)
-        .output()
-        .await
-        .map_err(|e| format!("could not run docker: {e}"))?;
+        .args(["--label", &format!("{OWNER_LABEL}=1")]);
+    if dockerfile.is_some() {
+        cmd.args(["-f", "-"]);
+    }
+    cmd.arg(context);
+
+    let out = match dockerfile {
+        None => cmd.output().await,
+        Some(text) => {
+            use tokio::io::AsyncWriteExt;
+            cmd.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            let mut child = cmd.spawn().map_err(|e| format!("could not run docker: {e}"))?;
+            // Dropped after the write so docker sees EOF and starts building.
+            {
+                let mut stdin = child.stdin.take().ok_or("docker took no stdin")?;
+                stdin
+                    .write_all(text.as_bytes())
+                    .await
+                    .map_err(|e| format!("could not hand docker the recipe: {e}"))?;
+            }
+            child.wait_with_output().await
+        }
+    }
+    .map_err(|e| format!("could not run docker: {e}"))?;
     if out.status.success() {
         return Ok(());
     }
