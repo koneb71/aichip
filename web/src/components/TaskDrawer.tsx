@@ -21,6 +21,7 @@ import { TierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 
 export function TaskDrawer({
+  onOpenPreviews,
   task,
   workspaceId,
   onClose,
@@ -38,6 +39,8 @@ export function TaskDrawer({
   /** The project's cards, so an epic can list its own without a second fetch. */
   boardTasks?: Task[];
   onOpenTask?: (t: Task) => void;
+  /** Switch the project page to its Previews tab, which owns the detail. */
+  onOpenPreviews?: () => void;
 }) {
   const tierModel = useTierModel();
   const engines = useEngines();
@@ -292,7 +295,6 @@ export function TaskDrawer({
       <div className="max-h-[55vh] overflow-y-auto">
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
-      <PreviewPanel taskId={task.id} projectId={task.projectId} />
 
       <div className="border-b border-line px-5 py-3">
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
@@ -407,6 +409,12 @@ export function TaskDrawer({
             </span>
           )}
         </div>
+
+        <PreviewPanel
+          taskId={task.id}
+          projectId={task.projectId}
+          onOpenPreviews={onOpenPreviews}
+        />
 
         <Permissions task={task} />
       </div>

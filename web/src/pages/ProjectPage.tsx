@@ -11,11 +11,13 @@ import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
 import { FilesPanel } from "../components/files/FilesPanel";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
+import { PreviewsPanel } from "../components/previews/PreviewsPanel";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
   { key: "workflows", label: "Workflows" },
   { key: "files", label: "Files" },
+  { key: "previews", label: "Previews" },
   // Docked beside the board on a wide screen; below `lg` there is no room for
   // a 380px column, so the chat becomes a tab like the others.
   { key: "chat", label: "Chat", narrowOnly: true },
@@ -156,6 +158,7 @@ export default function ProjectPage() {
           )}
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
           {activeTab === "files" && <FilesPanel projectId={projectId} />}
+          {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
           {activeTab === "chat" && <ChatPanel projectId={projectId} />}
         </div>
       </div>
@@ -181,6 +184,7 @@ export default function ProjectPage() {
         )}
         {selected && (
           <TaskDrawer
+            onOpenPreviews={() => setTab("previews")}
             key="task-drawer"
             task={selected}
             workspaceId={project?.workspaceId ?? ""}
