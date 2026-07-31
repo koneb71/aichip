@@ -16,6 +16,20 @@
 //! The one-time code is not a credential. It authorises this specific pending
 //! request and expires; it is shown to the person because showing it *is* the
 //! flow.
+//!
+//! ## Organisations
+//!
+//! `gh` requires `repo`, `read:org` and `gist`, and says so itself — "the
+//! minimum set of scopes cannot be removed". So aichip cannot ask for less, and
+//! does not pretend to: it asks for *nothing more* than that unless the person
+//! ticks something, and it says what it is asking for before they press the
+//! button.
+//!
+//! What actually decides whether a token can reach an organisation is not the
+//! scope, it is GitHub's own authorisation page, which lists each organisation
+//! separately with its own Grant control. Granting nothing there leaves the
+//! connection personal — which is the honest place to point someone who wants
+//! that, rather than a switch here that could not deliver it.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -80,10 +94,41 @@ pub fn parse_prompt(text: &str) -> Option<(String, String)> {
     (!code.is_empty()).then_some((code, url))
 }
 
+/// What `gh` will not go below, in its own words.
+///
+/// Surfaced so the UI can state it before the click rather than leaving someone
+/// to discover it on GitHub's authorisation page.
+pub const REQUIRED_SCOPES: [&str; 3] = ["repo", "read:org", "gist"];
+
+/// Scopes worth offering, none of which are asked for unless chosen.
+///
+/// Kept short on purpose. Every entry here is a thing the person will be asked
+/// to grant, and a list of plausible-sounding extras invites ticking them all.
+pub const OPTIONAL_SCOPES: [(&str, &str); 2] = [
+    ("workflow", "Push changes to GitHub Actions workflow files"),
+    ("read:project", "Read organisation and user projects"),
+];
+
 /// Begin a device flow and read back the code to show.
-pub async fn start() -> anyhow::Result<Started> {
-    let mut child = Command::new("gh")
-        .args(["auth", "login", "--web", "--hostname", "github.com"])
+///
+/// `extra` is added to what `gh` already requires. Empty is the normal case and
+/// the default: asking for more than is needed is how a connection quietly ends
+/// up able to do more than anyone intended.
+pub async fn start(extra: &[String]) -> anyhow::Result<Started> {
+    // Anything not offered is refused rather than passed through: this string
+    // goes to a subprocess that talks to GitHub, and it arrives over HTTP.
+    let allowed: Vec<&str> = extra
+        .iter()
+        .filter(|s| OPTIONAL_SCOPES.iter().any(|(name, _)| name == s))
+        .map(String::as_str)
+        .collect();
+
+    let mut cmd = Command::new("gh");
+    cmd.args(["auth", "login", "--web", "--hostname", "github.com"]);
+    if !allowed.is_empty() {
+        cmd.args(["--scopes", &allowed.join(",")]);
+    }
+    let mut child = cmd
         // Chosen so nothing is prompted for on a terminal nobody is watching:
         // this process has no console, so any question it asked would hang
         // forever.
@@ -218,6 +263,23 @@ mod tests {
         assert_eq!(parse_prompt(""), None);
         assert_eq!(parse_prompt("! First copy your one-time code:"), None);
         assert_eq!(parse_prompt("some unrelated warning\n"), None);
+    }
+
+    #[test]
+    fn the_offered_scopes_stay_minimal() {
+        // The default asks for nothing beyond what gh already requires. If a
+        // scope is ever added to this list it should be a deliberate act, and
+        // this test is where that shows up.
+        assert_eq!(OPTIONAL_SCOPES.len(), 2);
+        for (name, _) in OPTIONAL_SCOPES {
+            assert!(
+                !REQUIRED_SCOPES.contains(&name),
+                "{name} is already required; offering it implies it is optional"
+            );
+            // Nothing that can change an organisation.
+            assert!(!name.starts_with("admin:"), "{name} is too much to offer");
+            assert!(!name.starts_with("delete"), "{name} is too much to offer");
+        }
     }
 
     #[test]

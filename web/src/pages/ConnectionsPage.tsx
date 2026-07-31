@@ -32,6 +32,12 @@ function GitHubCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [scopes, setScopes] = useState<{
+    required: string[];
+    optional: { name: string; what: string }[];
+  } | null>(null);
+  /** Nothing beyond gh's minimum unless asked for. */
+  const [extra, setExtra] = useState<string[]>([]);
 
   const refresh = useCallback(
     () => api.github().then(setState).catch(() => {}),
@@ -39,6 +45,7 @@ function GitHubCard() {
   );
   useEffect(() => {
     refresh();
+    api.githubScopes().then(setScopes).catch(() => {});
   }, [refresh]);
 
   // Poll only while a flow is open. It finishes when the person finishes it in
@@ -60,7 +67,7 @@ function GitHubCard() {
     setBusy(true);
     setError(null);
     try {
-      setFlow(await api.connectGitHub());
+      setFlow(await api.connectGitHub(extra));
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
     } finally {
@@ -117,13 +124,62 @@ function GitHubCard() {
       )}
 
       {!state.usable && state.installed && !flow && (
-        <button
-          onClick={connect}
-          disabled={busy}
-          className="mt-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-        >
-          {busy ? "Starting…" : "Connect GitHub"}
-        </button>
+        <div className="mt-2">
+          {/* Said before the button, not after. What a sign-in will be able to
+              reach is the thing worth knowing while you can still decline. */}
+          {scopes && (
+            <div className="mb-2 rounded-lg border border-line bg-panel-2 p-2.5 text-[11px] leading-relaxed text-ink-dim">
+              <div>
+                Signs in as you.{" "}
+                <span className="text-ink">
+                  Organisations are a separate choice on GitHub's own page
+                </span>{" "}
+                — it lists each one with its own Grant button, and granting none
+                leaves this personal.
+              </div>
+              <div className="mt-1">
+                gh requires{" "}
+                {scopes.required.map((r, i) => (
+                  <span key={r}>
+                    {i > 0 && ", "}
+                    <code className="text-[11px]">{r}</code>
+                  </span>
+                ))}{" "}
+                and will not go below that. aichip asks for nothing more unless
+                you tick it.
+              </div>
+              {scopes.optional.map((o) => (
+                <label
+                  key={o.name}
+                  className="mt-1.5 flex cursor-pointer items-start gap-1.5"
+                >
+                  <input
+                    type="checkbox"
+                    checked={extra.includes(o.name)}
+                    onChange={(e) =>
+                      setExtra((x) =>
+                        e.target.checked
+                          ? [...x, o.name]
+                          : x.filter((n) => n !== o.name),
+                      )
+                    }
+                    className="mt-0.5 accent-[var(--color-accent)]"
+                  />
+                  <span>
+                    <code className="text-[11px]">{o.name}</code> — {o.what}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={connect}
+            disabled={busy}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {busy ? "Starting…" : "Connect GitHub"}
+          </button>
+        </div>
       )}
 
       {flow && (
@@ -164,7 +220,8 @@ function GitHubCard() {
             </button>
           </div>
           <div className="mt-1.5 text-[11px] text-ink-dim">
-            Waiting for you to finish in the browser…
+            Waiting for you to finish in the browser… GitHub will list your
+            organisations separately — skip them to keep this personal.
           </div>
         </div>
       )}
