@@ -194,6 +194,20 @@ export function previewUrl(p: TaskPreview): string | null {
   return p.url;
 }
 
+/**
+ * A build recipe for a project with no Dockerfile of its own.
+ *
+ * `proposed` means an agent wrote it and nobody has read it. Nothing builds a
+ * proposal — a Dockerfile's RUN lines execute on this machine, so approving one
+ * is approving code, and the UI shows the whole text rather than a summary.
+ */
+export interface PreviewRecipe {
+  dockerfile: string;
+  status: "proposed" | "approved";
+  /** A person rewrote it rather than approving what was proposed. */
+  edited: boolean;
+}
+
 /** Whether previews are possible here at all. */
 export interface DockerStatus {
   installed: boolean;
@@ -828,6 +842,21 @@ export const api = {
     patch(`/api/tasks/${taskId}`, body).then((r) =>
       json<{ moved: boolean; runId: string | null }>(r),
     ),
+  /** A Dockerfile an agent wrote for a project that has none. */
+  previewRecipe: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/preview-recipe`).then((r) =>
+      json<{ recipe: PreviewRecipe | null }>(r),
+    ),
+  proposeRecipe: (projectId: string) =>
+    post(`/api/projects/${projectId}/preview-recipe`).then((r) =>
+      json<{ recipe: PreviewRecipe }>(r),
+    ),
+  approveRecipe: (projectId: string, dockerfile: string) =>
+    fetch(`/api/projects/${projectId}/preview-recipe`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dockerfile }),
+    }).then((r) => json<{ approved: boolean; edited: boolean }>(r)),
   // Previews
   previewLimits: () =>
     fetch("/api/previews/limits").then((r) =>
