@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
+import { api, GitHubConnect, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 
 /**
@@ -28,9 +28,46 @@ import { useWorkspace } from "../lib/workspace";
  */
 function GitHubCard() {
   const [state, setState] = useState<GitHubStatus | null>(null);
+  const [flow, setFlow] = useState<GitHubConnect | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const refresh = useCallback(
+    () => api.github().then(setState).catch(() => {}),
+    [],
+  );
   useEffect(() => {
-    api.github().then(setState).catch(() => {});
-  }, []);
+    refresh();
+  }, [refresh]);
+
+  // Poll only while a flow is open. It finishes when the person finishes it in
+  // their browser, which nothing here can hurry along.
+  useEffect(() => {
+    if (!flow) return;
+    const t = setInterval(async () => {
+      const p = await api.githubConnectStatus(flow.id).catch(() => null);
+      if (!p || p.state === "waiting") return;
+      clearInterval(t);
+      setFlow(null);
+      if (p.state === "failed") setError(p.reason);
+      else refresh();
+    }, 2000);
+    return () => clearInterval(t);
+  }, [flow, refresh]);
+
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setFlow(await api.connectGitHub());
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!state) return null;
 
   const account = state.accounts.find((a) => a.active) ?? state.accounts[0];
@@ -67,10 +104,69 @@ function GitHubCard() {
         </p>
       )}
 
-      {!state.usable && (
+      {error && (
+        <p className="mt-1.5 text-xs text-danger">{error}</p>
+      )}
+
+      {/* Nothing to offer without the binary: this is a package to install,
+          not a button to press. */}
+      {!state.usable && !state.installed && (
         <code className="mt-2 inline-block rounded-md bg-panel-2 px-2 py-1 text-[11px]">
-          {state.installed ? "gh auth login" : "brew install gh && gh auth login"}
+          brew install gh
         </code>
+      )}
+
+      {!state.usable && state.installed && !flow && (
+        <button
+          onClick={connect}
+          disabled={busy}
+          className="mt-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+        >
+          {busy ? "Starting…" : "Connect GitHub"}
+        </button>
+      )}
+
+      {flow && (
+        <div className="mt-2 rounded-xl border border-line bg-panel-2 p-3">
+          <div className="text-xs text-ink-dim">
+            Enter this code on GitHub. aichip never sees the token — GitHub
+            gives it straight to your <code className="text-[11px]">gh</code>.
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <code className="rounded-md bg-panel px-2.5 py-1.5 font-mono text-sm tracking-widest">
+              {flow.code}
+            </code>
+            <button
+              onClick={() => {
+                navigator.clipboard?.writeText(flow.code);
+                setCopied(true);
+              }}
+              className="rounded-lg border border-line px-2 py-1 text-[11px] hover:bg-line/40"
+            >
+              {copied ? "copied" : "copy"}
+            </button>
+            <a
+              href={flow.url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
+            >
+              Open GitHub
+            </a>
+            <button
+              onClick={() => {
+                api.cancelGitHubConnect(flow.id);
+                setFlow(null);
+              }}
+              className="text-[11px] text-ink-dim hover:text-ink"
+            >
+              cancel
+            </button>
+          </div>
+          <div className="mt-1.5 text-[11px] text-ink-dim">
+            Waiting for you to finish in the browser…
+          </div>
+        </div>
       )}
     </div>
   );
