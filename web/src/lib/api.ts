@@ -164,6 +164,8 @@ export interface TaskPreview {
   containerPort: number | null;
   /** The Dockerfile named no port, so the one above is a guess. */
   portAssumed: boolean;
+  /** The card was worked on after this was built, so it is serving history. */
+  stale: boolean;
   error: string | null;
 }
 

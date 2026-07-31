@@ -44,8 +44,22 @@ pub struct Preview {
     /// number above is a guess. Surfaced because the symptom of a wrong guess
     /// is a blank page, which looks like a bug in the branch.
     pub port_assumed: bool,
+    /// The card has been worked on since this was built, so it is serving
+    /// history. Reported rather than acted on: killing what someone is looking
+    /// at is worse than telling them it is old, and "what did it look like
+    /// before?" is a real question.
+    pub stale: bool,
     pub error: Option<String>,
 }
+
+/// How many previews may run at once.
+///
+/// Each one is capped at 2 GB and 2 CPUs, so this is the number that decides
+/// whether a laptop keeps working while you review a column of cards. Three is
+/// deliberately low — the failure it prevents is not "a preview is slow", it is
+/// "the machine running your editor stops responding". Slice 4 makes it a
+/// setting; until then a wrong constant is much cheaper than no constant.
+pub const MAX_LIVE: i64 = 3;
 
 /// Where this task's work lives on disk.
 ///
@@ -84,13 +98,45 @@ fn free_port() -> anyhow::Result<u16> {
 /// The current preview for a task, alive or not.
 pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
     let row = sqlx::query(
-        "SELECT id, task_id, status, host_port, container_port, port_assumed, error
-           FROM previews WHERE task_id = $1
-          ORDER BY created_at DESC LIMIT 1",
+        "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
+                p.port_assumed, p.error, p.container_id,
+                -- Any run that started after this was built means the branch
+                -- has moved on. Cheaper than a column, and it cannot fall out
+                -- of step with the runs it is describing.
+                EXISTS (SELECT 1 FROM runs r
+                         WHERE r.task_id = p.task_id AND r.created_at > p.created_at)
+                    AS stale
+           FROM previews p WHERE p.task_id = $1
+          ORDER BY p.created_at DESC LIMIT 1",
     )
     .bind(task_id)
     .fetch_optional(&db.pool)
     .await?;
+
+    // A container can die on its own — out of memory, a crash minutes in — and
+    // nothing would notice until the next restart, leaving the card offering a
+    // link to a closed port. Checked here rather than on a timer because this
+    // is read when someone opens the card, which is exactly when it matters.
+    if let Some(r) = &row {
+        if r.get::<String, _>("status") == "running" {
+            let container: Option<String> = r.get("container_id");
+            let name = container.unwrap_or_else(|| recipe::container_name(&r.get("id")));
+            if !docker::is_running(&name).await {
+                let id: Uuid = r.get("id");
+                sqlx::query(
+                    "UPDATE previews SET status='stopped', stopped_at=now(),
+                            error=COALESCE(error, 'its container stopped on its own')
+                      WHERE id=$1 AND status='running'",
+                )
+                .bind(id)
+                .execute(&db.pool)
+                .await?;
+                docker::remove_image(&recipe::image_tag(&id)).await;
+                return Box::pin(get(db, task_id)).await;
+            }
+        }
+    }
+
     Ok(row.map(|r| {
         let host_port = r.get::<Option<i32>, _>("host_port");
         let status = r.get::<String, _>("status");
@@ -104,6 +150,7 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
             host_port,
             container_port: r.get("container_port"),
             port_assumed: r.get("port_assumed"),
+            stale: r.get("stale"),
             error: r.get("error"),
             status,
         }
@@ -132,6 +179,26 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
         .await
         .ok();
     let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
+
+    // Checked before the row is claimed, and named in the message: "too many
+    // previews" with no way to see which ones is a dead end, and the cards
+    // holding the slots are usually ones the person has forgotten about.
+    let live: Vec<String> = sqlx::query_scalar(
+        "SELECT t.title FROM previews p JOIN tasks t ON t.id = p.task_id
+          WHERE p.status IN ('building','running') AND p.task_id <> $1
+          ORDER BY p.created_at",
+    )
+    .bind(task_id)
+    .fetch_all(&db.pool)
+    .await?;
+    if live.len() as i64 >= MAX_LIVE {
+        anyhow::bail!(
+            "{} previews are already running, which is the limit — each one holds \
+             2 GB and 2 CPUs of this machine. Stop one first: {}.",
+            live.len(),
+            live.join(", ")
+        );
+    }
 
     let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM tasks WHERE id = $1")
         .bind(task_id)
