@@ -24,6 +24,15 @@ export function PreviewPanel({
 }) {
   const [preview, setPreview] = useState<TaskPreview | null>(null);
   const [docker, setDocker] = useState<DockerStatus | null>(null);
+  /**
+   * The same project's base branch, running.
+   *
+   * Offered here rather than on its own page because the question it answers
+   * only comes up while you are looking at a card: "is this different from
+   * main, or was main always like that?" A diff cannot tell you.
+   */
+  const [base, setBase] = useState<TaskPreview | null>(null);
+  const [baseBusy, setBaseBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +50,8 @@ export function PreviewPanel({
     setError(null);
     refresh();
     api.dockerStatus().then(setDocker).catch(() => {});
-  }, [taskId, refresh]);
+    api.basePreview(projectId).then((r) => setBase(r.preview)).catch(() => {});
+  }, [taskId, projectId, refresh]);
 
   const building = preview?.status === "building";
   useEffect(() => {
@@ -194,6 +204,64 @@ export function PreviewPanel({
           error, so the gate does not appear next to unrelated build failures. */}
       {noDockerfile && (
         <RecipeGate projectId={projectId} onApproved={start} />
+      )}
+
+      {live && (
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-2 text-[11px]">
+          <span className="text-ink-dim">Compare with main:</span>
+          {base?.status === "running" && previewUrl(base) ? (
+            <>
+              <a
+                href={previewUrl(base)!}
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent hover:underline"
+              >
+                {previewUrl(base)!.replace(/^https?:\/\//, "")}
+              </a>
+              <button
+                onClick={async () => {
+                  setBaseBusy(true);
+                  try {
+                    await api.stopBasePreview(projectId);
+                    setBase(null);
+                  } finally {
+                    setBaseBusy(false);
+                  }
+                }}
+                disabled={baseBusy}
+                className="text-ink-dim hover:text-ink disabled:opacity-50"
+              >
+                stop
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={async () => {
+                setBaseBusy(true);
+                try {
+                  const r = await api.startBasePreview(projectId);
+                  setBase(r.preview);
+                  // It builds in the background like any other preview.
+                  const t = setInterval(async () => {
+                    const next = await api.basePreview(projectId);
+                    setBase(next.preview);
+                    if (next.preview?.status !== "building") clearInterval(t);
+                  }, 2500);
+                } catch {
+                  // The message belongs to the base preview, and there is
+                  // nowhere sensible to put a second error block here.
+                } finally {
+                  setBaseBusy(false);
+                }
+              }}
+              disabled={baseBusy || base?.status === "building"}
+              className="text-accent hover:underline disabled:opacity-50"
+            >
+              {base?.status === "building" ? "building…" : "run it too"}
+            </button>
+          )}
+        </div>
       )}
 
       {!alive && !error && preview?.status !== "failed" && (

@@ -23,6 +23,10 @@ pub fn router() -> Router<AppState> {
         .route("/previews/limits", get(get_limits).put(set_limits))
         .route("/previews/disk", get(disk).delete(reclaim))
         .route(
+            "/projects/{id}/preview",
+            get(current_base).post(start_base).delete(stop_base),
+        )
+        .route(
             "/projects/{id}/preview-recipe",
             get(get_recipe).post(propose_recipe).put(approve_recipe),
         )
@@ -253,6 +257,50 @@ async fn approve_recipe(
     .map_err(internal)?;
 
     Ok(Json(json!({ "approved": true, "edited": edited })))
+}
+
+/// The project's base-branch preview — what a card's changes are compared to.
+async fn current_base(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let preview = aichip_core::previews::get_base(&state.db, project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "preview": preview })))
+}
+
+async fn start_base(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    if !docker_ready(&state).await {
+        return Err((
+            StatusCode::PRECONDITION_FAILED,
+            "Docker isn't available on this machine.".into(),
+        ));
+    }
+    let preview = aichip_core::previews::start_base(&state.db, project_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "preview": preview })))
+}
+
+async fn stop_base(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let stopped = aichip_core::previews::stop_base(&state.db, project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "stopped": stopped })))
+}
+
+async fn docker_ready(_state: &AppState) -> bool {
+    matches!(
+        aichip_core::previews::docker::detect().await,
+        Some(Ok(_))
+    )
 }
 
 async fn current(

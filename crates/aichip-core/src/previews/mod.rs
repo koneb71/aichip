@@ -36,7 +36,9 @@ use uuid::Uuid;
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
     pub id: Uuid,
-    pub task_id: Uuid,
+    /// None for a project's base-branch preview — the thing a card's changes
+    /// are meant to be compared against.
+    pub task_id: Option<Uuid>,
     pub status: String,
     pub url: Option<String>,
     pub host_port: Option<i32>,
@@ -170,28 +172,65 @@ fn free_port() -> anyhow::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-/// The current preview for a task, alive or not.
+/// Which preview: a card's, or a project's base branch.
+///
+/// One enum rather than two parallel families of function. Everything after the
+/// lookup — liveness, touching, waking, stopping — is identical, and the last
+/// time two copies of this kind of logic existed in aichip they drifted.
+#[derive(Debug, Clone, Copy)]
+enum Which {
+    Card(Uuid),
+    Base(Uuid),
+}
+
+async fn find(db: &Db, which: Which) -> anyhow::Result<Option<Uuid>> {
+    Ok(match which {
+        Which::Card(task_id) => sqlx::query_scalar(
+            "SELECT id FROM previews WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(task_id),
+        Which::Base(project_id) => sqlx::query_scalar(
+            "SELECT id FROM previews WHERE project_id = $1 AND task_id IS NULL
+              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(project_id),
+    }
+    .fetch_optional(&db.pool)
+    .await?)
+}
+
+/// The current preview for a card, alive or not.
 pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
+    match find(db, Which::Card(task_id)).await? {
+        Some(id) => by_id(db, id).await,
+        None => Ok(None),
+    }
+}
+
+/// The current preview of a project's base branch.
+pub async fn get_base(db: &Db, project_id: Uuid) -> anyhow::Result<Option<Preview>> {
+    match find(db, Which::Base(project_id)).await? {
+        Some(id) => by_id(db, id).await,
+        None => Ok(None),
+    }
+}
+
+async fn by_id(db: &Db, id: Uuid) -> anyhow::Result<Option<Preview>> {
     let row = sqlx::query(
         "SELECT p.id, p.task_id, p.status, p.host_port, p.container_port,
                 p.port_assumed, p.error, p.container_id, p.image_kept, p.slug,
                 -- Any run that started after this was built means the branch
-                -- has moved on. Cheaper than a column, and it cannot fall out
-                -- of step with the runs it is describing.
-                EXISTS (SELECT 1 FROM runs r
-                         WHERE r.task_id = p.task_id AND r.created_at > p.created_at)
-                    AS stale
-           FROM previews p WHERE p.task_id = $1
-          ORDER BY p.created_at DESC LIMIT 1",
+                -- has moved on. A base preview has no card, so it is never
+                -- stale in this sense: main moving is not something a run did.
+                COALESCE((SELECT true FROM runs r
+                           WHERE r.task_id = p.task_id AND r.created_at > p.created_at
+                           LIMIT 1), false) AS stale
+           FROM previews p WHERE p.id = $1",
     )
-    .bind(task_id)
+    .bind(id)
     .fetch_optional(&db.pool)
     .await?;
 
-    // A container can die on its own — out of memory, a crash minutes in — and
-    // nothing would notice until the next restart, leaving the card offering a
-    // link to a closed port. Checked here rather than on a timer because this
-    // is read when someone opens the card, which is exactly when it matters.
     // Reading the card is the only "someone is looking at this" signal there
     // is — the drawer does not poll a running preview, and the browser tab
     // showing the container never talks to aichip at all. It is a coarse
@@ -200,15 +239,19 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
     if let Some(r) = &row {
         if r.get::<String, _>("status") == "running" {
             let _ = sqlx::query("UPDATE previews SET last_seen_at = now() WHERE id = $1")
-                .bind(r.get::<Uuid, _>("id"))
+                .bind(id)
                 .execute(&db.pool)
                 .await;
             let container: Option<String> = r.get("container_id");
-            let name = container.unwrap_or_else(|| recipe::container_name(&r.get("id")));
+            let name = container.unwrap_or_else(|| recipe::container_name(&id));
+            // A container can die on its own — out of memory, a crash minutes
+            // in — and nothing would notice until the next restart, leaving a
+            // link to a closed port. Checked when someone reads it, which is
+            // exactly when it matters.
             if !docker::is_running(&name).await {
-                let id: Uuid = r.get("id");
                 sqlx::query(
                     "UPDATE previews SET status='stopped', stopped_at=now(),
+                            image_kept=FALSE,
                             error=COALESCE(error, 'its container stopped on its own')
                       WHERE id=$1 AND status='running'",
                 )
@@ -216,7 +259,7 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
                 .execute(&db.pool)
                 .await?;
                 docker::remove_image(&recipe::image_tag(&id)).await;
-                return Box::pin(get(db, task_id)).await;
+                return Box::pin(by_id(db, id)).await;
             }
         }
     }
@@ -235,7 +278,6 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
             container_port: r.get("container_port"),
             port_assumed: r.get("port_assumed"),
             stale: r.get("stale"),
-            // Only meaningful when it is not already up.
             can_wake: r.get::<bool, _>("image_kept") && status != "running",
             slug: r
                 .get::<Option<String>, _>("slug")
@@ -244,6 +286,99 @@ pub async fn get(db: &Db, task_id: Uuid) -> anyhow::Result<Option<Preview>> {
             status,
         }
     }))
+}
+
+/// Preview the branch cards merge into.
+///
+/// The project's own checkout rather than a worktree, so it is whatever `main`
+/// is right now. Everything downstream — build, ports, naming, idle-stop,
+/// reconciliation — is the per-card path unchanged; only where the source comes
+/// from and what the row is keyed to differ.
+pub async fn start_base(db: &Db, project_id: Uuid) -> anyhow::Result<Preview> {
+    let (path, name): (String, String) =
+        sqlx::query_as("SELECT path, name FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no such project"))?;
+    let source = PathBuf::from(&path);
+    if !source.exists() {
+        anyhow::bail!("this project's folder is gone from disk ({path})");
+    }
+
+    let own = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
+    let recipe_text = match &own {
+        Some(_) => None,
+        None => sqlx::query_scalar(
+            "SELECT dockerfile FROM preview_recipes
+              WHERE project_id = $1 AND status = 'approved'",
+        )
+        .bind(project_id)
+        .fetch_optional(&db.pool)
+        .await?,
+    };
+    let dockerfile = own.clone().or_else(|| recipe_text.clone());
+    let port = recipe::plan(dockerfile.as_deref()).map_err(|e| anyhow::anyhow!(e.message()))?;
+
+    // Base previews share the cap with card previews on purpose: they cost the
+    // same memory, and "the machine is full" does not care what a container is
+    // for.
+    let limits = limits(db).await;
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM previews WHERE status IN ('building','running')
+           AND (task_id IS NOT NULL OR project_id <> $1)",
+    )
+    .bind(project_id)
+    .fetch_one(&db.pool)
+    .await?;
+    if live >= limits.max_live {
+        anyhow::bail!(
+            "{live} previews are already running, which is the limit. Stop one first."
+        );
+    }
+
+    if let Some(woken) = wake(db, Which::Base(project_id), port.number).await? {
+        return Ok(woken);
+    }
+
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO previews
+             (task_id, project_id, status, container_port, port_assumed, source_path)
+         VALUES (NULL, $1, 'building', $2, $3, $4)
+         ON CONFLICT DO NOTHING
+         RETURNING id",
+    )
+    .bind(project_id)
+    .bind(port.number as i32)
+    .bind(port.source == recipe::PortSource::Assumed)
+    .bind(&path)
+    .fetch_optional(&db.pool)
+    .await?;
+
+    let Some(id) = id else {
+        return get_base(db, project_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("a preview is already starting for this project"));
+    };
+
+    // Named for the project rather than a card, and keyed to the project so the
+    // name survives rebuilds exactly as a card's does.
+    sqlx::query("UPDATE previews SET slug = $2 WHERE id = $1")
+        .bind(id)
+        .bind(recipe::slug(&format!("{name} main"), &project_id))
+        .execute(&db.pool)
+        .await?;
+
+    let pool = db.pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = build_and_run(&pool, id, &source, port.number, recipe_text).await {
+            fail(&pool, id, &e).await;
+        }
+    });
+
+    get_base(db, project_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("preview vanished immediately after being created"))
 }
 
 /// Begin a preview: claim the row, then build and run in the background.
@@ -302,7 +437,7 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
     // it back is a `docker run` rather than a `docker build` — seconds instead
     // of minutes, and byte-for-byte what was there before rather than a fresh
     // build of a branch that may have moved on in the meantime.
-    if let Some(woken) = wake(db, task_id, port.number).await? {
+    if let Some(woken) = wake(db, Which::Card(task_id), port.number).await? {
         return Ok(woken);
     }
 
@@ -379,13 +514,22 @@ async fn approved_recipe(db: &Db, task_id: Uuid) -> anyhow::Result<Option<String
 /// Returns `None` when there is nothing to wake, so the caller falls through to
 /// a normal build. Checks Docker for the image rather than trusting the column:
 /// `docker image prune` is a thing people run, and aichip is not told.
-async fn wake(db: &Db, task_id: Uuid, container_port: u16) -> anyhow::Result<Option<Preview>> {
-    let row = sqlx::query(
-        "SELECT id, image, container_port FROM previews
-          WHERE task_id = $1 AND status = 'idle' AND image_kept
-          ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(task_id)
+async fn wake(db: &Db, which: Which, container_port: u16) -> anyhow::Result<Option<Preview>> {
+    let row = match which {
+        Which::Card(task_id) => sqlx::query(
+            "SELECT id, image, container_port FROM previews
+              WHERE task_id = $1 AND status = 'idle' AND image_kept
+              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(task_id),
+        Which::Base(project_id) => sqlx::query(
+            "SELECT id, image, container_port FROM previews
+              WHERE project_id = $1 AND task_id IS NULL
+                AND status = 'idle' AND image_kept
+              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(project_id),
+    }
     .fetch_optional(&db.pool)
     .await?;
     let Some(row) = row else { return Ok(None) };
@@ -431,7 +575,7 @@ async fn wake(db: &Db, task_id: Uuid, container_port: u16) -> anyhow::Result<Opt
     .await?;
 
     tracing::info!(preview=%id, "woke an idle preview from its kept image");
-    get(db, task_id).await
+    by_id(db, id).await
 }
 
 /// Stop previews nobody has looked at for a while, keeping their images.
@@ -580,12 +724,30 @@ async fn fail(pool: &sqlx::PgPool, id: Uuid, why: &str) {
 /// container the user already killed by hand must still leave the row stopped,
 /// or the card offers Stop forever and never Preview.
 pub async fn stop(db: &Db, task_id: Uuid) -> anyhow::Result<bool> {
-    let row = sqlx::query(
-        "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
-          WHERE task_id=$1 AND status IN ('building','running','idle')
-      RETURNING id, container_id, image",
-    )
-    .bind(task_id)
+    stop_which(db, Which::Card(task_id)).await
+}
+
+/// Stop a project's base-branch preview.
+pub async fn stop_base(db: &Db, project_id: Uuid) -> anyhow::Result<bool> {
+    stop_which(db, Which::Base(project_id)).await
+}
+
+async fn stop_which(db: &Db, which: Which) -> anyhow::Result<bool> {
+    let row = match which {
+        Which::Card(task_id) => sqlx::query(
+            "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
+              WHERE task_id=$1 AND status IN ('building','running','idle')
+          RETURNING id, container_id, image",
+        )
+        .bind(task_id),
+        Which::Base(project_id) => sqlx::query(
+            "UPDATE previews SET status='stopped', stopped_at=now(), image_kept=FALSE
+              WHERE project_id=$1 AND task_id IS NULL
+                AND status IN ('building','running','idle')
+          RETURNING id, container_id, image",
+        )
+        .bind(project_id),
+    }
     .fetch_optional(&db.pool)
     .await?;
     let Some(row) = row else { return Ok(false) };
