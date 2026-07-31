@@ -247,6 +247,19 @@ export interface PlanLimit {
   updatedAt: string;
 }
 
+/** A GitHub device flow waiting for the person to finish it. */
+export interface GitHubConnect {
+  id: string;
+  /** The one-time code to type into GitHub. Not a credential. */
+  code: string;
+  url: string;
+}
+
+export type GitHubConnectProgress =
+  | { state: "waiting" }
+  | { state: "connected" }
+  | { state: "failed"; reason: string };
+
 /** Whether previews are possible here at all. */
 export interface DockerStatus {
   installed: boolean;
@@ -923,6 +936,21 @@ export const api = {
     fetch(`/api/previews/${previewId}/logs`).then((r) =>
       json<{ build: string; runtime: string }>(r),
     ),
+  /**
+   * Begin GitHub's device flow.
+   *
+   * aichip never sees the token: `gh` runs the flow, GitHub hands the
+   * credential straight to `gh`, and `gh` stores it. What comes back is a
+   * one-time code whose whole purpose is to be shown.
+   */
+  connectGitHub: () =>
+    post("/api/github/connect").then((r) => json<GitHubConnect>(r)),
+  githubConnectStatus: (id: string) =>
+    fetch(`/api/github/connect/${id}`).then((r) =>
+      json<GitHubConnectProgress>(r),
+    ),
+  cancelGitHubConnect: (id: string) =>
+    fetch(`/api/github/connect/${id}`, { method: "DELETE" }),
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),

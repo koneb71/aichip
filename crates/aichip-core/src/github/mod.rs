@@ -11,6 +11,8 @@
 //! Login is checked by *running* `gh auth status`, never by looking for a token
 //! file. Same rule as `Engine::detect`, same reason.
 
+pub mod connect;
+
 use serde::Deserialize;
 use tokio::process::Command;
 
