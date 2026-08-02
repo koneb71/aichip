@@ -443,6 +443,69 @@ pub async fn update(
     get(db, schema, model, id).await
 }
 
+/// Write a row exactly as it was exported, ids and timestamps included.
+///
+/// Only for reading aichip's own bundles back. A `ref:` column holds the id of
+/// another row, so re-minting ids on import would quietly break every link the
+/// bundle carried — which is a worse outcome than the narrow exception this
+/// makes to "the three columns aichip owns cannot be written".
+///
+/// It is still not a hole: the columns come from the manifest, every value is
+/// bound, and nothing about the row's *keys* can introduce SQL. What it skips
+/// is the required-field and computed-field checks, because the row already
+/// passed those on its way out.
+pub async fn insert_verbatim(
+    db: &Db,
+    schema: &str,
+    model: &Model,
+    row: &Map<String, Value>,
+) -> Result<(), DataError> {
+    let mut columns: Vec<String> = Vec::new();
+    let mut holes: Vec<String> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+
+    for (key, value) in row {
+        if value.is_null() {
+            continue;
+        }
+        // The declared spelling, or one of aichip's own three. Anything else is
+        // skipped rather than refused: a bundle written by a newer aichip may
+        // carry a column this one does not know, and dropping it loses one
+        // field where failing loses the whole app.
+        let (name, ty) = match model.field(key) {
+            Some(f) => (f.name.clone(), f.ty.clone()),
+            None if key == "id" => ("id".to_string(), FieldType::Ref(model.name.clone())),
+            None if key == "created_at" || key == "updated_at" => {
+                (key.clone(), FieldType::Datetime)
+            }
+            None => continue,
+        };
+        let Ok(text) = as_text(&ty, value) else { continue };
+        columns.push(query::quote(&name));
+        holes.push(format!("${}::{}", params.len() + 1, query::cast(&ty)));
+        params.push(text);
+    }
+
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let sql = format!(
+        "INSERT INTO {}.{} ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING",
+        query::quote(schema),
+        query::quote(&model.name),
+        columns.join(", "),
+        holes.join(", ")
+    );
+    let mut q = sqlx::query(&sql);
+    for param in &params {
+        q = q.bind(param);
+    }
+    q.execute(&db.pool)
+        .await
+        .map_err(|e| DataError(format!("could not load a \"{}\" row: {e}", model.name)))?;
+    Ok(())
+}
+
 pub async fn delete(db: &Db, schema: &str, model: &Model, id: Uuid) -> Result<bool, DataError> {
     let sql = format!(
         "DELETE FROM {}.{} WHERE \"id\" = $1::uuid",

@@ -34,6 +34,10 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{id}/chart/{view}", get(chart))
         .route("/apps/{id}/grants", get(grants).put(set_grants))
         .route("/apps/{id}/actions/{action}", post(run_action))
+        .route("/apps/{id}/export", get(export))
+        .route("/apps/import", post(import))
+        .route("/projects/{id}/apps", get(repo_apps))
+        .route("/projects/{id}/apps/sync", post(sync_app))
 }
 
 fn plan_json(plan: &apps::PendingPlan) -> Value {
@@ -530,6 +534,112 @@ async fn run_action(
         "deleted": out.deleted,
         "needsScope": out.needs_scope,
     })))
+}
+
+// ── Taking an app elsewhere ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ExportWhat {
+    /// `true` is a *Move* export. Absent is *Share* — no rows.
+    #[serde(default)]
+    pub data: bool,
+}
+
+/// Download an app as a bundle.
+///
+/// Served as a file rather than as JSON in a response body, because the thing
+/// a person does next is send it to someone.
+async fn export(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(what): Query<ExportWhat>,
+) -> Result<axum::response::Response, ApiError> {
+    let app = load(&state, id).await?;
+    let text = apps::export(&state.db, &app, what.data)
+        .await
+        .map_err(internal)?;
+
+    let filename = format!("{}.aichipapp", app.slug);
+    Ok(axum::response::Response::builder()
+        .header("content-type", "application/json; charset=utf-8")
+        // Quoted, and the slug is already a DNS label, so there is nothing in
+        // it that could end the header early.
+        .header("content-disposition", format!("attachment; filename=\"{filename}\""))
+        .body(axum::body::Body::from(text))
+        .map_err(internal)?)
+}
+
+#[derive(Deserialize)]
+struct Import {
+    workspace_id: Uuid,
+    bundle: String,
+}
+
+async fn import(
+    State(state): State<AppState>,
+    Json(body): Json<Import>,
+) -> Result<Json<Value>, ApiError> {
+    let app = apps::import(&state.db, body.workspace_id, &body.bundle)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(app_json(&app)))
+}
+
+/// Apps a project offers under `.aichip/apps/`.
+async fn repo_apps(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row: Option<(String, Uuid)> =
+        sqlx::query_as("SELECT path, workspace_id FROM projects WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    let (path, workspace_id) = row.ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+
+    let found = apps::sync::scan(&state.db, workspace_id, std::path::Path::new(&path))
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "apps": found.iter().map(|f| json!({
+            "dir": f.dir,
+            "name": f.name,
+            "summary": f.summary,
+            "error": f.error,
+            "installedAs": f.installed_as,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct SyncOne {
+    dir: String,
+}
+
+/// Install a repo app, or update the one already here.
+async fn sync_app(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SyncOne>,
+) -> Result<Json<Value>, ApiError> {
+    let row: Option<(String, Uuid)> =
+        sqlx::query_as("SELECT path, workspace_id FROM projects WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    let (path, workspace_id) = row.ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+
+    let app = apps::sync::adopt(
+        &state.db,
+        workspace_id,
+        std::path::Path::new(&path),
+        &body.dir,
+    )
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(app_json(&app)))
 }
 
 async fn load(state: &AppState, id: Uuid) -> Result<apps::App, ApiError> {

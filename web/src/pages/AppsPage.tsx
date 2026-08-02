@@ -47,6 +47,29 @@ export default function AppsPage() {
       <div className="mb-5 flex items-center gap-3">
         <h1 className="text-lg font-semibold">Apps</h1>
         <div className="flex-1" />
+        <label className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-line/40">
+          Import
+          <input
+            type="file"
+            accept=".aichipapp,.json,application/json"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              // Cleared straight away so picking the same file twice still
+              // fires a change event — otherwise a failed import cannot be
+              // retried without choosing something else first.
+              e.target.value = "";
+              if (!file || !active) return;
+              setError(null);
+              try {
+                await api.importApp(active.id, await file.text());
+                refresh();
+              } catch (err) {
+                setError(String(err).replace(/^Error:\s*/, ""));
+              }
+            }}
+          />
+        </label>
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={() => setAdding(true)}
