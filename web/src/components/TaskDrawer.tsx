@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, PendingPermission, Task, Team, tierColor } from "../lib/api";
+import { Agent, api, Attachment, displayTier, PendingPermission, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
@@ -17,7 +17,7 @@ import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
 import { PreviewPanel } from "./PreviewPanel";
-import { TierPicker } from "./TierPicker";
+import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 
 export function TaskDrawer({
@@ -72,7 +72,8 @@ export function TaskDrawer({
     cta: string;
     go: () => void;
   } | null>(null);
-  const accent = tierColor[task.modelTier];
+  const shownTier = displayTier(task);
+  const accent = tierColor[shownTier];
   // Anything that still owes an outcome, including a team run parked for
   // your approval — those must not look finished.
   const running = isActive(task.runStatus);
@@ -272,11 +273,21 @@ export function TaskDrawer({
               className="rounded-full px-2 py-0.5"
               style={{ background: `${accent}22`, color: accent }}
             >
-              {tierModel(task.modelTier)}
+              {task.tierIsAuto && "auto · "}
+              {tierModel(shownTier)}
             </span>
             {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
             {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
           </div>
+          {/* Why aichip picked this tier. Shown whenever aichip did the
+              picking, because a choice made on someone's behalf that they
+              cannot see is the silent downgrade this project refuses
+              elsewhere — the reason travels with the run that used it. */}
+          {task.tierIsAuto && task.tierReason && (
+            <div className="mt-1 text-[11px] text-ink-dim/80">
+              Auto → {task.tierResolved}: {task.tierReason}
+            </div>
+          )}
           {/* What it is doing, right in the header — visible without opening
               a tab or scrolling a transcript. */}
           <ActivityLine events={events} live={running} className="mt-1" />
@@ -370,7 +381,7 @@ export function TaskDrawer({
           <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
             Model
           </span>
-          <TierPicker
+          <CardTierPicker
             value={task.modelTier}
             engine={task.engine}
             disabled={running}
@@ -583,7 +594,7 @@ export function TaskDrawer({
           <BakeoffView
             taskId={task.id}
             agents={agents}
-            currentTier={task.modelTier}
+            currentTier={shownTier}
             onKept={onChanged}
             onClose={() => setBakeoff(false)}
           />

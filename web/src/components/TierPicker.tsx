@@ -1,4 +1,4 @@
-import { Tier } from "../lib/api";
+import { Tier, TierChoice } from "../lib/api";
 import { useTierModel } from "../lib/models";
 
 /**
@@ -42,6 +42,48 @@ export function TierPicker({
       onChange={(e) => onChange(e.target.value as Tier)}
       className={`rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
     >
+      {TIERS.map((t) => (
+        <option key={t} value={t}>
+          {LABEL[t]} · {tierModel(t, engine)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * The card version, which can also say "you pick".
+ *
+ * Only cards offer Auto. An agent or a workflow step is a *reusable* choice
+ * someone made deliberately, and quietly re-deciding it per run would take
+ * that away; a card is one piece of work, which is the thing there is enough
+ * information about to route.
+ *
+ * Auto is never the default. A router that switched itself on for everyone
+ * would be making exactly the choice it exists to surface.
+ */
+export function CardTierPicker({
+  value,
+  onChange,
+  engine,
+  disabled,
+  className = "",
+}: {
+  value: TierChoice;
+  onChange: (next: TierChoice) => void;
+  engine?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const tierModel = useTierModel();
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value as TierChoice)}
+      className={`rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
+    >
+      <option value="auto">Auto · picked per task</option>
       {TIERS.map((t) => (
         <option key={t} value={t}>
           {LABEL[t]} · {tierModel(t, engine)}

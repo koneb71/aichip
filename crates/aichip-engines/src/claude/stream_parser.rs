@@ -283,6 +283,44 @@ mod tests {
     }
 
     #[test]
+    fn cache_counters_survive_both_paths() {
+        // These are the numbers that say a run was cheap — cached input costs
+        // a fraction of fresh input — and they were parsed here long before
+        // anything downstream kept them. Assert on both the per-message and
+        // the final path, because a run is only ever priced by one of them.
+        let assistant = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":180,"output_tokens":14,"cache_read_input_tokens":12000,"cache_creation_input_tokens":800}}}"#;
+        match &parse_line(assistant)[..] {
+            [_, AichipEvent::UsageUpdated { usage }] => {
+                assert_eq!(usage.cache_read_tokens, 12_000);
+                assert_eq!(usage.cache_creation_tokens, 800);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"s","total_cost_usd":0.01,"usage":{"input_tokens":260,"output_tokens":59,"cache_read_input_tokens":12800,"cache_creation_input_tokens":800}}"#;
+        match &parse_line(result)[..] {
+            [AichipEvent::RunCompleted { usage, .. }] => {
+                assert_eq!(usage.cache_read_tokens, 12_800);
+                assert_eq!(usage.cache_creation_tokens, 800);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_cache_field_is_zero_not_a_parse_failure() {
+        // Older CLI builds omit them entirely; the run must still price.
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"s","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        match &parse_line(line)[..] {
+            [AichipEvent::RunCompleted { usage, .. }] => {
+                assert_eq!(usage.cache_read_tokens, 0);
+                assert_eq!(usage.input_tokens, 10);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
     fn error_result_yields_run_failed() {
         let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}"#;
         let events = parse_line(line);

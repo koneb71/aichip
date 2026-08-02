@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"mock-session-interrupted","model":"claude-opus-5"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Starting on the migration now."}],"usage":{"input_tokens":300,"output_tokens":22,"cache_read_input_tokens":5000,"cache_creation_input_tokens":1200}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_int_1","name":"Bash","input":{"command":"cargo test"}}],"usage":{"input_tokens":640,"output_tokens":31,"cache_read_input_tokens":5400,"cache_creation_input_tokens":1200}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Tests are still running; this will take a while."}],"usage":{"input_tokens":980,"output_tokens":17,"cache_read_input_tokens":5800,"cache_creation_input_tokens":1200}}}
