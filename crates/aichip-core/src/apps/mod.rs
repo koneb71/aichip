@@ -15,8 +15,10 @@
 //! wants to store and reaches its rows through aichip, which is what keeps
 //! agent-written code away from everything it did not declare.
 
+pub mod data;
 pub mod introspect;
 pub mod manifest;
+pub mod query;
 pub mod schema;
 pub mod scope;
 
