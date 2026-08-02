@@ -15,10 +15,13 @@
 //! wants to store and reaches its rows through aichip, which is what keeps
 //! agent-written code away from everything it did not declare.
 
+pub mod introspect;
 pub mod manifest;
+pub mod schema;
 pub mod scope;
 
 pub use manifest::{Manifest, ManifestError, Runtime};
+pub use schema::Stmt;
 pub use scope::Scope;
 
 use crate::Db;
@@ -254,17 +257,32 @@ pub async fn install(
     .await?;
     tx.commit().await?;
 
-    get(db, id)
+    let app = get(db, id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("the app vanished immediately after being created"))
+        .ok_or_else(|| anyhow::anyhow!("the app vanished immediately after being created"))?;
+
+    // A brand-new app has no tables, so every statement is a create and nothing
+    // can be destructive. It applies here rather than on first use, so an app
+    // that installed is an app that works.
+    reconcile_schema(db, &app).await?;
+    Ok(app)
 }
 
-/// Replace an app's manifest, in the database and in its folder.
+/// Replace an app's manifest, in the database and in its folder, and reconcile
+/// its tables with what the new one declares.
 ///
-/// Both, always, and through one function — the same shape the Files tab uses
-/// when a person saves. The database copy is what the renderer reads on every
-/// page load; the folder copy is what git tracks and what export reads.
-pub async fn set_manifest(db: &Db, app: &App, manifest_text: &str) -> anyhow::Result<Manifest> {
+/// Both copies, always, and through one function — the same shape the Files tab
+/// uses when a person saves. The database copy is what the renderer reads on
+/// every page load; the folder copy is what git tracks and what export reads.
+///
+/// The returned outcome says whether the tables followed or are waiting: a
+/// manifest that only adds is live immediately, and one that would destroy
+/// something is saved but not yet enacted.
+pub async fn set_manifest(
+    db: &Db,
+    app: &App,
+    manifest_text: &str,
+) -> anyhow::Result<(Manifest, SchemaOutcome)> {
     let parsed = manifest::parse(manifest_text)?;
     if parsed.runtime != app.runtime {
         anyhow::bail!(
@@ -292,11 +310,166 @@ pub async fn set_manifest(db: &Db, app: &App, manifest_text: &str) -> anyhow::Re
     .bind(parsed.port.map(i32::from))
     .execute(&db.pool)
     .await?;
-    Ok(parsed)
+
+    // Read the app back before reconciling: the plan is computed from the
+    // manifest that was just stored, not the one this call was handed.
+    let updated = get(db, app.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("this app was removed while it was being edited"))?;
+    let outcome = reconcile_schema(db, &updated).await?;
+    Ok((parsed, outcome))
 }
 
 async fn write_manifest(path: &Path, text: &str) -> anyhow::Result<()> {
     tokio::fs::write(path.join(MANIFEST_FILE), text).await?;
+    Ok(())
+}
+
+/// A migration waiting to be read.
+#[derive(Debug, Clone)]
+pub struct PendingPlan {
+    pub id: Uuid,
+    pub statements: Vec<Stmt>,
+}
+
+/// What reconciling an app's schema did, or wants permission to do.
+#[derive(Debug, Clone, Default)]
+pub struct SchemaOutcome {
+    /// Statements that ran. Only ever safe ones.
+    pub applied: Vec<Stmt>,
+    /// The whole plan, held back because part of it destroys something.
+    pub pending: Option<PendingPlan>,
+}
+
+/// Bring an app's tables in line with what its manifest declares.
+///
+/// Additive plans run immediately: creating a table or adding a nullable column
+/// cannot lose anything, and asking about them would be a dialog that always
+/// gets the same answer — which is how a gate stops being read.
+///
+/// A plan containing *anything* destructive runs **nothing** and waits, whole.
+/// Not the safe half now and the rest on approval: the statements are ordered
+/// and a half-applied migration is a schema in a state no manifest describes,
+/// and recomputing the remainder later would mean running SQL nobody saw.
+pub async fn reconcile_schema(db: &Db, app: &App) -> anyhow::Result<SchemaOutcome> {
+    let parsed = app.parsed()?;
+    let live = introspect::tables(db, &app.schema).await?;
+    let plan = schema::plan(&app.schema, &parsed.models, &live);
+
+    if !schema::needs_approval(&plan) {
+        run(db, &plan).await?;
+        // Anything outstanding was computed against a manifest that has now
+        // been superseded, so leaving it would offer a stale question.
+        sqlx::query(
+            "UPDATE app_schema_plans SET status = 'discarded'
+              WHERE app_id = $1 AND status = 'pending'",
+        )
+        .bind(app.id)
+        .execute(&db.pool)
+        .await?;
+        return Ok(SchemaOutcome { applied: plan, pending: None });
+    }
+
+    // One outstanding question per app: a new proposal replaces the old rather
+    // than queueing behind it, or approving the older one would apply a
+    // migration computed against a manifest that has since changed.
+    let mut tx = db.pool.begin().await?;
+    sqlx::query(
+        "UPDATE app_schema_plans SET status = 'discarded'
+          WHERE app_id = $1 AND status = 'pending'",
+    )
+    .bind(app.id)
+    .execute(&mut *tx)
+    .await?;
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO app_schema_plans (app_id, statements, destructive)
+         VALUES ($1, $2, TRUE) RETURNING id",
+    )
+    .bind(app.id)
+    .bind(serde_json::to_value(&plan)?)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(SchemaOutcome { applied: Vec::new(), pending: Some(PendingPlan { id, statements: plan }) })
+}
+
+/// The migration this app is waiting on, if any.
+pub async fn pending_plan(db: &Db, app_id: Uuid) -> anyhow::Result<Option<PendingPlan>> {
+    let row = sqlx::query(
+        "SELECT id, statements FROM app_schema_plans
+          WHERE app_id = $1 AND status = 'pending'",
+    )
+    .bind(app_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    use sqlx::Row;
+    Ok(Some(PendingPlan {
+        id: row.get("id"),
+        statements: serde_json::from_value(row.get("statements"))?,
+    }))
+}
+
+/// Run a plan a person has read.
+///
+/// The stored statements, not freshly derived ones — what was approved is what
+/// executes. All of it in one transaction, so a migration that fails half way
+/// leaves the schema as it was rather than in a shape nothing describes.
+pub async fn apply_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
+    let row = sqlx::query(
+        "SELECT statements FROM app_schema_plans WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(plan_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("that change has already been dealt with"))?;
+    use sqlx::Row;
+    let statements: Vec<Stmt> = serde_json::from_value(row.get("statements"))?;
+
+    if let Err(e) = run(db, &statements).await {
+        sqlx::query("UPDATE app_schema_plans SET status = 'failed', error = $2 WHERE id = $1")
+            .bind(plan_id)
+            .bind(e.to_string())
+            .execute(&db.pool)
+            .await?;
+        return Err(e);
+    }
+
+    sqlx::query(
+        "UPDATE app_schema_plans SET status = 'applied', applied_at = now() WHERE id = $1",
+    )
+    .bind(plan_id)
+    .execute(&db.pool)
+    .await?;
+    Ok(statements)
+}
+
+/// Turn down a proposed migration. The app keeps the tables it has.
+pub async fn discard_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<()> {
+    sqlx::query("UPDATE app_schema_plans SET status = 'discarded' WHERE id = $1")
+        .bind(plan_id)
+        .execute(&db.pool)
+        .await?;
+    Ok(())
+}
+
+async fn run(db: &Db, statements: &[Stmt]) -> anyhow::Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool.begin().await?;
+    for stmt in statements {
+        // Raw execute: this is DDL, which cannot take bound parameters. What
+        // makes it safe is upstream — every identifier in it came from the
+        // manifest's charset check, and every statement was built here rather
+        // than supplied.
+        sqlx::query(&stmt.sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}\n  while running: {}", e, stmt.sql))?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
