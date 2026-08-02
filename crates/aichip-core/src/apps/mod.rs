@@ -16,9 +16,11 @@
 //! agent-written code away from everything it did not declare.
 
 pub mod data;
+pub mod expr;
 pub mod introspect;
 pub mod manifest;
 pub mod query;
+pub mod render;
 pub mod schema;
 pub mod scope;
 
