@@ -25,6 +25,11 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{id}/schema", get(schema_plan))
         .route("/apps/{id}/schema/apply", post(apply_schema))
         .route("/apps/{id}/schema/discard", post(discard_schema))
+        .route("/apps/{id}/data/{model}", get(rows).post(add_row))
+        .route(
+            "/apps/{id}/data/{model}/{row}",
+            get(row).patch(change_row).delete(drop_row),
+        )
 }
 
 fn plan_json(plan: &apps::PendingPlan) -> Value {
@@ -207,6 +212,124 @@ async fn uninstall(
 ) -> Result<Json<Value>, ApiError> {
     apps::uninstall(&state.db, id).await.map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+// ── An app's own rows ───────────────────────────────────────────────────────
+//
+// No scope gates these. The tables exist because this app declared them, hold
+// only what it put there, and are dropped with it — asking permission to use
+// the thing you installed would be ceremony.
+
+/// A data problem is the caller's to fix: an undeclared field, a value that is
+/// not a number, a filter that is not a filter. 400 with the text, which names
+/// which field and what was sent.
+fn bad_data(e: impl std::fmt::Display) -> ApiError {
+    (StatusCode::BAD_REQUEST, e.to_string())
+}
+
+/// Resolve an app and one of its models together.
+///
+/// Both come from the manifest, so nothing after this point is holding a name
+/// that arrived in the URL — which is the property the whole data layer rests
+/// on. See `apps::query` for why.
+async fn model_of(
+    state: &AppState,
+    id: Uuid,
+    model: &str,
+) -> Result<(apps::App, apps::manifest::Model), ApiError> {
+    let app = load(state, id).await?;
+    let parsed = app.parsed().map_err(bad_manifest)?;
+    let model = apps::data::model_of(&parsed, model)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?
+        .clone();
+    Ok((app, model))
+}
+
+/// Read the query string as a list of pairs.
+///
+/// A list, not a struct: `where` may appear several times and a struct keeps
+/// only the last one, which would silently drop every filter but one and
+/// return the wrong rows without erroring.
+fn raw_query(pairs: Vec<(String, String)>) -> apps::query::Raw {
+    let mut raw = apps::query::Raw::default();
+    for (key, value) in pairs {
+        match key.as_str() {
+            "where" => raw.filters.push(value),
+            "order" => raw.order = Some(value),
+            "limit" => raw.limit = value.parse().ok(),
+            "offset" => raw.offset = value.parse().ok(),
+            _ => {}
+        }
+    }
+    raw
+}
+
+async fn rows(
+    State(state): State<AppState>,
+    Path((id, model)): Path<(Uuid, String)>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &model).await?;
+    let raw = raw_query(pairs);
+    let rows = apps::data::list(&state.db, &app.schema, &model, &raw)
+        .await
+        .map_err(bad_data)?;
+    let total = apps::data::count(&state.db, &app.schema, &model, &raw)
+        .await
+        .map_err(bad_data)?;
+    Ok(Json(json!({ "rows": rows, "total": total })))
+}
+
+async fn row(
+    State(state): State<AppState>,
+    Path((id, model, row)): Path<(Uuid, String, Uuid)>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &model).await?;
+    apps::data::get(&state.db, &app.schema, &model, row)
+        .await
+        .map_err(bad_data)?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "no such row".into()))
+}
+
+async fn add_row(
+    State(state): State<AppState>,
+    Path((id, model)): Path<(Uuid, String)>,
+    Json(body): Json<serde_json::Map<String, Value>>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &model).await?;
+    apps::data::create(&state.db, &app.schema, &model, &body)
+        .await
+        .map(Json)
+        .map_err(bad_data)
+}
+
+async fn change_row(
+    State(state): State<AppState>,
+    Path((id, model, row)): Path<(Uuid, String, Uuid)>,
+    Json(body): Json<serde_json::Map<String, Value>>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &model).await?;
+    apps::data::update(&state.db, &app.schema, &model, row, &body)
+        .await
+        .map_err(bad_data)?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "no such row".into()))
+}
+
+async fn drop_row(
+    State(state): State<AppState>,
+    Path((id, model, row)): Path<(Uuid, String, Uuid)>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &model).await?;
+    let gone = apps::data::delete(&state.db, &app.schema, &model, row)
+        .await
+        .map_err(bad_data)?;
+    if gone {
+        Ok(Json(json!({ "ok": true })))
+    } else {
+        Err((StatusCode::NOT_FOUND, "no such row".into()))
+    }
 }
 
 async fn load(state: &AppState, id: Uuid) -> Result<apps::App, ApiError> {
