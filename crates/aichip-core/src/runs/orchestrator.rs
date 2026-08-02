@@ -26,6 +26,7 @@ use crate::db::Db;
 use crate::runs::attachments;
 use crate::runs::memory;
 use crate::runs::task_plan;
+use crate::runs::usage_tally::{UsageDelta, UsageTally};
 use crate::queue::rate_limit_backoff;
 use crate::worktrees::manager::WorktreeManager;
 
@@ -2471,6 +2472,62 @@ this workflow manually."
         Ok(())
     }
 
+    /// Apply one step's token delta to the run, and to the step row when there
+    /// is one.
+    ///
+    /// Additive rather than absolute so a fan-out's parallel steps can each
+    /// write their own share of the same run without reading first — and
+    /// therefore without clobbering each other.
+    ///
+    /// `provisional` marks figures no final engine message ever reconciled. It
+    /// is OR-ed in, never cleared: one estimated step makes the run's total an
+    /// estimate, and a later exact step does not make the earlier guess true.
+    async fn flush_usage(
+        &self,
+        run_id: Uuid,
+        step_id: Option<Uuid>,
+        delta: UsageDelta,
+        provisional: bool,
+    ) -> anyhow::Result<()> {
+        if delta.is_zero() && !provisional {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE runs SET input_tokens          = input_tokens          + $2,
+                             output_tokens         = output_tokens         + $3,
+                             cache_read_tokens     = cache_read_tokens     + $4,
+                             cache_creation_tokens = cache_creation_tokens + $5,
+                             tokens_provisional    = tokens_provisional OR $6
+             WHERE id=$1",
+        )
+        .bind(run_id)
+        .bind(delta.input)
+        .bind(delta.output)
+        .bind(delta.cache_read)
+        .bind(delta.cache_creation)
+        .bind(provisional)
+        .execute(&self.db.pool)
+        .await?;
+
+        if let Some(step_id) = step_id {
+            sqlx::query(
+                "UPDATE steps SET input_tokens          = input_tokens          + $2,
+                                  output_tokens         = output_tokens         + $3,
+                                  cache_read_tokens     = cache_read_tokens     + $4,
+                                  cache_creation_tokens = cache_creation_tokens + $5
+                 WHERE id=$1",
+            )
+            .bind(step_id)
+            .bind(delta.input)
+            .bind(delta.output)
+            .bind(delta.cache_read)
+            .bind(delta.cache_creation)
+            .execute(&self.db.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn load_agent(
         &self,
         workspace_id: Uuid,
@@ -2563,6 +2620,11 @@ this workflow manually."
         let mut text_parts: Vec<String> = vec![];
         let mut result_text = String::new();
         let mut session_id: Option<String> = None;
+        // Both adapters report usage twice — per message as they go, and
+        // authoritatively at the end. The tally reconciles the two so the row
+        // is neither double-counted nor left at zero when no final message
+        // arrives; see `usage_tally` for why that is not just a sum.
+        let mut tally = UsageTally::default();
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => {
@@ -2588,20 +2650,33 @@ this workflow manually."
                         AichipEvent::RunCompleted { session_id: sid, cost_usd, usage, result_text: rt } => {
                             session_id = Some(sid.clone());
                             result_text = rt.clone();
+                            // The engine's own figures replace whatever the
+                            // mid-run telemetry estimated. Tokens are written
+                            // once after the loop, so this only adopts them.
+                            tally.adopt(usage);
                             // Costs accumulate: a workflow run has many steps.
                             sqlx::query(
-                                "UPDATE runs SET session_id=$1, session_engine=$6,
-                                 cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0),
-                                 input_tokens = input_tokens + $3,
-                                 output_tokens = output_tokens + $4 WHERE id=$5")
+                                "UPDATE runs SET session_id=$1, session_engine=$4,
+                                 cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0)
+                                 WHERE id=$3")
                                 .bind(sid)
                                 .bind(cost_usd)
-                                .bind(usage.input_tokens as i64)
-                                .bind(usage.output_tokens as i64)
                                 .bind(run_id)
                                 .bind(engine.id())
                                 .execute(&self.db.pool).await?;
+                            if let Some(step_id) = step_id {
+                                sqlx::query("UPDATE steps SET cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0) WHERE id=$1")
+                                    .bind(step_id)
+                                    .bind(cost_usd)
+                                    .execute(&self.db.pool).await?;
+                            }
                             outcome = Some((RunStatus::Completed, None));
+                        }
+                        AichipEvent::UsageUpdated { usage } => {
+                            // Only an estimate until a final message arrives —
+                            // but the only figures a cancelled run will ever
+                            // have, which is why they are kept at all.
+                            tally.observe(usage);
                         }
                         AichipEvent::RunFailed { reason } => {
                             outcome = Some((RunStatus::Failed, Some(reason.clone())));
@@ -2638,6 +2713,17 @@ this workflow manually."
         }
         if let Some(state) = self.cancels.lock().unwrap().get_mut(&run_id) {
             state.steps.remove(&step_key);
+        }
+
+        // The step's tokens, written exactly once, whichever way it ended. A
+        // run that was cancelled or whose engine died never sent a final
+        // message, and used to record zero — so an interrupted session showed
+        // as free, and the daily budget under-counted it to match.
+        let provisional = tally.is_provisional();
+        let delta = tally.take_delta();
+        if let Err(e) = self.flush_usage(run_id, step_id, delta, provisional).await {
+            // Never fail a run over its own bookkeeping.
+            tracing::warn!(%run_id, error = %e, "could not record token usage");
         }
 
         let (status, reason) =

@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"mock-session-cache","model":"claude-sonnet-5"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the runbook before I touch anything."}],"usage":{"input_tokens":180,"output_tokens":14,"cache_read_input_tokens":12000,"cache_creation_input_tokens":800}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_cache_1","name":"Read","input":{"file_path":"docs/runbook.md"}}],"usage":{"input_tokens":210,"output_tokens":26,"cache_read_input_tokens":12400,"cache_creation_input_tokens":800}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_cache_1","is_error":false,"content":"# Runbook\nDeploys are gated on the staging smoke test."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Understood — the smoke test gates the deploy."}],"usage":{"input_tokens":260,"output_tokens":19,"cache_read_input_tokens":12800,"cache_creation_input_tokens":800}}}
+{"type":"result","subtype":"success","is_error":false,"result":"Confirmed the deploy gate from the runbook.","session_id":"mock-session-cache","total_cost_usd":0.0094,"usage":{"input_tokens":260,"output_tokens":59,"cache_read_input_tokens":12800,"cache_creation_input_tokens":800}}
