@@ -14,6 +14,7 @@ pub mod orgs;
 pub mod projects;
 pub mod search;
 pub mod settings;
+pub mod spend;
 pub mod tasks;
 pub mod teams;
 pub mod workflows;
@@ -53,6 +54,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(github::router())
         .merge(previews::router())
         .merge(usage::router())
+        .merge(spend::router())
         .merge(kb::router())
 }
 
