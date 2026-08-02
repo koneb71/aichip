@@ -13,12 +13,29 @@ import {
   cellText,
   fieldLabel,
   formRows,
+  isPaged,
   listColumns,
+  pageWindow,
   recordFor,
+  searchableField,
+  searchFilter,
   sortParam,
 } from "../../lib/apps";
 import { showIf } from "../../lib/expr";
 import { FieldInput } from "./FieldInput";
+
+/** Rows per page. Big enough that most apps never see a pager. */
+const PAGE = 50;
+
+/**
+ * How many rows a board fetches.
+ *
+ * A kanban is not paged, and that is deliberate: its whole point is seeing
+ * everything at once, and a per-column count that silently means "on this
+ * page" is a number that lies. So it asks for as much as the server will give
+ * — see `MAX_LIMIT` in `apps::query` — and says so plainly when there is more.
+ */
+const BOARD = 1000;
 
 /**
  * One of an app's screens, drawn from its declaration.
@@ -32,6 +49,7 @@ export function AppView({
   manifest,
   view,
   title,
+  onGoto,
 }: {
   app: AppDetail;
   manifest: AppManifest;
@@ -39,6 +57,8 @@ export function AppView({
   /** What the menu calls this screen. The view's own name is an identifier —
    *  showing "list" beside a tab that already says "Expenses" is noise. */
   title?: string;
+  /** Where a `goto` step sends you. The page owns which screen is showing. */
+  onGoto?: (view: string) => void;
 }) {
   const model = manifest.models.find((m) => m.name === view.model);
   const [rows, setRows] = useState<AppRow[]>([]);
@@ -46,14 +66,26 @@ export function AppView({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<AppRow | "new" | null>(null);
   const [buckets, setBuckets] = useState<{ bucket: string | null; value: string | null }[]>([]);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+
+  const searchable = model ? searchableField(model) : null;
+  const filters = useMemo(() => searchFilter(searchable, search), [search, searchable]);
+  const paged = isPaged(view.kind);
+  const window = pageWindow(page, total, PAGE);
 
   const refresh = useCallback(async () => {
     if (!model) return;
     try {
       if (view.kind === "chart") {
-        setBuckets((await api.appChart(app.id, view.name)).buckets);
+        setBuckets((await api.appChart(app.id, view.name, filters)).buckets);
       } else {
-        const r = await api.appRows(app.id, model.name, { order: sortParam(view), limit: 200 });
+        const r = await api.appRows(app.id, model.name, {
+          where: filters,
+          order: sortParam(view),
+          limit: paged ? PAGE : BOARD,
+          offset: paged ? page * PAGE : 0,
+        });
         setRows(r.rows);
         setTotal(r.total);
       }
@@ -61,11 +93,20 @@ export function AppView({
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
     }
-  }, [app.id, model, view]);
+  }, [app.id, model, view, page, filters, paged]);
 
+  // Debounced, because every keystroke is a query. 200ms is under the point a
+  // person notices and well over the point the server does.
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    const t = setTimeout(refresh, search ? 200 : 0);
+    return () => clearTimeout(t);
+  }, [refresh, search]);
+
+  // Page 4 of a filter that now matches two rows is an empty screen with no
+  // explanation, so narrowing the search goes back to the start.
+  useEffect(() => {
+    setPage(0);
+  }, [search, view.name]);
 
   if (!model) {
     return <Empty>This view names a model the app no longer declares.</Empty>;
@@ -81,6 +122,14 @@ export function AppView({
           </span>
         )}
         <div className="flex-1" />
+        {searchable && (
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={`Search ${fieldLabel(model.fields.find((f) => f.name === searchable)!).toLowerCase()}…`}
+            className="w-48 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-accent"
+          />
+        )}
         {view.kind !== "chart" && (
           <motion.button
             whileTap={{ scale: 0.96 }}
@@ -103,9 +152,41 @@ export function AppView({
         <ListView model={model} view={view} rows={rows} onOpen={setEditing} />
       )}
       {view.kind === "kanban" && (
-        <KanbanView model={model} view={view} rows={rows} onOpen={setEditing} />
+        <KanbanView
+          model={model}
+          view={view}
+          rows={rows}
+          onOpen={setEditing}
+          // Said out loud rather than left to be noticed by adding up the
+          // column counts and finding they do not reach the total.
+          truncated={total > rows.length ? total : null}
+        />
       )}
       {view.kind === "chart" && <ChartView view={view} buckets={buckets} />}
+
+      {/* Only when there is a second page. A pager that always says "1 of 1"
+          is furniture. */}
+      {paged && window.needed && (
+        <div className="mt-3 flex items-center gap-2 text-xs">
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={!window.hasPrevious}
+            className="rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
+          >
+            Previous
+          </button>
+          <span className="text-ink-dim">
+            {window.from}–{window.to} of {window.total}
+          </span>
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            disabled={!window.hasNext}
+            className="rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
+      )}
 
       <AnimatePresence>
         {editing && (
@@ -119,6 +200,10 @@ export function AppView({
             onSaved={() => {
               setEditing(null);
               refresh();
+            }}
+            onGoto={(to) => {
+              setEditing(null);
+              onGoto?.(to);
             }}
           />
         )}
@@ -191,11 +276,14 @@ function KanbanView({
   view,
   rows,
   onOpen,
+  truncated,
 }: {
   model: AppModel;
   view: ViewDecl;
   rows: AppRow[];
   onOpen: (row: AppRow) => void;
+  /** The real total, when there are more rows than the board is showing. */
+  truncated: number | null;
 }) {
   const groupBy = view.spec.groupBy ?? model.fields[0]?.name;
   const titleField = view.spec.title ?? model.fields[0]?.name;
@@ -214,6 +302,12 @@ function KanbanView({
 
   return (
     <div className="min-h-0 flex-1 overflow-x-auto">
+      {truncated !== null && (
+        <div className="mb-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+          Showing the first {rows.length} of {truncated}. Narrow it with the search box —
+          the counts below are for what is on the board, not for everything.
+        </div>
+      )}
       <div className="flex gap-3">
         {columns.map(([key, group]) => (
           <div key={key} className="w-64 shrink-0 rounded-xl bg-panel-2 p-2">
@@ -254,34 +348,147 @@ function ChartView({
   buckets: { bucket: string | null; value: string | null }[];
 }) {
   const values = buckets.map((b) => bucketValue(b.value));
-  const max = Math.max(1, ...values);
   if (buckets.length === 0) return <Empty>Nothing to chart yet.</Empty>;
 
-  // Bars for every shape in this first pass. A pie that is really a bar chart
-  // is legible and honest; a half-drawn pie is neither.
+  const shape = view.spec.shape ?? "bar";
   return (
     <div className="rounded-xl border border-line p-4">
       <div className="mb-3 text-[11px] uppercase tracking-wide text-ink-dim">
         {view.spec.measure} by {view.spec.groupBy}
       </div>
-      <div className="flex flex-col gap-2">
+      {shape === "line" ? (
+        <LineChart buckets={buckets} values={values} />
+      ) : shape === "pie" ? (
+        <PieChart buckets={buckets} values={values} />
+      ) : (
+        <BarChart buckets={buckets} values={values} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One colour per slice, borrowed from the tier variables the dashboard already
+ * uses. Categorical rather than a gradient: these buckets are names, and a
+ * gradient would imply an order they do not have.
+ */
+const SERIES = [
+  "var(--color-accent)",
+  "var(--color-tier-easy)",
+  "var(--color-tier-complex)",
+  "var(--color-tier-medium)",
+  "var(--color-danger)",
+];
+
+type Bucket = { bucket: string | null; value: string | null };
+
+function BarChart({ buckets, values }: { buckets: Bucket[]; values: number[] }) {
+  const max = Math.max(1, ...values);
+  return (
+    <div className="flex flex-col gap-2">
+      {buckets.map((b, i) => (
+        <div key={`${b.bucket}-${i}`} className="flex items-center gap-2 text-xs">
+          <div className="w-32 shrink-0 truncate text-ink-dim" title={b.bucket ?? ""}>
+            {b.bucket || "—"}
+          </div>
+          <div className="h-4 min-w-0 flex-1 rounded bg-line/40">
+            <div
+              className="h-4 rounded"
+              style={{
+                width: `${Math.max(2, (values[i] / max) * 100)}%`,
+                background: "var(--color-accent)",
+              }}
+            />
+          </div>
+          {/* The server's text, not the number it was parsed into, so a summed
+              decimal shows every digit it actually has. */}
+          <div className="w-28 shrink-0 text-right tabular-nums">{b.value ?? "—"}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LineChart({ buckets, values }: { buckets: Bucket[]; values: number[] }) {
+  const W = 640;
+  const H = 180;
+  const PAD = 8;
+  const max = Math.max(1, ...values);
+  // A single point has no span to divide by, so it sits in the middle rather
+  // than at x = NaN.
+  const x = (i: number) =>
+    buckets.length === 1 ? W / 2 : PAD + (i * (W - PAD * 2)) / (buckets.length - 1);
+  const y = (v: number) => H - PAD - (v / max) * (H - PAD * 2);
+  const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-44 w-full min-w-[24rem]" role="img">
+        <polyline
+          points={points}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {values.map((v, i) => (
+          <circle key={i} cx={x(i)} cy={y(v)} r={3} fill="var(--color-accent)">
+            <title>{`${buckets[i].bucket ?? "—"}: ${buckets[i].value ?? ""}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="mt-1 flex justify-between text-[11px] text-ink-dim">
+        <span className="truncate">{buckets[0]?.bucket || "—"}</span>
+        {buckets.length > 1 && (
+          <span className="truncate">{buckets[buckets.length - 1]?.bucket || "—"}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PieChart({ buckets, values }: { buckets: Bucket[]; values: number[] }) {
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return <Empty>Every slice is zero, so there is no pie to draw.</Empty>;
+
+  const R = 70;
+  let angle = -Math.PI / 2; // start at twelve o'clock, where a pie is read from
+  const slices = values.map((v, i) => {
+    const sweep = (v / total) * Math.PI * 2;
+    const from = angle;
+    angle += sweep;
+    const p = (a: number) => `${(R + R * Math.cos(a)).toFixed(2)},${(R + R * Math.sin(a)).toFixed(2)}`;
+    // A slice of the whole circle cannot be drawn as an arc — its start and
+    // end points are the same, so the path collapses to nothing.
+    const d =
+      sweep >= Math.PI * 2 - 1e-9
+        ? `M ${R},${R} m ${-R},0 a ${R},${R} 0 1,0 ${R * 2},0 a ${R},${R} 0 1,0 ${-R * 2},0`
+        : `M ${R},${R} L ${p(from)} A ${R},${R} 0 ${sweep > Math.PI ? 1 : 0},1 ${p(angle)} Z`;
+    return { d, colour: SERIES[i % SERIES.length] };
+  });
+
+  return (
+    <div className="flex flex-wrap items-center gap-6">
+      <svg viewBox={`0 0 ${R * 2} ${R * 2}`} className="h-40 w-40 shrink-0" role="img">
+        {slices.map((s, i) => (
+          <path key={i} d={s.d} fill={s.colour}>
+            <title>{`${buckets[i].bucket ?? "—"}: ${buckets[i].value ?? ""}`}</title>
+          </path>
+        ))}
+      </svg>
+      <div className="flex min-w-0 flex-col gap-1 text-xs">
         {buckets.map((b, i) => (
-          <div key={`${b.bucket}-${i}`} className="flex items-center gap-2 text-xs">
-            <div className="w-32 shrink-0 truncate text-ink-dim" title={b.bucket ?? ""}>
-              {b.bucket || "—"}
-            </div>
-            <div className="h-4 min-w-0 flex-1 rounded bg-line/40">
-              <div
-                className="h-4 rounded"
-                style={{
-                  width: `${Math.max(2, (values[i] / max) * 100)}%`,
-                  background: "var(--color-accent)",
-                }}
-              />
-            </div>
-            {/* The server's text, not the number it was parsed into, so a
-                summed decimal shows every digit it actually has. */}
-            <div className="w-28 shrink-0 text-right tabular-nums">{b.value ?? "—"}</div>
+          <div key={`${b.bucket}-${i}`} className="flex items-center gap-2">
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-sm"
+              style={{ background: SERIES[i % SERIES.length] }}
+            />
+            <span className="min-w-0 truncate text-ink-dim">{b.bucket || "—"}</span>
+            <span className="tabular-nums">{b.value ?? "—"}</span>
+            <span className="text-ink-dim">
+              {((values[i] / total) * 100).toFixed(0)}%
+            </span>
           </div>
         ))}
       </div>
@@ -297,6 +504,7 @@ function RowEditor({
   row,
   onClose,
   onSaved,
+  onGoto,
 }: {
   app: AppDetail;
   manifest: AppManifest;
@@ -305,6 +513,7 @@ function RowEditor({
   row: AppRow | null;
   onClose: () => void;
   onSaved: () => void;
+  onGoto: (view: string) => void;
 }) {
   const [draft, setDraft] = useState<AppRow>(row ?? {});
   const [error, setError] = useState<string | null>(null);
@@ -358,8 +567,15 @@ function RowEditor({
       const out = await api.runAppAction(app.id, name, model.name, String(row.id));
       setNeedsScope(out.needsScope);
       setNotices(out.messages);
+      // `goto` wins over everything else: the action asked to be somewhere
+      // else, so staying on this record to read a notice would be ignoring it.
+      if (out.goto) {
+        onGoto(out.goto);
+        return;
+      }
       // A step that deleted or changed the record makes what is on screen
-      // stale, so the list is what should be looked at next.
+      // stale, so the list is what should be looked at next. A notice is the
+      // one reason to stay — it is there to be read.
       if (out.deleted) onSaved();
       else if (out.messages.length === 0 && !out.needsScope) onSaved();
     } catch (e) {

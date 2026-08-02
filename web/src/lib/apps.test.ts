@@ -7,8 +7,12 @@ import {
   cellText,
   fieldLabel,
   formRows,
+  isPaged,
   listColumns,
+  pageWindow,
   recordFor,
+  searchableField,
+  searchFilter,
   sortParam,
   ungrantedScopes,
 } from "./apps";
@@ -206,6 +210,56 @@ describe("scopes", () => {
       .toEqual(["write:board"]);
     expect(ungrantedScopes(["b", "a", "b"], [])).toEqual(["a", "b"]);
     expect(ungrantedScopes(["read:board"], ["read:board"])).toEqual([]);
+  });
+});
+
+describe("searching", () => {
+  it("searches the first text column", () => {
+    expect(searchableField(MODEL)).toBe("note");
+  });
+
+  it("offers no box when there is nothing text to search", () => {
+    // Better than a box that could never match anything.
+    const numbers: AppModel = {
+      name: "reading",
+      fields: [field({ name: "value", type: "decimal" }), field({ name: "at", type: "datetime" })],
+    };
+    expect(searchableField(numbers)).toBeNull();
+  });
+
+  it("builds a filter the query layer parses, and nothing when empty", () => {
+    expect(searchFilter("note", "rent")).toEqual(["note:like:rent"]);
+    expect(searchFilter("note", "  ")).toEqual([]);
+    expect(searchFilter(null, "rent")).toEqual([]);
+    // Not string-built: a term with a wildcard in it is handed over as-is and
+    // apps::query does the escaping.
+    expect(searchFilter("note", "50%")).toEqual(["note:like:50%"]);
+  });
+});
+
+describe("paging", () => {
+  it("pages a list but never a board", () => {
+    // A per-column count that silently means "on this page" is a number that
+    // lies, and adding the columns up is how someone finds out.
+    expect(isPaged("list")).toBe(true);
+    expect(isPaged("form")).toBe(true);
+    expect(isPaged("kanban")).toBe(false);
+    expect(isPaged("chart")).toBe(false);
+  });
+
+  it("counts from one and stops at the total", () => {
+    expect(pageWindow(0, 60, 50)).toMatchObject({ from: 1, to: 50, hasPrevious: false, hasNext: true });
+    expect(pageWindow(1, 60, 50)).toMatchObject({ from: 51, to: 60, hasPrevious: true, hasNext: false });
+  });
+
+  it("does not offer a pager that would always say the same thing", () => {
+    expect(pageWindow(0, 12, 50).needed).toBe(false);
+    expect(pageWindow(0, 50, 50).needed).toBe(false);
+    expect(pageWindow(0, 51, 50).needed).toBe(true);
+  });
+
+  it("says nothing rather than 1–0 of 0 when there is nothing", () => {
+    expect(pageWindow(0, 0, 50)).toMatchObject({ from: 0, to: 0, hasNext: false, needed: false });
   });
 });
 
