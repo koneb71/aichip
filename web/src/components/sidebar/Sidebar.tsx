@@ -15,6 +15,7 @@ const NAV = [
   { to: "/activity", label: "Activity", icon: "◈", end: false },
   { to: "/agents", label: "Agents", icon: "◉", end: false },
   { to: "/teams", label: "Teams", icon: "◫", end: false },
+  { to: "/apps", label: "Apps", icon: "◳", end: false },
   { to: "/knowledge", label: "Knowledge", icon: "▦", end: false },
   { to: "/connections", label: "Connections", icon: "⚯", end: false },
   { to: "/settings", label: "Settings", icon: "⚙", end: false },

@@ -10,7 +10,7 @@
 //! for every type is one path to get right, and it keeps a money column off the
 //! floating-point round trip that `numeric`-as-a-JSON-number would force.
 
-use super::manifest::{FieldType, Manifest, Model, RESERVED_FIELDS};
+use super::manifest::{Field, FieldType, Manifest, Model, RESERVED_FIELDS};
 use super::query::{self, Query, Raw};
 use crate::Db;
 use serde_json::{Map, Value};
@@ -157,6 +157,100 @@ fn is_decimal(text: &str) -> bool {
         && frac.chars().all(|c| c.is_ascii_digit())
 }
 
+/// The clock, as a string the expression language can hand back.
+fn now_text() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Fill in defaults and computed fields.
+///
+/// Defaults only apply on the way in and only when the caller said nothing;
+/// computed fields are recalculated on **every** write, which is what makes
+/// them trustworthy — a total that is only right when someone remembers to
+/// resend it is not a total.
+///
+/// A computed value that comes out null is stored as null rather than refused.
+/// A row whose amount is not filled in yet has no total yet, and that is an
+/// ordinary state rather than a broken manifest.
+fn derive(
+    model: &Model,
+    values: &mut Vec<(String, String)>,
+    existing: Option<&Value>,
+    creating: bool,
+) -> Result<(), DataError> {
+    let now = now_text();
+
+    if creating {
+        for field in &model.fields {
+            if field.compute.is_some() || values.iter().any(|(n, _)| n == &field.name) {
+                continue;
+            }
+            let Some(src) = &field.default else { continue };
+            let value = super::expr::run(src, &super::expr::Record::new(), &now)
+                .map_err(|e| DataError(format!("the default for \"{}\" failed: {e}", field.name)))?;
+            if value != super::expr::Val::Null {
+                values.push((field.name.clone(), value.to_string()));
+            }
+        }
+    }
+
+    // The record a compute sees: what is already stored, overlaid with what is
+    // being written now. Both, because an update naming only `qty` must still
+    // be able to compute `amount * qty` from the amount already there.
+    let computed: Vec<&Field> = model.fields.iter().filter(|f| f.compute.is_some()).collect();
+    if computed.is_empty() {
+        return Ok(());
+    }
+    let mut record = super::expr::Record::new();
+    if let Some(Value::Object(row)) = existing {
+        for (k, v) in row {
+            record.insert(k.clone(), coerce(model, k, v));
+        }
+    }
+    for (name, text) in values.iter() {
+        record.insert(name.clone(), text_as_val(model, name, text));
+    }
+
+    for field in computed {
+        let src = field.compute.as_ref().expect("filtered to computed fields");
+        let value = super::expr::run(src, &record, &now)
+            .map_err(|e| DataError(format!("\"{}\" could not be worked out: {e}", field.name)))?;
+        values.retain(|(n, _)| n != &field.name);
+        if value != super::expr::Val::Null {
+            values.push((field.name.clone(), value.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// A stored JSON value as the expression language sees it.
+///
+/// Decimals come back from the projection as strings so no digits are lost on
+/// the wire; arithmetic needs them as numbers again.
+fn coerce(model: &Model, name: &str, v: &Value) -> super::expr::Val {
+    let numeric = model
+        .field(name)
+        .is_some_and(|f| matches!(f.ty, FieldType::Decimal));
+    match (numeric, v) {
+        (true, Value::String(s)) => s
+            .parse::<f64>()
+            .map(super::expr::Val::Num)
+            .unwrap_or(super::expr::Val::Null),
+        _ => super::expr::Val::from_json(v),
+    }
+}
+
+fn text_as_val(model: &Model, name: &str, text: &str) -> super::expr::Val {
+    match model.field(name).map(|f| &f.ty) {
+        Some(FieldType::Int | FieldType::Decimal) => text
+            .parse::<f64>()
+            .map(super::expr::Val::Num)
+            .unwrap_or(super::expr::Val::Null),
+        Some(FieldType::Bool) => super::expr::Val::Bool(text == "true"),
+        _ => super::expr::Val::Str(text.to_string()),
+    }
+}
+
 fn missing_required(model: &Model, present: &[(String, String)]) -> Option<String> {
     model
         .fields
@@ -242,7 +336,8 @@ pub async fn create(
     model: &Model,
     body: &Map<String, Value>,
 ) -> Result<Value, DataError> {
-    let values = writable(model, body)?;
+    let mut values = writable(model, body)?;
+    derive(model, &mut values, None, true)?;
     if let Some(name) = missing_required(model, &values) {
         return bad(format!("\"{name}\" is required"));
     }
@@ -297,10 +392,17 @@ pub async fn update(
     id: Uuid,
     body: &Map<String, Value>,
 ) -> Result<Option<Value>, DataError> {
-    let values = writable(model, body)?;
+    let mut values = writable(model, body)?;
     if values.is_empty() {
         return get(db, schema, model, id).await;
     }
+    // The row as it stands, so a compute can see the fields this write is not
+    // touching. Read before the change, since that is what its inputs are.
+    let existing = get(db, schema, model, id).await?;
+    if existing.is_none() {
+        return Ok(None);
+    }
+    derive(model, &mut values, existing.as_ref(), false)?;
 
     let mut sets: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();

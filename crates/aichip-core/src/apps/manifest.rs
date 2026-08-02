@@ -412,6 +412,11 @@ pub fn parse(yaml: &str) -> R<Manifest> {
         menu,
     };
 
+    // Expressions are checked here rather than at the first write, for the same
+    // reason as everything else in this function: a manifest that installs and
+    // then fails the moment someone uses it has told them nothing useful.
+    check_expressions(&manifest)?;
+
     // An action needing a permission the manifest never requested would fail at
     // the click, having looked fine at install. Catch it at the read instead.
     for needed in manifest.needed_scopes() {
@@ -427,6 +432,125 @@ pub fn parse(yaml: &str) -> R<Manifest> {
     }
 
     Ok(manifest)
+}
+
+/// Every expression parses, and only names fields that exist.
+///
+/// A `compute` referring to a field nobody declared is the interesting case: it
+/// evaluates to null rather than failing, so without this check the symptom is
+/// a column that is silently always empty — the hardest kind of wrong to notice.
+fn check_expressions(m: &Manifest) -> R<()> {
+    let check = |src: &str, at: String, model: Option<&Model>| -> R<()> {
+        let ast = super::expr::parse(src).map_err(|e| ManifestError::new(&at, e.0))?;
+        if let Some(model) = model {
+            for name in super::expr::fields_used(&ast) {
+                if RESERVED_FIELDS.contains(&name.as_str()) || model.field(&name).is_some() {
+                    continue;
+                }
+                return Err(ManifestError::new(
+                    &at,
+                    format!("\"{name}\" is not a field of \"{}\"", model.name),
+                ));
+            }
+        }
+        Ok(())
+    };
+
+    for model in &m.models {
+        for field in &model.fields {
+            let at = format!("models.{}.fields.{}", model.name, field.name);
+            if let Some(src) = &field.compute {
+                check(src, format!("{at}.compute"), Some(model))?;
+            }
+            if let Some(src) = &field.default {
+                // A default is evaluated before the row exists, so it may not
+                // read the row it is about to become part of.
+                check(src, format!("{at}.default"), None)?;
+            }
+        }
+    }
+
+    for action in &m.actions {
+        if let Some(src) = &action.show_if {
+            check(src, format!("actions.{}.show_if", action.name), None)?;
+        }
+    }
+
+    // A chart's measure is its own tiny grammar rather than a general
+    // expression: `sum(total)` reduces a whole column, which is a different
+    // thing from anything the expression language does to one record, and
+    // conflating them would mean teaching it about aggregation.
+    for view in &m.views {
+        if let ViewSpec::Chart { measure, .. } = &view.spec {
+            let model = m.model(&view.model).expect("views resolve their model at parse");
+            parse_measure(measure)
+                .and_then(|(_, field)| match field {
+                    None => Ok(()),
+                    Some(f) if RESERVED_FIELDS.contains(&f.as_str()) => Ok(()),
+                    Some(f) if model.field(&f).is_some() => Ok(()),
+                    Some(f) => Err(format!("\"{f}\" is not a field of \"{}\"", model.name)),
+                })
+                .map_err(|e| ManifestError::new(format!("views.{}.measure", view.name), e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Read `sum(total)`, `count()` and friends.
+///
+/// Returns the aggregate and the field it reduces — `None` for `count()`, which
+/// counts rows rather than values.
+pub fn parse_measure(src: &str) -> Result<(Agg, Option<String>), String> {
+    let trimmed = src.trim();
+    let Some((name, rest)) = trimmed.split_once('(') else {
+        return Err(format!(
+            "\"{trimmed}\" is not a measure — expected count(), sum(field), \
+             avg(field), min(field) or max(field)"
+        ));
+    };
+    let Some(inner) = rest.strip_suffix(')') else {
+        return Err(format!("\"{trimmed}\" is missing its closing bracket"));
+    };
+    let agg = Agg::parse(name.trim())
+        .ok_or_else(|| format!("\"{}\" is not one of count, sum, avg, min, max", name.trim()))?;
+    let field = inner.trim();
+    match (agg, field.is_empty()) {
+        (Agg::Count, _) => Ok((agg, (!field.is_empty()).then(|| field.to_string()))),
+        (_, true) => Err(format!("{} needs a field to add up", agg.as_str())),
+        (_, false) => Ok((agg, Some(field.to_string()))),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Agg {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl Agg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "count" => Self::Count,
+            "sum" => Self::Sum,
+            "avg" => Self::Avg,
+            "min" => Self::Min,
+            "max" => Self::Max,
+            _ => return None,
+        })
+    }
 }
 
 fn parse_scopes(root: &Mapping) -> R<Vec<Scope>> {

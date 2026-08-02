@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
             "/apps/{id}/data/{model}/{row}",
             get(row).patch(change_row).delete(drop_row),
         )
+        .route("/apps/{id}/chart/{view}", get(chart))
 }
 
 fn plan_json(plan: &apps::PendingPlan) -> Value {
@@ -82,6 +83,13 @@ async fn list(
     Ok(Json(json!({ "apps": apps.iter().map(app_json).collect::<Vec<_>>() })))
 }
 
+/// One app, with everything a screen needs to draw it.
+///
+/// The parsed manifest travels alongside the text, so the browser never has to
+/// read YAML and cannot end up with a different idea of what the app declares
+/// than the server has. A manifest that no longer parses still returns the app
+/// — with the error — because the way out of a broken manifest is the editor,
+/// and a 500 would take that away.
 async fn one(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -89,6 +97,15 @@ async fn one(
     let app = load(&state, id).await?;
     let mut body = app_json(&app);
     body["manifest"] = json!(app.manifest);
+    match app.parsed() {
+        Ok(parsed) => body["declares"] = apps::render::manifest_json(&parsed),
+        Err(e) => body["manifestError"] = json!(e.to_string()),
+    }
+    body["pending"] = apps::pending_plan(&state.db, id)
+        .await
+        .map_err(internal)?
+        .as_ref()
+        .map_or(Value::Null, plan_json);
     Ok(Json(body))
 }
 
@@ -330,6 +347,40 @@ async fn drop_row(
     } else {
         Err((StatusCode::NOT_FOUND, "no such row".into()))
     }
+}
+
+/// The buckets behind a chart view.
+///
+/// Grouped in Postgres. A year of entries drawn as twelve bars should send
+/// twelve numbers, not a year of entries.
+async fn chart(
+    State(state): State<AppState>,
+    Path((id, view)): Path<(Uuid, String)>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    let parsed = app.parsed().map_err(bad_manifest)?;
+    let view = parsed
+        .view(&view)
+        .ok_or((StatusCode::NOT_FOUND, "no such view".to_string()))?;
+    let apps::manifest::ViewSpec::Chart { group_by, measure, .. } = &view.spec else {
+        return Err((StatusCode::BAD_REQUEST, "that view is not a chart".into()));
+    };
+    let model = parsed
+        .model(&view.model)
+        .ok_or((StatusCode::NOT_FOUND, "no such model".to_string()))?;
+
+    let buckets = apps::render::chart(
+        &state.db,
+        &app.schema,
+        model,
+        group_by,
+        measure,
+        &raw_query(pairs),
+    )
+    .await
+    .map_err(bad_data)?;
+    Ok(Json(json!({ "buckets": buckets })))
 }
 
 async fn load(state: &AppState, id: Uuid) -> Result<apps::App, ApiError> {

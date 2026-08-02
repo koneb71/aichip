@@ -820,6 +820,127 @@ export interface FsListing {
   dirs: { name: string; path: string; isGitRepo: boolean }[];
 }
 
+// ── Apps ────────────────────────────────────────────────────────────────────
+
+/** The closed set of field types a manifest may declare. `ref:<model>` too. */
+export type AppFieldType =
+  | "text"
+  | "int"
+  | "decimal"
+  | "bool"
+  | "date"
+  | "datetime"
+  | "json"
+  | string;
+
+export interface AppField {
+  name: string;
+  label: string | null;
+  type: AppFieldType;
+  required: boolean;
+  /** Worked out from other fields on every save, so a form must not offer it. */
+  computed: boolean;
+  hasDefault: boolean;
+}
+
+export interface AppModel {
+  name: string;
+  /** In declaration order, which is the order a form shows them in. */
+  fields: AppField[];
+}
+
+export type AppViewKind = "list" | "form" | "kanban" | "chart";
+
+export interface AppView {
+  name: string;
+  kind: AppViewKind;
+  model: string;
+  spec: {
+    columns?: string[];
+    sort?: { field: string; descending: boolean } | null;
+    groups?: string[][];
+    buttons?: string[];
+    groupBy?: string;
+    title?: string;
+    fields?: string[];
+    shape?: "bar" | "line" | "pie";
+    measure?: string;
+  };
+}
+
+export interface AppAction {
+  name: string;
+  label: string;
+  /** An expression the browser evaluates; see `lib/expr.ts`. */
+  showIf: string | null;
+  steps: { kind: string; scope: string | null }[];
+}
+
+export interface AppManifest {
+  name: string;
+  icon: string;
+  summary: string;
+  runtime: "module" | "node" | "static";
+  scopes: string[];
+  models: AppModel[];
+  views: AppView[];
+  actions: AppAction[];
+  menu: { label: string; view: string }[];
+}
+
+export interface App {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  slug: string;
+  name: string;
+  icon: string;
+  summary: string;
+  brief: string;
+  runtime: "module" | "node" | "static";
+  /** Switched on. Off keeps every row — only uninstalling drops data. */
+  active: boolean;
+  path: string;
+}
+
+export interface SchemaStatement {
+  sql: string;
+  /** True when running it loses something already stored. */
+  destructive: boolean;
+  /** A sentence for the person being asked, in terms of effect. */
+  why: string;
+}
+
+export interface SchemaPlan {
+  id: string;
+  statements: SchemaStatement[];
+}
+
+export interface AppDetail extends App {
+  manifest: string;
+  /** Absent when the manifest no longer parses — `manifestError` says why. */
+  declares?: AppManifest;
+  manifestError?: string;
+  pending: SchemaPlan | null;
+}
+
+/** A row, as the server projects it. Decimals arrive as strings. */
+export type AppRow = Record<string, unknown>;
+
+export interface RowQuery {
+  /** `field:op:value`, repeatable. Never SQL — see `apps::query` in the core. */
+  where?: string[];
+  order?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ChartBucket {
+  bucket: string | null;
+  /** Text, so a summed decimal keeps its digits. */
+  value: string | null;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
@@ -1530,6 +1651,68 @@ export const api = {
       effort: opts.effort ?? undefined,
       attachment_ids: opts.attachmentIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
+
+  // Apps
+  apps: (workspaceId?: string) =>
+    fetch("/api/apps" + (workspaceId ? `?workspace_id=${workspaceId}` : "")).then((r) =>
+      json<{ apps: App[] }>(r),
+    ),
+  app: (id: string) => fetch(`/api/apps/${id}`).then((r) => json<AppDetail>(r)),
+  installApp: (workspaceId: string, manifest: string, brief = "") =>
+    post("/api/apps", { workspace_id: workspaceId, manifest, brief }).then((r) =>
+      json<App>(r),
+    ),
+  setAppManifest: (id: string, manifest: string) =>
+    fetch(`/api/apps/${id}/manifest`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest }),
+    }).then((r) => json<AppDetail>(r)),
+  setAppActive: (id: string, active: boolean) =>
+    post(`/api/apps/${id}/active`, { active }).then((r) => json<{ active: boolean }>(r)),
+  uninstallApp: (id: string) =>
+    fetch(`/api/apps/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
+
+  appSchemaPlan: (id: string) =>
+    fetch(`/api/apps/${id}/schema`).then((r) => json<{ pending: SchemaPlan | null }>(r)),
+  applyAppSchema: (id: string, planId: string) =>
+    post(`/api/apps/${id}/schema/apply`, { plan_id: planId }).then((r) =>
+      json<{ applied: number }>(r),
+    ),
+  discardAppSchema: (id: string, planId: string) =>
+    post(`/api/apps/${id}/schema/discard`, { plan_id: planId }).then(json),
+
+  // `where` repeats, so the query is built by hand rather than from an object —
+  // URLSearchParams keeps every value for a repeated key, a plain object does
+  // not, and losing all but the last filter would quietly return wrong rows.
+  appRows: (id: string, model: string, q: RowQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const f of q.where ?? []) params.append("where", f);
+    if (q.order) params.set("order", q.order);
+    if (q.limit !== undefined) params.set("limit", String(q.limit));
+    if (q.offset !== undefined) params.set("offset", String(q.offset));
+    const qs = params.toString();
+    return fetch(`/api/apps/${id}/data/${model}${qs ? `?${qs}` : ""}`).then((r) =>
+      json<{ rows: AppRow[]; total: number }>(r),
+    );
+  },
+  appRow: (id: string, model: string, rowId: string) =>
+    fetch(`/api/apps/${id}/data/${model}/${rowId}`).then((r) => json<AppRow>(r)),
+  addAppRow: (id: string, model: string, values: AppRow) =>
+    post(`/api/apps/${id}/data/${model}`, values).then((r) => json<AppRow>(r)),
+  changeAppRow: (id: string, model: string, rowId: string, values: AppRow) =>
+    patch(`/api/apps/${id}/data/${model}/${rowId}`, values).then((r) => json<AppRow>(r)),
+  removeAppRow: (id: string, model: string, rowId: string) =>
+    fetch(`/api/apps/${id}/data/${model}/${rowId}`, { method: "DELETE" }).then(json),
+
+  appChart: (id: string, view: string, where: string[] = []) => {
+    const params = new URLSearchParams();
+    for (const f of where) params.append("where", f);
+    const qs = params.toString();
+    return fetch(`/api/apps/${id}/chart/${view}${qs ? `?${qs}` : ""}`).then((r) =>
+      json<{ buckets: ChartBucket[] }>(r),
+    );
+  },
 };
 
 /**
