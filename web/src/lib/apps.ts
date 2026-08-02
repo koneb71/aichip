@@ -141,3 +141,61 @@ export function bucketValue(value: string | null): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 }
+
+/**
+ * Which field a search box searches.
+ *
+ * The first text column, because that is what "search" means to someone
+ * looking at a table of things with names. A model with no text at all gets no
+ * box, rather than one that could never match.
+ */
+export function searchableField(model: AppModel): string | null {
+  return model.fields.find((f) => baseType(f.type) === "text")?.name ?? null;
+}
+
+/**
+ * The filter a search term becomes.
+ *
+ * Always `like`, never string-building: `apps::query` takes `field:op:value`
+ * and does the escaping, so a term containing `%` or a quote is a term.
+ */
+export function searchFilter(field: string | null, term: string): string[] {
+  const trimmed = term.trim();
+  return field && trimmed ? [`${field}:like:${trimmed}`] : [];
+}
+
+/**
+ * Whether a view pages.
+ *
+ * A list does; a board does not. Splitting a kanban across pages breaks the
+ * one thing it is for, and a per-column count that silently means "on this
+ * page" is a number that lies.
+ */
+export function isPaged(kind: string): boolean {
+  return kind === "list" || kind === "form";
+}
+
+export interface PageWindow {
+  /** 1-indexed, inclusive, for display. */
+  from: number;
+  to: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  /** Whether a pager is worth showing at all. */
+  needed: boolean;
+}
+
+/** What the pager says and which of its buttons work. */
+export function pageWindow(page: number, total: number, size: number): PageWindow {
+  const from = total === 0 ? 0 : page * size + 1;
+  const to = Math.min((page + 1) * size, total);
+  return {
+    from,
+    to,
+    total,
+    hasPrevious: page > 0,
+    hasNext: (page + 1) * size < total,
+    needed: total > size,
+  };
+}

@@ -207,6 +207,7 @@ export default function AppPage() {
               view={view}
               // Only when there is no tab bar saying it already.
               title={tabs.length > 1 ? undefined : tabs[0]?.label}
+              onGoto={setScreen}
             />
           ) : (
             !app.manifestError && (
