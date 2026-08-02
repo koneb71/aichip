@@ -27,7 +27,7 @@
 use crate::AppState;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderName, Request, Response, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::middleware::Next;
 use sqlx::Row;
 
@@ -62,6 +62,31 @@ const HOP_BY_HOP: [&str; 8] = [
     "transfer-encoding",
     "upgrade",
 ];
+
+/// A `Set-Cookie` line with any `Domain` attribute removed.
+///
+/// Cookies ignore ports but they do not ignore domains, and a preview that
+/// sends `Domain=localhost` has its cookie sent to *every other preview* and to
+/// the dashboard — which is the exact sharing this module's distinct hostnames
+/// exist to prevent. Stripping the attribute makes the cookie host-only, so it
+/// comes back to the preview that set it and nowhere else.
+///
+/// The first `;`-separated segment is the cookie itself, never an attribute, so
+/// a cookie genuinely named `domain` survives. Everything kept is copied
+/// verbatim, spacing included: this rewrites one attribute, it does not
+/// normalise a header the browser is about to parse.
+pub fn host_only(set_cookie: &str) -> String {
+    let kept: Vec<&str> = set_cookie
+        .split(';')
+        .enumerate()
+        .filter(|(i, part)| {
+            let name = part.split('=').next().unwrap_or("").trim();
+            !(*i > 0 && name.eq_ignore_ascii_case("domain"))
+        })
+        .map(|(_, part)| part)
+        .collect();
+    kept.join(";")
+}
 
 fn forwardable(headers: &HeaderMap) -> HeaderMap {
     let mut out = HeaderMap::new();
@@ -162,8 +187,19 @@ async fn proxy(
 
     let mut out = Response::builder().status(upstream.status());
     for (name, value) in upstream.headers() {
-        if HOP_BY_HOP.contains(&name.as_str().to_ascii_lowercase().as_str()) {
+        let lower = name.as_str().to_ascii_lowercase();
+        if HOP_BY_HOP.contains(&lower.as_str()) {
             continue;
+        }
+        // The one header rewritten on the way back. A `Domain` attribute would
+        // hand this preview's cookie to every other one and to the dashboard.
+        if lower == "set-cookie" {
+            if let Ok(text) = value.to_str() {
+                if let Ok(fixed) = HeaderValue::from_str(&host_only(text)) {
+                    out = out.header(name, fixed);
+                    continue;
+                }
+            }
         }
         out = out.header(name, value);
     }
@@ -227,5 +263,30 @@ mod tests {
         // The preview's own cookies must survive, or nothing with a login works.
         assert_eq!(out.get("cookie").unwrap(), "session=abc");
         assert_eq!(out.get("accept").unwrap(), "text/html");
+    }
+
+    #[test]
+    fn a_domain_attribute_does_not_survive_the_trip_back() {
+        // The bug: `Domain=localhost` matches every subdomain, so one preview's
+        // session cookie was sent to every other preview and to the dashboard.
+        assert_eq!(
+            host_only("session=abc; Domain=localhost; Path=/"),
+            "session=abc; Path=/"
+        );
+        // Spelling it differently must not get past the check.
+        assert_eq!(host_only("a=1; domain = .localhost"), "a=1");
+        assert_eq!(host_only("a=1; DOMAIN=.LocalHost; HttpOnly"), "a=1; HttpOnly");
+    }
+
+    #[test]
+    fn everything_else_about_a_cookie_is_left_exactly_as_it_was() {
+        // Not a normaliser: attribute order and spacing reach the browser
+        // unchanged, because this rewrites one attribute and nothing else.
+        let untouched = "session=abc; Path=/; Secure; SameSite=Lax; Max-Age=600";
+        assert_eq!(host_only(untouched), untouched);
+        assert_eq!(host_only("bare"), "bare");
+        // The first segment is the cookie, never an attribute — a cookie that
+        // happens to be called `domain` is a cookie, and keeps its value.
+        assert_eq!(host_only("domain=abc; Path=/"), "domain=abc; Path=/");
     }
 }
