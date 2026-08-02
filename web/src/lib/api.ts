@@ -941,6 +941,17 @@ export interface ChartBucket {
   value: string | null;
 }
 
+/** An app a project offers under `.aichip/apps/`. */
+export interface RepoApp {
+  dir: string;
+  name: string;
+  summary: string;
+  /** Set when its manifest does not parse. Listed anyway, so it can be fixed. */
+  error: string | null;
+  /** The id of the app already installed under this name, if there is one. */
+  installedAs: string | null;
+}
+
 export interface AppGrants {
   /** What the manifest asks for. Never itself a grant. */
   requested: string[];
@@ -1726,6 +1737,17 @@ export const api = {
     patch(`/api/apps/${id}/data/${model}/${rowId}`, values).then((r) => json<AppRow>(r)),
   removeAppRow: (id: string, model: string, rowId: string) =>
     fetch(`/api/apps/${id}/data/${model}/${rowId}`, { method: "DELETE" }).then(json),
+
+  // A URL rather than a fetch: the browser's own download machinery names the
+  // file from Content-Disposition, which a blob built here would not.
+  appExportUrl: (id: string, withData: boolean) =>
+    `/api/apps/${id}/export${withData ? "?data=true" : ""}`,
+  importApp: (workspaceId: string, bundle: string) =>
+    post("/api/apps/import", { workspace_id: workspaceId, bundle }).then((r) => json<App>(r)),
+  repoApps: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/apps`).then((r) => json<{ apps: RepoApp[] }>(r)),
+  syncRepoApp: (projectId: string, dir: string) =>
+    post(`/api/projects/${projectId}/apps/sync`, { dir }).then((r) => json<App>(r)),
 
   appGrants: (id: string) => fetch(`/api/apps/${id}/grants`).then((r) => json<AppGrants>(r)),
   setAppGrants: (id: string, scopes: string[]) =>

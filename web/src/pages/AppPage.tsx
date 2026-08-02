@@ -87,6 +87,25 @@ export default function AppPage() {
             Switched off
           </span>
         )}
+        {/* Two exports, not one with a checkbox: "here, try my app" and "put
+            this on my laptop" are different sentences, and only one of them
+            means to include what is in your tables. */}
+        <a
+          href={api.appExportUrl(app.id, false)}
+          download
+          title="The app, with empty tables — what you send someone."
+          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+        >
+          Share
+        </a>
+        <a
+          href={api.appExportUrl(app.id, true)}
+          download
+          title="The app and everything in it — what you carry to another machine."
+          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+        >
+          Export with data
+        </a>
         <button
           onClick={() => setPerms((p) => !p)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"

@@ -15,6 +15,7 @@
 //! wants to store and reaches its rows through aichip, which is what keeps
 //! agent-written code away from everything it did not declare.
 
+pub mod bundle;
 pub mod data;
 pub mod expr;
 pub mod grants;
@@ -26,6 +27,7 @@ pub mod run;
 pub mod scaffold;
 pub mod schema;
 pub mod scope;
+pub mod sync;
 
 pub use manifest::{Manifest, ManifestError, Runtime};
 pub use schema::Stmt;
@@ -478,6 +480,75 @@ async fn run(db: &Db, statements: &[Stmt]) -> anyhow::Result<()> {
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// Pack an app up to go somewhere else.
+///
+/// `with_data` is the *Move* export; without it this is *Share*. The choice is
+/// the caller's rather than a default, because "here, try my app" and "put this
+/// on my laptop" are different sentences and only one of them means to include
+/// what is in your tables.
+pub async fn export(db: &Db, app: &App, with_data: bool) -> anyhow::Result<String> {
+    let parsed = app.parsed()?;
+    let ddl = schema::plan(&app.schema, &parsed.models, &[])
+        .iter()
+        .map(|s| format!("{};", s.sql))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let mut rows = Vec::new();
+    if with_data {
+        for name in bundle::model_order(&parsed.models) {
+            let Some(model) = parsed.model(&name) else { continue };
+            // Everything, in id order so two exports of an unchanged app are
+            // the same bytes and a bundle in git diffs to nothing.
+            let all = data::list(
+                db,
+                &app.schema,
+                model,
+                &query::Raw {
+                    order: Some("id".into()),
+                    limit: Some(query::MAX_LIMIT),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e.0))?;
+            rows.push((name, all));
+        }
+    }
+
+    Ok(bundle::write(&app.manifest, &parsed, &ddl, &rows))
+}
+
+/// Install an app from a bundle, rows and all.
+///
+/// The tables are derived from the manifest by the ordinary install path — the
+/// `schema` in a bundle is documentation and is never executed, so a bundle
+/// someone hand-edited cannot introduce a statement no manifest asked for.
+pub async fn import(db: &Db, workspace_id: Uuid, text: &str) -> anyhow::Result<App> {
+    let parsed_bundle = bundle::read(text)?;
+    // Parsed here so the error is the manifest parser's, naming the key, rather
+    // than a second opinion from the bundle reader.
+    let parsed = manifest::parse(&parsed_bundle.manifest)?;
+    let app = install(db, workspace_id, &parsed_bundle.manifest, "imported").await?;
+
+    for (model_name, rows) in &parsed_bundle.rows {
+        let Some(model) = parsed.model(model_name) else { continue };
+        for row in rows {
+            // Ids and timestamps are kept: a `ref:` holds the id of another
+            // row, so re-minting them would quietly break every link in the
+            // bundle. This is aichip loading its own export, not an app
+            // writing — but the values are still bound and the columns still
+            // come from the manifest.
+            if let Err(e) = data::insert_verbatim(db, &app.schema, model, row).await {
+                // One bad row should not lose the other nine hundred, and the
+                // app is already installed and usable without it.
+                tracing::warn!(app = %app.slug, model = %model_name, "skipped a row: {e}");
+            }
+        }
+    }
+    Ok(app)
 }
 
 /// Switch an app on or off.
