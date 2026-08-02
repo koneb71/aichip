@@ -72,6 +72,34 @@ Engine differences are declared in `Capabilities` (interactive permissions, stru
 
 Mid-run permission prompts flow: engine → `--permission-prompt-tool mcp__aichip__approve` → `crates/aichip-server/src/mcp/` → `PermissionBroker` parks the call and emits an event → dashboard Allow/Deny resolves the oneshot (15 min timeout → deny).
 
+### Apps
+
+An app is a **project** under `~/.aichip/apps/<slug>` (`projects.kind='app'`),
+which is what gives it worktrees, diffs and the files editor for free. The three
+places that *list* projects filter on `kind='repo'`; the spend and activity joins
+deliberately do not, because generating an app costs real money.
+
+Its manifest ([crates/aichip-core/src/apps/manifest.rs](crates/aichip-core/src/apps/manifest.rs))
+is parsed by hand, not derived: declaration order is display order, errors name
+the offending key, and unknown keys are refused rather than ignored. Field types
+and identifier charset are closed sets — those identifiers are interpolated into
+DDL, and the defence is the charset, not the quoting.
+
+Two rules that are easy to break:
+
+- **Nothing an app sends is ever an identifier.** `apps::query` looks field names
+  up among the declared fields and emits the *manifest's* copy; operators come
+  from an enum; values are always bound. Never build a fragment from request text.
+- **Additive schema changes apply; destructive ones wait.** `apps::schema::plan`
+  diffs declared models against `information_schema` — never against a registry,
+  which would drift. A plan with any destructive statement runs *nothing* and is
+  stored whole, so what a person approved is byte-for-byte what executes.
+
+The expression language exists twice, in `apps/expr.rs` and `web/src/lib/expr.ts`,
+because `show_if` cannot afford a round trip and computed values cannot be
+decided by a browser. `crates/aichip-core/src/apps/expr_cases.json` is the
+specification and both test suites read it — add a case there, not to one side.
+
 ### Worktrees
 
 Board tasks run in an isolated git worktree so an agent never touches the working copy, and that worktree produces the reviewable diff. A project that can't have its own repo (e.g. nested inside another) edits in place — no worktree, no diff, no undo, and full-auto is refused there regardless of project settings.

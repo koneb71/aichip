@@ -18,6 +18,9 @@ login. It gives you:
   step, and pit two against each other on the same brief in a bake-off. An engine that isn't
   installed is simply not offered, and one that can't honour a permission mode says so before
   you start rather than failing forty minutes in.
+- **Apps** — describe a small tool, get a manifest you can read, install it and use it in the
+  dashboard. Its models become real Postgres tables and its views become screens; nothing it
+  ships executes.
 
 ## How it stays within the terms of service
 
@@ -38,8 +41,8 @@ These four invariants are contribution rules. PRs that violate them will not be 
 
 ## Status
 
-Early development. Task board, agents, teams, chat, pipelines, scheduling, and
-prompt attachments all work end to end; see the roadmap below.
+Early development. Task board, agents, teams, chat, pipelines, scheduling,
+prompt attachments and apps all work end to end; see the roadmap below.
 
 ## Quick start
 
@@ -213,6 +216,95 @@ delegates it, a pipeline or debate team runs its pattern. Either way the work
 happens in the task's own worktree, so the card lands on Review and you diff
 and squash-merge it exactly like a solo task. Open the card and hit **Open team
 room** to watch or replay the conversation behind it.
+
+## Apps
+
+Everything else here changes code you already have, and lands as a diff you
+review. An app is the other thing: something you ask for, install, switch on,
+and **use**.
+
+An app is a manifest — one YAML file. Models in it become **real Postgres
+tables**; views become screens aichip's own dashboard draws. Nothing you get
+handed executes:
+
+```yaml
+name: Expenses
+icon: "▤"
+runtime: module
+
+models:
+  expense:
+    fields:
+      description: { type: text, required: true }
+      amount:      { type: decimal }
+      qty:         { type: int, default: 1 }
+      total:       { type: decimal, compute: "amount * qty" }
+      spent_on:    { type: date, default: "today()" }
+      category:    { type: text }
+    indexes: [spent_on]
+
+views:
+  list:  { columns: [spent_on, description, category, total], sort: "-spent_on" }
+  chart: { shape: bar, group_by: category, measure: "sum(total)" }
+
+menu:
+  - { label: Expenses, view: list }
+  - { label: By category, view: chart }
+```
+
+Describe what you want and an agent writes that file. It comes back **in the
+editor, not installed** — being able to read the thing before it is real is the
+entire reason an app is a declaration rather than code, and installing it for
+you would spend that and give nothing back.
+
+Field types are a closed set (`text int decimal bool date datetime json` and
+`ref:<model>`), and names are lower-case letters, digits and underscores. That
+narrowness is load bearing: these identifiers are interpolated into DDL, and the
+defence is the charset rather than the quoting. Unknown keys are refused rather
+than ignored — an agent that writes `colums:` has written a view with no
+columns, and silently rendering an empty table is worse than saying which key.
+
+### Your tables are yours
+
+Change the manifest and the tables follow, but not unconditionally. New tables,
+new columns and new indexes apply themselves, because asking about them would be
+a dialog that always gets the same answer — and a dialog that always gets the
+same answer trains people to stop reading it.
+
+Anything that **destroys** something waits, whole. A dropped column, a dropped
+table, a changed type: you get the literal SQL and a sentence saying what it
+costs, and nothing has run until you say so. What you approve is byte for byte
+what executes, because deriving it again at that point would mean running
+statements nobody saw.
+
+The comparison is against `information_schema`, not against a registry of what
+aichip thinks the schema is. A registry drifts the first time anything touches a
+table outside the code maintaining it, and then every diff is against a fiction.
+
+### Switching off is not deleting
+
+**Deactivate** takes an app out of the sidebar and keeps every row.
+**Uninstall** is the only verb that drops a schema, and it asks first. If
+deactivating ever risked data the switch would stop being used, which is the
+whole point of having one.
+
+### What an app can and cannot reach
+
+Its own tables, always — they exist because it declared them, hold only what it
+put there, and are dropped with it. Anything of *yours* is a scope the manifest
+requests and you grant, and putting a card on your board is a different grant
+from starting an agent run: filing a card is cheap, and spending money is not
+the same decision.
+
+An app never gets a database connection, and never writes SQL. It says
+`amount:gt:10`; the grammar is closed, identifiers are looked up among declared
+fields, and every value is a bound parameter. A note of `'; DROP TABLE entry; --`
+is stored, returned and matched as exactly those characters.
+
+Decimals stay text the whole way — string in, `numeric` column, string out — so
+a ledger does not lose cents to a double on its way to a browser. A number with
+more digits than a JSON number can carry is refused rather than quietly rounded,
+and the message says to send it as a string.
 
 ## Knowledge base
 

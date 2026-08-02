@@ -48,6 +48,11 @@ pub fn app(state: AppState) -> Router {
 
     router
         .layer(middleware::from_fn(reject_non_local_callers))
+        // Inside the preview proxy and outside the loopback check, so every
+        // dashboard response carries it — including the 403 above — and no
+        // proxied response does. A preview must stay framable; the dashboard
+        // must not.
+        .layer(middleware::from_fn(refuse_to_be_framed))
         // Outside the loopback check on purpose: a preview hostname is handled
         // here in full and never reaches the dashboard router, so widening what
         // `Host` values are accepted does not widen what can reach the API.
@@ -57,6 +62,36 @@ pub fn app(state: AppState) -> Router {
             preview_proxy::route_previews,
         ))
         .with_state(state)
+}
+
+/// Refuse to be displayed inside anyone else's frame.
+///
+/// aichip has no authentication, so every control on this page acts the moment
+/// it is clicked: a mid-run permission prompt's **Allow**, a Dockerfile
+/// approval, a squash-merge. Nothing stopped another page from loading the
+/// dashboard in an invisible iframe, positioning it under something innocuous,
+/// and collecting one of those clicks — the textbook clickjack, against a UI
+/// made of one-click irreversible actions.
+///
+/// Both headers, because they are not the same check: `frame-ancestors` is the
+/// one browsers actually honour now, and `X-Frame-Options` still covers what
+/// predates it. Neither reaches a preview or an app, which are *meant* to be
+/// embedded — that is what the layer's position buys.
+async fn refuse_to_be_framed(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    headers.insert(
+        axum::http::header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    res
 }
 
 /// Hosts this server will answer to, and origins whose pages may call it.

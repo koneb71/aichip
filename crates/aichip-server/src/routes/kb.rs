@@ -535,7 +535,8 @@ async fn spaces(
     let rows = sqlx::query(
         "SELECT p.id, p.name,
                 (SELECT count(*) FROM kb_articles a WHERE a.project_id = p.id) AS pages
-           FROM projects p WHERE p.workspace_id = $1 ORDER BY p.name",
+           FROM projects p
+          WHERE p.kind = 'repo' AND p.workspace_id = $1 ORDER BY p.name",
     )
     .bind(f.workspace_id)
     .fetch_all(&state.db.pool)

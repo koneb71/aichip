@@ -820,6 +820,154 @@ export interface FsListing {
   dirs: { name: string; path: string; isGitRepo: boolean }[];
 }
 
+// ── Apps ────────────────────────────────────────────────────────────────────
+
+/** The closed set of field types a manifest may declare. `ref:<model>` too. */
+export type AppFieldType =
+  | "text"
+  | "int"
+  | "decimal"
+  | "bool"
+  | "date"
+  | "datetime"
+  | "json"
+  | string;
+
+export interface AppField {
+  name: string;
+  label: string | null;
+  type: AppFieldType;
+  required: boolean;
+  /** Worked out from other fields on every save, so a form must not offer it. */
+  computed: boolean;
+  hasDefault: boolean;
+}
+
+export interface AppModel {
+  name: string;
+  /** In declaration order, which is the order a form shows them in. */
+  fields: AppField[];
+}
+
+export type AppViewKind = "list" | "form" | "kanban" | "chart";
+
+export interface AppView {
+  name: string;
+  kind: AppViewKind;
+  model: string;
+  spec: {
+    columns?: string[];
+    sort?: { field: string; descending: boolean } | null;
+    groups?: string[][];
+    buttons?: string[];
+    groupBy?: string;
+    title?: string;
+    fields?: string[];
+    shape?: "bar" | "line" | "pie";
+    measure?: string;
+  };
+}
+
+export interface AppAction {
+  name: string;
+  label: string;
+  /** An expression the browser evaluates; see `lib/expr.ts`. */
+  showIf: string | null;
+  steps: { kind: string; scope: string | null }[];
+}
+
+export interface AppManifest {
+  name: string;
+  icon: string;
+  summary: string;
+  runtime: "module" | "node" | "static";
+  scopes: string[];
+  models: AppModel[];
+  views: AppView[];
+  actions: AppAction[];
+  menu: { label: string; view: string }[];
+}
+
+export interface App {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  slug: string;
+  name: string;
+  icon: string;
+  summary: string;
+  brief: string;
+  runtime: "module" | "node" | "static";
+  /** Switched on. Off keeps every row — only uninstalling drops data. */
+  active: boolean;
+  path: string;
+}
+
+export interface SchemaStatement {
+  sql: string;
+  /** True when running it loses something already stored. */
+  destructive: boolean;
+  /** A sentence for the person being asked, in terms of effect. */
+  why: string;
+}
+
+export interface SchemaPlan {
+  id: string;
+  statements: SchemaStatement[];
+}
+
+export interface AppDetail extends App {
+  manifest: string;
+  /** Absent when the manifest no longer parses — `manifestError` says why. */
+  declares?: AppManifest;
+  manifestError?: string;
+  pending: SchemaPlan | null;
+}
+
+/** A row, as the server projects it. Decimals arrive as strings. */
+export type AppRow = Record<string, unknown>;
+
+export interface RowQuery {
+  /** `field:op:value`, repeatable. Never SQL — see `apps::query` in the core. */
+  where?: string[];
+  order?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ChartBucket {
+  bucket: string | null;
+  /** Text, so a summed decimal keeps its digits. */
+  value: string | null;
+}
+
+/** An app a project offers under `.aichip/apps/`. */
+export interface RepoApp {
+  dir: string;
+  name: string;
+  summary: string;
+  /** Set when its manifest does not parse. Listed anyway, so it can be fixed. */
+  error: string | null;
+  /** The id of the app already installed under this name, if there is one. */
+  installedAs: string | null;
+}
+
+export interface AppGrants {
+  /** What the manifest asks for. Never itself a grant. */
+  requested: string[];
+  granted: { scope: string; grantedAt: string; lastUsedAt: string | null }[];
+  /** Every scope aichip has, with a sentence each. */
+  all: { scope: string; blurb: string; write: boolean }[];
+}
+
+export interface ActionOutcome {
+  messages: string[];
+  goto: string | null;
+  deleted: boolean;
+  /** Set when a step stopped for want of a permission. Not an error. */
+  needsScope: string | null;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
@@ -1530,6 +1678,100 @@ export const api = {
       effort: opts.effort ?? undefined,
       attachment_ids: opts.attachmentIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
+
+  // Apps
+  apps: (workspaceId?: string) =>
+    fetch("/api/apps" + (workspaceId ? `?workspace_id=${workspaceId}` : "")).then((r) =>
+      json<{ apps: App[] }>(r),
+    ),
+  app: (id: string) => fetch(`/api/apps/${id}`).then((r) => json<AppDetail>(r)),
+  // Returns the manifest unsaved, with `error` set when it does not parse —
+  // the point of a declaration is that a person reads it before it is real.
+  generateApp: (description: string, engine?: string) =>
+    post("/api/apps/generate", { description, engine }).then((r) =>
+      json<{ manifest: string; error: string | null }>(r),
+    ),
+  installApp: (workspaceId: string, manifest: string, brief = "") =>
+    post("/api/apps", { workspace_id: workspaceId, manifest, brief }).then((r) =>
+      json<App>(r),
+    ),
+  setAppManifest: (id: string, manifest: string) =>
+    fetch(`/api/apps/${id}/manifest`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest }),
+    }).then((r) => json<AppDetail>(r)),
+  setAppActive: (id: string, active: boolean) =>
+    post(`/api/apps/${id}/active`, { active }).then((r) => json<{ active: boolean }>(r)),
+  uninstallApp: (id: string) =>
+    fetch(`/api/apps/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
+
+  appSchemaPlan: (id: string) =>
+    fetch(`/api/apps/${id}/schema`).then((r) => json<{ pending: SchemaPlan | null }>(r)),
+  applyAppSchema: (id: string, planId: string) =>
+    post(`/api/apps/${id}/schema/apply`, { plan_id: planId }).then((r) =>
+      json<{ applied: number }>(r),
+    ),
+  discardAppSchema: (id: string, planId: string) =>
+    post(`/api/apps/${id}/schema/discard`, { plan_id: planId }).then(json),
+
+  // `where` repeats, so the query is built by hand rather than from an object —
+  // URLSearchParams keeps every value for a repeated key, a plain object does
+  // not, and losing all but the last filter would quietly return wrong rows.
+  appRows: (id: string, model: string, q: RowQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const f of q.where ?? []) params.append("where", f);
+    if (q.order) params.set("order", q.order);
+    if (q.limit !== undefined) params.set("limit", String(q.limit));
+    if (q.offset !== undefined) params.set("offset", String(q.offset));
+    const qs = params.toString();
+    return fetch(`/api/apps/${id}/data/${model}${qs ? `?${qs}` : ""}`).then((r) =>
+      json<{ rows: AppRow[]; total: number }>(r),
+    );
+  },
+  appRow: (id: string, model: string, rowId: string) =>
+    fetch(`/api/apps/${id}/data/${model}/${rowId}`).then((r) => json<AppRow>(r)),
+  addAppRow: (id: string, model: string, values: AppRow) =>
+    post(`/api/apps/${id}/data/${model}`, values).then((r) => json<AppRow>(r)),
+  changeAppRow: (id: string, model: string, rowId: string, values: AppRow) =>
+    patch(`/api/apps/${id}/data/${model}/${rowId}`, values).then((r) => json<AppRow>(r)),
+  removeAppRow: (id: string, model: string, rowId: string) =>
+    fetch(`/api/apps/${id}/data/${model}/${rowId}`, { method: "DELETE" }).then(json),
+
+  // A URL rather than a fetch: the browser's own download machinery names the
+  // file from Content-Disposition, which a blob built here would not.
+  appExportUrl: (id: string, withData: boolean) =>
+    `/api/apps/${id}/export${withData ? "?data=true" : ""}`,
+  importApp: (workspaceId: string, bundle: string) =>
+    post("/api/apps/import", { workspace_id: workspaceId, bundle }).then((r) => json<App>(r)),
+  repoApps: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/apps`).then((r) => json<{ apps: RepoApp[] }>(r)),
+  syncRepoApp: (projectId: string, dir: string) =>
+    post(`/api/projects/${projectId}/apps/sync`, { dir }).then((r) => json<App>(r)),
+
+  appGrants: (id: string) => fetch(`/api/apps/${id}/grants`).then((r) => json<AppGrants>(r)),
+  setAppGrants: (id: string, scopes: string[]) =>
+    fetch(`/api/apps/${id}/grants`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scopes }),
+    }).then((r) => json<{ granted: string[] }>(r)),
+  // A step needing an ungranted scope comes back as `needsScope` rather than
+  // an error: it is something the person is allowed to fix, so the screen
+  // offers the grant instead of a complaint.
+  runAppAction: (id: string, action: string, model: string, row?: string) =>
+    post(`/api/apps/${id}/actions/${action}`, { model, row }).then((r) =>
+      json<ActionOutcome>(r),
+    ),
+
+  appChart: (id: string, view: string, where: string[] = []) => {
+    const params = new URLSearchParams();
+    for (const f of where) params.append("where", f);
+    const qs = params.toString();
+    return fetch(`/api/apps/${id}/chart/${view}${qs ? `?${qs}` : ""}`).then((r) =>
+      json<{ buckets: ChartBucket[] }>(r),
+    );
+  },
 };
 
 /**
