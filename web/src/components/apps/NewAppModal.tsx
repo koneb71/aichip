@@ -53,6 +53,33 @@ export function NewAppModal({
   const [brief, setBrief] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [writing, setWriting] = useState(false);
+
+  /**
+   * Ask an agent for a manifest, and put it in the box rather than installing
+   * it. Reading the thing before it becomes real is the whole reason an app is
+   * a declaration instead of code.
+   */
+  const generate = async () => {
+    if (!brief.trim()) {
+      setError("Say what the app is for first.");
+      return;
+    }
+    setWriting(true);
+    setError(null);
+    try {
+      const r = await api.generateApp(brief.trim());
+      setManifest(r.manifest);
+      // A manifest that does not parse still lands in the box, with the
+      // parser's complaint above it: the fix is usually one line, and
+      // throwing the draft away to regenerate costs another call.
+      setError(r.error);
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setWriting(false);
+    }
+  };
 
   const install = async () => {
     setBusy(true);
@@ -90,17 +117,30 @@ export function NewAppModal({
           here executes.
         </p>
 
-        <label className="mt-4 block">
+        <div className="mt-4">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
             What is it for
           </span>
-          <input
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            placeholder="track my spending by category"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
-          />
-        </label>
+          <div className="flex gap-2">
+            <input
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !writing) generate();
+              }}
+              placeholder="track my spending by category"
+              className="flex-1 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
+            />
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={generate}
+              disabled={writing || busy}
+              className="shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-line/40 disabled:opacity-50"
+            >
+              {writing ? "Writing…" : "Write it for me"}
+            </motion.button>
+          </div>
+        </div>
 
         <label className="mt-3 flex min-h-0 flex-1 flex-col">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
