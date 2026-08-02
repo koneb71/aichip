@@ -1,5 +1,10 @@
 import { TreePage } from "./kbTree";
 export type Tier = "easy" | "medium" | "complex";
+/**
+ * What a person picked for a card, which is not the same as what a run gets.
+ * `auto` means aichip decides per run and records which tier it chose and why.
+ */
+export type TierChoice = Tier | "auto";
 
 export interface Workspace {
   id: string;
@@ -34,7 +39,17 @@ export interface PermissionSettings {
 export interface Task {
   id: string;
   title: string;
-  modelTier: Tier;
+  /** What was picked. `auto` means the tier is decided per run. */
+  modelTier: TierChoice;
+  /** True when `modelTier` is `auto` and no tier is settled until a run. */
+  tierIsAuto: boolean;
+  /** The tier the latest run actually used. Null before the first run. */
+  tierResolved: Tier | null;
+  /**
+   * Why aichip picked that tier, when aichip picked it. Null when a person
+   * chose — a choice that was already explicit needs no explanation.
+   */
+  tierReason: string | null;
   boardColumn: "backlog" | "running" | "review" | "done";
   /** Manual kanban ordering within a column; smaller sorts first. */
   position: number;
@@ -940,7 +955,8 @@ export const api = {
     project_id: string;
     title: string;
     prompt: string;
-    model_tier: Tier;
+    /** "auto" included — the card stores the choice, not the resolved tier. */
+    model_tier: TierChoice;
     start: boolean;
     agent_id?: string | null;
     team_id?: string | null;
@@ -969,7 +985,8 @@ export const api = {
       position?: number;
       engine?: string;
       plan_first?: boolean;
-      model_tier?: Tier;
+      /** "auto" included — a card may hand the tier choice back to aichip. */
+      model_tier?: TierChoice;
       /**
        * Three states, and JSON gives us all three: omit the key to leave it
        * alone, send null to return the card to inheriting, send a value to pin
@@ -1514,6 +1531,23 @@ export const api = {
       attachment_ids: opts.attachmentIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
 };
+
+/**
+ * The tier to colour and label a card with.
+ *
+ * An `auto` card has no tier of its own until it runs, so the last run's
+ * resolved tier stands in. Before the first run there is genuinely nothing to
+ * show, and Medium is the honest placeholder — it is what the card would get
+ * if nothing about it stood out. Callers that need to say "not settled yet"
+ * should read `tierIsAuto` rather than inferring it from this.
+ */
+export function displayTier(t: {
+  modelTier: TierChoice;
+  tierResolved?: Tier | null;
+}): Tier {
+  if (t.modelTier !== "auto") return t.modelTier;
+  return t.tierResolved ?? "medium";
+}
 
 export const tierColor: Record<Tier, string> = {
   easy: "var(--color-tier-easy)",
