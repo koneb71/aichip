@@ -57,7 +57,8 @@ async fn search(
 
     let projects = sqlx::query(
         "SELECT id, name, path FROM projects
-         WHERE workspace_id=$1 AND (name ILIKE $2 ESCAPE '\\' OR path ILIKE $2 ESCAPE '\\')
+         WHERE kind = 'repo' AND workspace_id=$1
+           AND (name ILIKE $2 ESCAPE '\\' OR path ILIKE $2 ESCAPE '\\')
          ORDER BY created_at DESC LIMIT $3",
     )
     .bind(sq.workspace_id)
