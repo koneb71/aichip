@@ -22,6 +22,20 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{id}", get(one).delete(uninstall))
         .route("/apps/{id}/manifest", put(set_manifest))
         .route("/apps/{id}/active", post(set_active))
+        .route("/apps/{id}/schema", get(schema_plan))
+        .route("/apps/{id}/schema/apply", post(apply_schema))
+        .route("/apps/{id}/schema/discard", post(discard_schema))
+}
+
+fn plan_json(plan: &apps::PendingPlan) -> Value {
+    json!({
+        "id": plan.id,
+        "statements": plan.statements.iter().map(|s| json!({
+            "sql": s.sql,
+            "destructive": s.destructive,
+            "why": s.why,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn app_json(app: &apps::App) -> Value {
@@ -107,13 +121,62 @@ async fn set_manifest(
     Json(body): Json<SetManifest>,
 ) -> Result<Json<Value>, ApiError> {
     let app = load(&state, id).await?;
-    apps::set_manifest(&state.db, &app, &body.manifest)
+    let (_, outcome) = apps::set_manifest(&state.db, &app, &body.manifest)
         .await
         .map_err(bad_manifest)?;
     let app = load(&state, id).await?;
     let mut out = app_json(&app);
     out["manifest"] = json!(app.manifest);
+    // The caller needs to know whether the tables followed. A manifest that
+    // saved but whose columns are waiting on approval looks identical
+    // otherwise, and the app would appear to have changed when it has not.
+    out["applied"] = json!(outcome.applied.len());
+    out["pending"] = outcome.pending.as_ref().map_or(Value::Null, plan_json);
     Ok(Json(out))
+}
+
+/// The migration this app is waiting on, if any.
+async fn schema_plan(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    load(&state, id).await?;
+    let pending = apps::pending_plan(&state.db, id).await.map_err(internal)?;
+    Ok(Json(json!({ "pending": pending.as_ref().map_or(Value::Null, plan_json) })))
+}
+
+#[derive(Deserialize)]
+struct PlanId {
+    plan_id: Uuid,
+}
+
+/// Run a migration a person has read.
+///
+/// The plan id is required rather than "whatever is pending", so approving a
+/// screen someone has been looking at cannot silently apply a different
+/// migration that replaced it while they read.
+async fn apply_schema(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PlanId>,
+) -> Result<Json<Value>, ApiError> {
+    load(&state, id).await?;
+    let applied = apps::apply_plan(&state.db, body.plan_id)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({ "applied": applied.len() })))
+}
+
+async fn discard_schema(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PlanId>,
+) -> Result<Json<Value>, ApiError> {
+    load(&state, id).await?;
+    apps::discard_plan(&state.db, body.plan_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
