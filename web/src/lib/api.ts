@@ -676,6 +676,58 @@ export interface Activity {
   };
 }
 
+/** One row of a spend breakdown — a project, a tier, a pattern, whatever. */
+export interface SpendSlice {
+  key: string;
+  costUsd: number;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** Median, not mean — one runaway run shouldn't set the expectation. */
+  medianUsd: number | null;
+}
+
+export interface SpendDay {
+  day: string;
+  costUsd: number;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+}
+
+export interface SpendTotals {
+  costUsd: number;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** Runs whose counters include estimates nothing reconciled. */
+  provisionalRuns: number;
+  /** Runs that spent tokens but whose engine never reported a price. */
+  unpricedRuns: number;
+}
+
+/** Which ways the spend can be sliced. Mirrors the server's dimension list. */
+export type SpendDimension = "project" | "engine" | "model" | "tier" | "pattern";
+
+export interface Spend {
+  days: number;
+  totals: SpendTotals;
+  /**
+   * Share of everything sent that was served from cache, or null when nothing
+   * has been sent. Null and zero are different facts: "no runs yet" is not
+   * "every request missed", and rendering both as 0% would say the cache is
+   * broken on a fresh install.
+   */
+  cacheHitRate: number | null;
+  byDay: SpendDay[];
+  breakdowns: Record<SpendDimension, SpendSlice[]>;
+}
+
 /** Which model each complexity tier routes to, plus what may be chosen. */
 /** One engine's tier routing, as the settings page edits it. */
 export interface EngineModels {
@@ -1232,6 +1284,16 @@ export const api = {
     ),
   teamEstimate: (teamId: string) =>
     fetch(`/api/teams/${teamId}/estimate`).then((r) => json<TeamEstimate>(r)),
+
+  /**
+   * Where the tokens went. Deliberately not folded into `activity()`, which is
+   * polled every few seconds — this is fetched when someone opens the page.
+   */
+  spend: (workspaceId?: string, days = 30) => {
+    const q = new URLSearchParams({ days: String(days) });
+    if (workspaceId) q.set("workspace_id", workspaceId);
+    return fetch(`/api/spend?${q}`).then((r) => json<Spend>(r));
+  },
 
   // agents
   agents: (workspaceId: string) =>
