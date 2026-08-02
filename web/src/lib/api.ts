@@ -941,6 +941,22 @@ export interface ChartBucket {
   value: string | null;
 }
 
+export interface AppGrants {
+  /** What the manifest asks for. Never itself a grant. */
+  requested: string[];
+  granted: { scope: string; grantedAt: string; lastUsedAt: string | null }[];
+  /** Every scope aichip has, with a sentence each. */
+  all: { scope: string; blurb: string; write: boolean }[];
+}
+
+export interface ActionOutcome {
+  messages: string[];
+  goto: string | null;
+  deleted: boolean;
+  /** Set when a step stopped for want of a permission. Not an error. */
+  needsScope: string | null;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
@@ -1710,6 +1726,21 @@ export const api = {
     patch(`/api/apps/${id}/data/${model}/${rowId}`, values).then((r) => json<AppRow>(r)),
   removeAppRow: (id: string, model: string, rowId: string) =>
     fetch(`/api/apps/${id}/data/${model}/${rowId}`, { method: "DELETE" }).then(json),
+
+  appGrants: (id: string) => fetch(`/api/apps/${id}/grants`).then((r) => json<AppGrants>(r)),
+  setAppGrants: (id: string, scopes: string[]) =>
+    fetch(`/api/apps/${id}/grants`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scopes }),
+    }).then((r) => json<{ granted: string[] }>(r)),
+  // A step needing an ungranted scope comes back as `needsScope` rather than
+  // an error: it is something the person is allowed to fix, so the screen
+  // offers the grant instead of a complaint.
+  runAppAction: (id: string, action: string, model: string, row?: string) =>
+    post(`/api/apps/${id}/actions/${action}`, { model, row }).then((r) =>
+      json<ActionOutcome>(r),
+    ),
 
   appChart: (id: string, view: string, where: string[] = []) => {
     const params = new URLSearchParams();

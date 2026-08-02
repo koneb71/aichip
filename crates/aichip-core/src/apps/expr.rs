@@ -671,3 +671,4 @@ mod tests {
         assert!(e.0.contains("coalesce"), "{e}");
     }
 }
+

@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, type AppDetail } from "../lib/api";
 import { AppView } from "../components/apps/AppView";
 import { SchemaGate } from "../components/apps/SchemaGate";
+import { ScopeGrant } from "../components/apps/ScopeGrant";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
@@ -12,6 +13,7 @@ export default function AppPage() {
   const [app, setApp] = useState<AppDetail | null>(null);
   const [screen, setScreen] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [perms, setPerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -86,6 +88,12 @@ export default function AppPage() {
           </span>
         )}
         <button
+          onClick={() => setPerms((p) => !p)}
+          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+        >
+          Permissions
+        </button>
+        <button
           onClick={() => setEditing(editing === null ? app.manifest : null)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
         >
@@ -101,6 +109,12 @@ export default function AppPage() {
 
       {app.pending && (
         <SchemaGate appId={app.id} plan={app.pending} onDone={refresh} />
+      )}
+
+      {perms && (
+        <div className="mb-4">
+          <ScopeGrant appId={app.id} />
+        </div>
       )}
 
       {app.manifestError && (

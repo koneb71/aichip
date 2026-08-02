@@ -309,6 +309,8 @@ function RowEditor({
   const [draft, setDraft] = useState<AppRow>(row ?? {});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notices, setNotices] = useState<string[]>([]);
+  const [needsScope, setNeedsScope] = useState<string | null>(null);
 
   const form = manifest.views.find((v) => v.kind === "form" && v.model === model.name) ?? view;
   const groups = formRows(model, form);
@@ -332,6 +334,34 @@ function RowEditor({
         await api.addAppRow(app.id, model.name, values);
       }
       onSaved();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Press a declared button.
+   *
+   * A missing permission is not treated as a failure: it comes back as
+   * `needsScope`, which is a thing the person can grant, so it gets its own
+   * note rather than the red box errors use.
+   */
+  const press = async (name: string) => {
+    if (!row?.id) return;
+    setBusy(true);
+    setError(null);
+    setNeedsScope(null);
+    setNotices([]);
+    try {
+      const out = await api.runAppAction(app.id, name, model.name, String(row.id));
+      setNeedsScope(out.needsScope);
+      setNotices(out.messages);
+      // A step that deleted or changed the record makes what is on screen
+      // stale, so the list is what should be looked at next.
+      if (out.deleted) onSaved();
+      else if (out.messages.length === 0 && !out.needsScope) onSaved();
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
     } finally {
@@ -394,23 +424,37 @@ function RowEditor({
             expression runs here, in the browser, which is why there are two
             implementations of the language and one shared corpus. */}
         {(form.spec.buttons ?? []).length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-3">
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3">
             {(form.spec.buttons ?? []).map((name) => {
               const action = manifest.actions.find((a) => a.name === name);
               if (!action || !showIf(action.showIf, record, now)) return null;
               return (
-                <button
+                <motion.button
                   key={name}
-                  disabled
-                  title="Actions arrive with the next slice."
-                  className="rounded-lg border border-line px-2 py-1 text-xs opacity-50"
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => press(action.name)}
+                  disabled={busy || !row?.id}
+                  title={row?.id ? undefined : "Save the record first."}
+                  className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
                 >
                   {action.label}
-                </button>
+                </motion.button>
               );
             })}
           </div>
         )}
+
+        {needsScope && (
+          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            That button needs the <span className="font-mono">{needsScope}</span> permission,
+            which this app does not have. Grant it under Permissions and try again.
+          </div>
+        )}
+        {notices.map((m, i) => (
+          <div key={i} className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-xs">
+            {m}
+          </div>
+        ))}
 
         {error && (
           <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
