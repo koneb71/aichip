@@ -15,6 +15,69 @@ pub enum ModelTier {
     Complex,
 }
 
+/// What a person picked, which is not the same as what a run gets.
+///
+/// [`ModelTier`] answers "which model"; this answers "who decides". They are
+/// kept apart for a concrete reason: [`TierMapping::model_for`] falls back to
+/// `claude-opus-5` for a tier it has no entry for, so an `Auto` variant added
+/// to `ModelTier` would resolve to the *most expensive* model every time it
+/// reached a mapping — the exact outcome automatic routing exists to prevent.
+/// Keeping `ModelTier` closed at three real tiers means `auto` cannot reach
+/// `model_for` at all; it has to be resolved first.
+///
+/// Stored as plain text in the same columns as a tier (`tasks.model_tier`,
+/// `agents.model_tier`, `runs.tier_override`), so nothing needed a migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TierChoice {
+    /// Let aichip pick per run, from what it can see about the work.
+    Auto,
+    Easy,
+    Medium,
+    Complex,
+}
+
+impl TierChoice {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" => Some(Self::Auto),
+            "easy" => Some(Self::Easy),
+            "medium" => Some(Self::Medium),
+            "complex" => Some(Self::Complex),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Complex => "complex",
+        }
+    }
+
+    /// The tier this choice pins, or `None` when aichip decides.
+    pub fn fixed(self) -> Option<ModelTier> {
+        match self {
+            Self::Auto => None,
+            Self::Easy => Some(ModelTier::Easy),
+            Self::Medium => Some(ModelTier::Medium),
+            Self::Complex => Some(ModelTier::Complex),
+        }
+    }
+}
+
+impl From<ModelTier> for TierChoice {
+    fn from(t: ModelTier) -> Self {
+        match t {
+            ModelTier::Easy => Self::Easy,
+            ModelTier::Medium => Self::Medium,
+            ModelTier::Complex => Self::Complex,
+        }
+    }
+}
+
 /// Tier → model-ID mapping. Stored in settings so users on plans without
 /// access to a given model can remap (e.g. Complex → Opus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,5 +499,44 @@ mod per_engine_tests {
             Some(ReasoningEffort::XHigh)
         );
         assert_eq!(back.effort_for("opencode", ModelTier::Medium), None);
+    }
+
+    #[test]
+    fn model_tier_refuses_auto_rather_than_defaulting_it() {
+        // The trap this guards: several call sites read a tier with
+        // `from_value(...).unwrap_or_default()`. If `ModelTier` accepted
+        // "auto" it would land on Medium → Opus; if it silently *defaulted*
+        // one, the same thing happens. Either way an automatic router that
+        // exists to save money would route every auto card to the dearest
+        // model, and nothing would say so.
+        //
+        // So `ModelTier` must reject the string outright, and `TierChoice` is
+        // the only type allowed to understand it.
+        assert!(serde_json::from_value::<ModelTier>(serde_json::json!("auto")).is_err());
+        assert_eq!(TierChoice::parse("auto"), Some(TierChoice::Auto));
+    }
+
+    #[test]
+    fn a_tier_choice_round_trips_through_a_text_column() {
+        // These live in TEXT columns beside real tiers, so every value has to
+        // survive the trip out and back without a migration.
+        for c in [
+            TierChoice::Auto,
+            TierChoice::Easy,
+            TierChoice::Medium,
+            TierChoice::Complex,
+        ] {
+            assert_eq!(TierChoice::parse(c.as_str()), Some(c));
+        }
+        assert_eq!(TierChoice::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn only_auto_leaves_the_tier_undecided() {
+        assert_eq!(TierChoice::Auto.fixed(), None);
+        assert_eq!(TierChoice::Easy.fixed(), Some(ModelTier::Easy));
+        assert_eq!(TierChoice::Complex.fixed(), Some(ModelTier::Complex));
+        // And a real tier converts in without inventing a choice.
+        assert_eq!(TierChoice::from(ModelTier::Medium).fixed(), Some(ModelTier::Medium));
     }
 }

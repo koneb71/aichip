@@ -1,7 +1,7 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
 use aichip_core::runs::orchestrator::Variant;
-use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort};
+use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -84,6 +84,7 @@ async fn list(
                      WHEN t.permission_mode IS NOT NULL THEN 'card'
                      ELSE 'default' END AS permission_source,
                 r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
+                r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
          FROM tasks t
          JOIN projects p ON p.id = t.project_id
@@ -119,8 +120,13 @@ async fn list(
         .map(|r| {
             // The same function the orchestrator resolves with, so the board
             // cannot disagree with what the run actually does.
-            let tier = serde_json::from_value(Value::String(r.get("model_tier")))
-                .unwrap_or_default();
+            // An `auto` card has no tier until it runs, so the board shows
+            // the effort it would get at Medium. Marked in the payload below
+            // so the UI can say "decided per run" rather than state a figure
+            // as though it were settled.
+            let choice = TierChoice::parse(&r.get::<String, _>("model_tier"))
+                .unwrap_or(TierChoice::Medium);
+            let tier = choice.fixed().unwrap_or_default();
             let (effective_effort, effort_source) = aichip_shared::resolve_effort(
                 parse_effort(r.get("agent_effort")),
                 parse_effort(r.get("card_effort")),
@@ -131,6 +137,8 @@ async fn list(
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<String, _>("model_tier"),
+                // True when the tier is not settled until the run starts.
+                "tierIsAuto": choice == TierChoice::Auto,
                 "boardColumn": r.get::<String, _>("board_column"),
                 "position": r.get::<f64, _>("position"),
                 "branch": r.get::<Option<String>, _>("branch"),
@@ -159,6 +167,10 @@ async fn list(
                 "runStatus": r.get::<Option<String>, _>("run_status"),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
                 "model": r.get::<Option<String>, _>("model"),
+                // What the last run actually ran at, and why — the whole
+                // point of an automatic choice being allowed to happen at all.
+                "tierResolved": r.get::<Option<String>, _>("tier_resolved"),
+                "tierReason": r.get::<Option<String>, _>("tier_reason"),
                 "engine": r.get::<String, _>("engine"),
                 "planFirst": r.get::<bool, _>("plan_first"),
             })
@@ -167,13 +179,22 @@ async fn list(
     Ok(Json(json!({ "tasks": tasks })))
 }
 
+/// Cards default to Medium, unchanged. Auto is opt-in: a router that turned
+/// itself on for everyone would be making the choice it exists to surface.
+fn default_tier_choice() -> TierChoice {
+    TierChoice::Medium
+}
+
 #[derive(Deserialize)]
 struct CreateTask {
     project_id: Uuid,
     title: String,
     prompt: String,
-    #[serde(default)]
-    model_tier: ModelTier,
+    /// `auto` included: the card stores the *choice*, and which tier that
+    /// becomes is decided per run, once the phase and the card's shape are
+    /// known.
+    #[serde(default = "default_tier_choice")]
+    model_tier: TierChoice,
     /// Absent means "use the workspace default", which is not the same as
     /// asking for Reviewed — `#[serde(default)]` here would silently force
     /// prompts on every client that doesn't name a mode.
@@ -205,7 +226,7 @@ async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, ApiError> {
-    let tier = serde_json::to_value(body.model_tier).unwrap();
+    let tier = body.model_tier.as_str();
     // Store NULL when the caller didn't choose, so the card inherits whatever
     // the default is *when it runs* rather than freezing today's value.
     let mode: Option<String> = body
@@ -218,7 +239,7 @@ async fn create(
     .bind(body.project_id)
     .bind(&body.title)
     .bind(&body.prompt)
-    .bind(tier.as_str().unwrap())
+    .bind(tier)
     .bind(mode.as_deref())
     .bind(body.engine.clone().unwrap_or_else(|| state.orchestrator.default_engine()))
     .bind(body.agent_id)
@@ -544,7 +565,7 @@ struct MoveTask {
     /// Absent leaves it alone. Cards always have a tier, so unlike the assignee
     /// there is no "clear it" case.
     #[serde(default)]
-    model_tier: Option<ModelTier>,
+    model_tier: Option<TierChoice>,
     /// Nested, because all three states are meaningful: absent means "leave it",
     /// an explicit null means "go back to inheriting", and a value pins one.
     #[serde(default, deserialize_with = "present")]
@@ -661,7 +682,7 @@ async fn move_task(
     .bind(team_id.flatten())
     .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
     .bind(body.plan_first)
-    .bind(body.model_tier.map(|t| serde_json::to_value(t).ok()).flatten().and_then(|v| v.as_str().map(str::to_string)))
+    .bind(body.model_tier.map(|t| t.as_str()))
     .bind(body.effort.is_some())
     .bind(body.effort.flatten().map(|e| e.as_str().to_string()))
     .execute(&state.db.pool)

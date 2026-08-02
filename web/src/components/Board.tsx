@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Task, tierColor, tierSoft } from "../lib/api";
+import { displayTier, Task, tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
@@ -124,7 +124,8 @@ function TaskCard({
   onSelect: (t: Task) => void;
 }) {
   const tierModel = useTierModel();
-  const accent = task.agentColor ?? tierColor[task.modelTier];
+  const shown = displayTier(task);
+  const accent = task.agentColor ?? tierColor[shown];
   const teamRun = !!task.teamName;
   const running = task.runStatus === "running" || task.runStatus === "starting";
   const waiting = task.runStatus === "waiting_permission";
@@ -196,9 +197,13 @@ function TaskCard({
         {!teamRun && (
           <span
             className="rounded-full px-2 py-0.5"
-            style={{ background: tierSoft[task.modelTier], color: tierColor[task.modelTier] }}
+            style={{ background: tierSoft[shown], color: tierColor[shown] }}
+            // An auto card says so, because "Medium" on a card nobody set to
+            // Medium would read as a choice someone made.
+            title={task.tierIsAuto ? "Tier picked automatically for each run" : undefined}
           >
-            {tierModel(task.modelTier)}
+            {task.tierIsAuto && "auto · "}
+            {tierModel(shown)}
           </span>
         )}
         {task.agentName && (

@@ -10,6 +10,7 @@
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
 use aichip_shared::{EngineTierEffort, EngineTierMapping, McpWiring, 
     AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
+    TierChoice,
 };
 use aichip_engines::{Engine, RunSpec};
 use chrono::{DateTime, Utc};
@@ -1209,15 +1210,17 @@ impl Orchestrator {
         // Normally a bound agent's tier wins over the card's. A bake-off
         // variant inverts that — comparing tiers means the variant's tier has
         // to beat the agent's, or every variant would run the same model.
-        let tier_str: String = match run.get::<Option<String>, _>("tier_override") {
-            Some(explicit) => explicit,
-            None => agent_tier.unwrap_or_else(|| run.get("model_tier")),
+        //
+        // Resolved further down rather than here, because `auto` needs to know
+        // which pass this is: writing a plan and carrying out an approved one
+        // are different jobs and should not draw the same model.
+        let (tier_str, tier_source) = match run.get::<Option<String>, _>("tier_override") {
+            Some(explicit) => (explicit, "variant"),
+            None => match agent_tier {
+                Some(t) => (t, "agent"),
+                None => (run.get("model_tier"), "card"),
+            },
         };
-        let tier: ModelTier =
-            serde_json::from_value(serde_json::Value::String(tier_str)).unwrap_or_default();
-        let effort = self
-            .resolve_effort(agent_effort, card_effort, &engine_id, tier)
-            .await;
         // Most specific wins: the agent's own preset, else the card's, else
         // the workspace default. Both of the first two are nullable and mean
         // "inherit" when unset — resolved here rather than frozen at create
@@ -1245,6 +1248,41 @@ impl Orchestrator {
                 .is_some(),
         );
         let planning = phase == task_plan::Phase::Plan;
+
+        // Now the phase is known, settle the tier. `auto` means aichip picks;
+        // anything else is a person's choice and is left exactly alone.
+        //
+        // The decision is recorded on the run below, before the process
+        // starts. A router that changed which model ran your work without
+        // saying so would be the same silent downgrade this codebase refuses
+        // elsewhere — the reason has to survive to the card.
+        let (tier, tier_source, tier_rule, tier_reason) =
+            match TierChoice::parse(&tier_str).unwrap_or(TierChoice::Medium) {
+                TierChoice::Auto => {
+                    let signals = self.tier_signals(run_id, task_id, &run).await;
+                    let phase = match (&phase, planning) {
+                        (_, true) => aichip_shared::TierPhase::Plan,
+                        (task_plan::Phase::Work { plan: Some(_) }, _) => {
+                            aichip_shared::TierPhase::Work
+                        }
+                        _ => aichip_shared::TierPhase::Single,
+                    };
+                    let d = aichip_shared::classify_tier(&signals, phase);
+                    tracing::info!(%run_id, tier = ?d.tier, rule = d.rule, "auto tier");
+                    (d.tier, "auto", Some(d.rule.to_string()), Some(d.because))
+                }
+                fixed => (
+                    // `unwrap_or_default` is safe here only because `Auto` is
+                    // handled above: `fixed()` is `None` for that case alone.
+                    fixed.fixed().unwrap_or_default(),
+                    tier_source,
+                    None,
+                    None,
+                ),
+            };
+        let effort = self
+            .resolve_effort(agent_effort, card_effort, &engine_id, tier)
+            .await;
 
         // Capability gate. Checked here as well as at enqueue time because a
         // card's mode can be edited after it was queued — and a run that
@@ -1310,11 +1348,24 @@ impl Orchestrator {
         }
 
         let model_id = self.model_for(&engine_id, tier);
-        sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
-            .bind(&model_id)
-            .bind(run_id)
-            .execute(&self.db.pool)
-            .await?;
+        // The tier lands on the row in the same write as the model, so the
+        // choice is durable *before* the process starts rather than inferred
+        // afterwards. `model` alone could not answer it: two tiers can map to
+        // one model and the mapping is editable, so a model id read back next
+        // week cannot say which tier asked for it, or who decided.
+        sqlx::query(
+            "UPDATE runs SET model=$1, started_at=now(),
+                             tier_resolved=$3, tier_source=$4, tier_rule=$5, tier_reason=$6
+             WHERE id=$2",
+        )
+        .bind(&model_id)
+        .bind(run_id)
+        .bind(TierChoice::from(tier).as_str())
+        .bind(tier_source)
+        .bind(&tier_rule)
+        .bind(&tier_reason)
+        .execute(&self.db.pool)
+        .await?;
 
         // Attachments are folded in here rather than at the route, so that
         // re-running a task re-attaches and `tasks.prompt` keeps holding
@@ -1749,9 +1800,15 @@ impl Orchestrator {
         // Both were hardcoded — Medium, and no effort at all — which is why the
         // chat composer had a picker for the engine and nothing else. NULL still
         // means inherit, resolved now rather than frozen when the chat opened.
+        //
+        // `auto` is not offered for chat yet, and lands on Medium — stated
+        // here rather than left to `unwrap_or_default`, because that is the
+        // shape of accident this whole feature is guarding against: an
+        // unrecognised tier quietly becoming the dearest ordinary model.
         let tier: ModelTier = row
             .get::<Option<String>, _>("chat_tier")
-            .and_then(|t| serde_json::from_value(serde_json::Value::String(t)).ok())
+            .and_then(|t| TierChoice::parse(&t))
+            .and_then(TierChoice::fixed)
             .unwrap_or(ModelTier::Medium);
         let chat_effort = self
             .resolve_effort(
@@ -2472,6 +2529,64 @@ this workflow manually."
         Ok(())
     }
 
+    /// What is known about a card before its run starts, for the auto tier.
+    ///
+    /// One round trip, and every signal is structural — how much was attached,
+    /// how much was written, what happened last time. Deliberately *not* the
+    /// project's historical cost: that measures the model previously used, so
+    /// routing on it would close a loop where cheap runs keep justifying the
+    /// cheap tier. It belongs on the spend page as context, not in here.
+    ///
+    /// Best-effort: a signal query that fails must not fail the run, so a
+    /// failure yields empty signals, which classify to Medium — the same tier
+    /// the card would have had before any of this existed.
+    async fn tier_signals(
+        &self,
+        run_id: Uuid,
+        task_id: Uuid,
+        run: &sqlx::postgres::PgRow,
+    ) -> aichip_shared::TierSignals {
+        let title: String = run.get("title");
+        let prompt: String = run.get("prompt");
+        let mut signals = aichip_shared::TierSignals {
+            brief_chars: title.chars().count() + prompt.chars().count(),
+            replans: run.try_get("replans").unwrap_or(0),
+            ..Default::default()
+        };
+
+        let row = sqlx::query(
+            "SELECT (SELECT count(*) FROM attachments   WHERE task_id = $1) AS attachments,
+                    (SELECT count(*) FROM task_articles WHERE task_id = $1) AS articles,
+                    (SELECT status        FROM runs WHERE task_id = $1 AND id <> $2
+                      ORDER BY created_at DESC LIMIT 1) AS prior_status,
+                    (SELECT tier_resolved FROM runs WHERE task_id = $1 AND id <> $2
+                       AND tier_resolved IS NOT NULL
+                      ORDER BY created_at DESC LIMIT 1) AS prior_tier",
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_optional(&self.db.pool)
+        .await;
+
+        match row {
+            Ok(Some(r)) => {
+                signals.attachments = r.get::<i64, _>("attachments").max(0) as usize;
+                signals.kb_articles = r.get::<i64, _>("articles").max(0) as usize;
+                signals.prior_failed = matches!(
+                    r.get::<Option<String>, _>("prior_status").as_deref(),
+                    Some("failed")
+                );
+                signals.prior_tier = r
+                    .get::<Option<String>, _>("prior_tier")
+                    .and_then(|t| TierChoice::parse(&t))
+                    .and_then(TierChoice::fixed);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(%run_id, error = %e, "auto tier signals unavailable"),
+        }
+        signals
+    }
+
     /// Apply one step's token delta to the run, and to the step row when there
     /// is one.
     ///
@@ -2546,7 +2661,11 @@ this workflow manually."
         Ok(row.map(|r| BoundAgent {
             id: r.get("id"),
             system_prompt: r.get("system_prompt"),
-            tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
+            // An agent cannot be set to `auto` from the UI yet; if one ever is,
+            // it resolves to Medium here rather than falling through an
+            // unwrap_or_default that would read as a deliberate choice.
+            tier: TierChoice::parse(&r.get::<String, _>("model_tier"))
+                .and_then(TierChoice::fixed)
                 .unwrap_or_default(),
             effort: r
                 .get::<Option<String>, _>("effort")
