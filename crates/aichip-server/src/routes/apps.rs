@@ -32,6 +32,8 @@ pub fn router() -> Router<AppState> {
             get(row).patch(change_row).delete(drop_row),
         )
         .route("/apps/{id}/chart/{view}", get(chart))
+        .route("/apps/{id}/grants", get(grants).put(set_grants))
+        .route("/apps/{id}/actions/{action}", post(run_action))
 }
 
 fn plan_json(plan: &apps::PendingPlan) -> Value {
@@ -434,6 +436,100 @@ async fn chart(
     .await
     .map_err(bad_data)?;
     Ok(Json(json!({ "buckets": buckets })))
+}
+
+// ── Grants ──────────────────────────────────────────────────────────────────
+
+/// What the app asks for, what it has, and what each one means.
+///
+/// All three together, because a permissions screen that shows only what is
+/// granted cannot show what is being asked for, and the question is the point.
+async fn grants(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    let held = apps::grants::list(&state.db, id).await.map_err(internal)?;
+    let requested = app.parsed().map(|m| m.scopes).unwrap_or_default();
+
+    Ok(Json(json!({
+        "requested": requested.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "granted": held.iter().map(|g| json!({
+            "scope": g.scope.as_str(),
+            "grantedAt": g.granted_at,
+            "lastUsedAt": g.last_used_at,
+        })).collect::<Vec<_>>(),
+        "all": apps::scope::ALL.iter().map(|s| json!({
+            "scope": s.as_str(),
+            "blurb": s.blurb(),
+            "write": s.is_write(),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct SetGrants {
+    scopes: Vec<String>,
+}
+
+async fn set_grants(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetGrants>,
+) -> Result<Json<Value>, ApiError> {
+    load(&state, id).await?;
+    let mut scopes = Vec::new();
+    for text in &body.scopes {
+        // An unknown scope is refused rather than dropped: a client sending one
+        // has a bug, and quietly granting the subset it got right would hide it.
+        scopes.push(apps::Scope::parse(text).ok_or((
+            StatusCode::BAD_REQUEST,
+            format!("\"{text}\" is not a permission aichip has"),
+        ))?);
+    }
+    apps::grants::set(&state.db, id, &scopes)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "granted": body.scopes })))
+}
+
+#[derive(Deserialize)]
+struct RunAction {
+    model: String,
+    row: Option<Uuid>,
+}
+
+/// Press a button.
+///
+/// A step needing a scope nobody granted does not fail the request — it comes
+/// back as `needsScope`, so the screen can offer to grant it instead of showing
+/// an error about something the person is allowed to fix.
+async fn run_action(
+    State(state): State<AppState>,
+    Path((id, action)): Path<(Uuid, String)>,
+    Json(body): Json<RunAction>,
+) -> Result<Json<Value>, ApiError> {
+    let (app, model) = model_of(&state, id, &body.model).await?;
+    let manifest = app.parsed().map_err(bad_manifest)?;
+
+    let out = apps::run::run(
+        &state.db,
+        &state.orchestrator,
+        &app,
+        &manifest,
+        &action,
+        &model,
+        body.row,
+    )
+    .await
+    .map_err(bad_data)?;
+
+    Ok(Json(json!({
+        "messages": out.messages,
+        "goto": out.goto,
+        "deleted": out.deleted,
+        "needsScope": out.needs_scope,
+    })))
 }
 
 async fn load(state: &AppState, id: Uuid) -> Result<apps::App, ApiError> {

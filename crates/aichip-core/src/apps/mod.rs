@@ -17,10 +17,12 @@
 
 pub mod data;
 pub mod expr;
+pub mod grants;
 pub mod introspect;
 pub mod manifest;
 pub mod query;
 pub mod render;
+pub mod run;
 pub mod scaffold;
 pub mod schema;
 pub mod scope;
