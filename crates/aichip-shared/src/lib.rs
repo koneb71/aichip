@@ -1,3 +1,4 @@
+pub mod auto_tier;
 pub mod effort;
 pub mod env_guard;
 pub mod events;
@@ -7,6 +8,10 @@ pub mod rate_limit;
 pub mod status;
 pub mod workflow;
 
+pub use auto_tier::{
+    classify as classify_tier, Decision as AutoTierDecision, Phase as TierPhase,
+    Signals as TierSignals,
+};
 pub use effort::{resolve_effort, EffortSource, ReasoningEffort};
 pub use env_guard::{auth_env_refusal, is_auth_env, AICHIP_OWN_SECRETS};
 pub use rate_limit::{rate_limit_signal, LimitStatus};
@@ -15,7 +20,7 @@ pub use mcp::{McpServerSpec, McpTransport, McpWiring};
 pub use model_tier::{
     is_known_model, is_known_model_for, is_provider_model_shape, pick_defaults,
     EngineTierEffort, EngineTierMapping, ModelChoice,
-    ModelTier, TierMapping, MODEL_CHOICES,
+    ModelTier, TierChoice, TierMapping, MODEL_CHOICES,
 };
 pub use status::{PermissionMode, RunStatus};
 pub use workflow::{interpolate, SessionMode, Step, StepOutputs, Workflow};

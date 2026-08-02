@@ -289,6 +289,69 @@ licence key. It emits HTML, which is why swapping it changed nothing behind it:
 the same sanitiser, the same text projection, the same diff, the same search
 index. A markdown-first editor would have meant rewriting all four.
 
+## What it costs, and spending less
+
+The binding constraint here is a subscription rate limit you cannot see, so
+aichip keeps what your CLI says about its own usage rather than discarding it.
+It asks Anthropic nothing, holds no credential, and prices nothing itself: a
+figure here is one the binary printed.
+
+**Where the tokens went.** The activity page breaks the window down five ways
+— by project, engine, model, tier, and which *feature* spent it. The last one
+is the useful one, because the dearest line is usually a pattern rather than a
+project: a bake-off is several runs on one brief, a debate team is several
+attempts plus a judge, a plan-first card is two passes. None of that shows up
+in a per-run cost.
+
+**Cache hit rate** leads the panel. Cached input costs a fraction of fresh
+input, so the share of your tokens served from cache — not the token count —
+is what separates a cheap run from an expensive one. It reads `—`, never
+`0%`, when nothing has been sent: a fresh install has not proven its cache
+broken.
+
+The totals name their own gaps. Runs whose engine never reported a price are
+counted separately instead of being folded into a number that looks complete,
+and runs that ended without a final tally are marked as carrying estimates.
+Both used to show as `$0` — a run you cancelled after twenty minutes cost real
+money and reported nothing, which also meant the daily cap under-counted it.
+
+**A daily cap** in dollars stops the queue when the day's spend passes it, and
+clears on its own at midnight rather than needing to be resumed.
+
+### Auto tier
+
+A card's tier can be set to **Auto**, and aichip picks per run.
+
+This is worth having because `Medium` is the default and maps to Opus, so
+every card nobody thought about runs on the dearest ordinary model. Auto is
+opt-in and never the default — a router that switched itself on for everyone
+would be making exactly the choice it exists to surface.
+
+The rules are ordered and first-match-wins, not a score, because a score
+cannot be explained to the person whose card it just routed:
+
+- A **retry never routes below what already failed.** Rerunning a failure on a
+  cheaper model pays twice to lose twice.
+- **Planning gets the strong model; carrying out an approved plan gets a
+  cheaper one.** This is the biggest honest saving — the judgment already
+  happened and you approved it.
+- A **long brief with several attachments or runbooks** is a briefing, not a
+  chore, and goes up.
+- A **short brief with nothing attached** goes down.
+- Anything else stays at Medium, exactly as before.
+
+Two rules are deliberately missing. Historical project cost is *not* an input:
+it measures the model that was used, so routing on it closes a loop where
+cheap runs keep justifying the cheap tier. And shortness alone never buys the
+cheap tier — a short brief is as likely to be under-specified as simple, and a
+brief below a floor buys nothing at all.
+
+Every automatic choice is recorded on the run before it starts and shown on
+the card: *Auto → easy: a short brief with nothing attached*. That isn't
+decoration. aichip refuses to quietly downgrade a Reviewed card on an engine
+that cannot ask, and a router that changed which model ran your work without
+saying so would be the same thing wearing a different hat.
+
 ## Engines
 
 Two are supported. Which ones you're offered depends on what's installed — `aichip doctor`

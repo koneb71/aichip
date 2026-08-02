@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Effort, Project, Team, Tier, tierColor, tierSoft } from "../lib/api";
+import { Agent, api, Effort, Project, Team, TierChoice, tierColor, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar } from "./AttachmentBar";
@@ -26,7 +26,7 @@ export function NewTaskModal({
   const { active } = useWorkspace();
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [tier, setTier] = useState<Tier>("medium");
+  const [tier, setTier] = useState<TierChoice>("medium");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [assignee, setAssignee] = useState<string>("");
@@ -167,6 +167,20 @@ export function NewTaskModal({
               Complexity → model
             </div>
             <div className="flex gap-1.5">
+              {/* Auto sits alongside the three rather than replacing a default:
+                  it is a choice to hand the choice over, and it has to be made
+                  deliberately. */}
+              <button
+                onClick={() => setTier("auto")}
+                className="flex-1 rounded-lg border px-2 py-1.5 text-xs"
+                style={{
+                  borderColor: tier === "auto" ? "var(--color-accent)" : "var(--color-line)",
+                  color: tier === "auto" ? "var(--color-accent)" : "var(--color-ink-dim)",
+                }}
+              >
+                auto
+                <span className="block text-[10px] opacity-75">picked per task</span>
+              </button>
               {TIERS.map((t) => (
                 <button
                   key={t}

@@ -1505,7 +1505,11 @@ impl Orchestrator {
             name: r.get("name"),
             title: title.to_string(),
             description: r.get("description"),
-            tier: serde_json::from_value(serde_json::Value::String(r.get("model_tier")))
+            // Same reasoning as `load_agent`: `auto` is not offered for a
+            // roster member yet, and resolving it here rather than through an
+            // unwrap_or_default keeps that a stated decision.
+            tier: aichip_shared::TierChoice::parse(&r.get::<String, _>("model_tier"))
+                .and_then(aichip_shared::TierChoice::fixed)
                 .unwrap_or_default(),
             effort: r
                 .get::<Option<String>, _>("effort")

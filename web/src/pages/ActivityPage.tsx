@@ -9,6 +9,7 @@ import { isWorking, statusColor, statusLabel } from "../lib/runStatus";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { PermissionRow } from "../components/PermissionRow";
 import { ActivityLine } from "../components/RunStream";
+import { SpendPanel } from "../components/spend/SpendPanel";
 import { useRunStream } from "../lib/ws";
 
 /**
@@ -234,6 +235,8 @@ export default function ActivityPage() {
             </div>
           </div>
         )}
+
+        <SpendPanel />
       </Section>
 
       <AnimatePresence>
