@@ -26,9 +26,12 @@ async fn list(
     Query(filter): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
+        // Apps are projects too — that is what gives them worktrees, diffs and
+        // previews — but they belong in the gallery, not in a list of the
+        // repositories someone works in.
         "SELECT id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in
          FROM projects
-         WHERE $1::uuid IS NULL OR workspace_id = $1
+         WHERE kind = 'repo' AND ($1::uuid IS NULL OR workspace_id = $1)
          ORDER BY created_at DESC",
     )
     .bind(filter.workspace_id)

@@ -1,3 +1,4 @@
+pub mod apps;
 pub mod bus;
 pub mod db;
 pub mod github;
