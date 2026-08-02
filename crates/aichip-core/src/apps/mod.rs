@@ -21,6 +21,7 @@ pub mod introspect;
 pub mod manifest;
 pub mod query;
 pub mod render;
+pub mod scaffold;
 pub mod schema;
 pub mod scope;
 

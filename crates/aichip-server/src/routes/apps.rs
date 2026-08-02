@@ -19,6 +19,7 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/apps", get(list).post(install))
+        .route("/apps/generate", post(generate))
         .route("/apps/{id}", get(one).delete(uninstall))
         .route("/apps/{id}/manifest", put(set_manifest))
         .route("/apps/{id}/active", post(set_active))
@@ -130,6 +131,58 @@ async fn install(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(app_json(&app)))
+}
+
+#[derive(Deserialize)]
+struct Generate {
+    description: String,
+    engine: Option<String>,
+}
+
+/// Write a manifest from a description, and hand it back unsaved.
+///
+/// Returned rather than installed, deliberately. The whole reason a module is
+/// YAML instead of code is that a person can read it before it becomes real —
+/// installing it for them would spend that and give nothing back. Same shape as
+/// `/api/agents/generate`.
+///
+/// The result is parsed here before it is returned, so a manifest the model got
+/// wrong arrives with the error attached and the text still editable, rather
+/// than looking fine until the install button fails.
+async fn generate(
+    State(state): State<AppState>,
+    Json(body): Json<Generate>,
+) -> Result<Json<Value>, ApiError> {
+    let description = body.description.trim();
+    if description.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "say what the app is for".into()));
+    }
+
+    let default_engine = state.orchestrator.default_engine();
+    let engine_id = body.engine.as_deref().unwrap_or(&default_engine);
+    let engine = state
+        .orchestrator
+        .engine(engine_id)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
+    let model_id = state
+        .orchestrator
+        .model_for(engine_id, aichip_shared::ModelTier::Complex);
+
+    // No tools and no project directory: this writes text, and a run that
+    // cannot touch the filesystem cannot get that wrong in an interesting way.
+    let output = aichip_core::runs::utility::utility_run(
+        engine,
+        model_id,
+        apps::scaffold::prompt(description),
+        Some(aichip_shared::ReasoningEffort::High),
+        std::time::Duration::from_secs(180),
+    )
+    .await
+    .map_err(internal)?;
+
+    let manifest = apps::scaffold::extract(&output);
+    let error = apps::manifest::parse(&manifest).err().map(|e| e.to_string());
+    Ok(Json(json!({ "manifest": manifest, "error": error })))
 }
 
 #[derive(Deserialize)]

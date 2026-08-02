@@ -1658,6 +1658,12 @@ export const api = {
       json<{ apps: App[] }>(r),
     ),
   app: (id: string) => fetch(`/api/apps/${id}`).then((r) => json<AppDetail>(r)),
+  // Returns the manifest unsaved, with `error` set when it does not parse —
+  // the point of a declaration is that a person reads it before it is real.
+  generateApp: (description: string, engine?: string) =>
+    post("/api/apps/generate", { description, engine }).then((r) =>
+      json<{ manifest: string; error: string | null }>(r),
+    ),
   installApp: (workspaceId: string, manifest: string, brief = "") =>
     post("/api/apps", { workspace_id: workspaceId, manifest, brief }).then((r) =>
       json<App>(r),
