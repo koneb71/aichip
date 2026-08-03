@@ -78,6 +78,26 @@ pub async fn base_commit(app: &App) -> Option<String> {
     manager::head(&app.path).await
 }
 
+/// Whether a change to this app is already under way.
+///
+/// **One at a time, and the reason is the undo.** Two builds started together
+/// both record the *same* `base_commit`, because neither has landed yet. The
+/// second to land is then the newest landed build, so undoing it resets past
+/// the first one as well — silently discarding a change nobody asked to lose,
+/// which is precisely what [`revertible`] exists to prevent and cannot detect
+/// once the rows are written.
+pub async fn in_progress(db: &Db, app_id: Uuid) -> anyhow::Result<Option<String>> {
+    let brief: Option<String> = sqlx::query_scalar(
+        "SELECT brief FROM app_builds
+          WHERE app_id = $1 AND status = 'running'
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(app_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(brief)
+}
+
 /// Note that a card is going to change this app.
 pub async fn record(
     db: &Db,
@@ -266,14 +286,19 @@ pub async fn revert(db: &Db, id: Uuid) -> anyhow::Result<App> {
         .ok_or_else(|| anyhow::anyhow!("this app is no longer installed"))?;
 
     manager::reset_hard(&app.path, base).await?;
-    // Same gate as landing: the files are back, and the tables follow through
-    // the ordinary plan. Reverting an added column is a *drop*, so it waits.
-    adopt_manifest(db, &app).await?;
-
+    // Recorded the moment the folder is back, and before the manifest is
+    // adopted: from here on the files *are* reverted, and a status still
+    // reading `landed` because the step after this one failed would offer the
+    // undo a second time and describe the app as something it no longer is.
     sqlx::query("UPDATE app_builds SET status='reverted' WHERE id=$1")
         .bind(id)
         .execute(&db.pool)
         .await?;
+
+    // Same gate as landing: the files are back, and the tables follow through
+    // the ordinary plan. Reverting an added column is a *drop*, so it waits.
+    adopt_manifest(db, &app).await?;
+
     super::get(db, build.app_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("this app is no longer installed"))

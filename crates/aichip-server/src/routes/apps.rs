@@ -291,6 +291,22 @@ async fn change(
     if brief.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "say what should change".into()));
     }
+    // One change at a time. Two started together would record the same
+    // `base_commit`, and undoing the second would then reset past the first as
+    // well — see `apps::build::in_progress`.
+    if let Some(running) = apps::build::in_progress(&state.db, app.id)
+        .await
+        .map_err(internal)?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "this app is already being changed — \"{running}\" has not finished. \
+                 Wait for it, or cancel its card."
+            ),
+        ));
+    }
+
     // Read before the card exists. Once the run has landed there is no way to
     // ask git where the branch was, and an undo needs to know.
     let base = apps::build::base_commit(&app).await;
@@ -310,10 +326,30 @@ async fn change(
     // real undo, and a dialog per line of YAML is the gate nobody reads — the
     // same argument `runtime.rs` makes for owning the Dockerfile. Not full-auto:
     // that would also stop asking about everything which is *not* an edit.
+    const MODE: aichip_shared::PermissionMode = aichip_shared::PermissionMode::AutoEdit;
+
+    // Refused on the click rather than as a failed run several seconds later,
+    // which would leave a card and a build row to clean up. Existence is
+    // checked separately because `vet_engine` answers "can this engine honour
+    // that mode" and says *nothing* about an engine it has never heard of —
+    // for an unknown id it returns None, which reads as approval.
+    if state.orchestrator.engine(&engine).is_none() {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown engine {engine}")));
+    }
+    // The mode is aichip's choice here, not the person's, so an engine that
+    // cannot honour it is aichip asking for something impossible.
+    if let Some(reason) = state.orchestrator.vet_engine(&engine, MODE) {
+        return Err((StatusCode::CONFLICT, reason));
+    }
+
+    // Created in the backlog and only moved to In Progress once the run is
+    // actually queued, the same order `tasks::create` uses. Inserting it as
+    // running would leave a card that nothing is working on if the enqueue
+    // failed — and, here, a build row stuck on `running` forever with it.
     let task_id: Uuid = sqlx::query_scalar(
         "INSERT INTO tasks (project_id, title, prompt, model_tier, engine, board_column,
                             permission_mode)
-         VALUES ($1, $2, $3, 'complex', $4, 'running', 'auto_edit') RETURNING id",
+         VALUES ($1, $2, $3, 'complex', $4, 'backlog', 'auto_edit') RETURNING id",
     )
     .bind(app.project_id)
     .bind(&title)
@@ -330,6 +366,11 @@ async fn change(
     let run_id = state
         .orchestrator
         .enqueue_task(task_id)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+        .bind(task_id)
+        .execute(&state.db.pool)
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "buildId": build_id, "taskId": task_id, "runId": run_id })))

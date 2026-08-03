@@ -33,15 +33,15 @@ export default function AppPage() {
       .app(appId)
       .then((a) => {
         setApp(a);
-        setScreen(
-          (s) => s ?? wanted ?? a.declares?.menu[0]?.view ?? a.declares?.views[0]?.name ?? null,
-        );
+        // Only when nothing has chosen one yet — the effect below has already
+        // applied `?view=` by the time this resolves.
+        setScreen((s) => s ?? a.declares?.menu[0]?.view ?? a.declares?.views[0]?.name ?? null);
       })
       .catch((e) => setError(String(e).replace(/^Error:\s*/, "")));
-  }, [appId, wanted]);
+    // Deliberately not keyed on `?view=`: a sidebar click changes the screen,
+    // not the app, and refetching it on every one would be a request per tab.
+  }, [appId]);
 
-  // A later click on a different sidebar entry is a new `?view=`, and the state
-  // above has already been set by then.
   useEffect(() => {
     if (wanted) setScreen(wanted);
   }, [wanted]);
