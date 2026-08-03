@@ -10,6 +10,7 @@ import { OrgRunView } from "../components/orgs/OrgRunView";
 import { PermissionRow } from "../components/PermissionRow";
 import { ActivityLine } from "../components/RunStream";
 import { SpendPanel } from "../components/spend/SpendPanel";
+import { UsagePanel } from "../components/usage/UsagePanel";
 import { useRunStream } from "../lib/ws";
 
 /**
@@ -188,6 +189,10 @@ export default function ActivityPage() {
             </AnimatePresence>
           </div>
         )}
+      </Section>
+
+      <Section title="Claude plan usage">
+        <UsagePanel />
       </Section>
 
       <Section title="Spend, last 14 days">

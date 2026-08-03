@@ -270,6 +270,32 @@ export interface PlanLimit {
   updatedAt: string;
 }
 
+/** One recorded change in a limit's state. */
+export interface UsageEvent {
+  engine: string;
+  limitType: string;
+  status: "allowed" | "warning" | "blocked";
+  /** What it was before. `null` is the first time this limit was heard from. */
+  previous: "allowed" | "warning" | "blocked" | null;
+  resetsAt: string | null;
+  usingOverage: boolean;
+  observedAt: string;
+}
+
+/**
+ * Whether a limit is a wall you meet often, or met once.
+ *
+ * `daysSeen` counts only the days aichip actually heard from the limit, which
+ * is the days you ran something — so these are counts, never a percentage of
+ * "the time". aichip learns nothing on a day it runs nothing.
+ */
+export interface UsagePattern {
+  limitType: string;
+  daysSeen: number;
+  daysPinched: number;
+  timesBlocked: number;
+}
+
 /** A GitHub device flow waiting for the person to finish it. */
 export interface GitHubConnect {
   id: string;
@@ -1264,6 +1290,10 @@ export const api = {
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),
+    ),
+  usageHistory: () =>
+    fetch("/api/usage/history").then((r) =>
+      json<{ days: number; events: UsageEvent[]; patterns: UsagePattern[] }>(r),
     ),
   // Previews
   previewLimits: () =>
