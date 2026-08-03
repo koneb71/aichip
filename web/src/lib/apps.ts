@@ -6,7 +6,15 @@
  * is the branch matrix — which is where the bugs actually are.
  */
 
-import type { App, AppDetail, AppField, AppModel, AppRow, AppView } from "./api";
+import type {
+  App,
+  AppDetail,
+  AppField,
+  AppModel,
+  AppRow,
+  AppView,
+  ContainerState,
+} from "./api";
 
 /** What a field is called on screen. */
 export function fieldLabel(field: AppField): string {
@@ -198,4 +206,37 @@ export function pageWindow(page: number, total: number, size: number): PageWindo
     hasNext: (page + 1) * size < total,
     needed: total > size,
   };
+}
+
+/**
+ * Where a container app is served.
+ *
+ * Built in the browser rather than by the server, for the same reason
+ * `previewUrl` is: the port to put in it is the one aichip is being *served*
+ * on, and the browser is the only party that already knows it.
+ */
+export function appOrigin(slug: string, port: string): string {
+  return `http://${slug}.app.localhost${port ? `:${port}` : ""}`;
+}
+
+/** One line saying where a container app stands. */
+export function containerLine(state: ContainerState | null): string {
+  if (!state) return "Checking…";
+  if (state.docker.usable === false) return "Docker isn't available.";
+  switch (state.preview?.status) {
+    case "running":
+      return "Running at";
+    case "building":
+      return "Building — this takes a minute the first time.";
+    case "idle":
+      // The distinction that makes the button honest: waking is seconds
+      // because the image is still here, and rebuilding is not.
+      return "Asleep. Waking it takes a few seconds.";
+    case "failed":
+      return "The last build failed.";
+    case "stopped":
+      return "Stopped.";
+    default:
+      return "Not built yet.";
+  }
 }

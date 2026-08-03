@@ -32,6 +32,8 @@ pub fn router() -> Router<AppState> {
             get(row).patch(change_row).delete(drop_row),
         )
         .route("/apps/{id}/chart/{view}", get(chart))
+        .route("/apps/{id}/run", get(container).post(start).delete(stop))
+        .route("/apps/{id}/dockerfile", get(dockerfile).post(approve_dockerfile))
         .route("/apps/{id}/grants", get(grants).put(set_grants))
         .route("/apps/{id}/actions/{action}", post(run_action))
         .route("/apps/{id}/export", get(export))
@@ -440,6 +442,164 @@ async fn chart(
     .await
     .map_err(bad_data)?;
     Ok(Json(json!({ "buckets": buckets })))
+}
+
+// ── Container apps ──────────────────────────────────────────────────────────
+
+/// Refuse plainly when this app has nothing to run.
+///
+/// A module is drawn by the dashboard, so "start the container" is not a
+/// slower version of anything — it is a category error, and saying so beats a
+/// Docker message about a missing Dockerfile.
+fn container_app(app: &apps::App) -> Result<(), ApiError> {
+    if app.runtime.is_container() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("\"{}\" is a module — aichip draws it, so there is nothing to run.", app.name),
+        ))
+    }
+}
+
+/// Docker, in the two shapes the UI needs: a flag to disable a button, and a
+/// sentence saying which of the two problems it is. "Not installed" and "the
+/// daemon is not answering" are completely different fixes.
+async fn docker_state() -> Value {
+    match docker_problem().await {
+        None => json!({ "usable": true, "problem": Value::Null }),
+        Some(problem) => json!({ "usable": false, "problem": problem }),
+    }
+}
+
+async fn docker_problem() -> Option<String> {
+    match aichip_core::previews::docker::detect().await {
+        Some(Ok(_)) => None,
+        None => Some("Docker isn't installed, or isn't on this machine's PATH.".into()),
+        Some(Err(detail)) => {
+            Some(format!("Docker is installed but its daemon isn't responding. {detail}"))
+        }
+    }
+}
+
+/// Whether this app's container is up, and where.
+async fn container(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    let preview = aichip_core::previews::get_base(&state.db, app.project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        // The slug, not a URL: the port to put in it is the one aichip is being
+        // *served* on, which the browser knows and the server does not.
+        "slug": app.slug,
+        "preview": preview,
+        "docker": docker_state().await,
+    })))
+}
+
+/// Build and run it, or wake it if the image is still here.
+async fn start(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    if !app.active {
+        return Err((StatusCode::CONFLICT, "switch this app on first".into()));
+    }
+    if let Some(problem) = docker_problem().await {
+        return Err((StatusCode::PRECONDITION_FAILED, problem));
+    }
+    let preview = aichip_core::previews::start_base(&state.db, app.project_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "slug": app.slug, "preview": preview })))
+}
+
+async fn stop(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    aichip_core::previews::stop_base(&state.db, app.project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The Dockerfile this app would build from, and whether it needs reading.
+async fn dockerfile(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    use aichip_core::apps::runtime::{self, Build};
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+
+    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile")).await.ok();
+    Ok(Json(match runtime::drift(app.runtime, committed.as_deref()) {
+        Build::Owned(text) => json!({ "text": text, "drifted": false, "sha": Value::Null }),
+        Build::Drifted { text, sha } => {
+            let approved: Option<String> =
+                sqlx::query_scalar("SELECT dockerfile_sha256 FROM apps WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&state.db.pool)
+                    .await
+                    .map_err(internal)?;
+            json!({
+                "text": text,
+                // Drifted *and unapproved* is what the gate reacts to. An edit
+                // someone already read is not a question any more.
+                "drifted": approved.as_deref() != Some(sha.as_str()),
+                "sha": sha,
+            })
+        }
+        Build::None => json!({ "text": Value::Null, "drifted": false, "sha": Value::Null }),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ApproveDockerfile {
+    sha: String,
+}
+
+/// Say that a person has read the Dockerfile as it now stands.
+///
+/// The hash, not a flag: approval attaches to the text, so the next rewrite
+/// does not inherit the reading someone gave this one. Same rule as approving
+/// a preview recipe.
+async fn approve_dockerfile(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ApproveDockerfile>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "this app has no Dockerfile".to_string()))?;
+
+    // Re-derived from the file rather than trusted from the request, so what is
+    // approved is what is on disk right now — not what the screen was showing
+    // when it was opened.
+    let actual = aichip_core::apps::digest(committed.trim());
+    if actual != body.sha {
+        return Err((
+            StatusCode::CONFLICT,
+            "the Dockerfile changed while you were reading it — look again".into(),
+        ));
+    }
+    sqlx::query("UPDATE apps SET dockerfile_sha256 = $2, approved_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(&actual)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "approved": actual })))
 }
 
 // ── Grants ──────────────────────────────────────────────────────────────────

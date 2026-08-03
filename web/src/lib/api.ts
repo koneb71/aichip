@@ -952,6 +952,17 @@ export interface RepoApp {
   installedAs: string | null;
 }
 
+export interface ContainerState {
+  slug: string;
+  preview: {
+    status: "building" | "running" | "idle" | "stopped" | "failed";
+    canWake: boolean;
+    portAssumed: boolean;
+    error: string | null;
+  } | null;
+  docker: { usable: boolean; problem: string | null };
+}
+
 export interface AppGrants {
   /** What the manifest asks for. Never itself a grant. */
   requested: string[];
@@ -1748,6 +1759,19 @@ export const api = {
     fetch(`/api/projects/${projectId}/apps`).then((r) => json<{ apps: RepoApp[] }>(r)),
   syncRepoApp: (projectId: string, dir: string) =>
     post(`/api/projects/${projectId}/apps/sync`, { dir }).then((r) => json<App>(r)),
+
+  appContainer: (id: string) =>
+    fetch(`/api/apps/${id}/run`).then((r) => json<ContainerState>(r)),
+  startAppContainer: (id: string) =>
+    post(`/api/apps/${id}/run`).then((r) => json<ContainerState>(r)),
+  stopAppContainer: (id: string) =>
+    fetch(`/api/apps/${id}/run`, { method: "DELETE" }).then(json),
+  appDockerfile: (id: string) =>
+    fetch(`/api/apps/${id}/dockerfile`).then((r) =>
+      json<{ text: string | null; drifted: boolean; sha: string | null }>(r),
+    ),
+  approveAppDockerfile: (id: string, sha: string) =>
+    post(`/api/apps/${id}/dockerfile`, { sha }).then((r) => json<{ approved: string }>(r)),
 
   appGrants: (id: string) => fetch(`/api/apps/${id}/grants`).then((r) => json<AppGrants>(r)),
   setAppGrants: (id: string, scopes: string[]) =>
