@@ -5,6 +5,7 @@ import { api, type App } from "../lib/api";
 import { appState } from "../lib/apps";
 import { useWorkspace } from "../lib/workspace";
 import { NewAppModal } from "../components/apps/NewAppModal";
+import { RepoApps } from "../components/apps/RepoApps";
 
 /**
  * The gallery.
@@ -137,6 +138,8 @@ export default function AppsPage() {
           </div>
         )}
       </div>
+
+      {active && <RepoApps workspaceId={active.id} onSynced={refresh} />}
 
       <AnimatePresence>
         {adding && active && (

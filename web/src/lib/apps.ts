@@ -6,7 +6,17 @@
  * is the branch matrix — which is where the bugs actually are.
  */
 
-import type { App, AppDetail, AppField, AppModel, AppRow, AppView } from "./api";
+import type {
+  App,
+  AppBuild,
+  AppDetail,
+  AppField,
+  AppModel,
+  AppRow,
+  AppRuntime,
+  AppView,
+  ContainerState,
+} from "./api";
 
 /** What a field is called on screen. */
 export function fieldLabel(field: AppField): string {
@@ -140,4 +150,185 @@ export function bucketValue(value: string | null): number {
   if (value === null) return 0;
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Which field a search box searches.
+ *
+ * The first text column, because that is what "search" means to someone
+ * looking at a table of things with names. A model with no text at all gets no
+ * box, rather than one that could never match.
+ */
+export function searchableField(model: AppModel): string | null {
+  return model.fields.find((f) => baseType(f.type) === "text")?.name ?? null;
+}
+
+/**
+ * The filter a search term becomes.
+ *
+ * Always `like`, never string-building: `apps::query` takes `field:op:value`
+ * and does the escaping, so a term containing `%` or a quote is a term.
+ */
+export function searchFilter(field: string | null, term: string): string[] {
+  const trimmed = term.trim();
+  return field && trimmed ? [`${field}:like:${trimmed}`] : [];
+}
+
+/**
+ * Whether a view pages.
+ *
+ * A list does; a board does not. Splitting a kanban across pages breaks the
+ * one thing it is for, and a per-column count that silently means "on this
+ * page" is a number that lies.
+ */
+export function isPaged(kind: string): boolean {
+  return kind === "list" || kind === "form";
+}
+
+export interface PageWindow {
+  /** 1-indexed, inclusive, for display. */
+  from: number;
+  to: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  /** Whether a pager is worth showing at all. */
+  needed: boolean;
+}
+
+/** What the pager says and which of its buttons work. */
+export function pageWindow(page: number, total: number, size: number): PageWindow {
+  const from = total === 0 ? 0 : page * size + 1;
+  const to = Math.min((page + 1) * size, total);
+  return {
+    from,
+    to,
+    total,
+    hasPrevious: page > 0,
+    hasNext: (page + 1) * size < total,
+    needed: total > size,
+  };
+}
+
+/**
+ * Where a container app is served.
+ *
+ * Built in the browser rather than by the server, for the same reason
+ * `previewUrl` is: the port to put in it is the one aichip is being *served*
+ * on, and the browser is the only party that already knows it.
+ */
+export function appOrigin(slug: string, port: string): string {
+  return `http://${slug}.app.localhost${port ? `:${port}` : ""}`;
+}
+
+/** What choosing a runtime commits someone to, at the moment they choose. */
+export function runtimeBlurb(runtime: AppRuntime): string {
+  switch (runtime) {
+    case "module":
+      return "Models and screens, declared. Nothing executes, so there is nothing to approve.";
+    case "node":
+      return "A real Node server in a container. Needs Docker on this machine.";
+    case "static":
+      return "HTML, CSS and JavaScript in a container. Needs Docker on this machine.";
+  }
+}
+
+/**
+ * The manifest a new app starts from.
+ *
+ * A working example rather than an empty box and the word YAML — editing one is
+ * how most people learn the shape. The module's exercises most of the format in
+ * as few lines as possible: two field types, a computed column, a default, a
+ * list and a chart. A container's declares tables and no views, because it
+ * draws its own pages and a `views:` block would be refused.
+ */
+export function starterManifest(runtime: AppRuntime): string {
+  if (runtime === "module") {
+    return `name: Expenses
+icon: "▤"
+summary: Track spending by category
+runtime: module
+
+models:
+  expense:
+    fields:
+      description: { type: text, required: true }
+      amount:      { type: decimal }
+      qty:         { type: int, default: 1 }
+      total:       { type: decimal, compute: "amount * qty" }
+      spent_on:    { type: date, default: "today()" }
+      category:    { type: text }
+    indexes: [spent_on]
+
+views:
+  list:
+    columns: [spent_on, description, category, total]
+    sort: "-spent_on"
+  chart:
+    shape: bar
+    group_by: category
+    measure: "sum(total)"
+
+menu:
+  - { label: Expenses, view: list }
+  - { label: By category, view: chart }
+`;
+  }
+  return `name: Notes
+icon: "✎"
+summary: A place to keep notes
+runtime: ${runtime}
+
+models:
+  note:
+    fields:
+      title: { type: text, required: true }
+      body:  { type: text }
+`;
+}
+
+/**
+ * One line describing a build.
+ *
+ * `landed` with an error is the awkward one and the reason this is a function:
+ * the files did land, so calling it a failure would be wrong, but something is
+ * nonetheless broken and saying only "Landed" would hide it.
+ */
+export function buildLine(build: AppBuild): string {
+  switch (build.status) {
+    case "running":
+      return "Working on it…";
+    case "landed":
+      return build.error ? "Landed, but the app has a problem." : "Landed.";
+    case "conflicted":
+      return "Could not merge — the card still has the diff.";
+    case "failed":
+      return "The run did not finish.";
+    case "reverted":
+      return "Undone.";
+    default:
+      return build.status;
+  }
+}
+
+/** One line saying where a container app stands. */
+export function containerLine(state: ContainerState | null): string {
+  if (!state) return "Checking…";
+  if (state.docker.usable === false) return "Docker isn't available.";
+  switch (state.preview?.status) {
+    case "running":
+      return "Running at";
+    case "building":
+      return "Building — this takes a minute the first time.";
+    case "idle":
+      // The distinction that makes the button honest: waking is seconds
+      // because the image is still here, and rebuilding is not.
+      return "Asleep. Waking it takes a few seconds.";
+    case "failed":
+      return "The last build failed.";
+    case "stopped":
+      return "Stopped.";
+    default:
+      return "Not built yet.";
+  }
 }

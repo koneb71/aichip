@@ -115,6 +115,10 @@ async fn set_limits(
         aichip_core::previews::Limits {
             max_live: body.max_live,
             idle_minutes: body.idle_minutes,
+            // Not settable from this screen, which is about card previews.
+            // Kept as it is rather than defaulted, or saving the preview
+            // limits would silently reset the app budget.
+            max_live_apps: aichip_core::previews::limits(&state.db).await.max_live_apps,
         },
     )
     .await

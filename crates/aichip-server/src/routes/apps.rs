@@ -23,15 +23,18 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{id}", get(one).delete(uninstall))
         .route("/apps/{id}/manifest", put(set_manifest))
         .route("/apps/{id}/active", post(set_active))
-        .route("/apps/{id}/schema", get(schema_plan))
+        .route("/apps/{id}/builds", get(builds).post(change))
+        .route("/apps/{id}/builds/{build}/revert", post(revert_build))
         .route("/apps/{id}/schema/apply", post(apply_schema))
         .route("/apps/{id}/schema/discard", post(discard_schema))
         .route("/apps/{id}/data/{model}", get(rows).post(add_row))
         .route(
             "/apps/{id}/data/{model}/{row}",
-            get(row).patch(change_row).delete(drop_row),
+            axum::routing::patch(change_row).delete(drop_row),
         )
         .route("/apps/{id}/chart/{view}", get(chart))
+        .route("/apps/{id}/run", get(container).post(start).delete(stop))
+        .route("/apps/{id}/dockerfile", get(dockerfile).post(approve_dockerfile))
         .route("/apps/{id}/grants", get(grants).put(set_grants))
         .route("/apps/{id}/actions/{action}", post(run_action))
         .route("/apps/{id}/export", get(export))
@@ -52,6 +55,19 @@ fn plan_json(plan: &apps::PendingPlan) -> Value {
 }
 
 fn app_json(app: &apps::App) -> Value {
+    // The menu rides along on the list the sidebar already fetches, rather than
+    // costing a request per app to draw a nav item. A manifest that no longer
+    // parses gets an empty one: the sidebar is not where someone should first
+    // learn an app is broken.
+    let menu = app.parsed().map_or_else(
+        |_| Vec::new(),
+        |m| {
+            m.menu
+                .iter()
+                .map(|e| json!({ "label": e.label, "view": e.view }))
+                .collect::<Vec<_>>()
+        },
+    );
     json!({
         "id": app.id,
         "projectId": app.project_id,
@@ -64,6 +80,7 @@ fn app_json(app: &apps::App) -> Value {
         "runtime": app.runtime.as_str(),
         "active": app.active,
         "path": app.path.to_string_lossy(),
+        "menu": menu,
     })
 }
 
@@ -143,6 +160,9 @@ async fn install(
 struct Generate {
     description: String,
     engine: Option<String>,
+    /// Omitted means a module — the safe runtime, and the one that needs no
+    /// Docker on the machine.
+    runtime: Option<String>,
 }
 
 /// Write a manifest from a description, and hand it back unsaved.
@@ -163,6 +183,11 @@ async fn generate(
     if description.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "say what the app is for".into()));
     }
+    let runtime = match body.runtime.as_deref() {
+        None => apps::Runtime::Module,
+        Some(r) => apps::Runtime::parse(r)
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("there is no {r} runtime")))?,
+    };
 
     let default_engine = state.orchestrator.default_engine();
     let engine_id = body.engine.as_deref().unwrap_or(&default_engine);
@@ -179,7 +204,7 @@ async fn generate(
     let output = aichip_core::runs::utility::utility_run(
         engine,
         model_id,
-        apps::scaffold::prompt(description),
+        apps::scaffold::manifest_prompt(description, runtime),
         Some(aichip_shared::ReasoningEffort::High),
         std::time::Duration::from_secs(180),
     )
@@ -216,14 +241,153 @@ async fn set_manifest(
     Ok(Json(out))
 }
 
-/// The migration this app is waiting on, if any.
-async fn schema_plan(
+fn build_json(b: &apps::build::Build, revertible: Option<Uuid>) -> Value {
+    json!({
+        "id": b.id,
+        "taskId": b.task_id,
+        "brief": b.brief,
+        "status": b.status,
+        "error": b.error,
+        "landedCommit": b.landed_commit,
+        "createdAt": b.created_at.to_rfc3339(),
+        // Answered by the server rather than derived in the browser: which
+        // build may be undone is a rule about what `base_commit` can promise,
+        // and two implementations of it would disagree exactly once.
+        "revertible": revertible == Some(b.id),
+    })
+}
+
+async fn builds(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     load(&state, id).await?;
-    let pending = apps::pending_plan(&state.db, id).await.map_err(internal)?;
-    Ok(Json(json!({ "pending": pending.as_ref().map_or(Value::Null, plan_json) })))
+    let builds = apps::build::list(&state.db, id).await.map_err(internal)?;
+    let revertible = apps::build::revertible(&builds);
+    Ok(Json(json!({
+        "builds": builds.iter().map(|b| build_json(b, revertible)).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct Change {
+    brief: String,
+    engine: Option<String>,
+}
+
+/// Hand this app to an agent.
+///
+/// An ordinary card on the app's own project — the orchestrator gives it a
+/// worktree and a diff like any other. What is different is recorded in
+/// `app_builds`: where the branch stood before it started, which is what makes
+/// the automatic landing undoable.
+async fn change(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<Change>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    let brief = body.brief.trim();
+    if brief.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "say what should change".into()));
+    }
+    // One change at a time. Two started together would record the same
+    // `base_commit`, and undoing the second would then reset past the first as
+    // well — see `apps::build::in_progress`.
+    if let Some(running) = apps::build::in_progress(&state.db, app.id)
+        .await
+        .map_err(internal)?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "this app is already being changed — \"{running}\" has not finished. \
+                 Wait for it, or cancel its card."
+            ),
+        ));
+    }
+
+    // Read before the card exists. Once the run has landed there is no way to
+    // ask git where the branch was, and an undo needs to know.
+    let base = apps::build::base_commit(&app).await;
+
+    let engine = body
+        .engine
+        .clone()
+        .unwrap_or_else(|| state.orchestrator.default_engine());
+    let prompt = apps::scaffold::build_prompt(&app.manifest, app.runtime, brief);
+    let title = apps::build::commit_message(brief)
+        .strip_prefix("aichip: ")
+        .unwrap_or(brief)
+        .to_string();
+
+    // Auto-edit rather than the machine default, which is Reviewed. The agent
+    // is editing a worktree of a folder aichip created, the result lands with a
+    // real undo, and a dialog per line of YAML is the gate nobody reads — the
+    // same argument `runtime.rs` makes for owning the Dockerfile. Not full-auto:
+    // that would also stop asking about everything which is *not* an edit.
+    const MODE: aichip_shared::PermissionMode = aichip_shared::PermissionMode::AutoEdit;
+
+    // Refused on the click rather than as a failed run several seconds later,
+    // which would leave a card and a build row to clean up. Existence is
+    // checked separately because `vet_engine` answers "can this engine honour
+    // that mode" and says *nothing* about an engine it has never heard of —
+    // for an unknown id it returns None, which reads as approval.
+    if state.orchestrator.engine(&engine).is_none() {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown engine {engine}")));
+    }
+    // The mode is aichip's choice here, not the person's, so an engine that
+    // cannot honour it is aichip asking for something impossible.
+    if let Some(reason) = state.orchestrator.vet_engine(&engine, MODE) {
+        return Err((StatusCode::CONFLICT, reason));
+    }
+
+    // Created in the backlog and only moved to In Progress once the run is
+    // actually queued, the same order `tasks::create` uses. Inserting it as
+    // running would leave a card that nothing is working on if the enqueue
+    // failed — and, here, a build row stuck on `running` forever with it.
+    let task_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, engine, board_column,
+                            permission_mode)
+         VALUES ($1, $2, $3, 'complex', $4, 'backlog', 'auto_edit') RETURNING id",
+    )
+    .bind(app.project_id)
+    .bind(&title)
+    .bind(&prompt)
+    .bind(&engine)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let build_id = apps::build::record(&state.db, app.id, task_id, brief, base.as_deref())
+        .await
+        .map_err(internal)?;
+
+    let run_id = state
+        .orchestrator
+        .enqueue_task(task_id)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+        .bind(task_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "buildId": build_id, "taskId": task_id, "runId": run_id })))
+}
+
+/// Put the app back the way it was before its most recent change.
+async fn revert_build(
+    State(state): State<AppState>,
+    Path((id, build)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, ApiError> {
+    load(&state, id).await?;
+    let app = apps::build::revert(&state.db, build)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    let mut out = app_json(&app);
+    out["manifest"] = json!(app.manifest);
+    Ok(Json(out))
 }
 
 #[derive(Deserialize)]
@@ -356,18 +520,6 @@ async fn rows(
     Ok(Json(json!({ "rows": rows, "total": total })))
 }
 
-async fn row(
-    State(state): State<AppState>,
-    Path((id, model, row)): Path<(Uuid, String, Uuid)>,
-) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &model).await?;
-    apps::data::get(&state.db, &app.schema, &model, row)
-        .await
-        .map_err(bad_data)?
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, "no such row".into()))
-}
-
 async fn add_row(
     State(state): State<AppState>,
     Path((id, model)): Path<(Uuid, String)>,
@@ -440,6 +592,164 @@ async fn chart(
     .await
     .map_err(bad_data)?;
     Ok(Json(json!({ "buckets": buckets })))
+}
+
+// ── Container apps ──────────────────────────────────────────────────────────
+
+/// Refuse plainly when this app has nothing to run.
+///
+/// A module is drawn by the dashboard, so "start the container" is not a
+/// slower version of anything — it is a category error, and saying so beats a
+/// Docker message about a missing Dockerfile.
+fn container_app(app: &apps::App) -> Result<(), ApiError> {
+    if app.runtime.is_container() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("\"{}\" is a module — aichip draws it, so there is nothing to run.", app.name),
+        ))
+    }
+}
+
+/// Docker, in the two shapes the UI needs: a flag to disable a button, and a
+/// sentence saying which of the two problems it is. "Not installed" and "the
+/// daemon is not answering" are completely different fixes.
+async fn docker_state() -> Value {
+    match docker_problem().await {
+        None => json!({ "usable": true, "problem": Value::Null }),
+        Some(problem) => json!({ "usable": false, "problem": problem }),
+    }
+}
+
+async fn docker_problem() -> Option<String> {
+    match aichip_core::previews::docker::detect().await {
+        Some(Ok(_)) => None,
+        None => Some("Docker isn't installed, or isn't on this machine's PATH.".into()),
+        Some(Err(detail)) => {
+            Some(format!("Docker is installed but its daemon isn't responding. {detail}"))
+        }
+    }
+}
+
+/// Whether this app's container is up, and where.
+async fn container(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    let preview = aichip_core::previews::get_base(&state.db, app.project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        // The slug, not a URL: the port to put in it is the one aichip is being
+        // *served* on, which the browser knows and the server does not.
+        "slug": app.slug,
+        "preview": preview,
+        "docker": docker_state().await,
+    })))
+}
+
+/// Build and run it, or wake it if the image is still here.
+async fn start(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    if !app.active {
+        return Err((StatusCode::CONFLICT, "switch this app on first".into()));
+    }
+    if let Some(problem) = docker_problem().await {
+        return Err((StatusCode::PRECONDITION_FAILED, problem));
+    }
+    let preview = aichip_core::previews::start_base(&state.db, app.project_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "slug": app.slug, "preview": preview })))
+}
+
+async fn stop(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    aichip_core::previews::stop_base(&state.db, app.project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The Dockerfile this app would build from, and whether it needs reading.
+async fn dockerfile(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    use aichip_core::apps::runtime::{self, Build};
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+
+    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile")).await.ok();
+    Ok(Json(match runtime::drift(app.runtime, committed.as_deref()) {
+        Build::Owned(text) => json!({ "text": text, "drifted": false, "sha": Value::Null }),
+        Build::Drifted { text, sha } => {
+            let approved: Option<String> =
+                sqlx::query_scalar("SELECT dockerfile_sha256 FROM apps WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&state.db.pool)
+                    .await
+                    .map_err(internal)?;
+            json!({
+                "text": text,
+                // Drifted *and unapproved* is what the gate reacts to. An edit
+                // someone already read is not a question any more.
+                "drifted": approved.as_deref() != Some(sha.as_str()),
+                "sha": sha,
+            })
+        }
+        Build::None => json!({ "text": Value::Null, "drifted": false, "sha": Value::Null }),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ApproveDockerfile {
+    sha: String,
+}
+
+/// Say that a person has read the Dockerfile as it now stands.
+///
+/// The hash, not a flag: approval attaches to the text, so the next rewrite
+/// does not inherit the reading someone gave this one. Same rule as approving
+/// a preview recipe.
+async fn approve_dockerfile(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ApproveDockerfile>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, id).await?;
+    container_app(&app)?;
+    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "this app has no Dockerfile".to_string()))?;
+
+    // Re-derived from the file rather than trusted from the request, so what is
+    // approved is what is on disk right now — not what the screen was showing
+    // when it was opened.
+    let actual = aichip_core::apps::digest(committed.trim());
+    if actual != body.sha {
+        return Err((
+            StatusCode::CONFLICT,
+            "the Dockerfile changed while you were reading it — look again".into(),
+        ));
+    }
+    sqlx::query("UPDATE apps SET dockerfile_sha256 = $2, approved_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(&actual)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "approved": actual })))
 }
 
 // ── Grants ──────────────────────────────────────────────────────────────────

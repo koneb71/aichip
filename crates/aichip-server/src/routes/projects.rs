@@ -13,7 +13,44 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
-        .route("/projects/{id}", axum::routing::patch(update))
+        .route("/projects/{id}", get(one).patch(update))
+}
+
+const PROJECT_COLUMNS: &str =
+    "id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in, kind";
+
+fn project_json(r: &sqlx::postgres::PgRow) -> Value {
+    json!({
+        "id": r.get::<Uuid, _>("id"),
+        "path": r.get::<String, _>("path"),
+        "name": r.get::<String, _>("name"),
+        "defaultBranch": r.get::<String, _>("default_branch"),
+        "workspaceId": r.get::<Uuid, _>("workspace_id"),
+        "vcs": r.get::<String, _>("vcs"),
+        "vcsNote": r.get::<Option<String>, _>("vcs_note"),
+        "fullAutoOptIn": r.get::<bool, _>("full_auto_opt_in"),
+        "kind": r.get::<String, _>("kind"),
+    })
+}
+
+/// One project by id, whatever kind it is.
+///
+/// Deliberately without the `kind = 'repo'` filter the list carries. An app is
+/// a project, and its folder is the only place its source lives — so the files
+/// editor has to be able to reach it. Filtered here as well would mean a page
+/// that renders with a header reading "Project" and every setting silently
+/// defaulted, which is what happened while this route did not exist.
+async fn one(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE id = $1"))
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+    Ok(Json(project_json(&row)))
 }
 
 #[derive(Deserialize)]
@@ -25,34 +62,19 @@ async fn list(
     State(state): State<AppState>,
     Query(filter): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         // Apps are projects too — that is what gives them worktrees, diffs and
         // previews — but they belong in the gallery, not in a list of the
         // repositories someone works in.
-        "SELECT id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in
-         FROM projects
+        "SELECT {PROJECT_COLUMNS} FROM projects
          WHERE kind = 'repo' AND ($1::uuid IS NULL OR workspace_id = $1)
-         ORDER BY created_at DESC",
-    )
+         ORDER BY created_at DESC"
+    ))
     .bind(filter.workspace_id)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
-    let projects: Vec<Value> = rows
-        .iter()
-        .map(|r| {
-            json!({
-                "id": r.get::<Uuid, _>("id"),
-                "path": r.get::<String, _>("path"),
-                "name": r.get::<String, _>("name"),
-                "defaultBranch": r.get::<String, _>("default_branch"),
-                "workspaceId": r.get::<Uuid, _>("workspace_id"),
-                "vcs": r.get::<String, _>("vcs"),
-                "vcsNote": r.get::<Option<String>, _>("vcs_note"),
-                "fullAutoOptIn": r.get::<bool, _>("full_auto_opt_in"),
-            })
-        })
-        .collect();
+    let projects: Vec<Value> = rows.iter().map(project_json).collect();
     Ok(Json(json!({ "projects": projects })))
 }
 

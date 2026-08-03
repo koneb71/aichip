@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { useNavigate, useParams } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppDetail } from "../lib/api";
 import { AppView } from "../components/apps/AppView";
 import { SchemaGate } from "../components/apps/SchemaGate";
 import { ScopeGrant } from "../components/apps/ScopeGrant";
+import { AppFrame } from "../components/apps/AppFrame";
+import { BuildHistory } from "../components/apps/BuildHistory";
+import { ChangeAppModal } from "../components/apps/ChangeAppModal";
+import { DockerfileGate } from "../components/apps/DockerfileGate";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
   const { appId } = useParams();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [app, setApp] = useState<AppDetail | null>(null);
   const [screen, setScreen] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [perms, setPerms] = useState(false);
+  const [changing, setChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // The sidebar links straight to a screen, so `?view=` wins over the menu's
+  // first entry — otherwise every link in it would land on the same page.
+  const wanted = params.get("view");
 
   const refresh = useCallback(() => {
     if (!appId) return;
@@ -23,10 +33,18 @@ export default function AppPage() {
       .app(appId)
       .then((a) => {
         setApp(a);
+        // Only when nothing has chosen one yet — the effect below has already
+        // applied `?view=` by the time this resolves.
         setScreen((s) => s ?? a.declares?.menu[0]?.view ?? a.declares?.views[0]?.name ?? null);
       })
       .catch((e) => setError(String(e).replace(/^Error:\s*/, "")));
+    // Deliberately not keyed on `?view=`: a sidebar click changes the screen,
+    // not the app, and refetching it on every one would be a request per tab.
   }, [appId]);
+
+  useEffect(() => {
+    if (wanted) setScreen(wanted);
+  }, [wanted]);
 
   useEffect(() => {
     refresh();
@@ -106,12 +124,26 @@ export default function AppPage() {
         >
           Export with data
         </a>
+        <Link
+          to={`/projects/${app.projectId}`}
+          title="This app's own folder, in the files editor."
+          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+        >
+          Files
+        </Link>
         <button
           onClick={() => setPerms((p) => !p)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
         >
           Permissions
         </button>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={() => setChanging(true)}
+          className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-white"
+        >
+          Change this app
+        </motion.button>
         <button
           onClick={() => setEditing(editing === null ? app.manifest : null)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
@@ -200,13 +232,19 @@ export default function AppPage() {
               ))}
             </div>
           )}
-          {manifest && view ? (
+          {app.runtime !== "module" ? (
+            <>
+              <DockerfileGate appId={app.id} onApproved={refresh} />
+              <AppFrame app={app} />
+            </>
+          ) : manifest && view ? (
             <AppView
               app={app}
               manifest={manifest}
               view={view}
               // Only when there is no tab bar saying it already.
               title={tabs.length > 1 ? undefined : tabs[0]?.label}
+              onGoto={setScreen}
             />
           ) : (
             !app.manifestError && (
@@ -216,8 +254,22 @@ export default function AppPage() {
               </div>
             )
           )}
+          <BuildHistory appId={app.id} projectId={app.projectId} onChanged={refresh} />
         </>
       )}
+
+      <AnimatePresence>
+        {changing && (
+          <ChangeAppModal
+            app={app}
+            onClose={() => setChanging(false)}
+            onStarted={() => {
+              setChanging(false);
+              refresh();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

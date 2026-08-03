@@ -196,14 +196,26 @@ mod tests {
     fn sandbox_accepts_home_subdirs_and_rejects_escapes() {
         let home = std::env::var("HOME").unwrap();
         let home = Path::new(&home);
+
+        // A directory this test makes, rather than one it hopes for. The
+        // previous version reached for `Documents`, which meant the test
+        // passed on a laptop and failed in any container without one — and a
+        // test that depends on the machine is a test people learn to ignore.
+        let scratch = home.join(".aichip-fs-sandbox-test");
+        std::fs::create_dir_all(&scratch).expect("a directory under HOME");
+
         // Home itself is allowed.
         assert!(sandboxed(home, home).is_some());
         // Traversal back into home is fine after canonicalization…
-        assert!(sandboxed(home, &home.join("Documents/..")).is_some());
+        assert!(sandboxed(home, &scratch.join("..")).is_some());
+        // …and into the directory itself.
+        assert!(sandboxed(home, &scratch).is_some());
         // …but escaping is not.
         assert!(sandboxed(home, Path::new("/tmp")).is_none());
         assert!(sandboxed(home, &home.join("..")).is_none());
         // Nonexistent paths are rejected (canonicalize fails).
         assert!(sandboxed(home, &home.join("definitely-not-a-real-dir-xyz")).is_none());
+
+        let _ = std::fs::remove_dir(&scratch);
     }
 }

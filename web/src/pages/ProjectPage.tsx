@@ -86,13 +86,13 @@ export default function ProjectPage() {
     [refresh],
   );
 
+  // Fetched by id, not found in the list: the list filters to `kind='repo'`,
+  // so scanning it left an app's own project resolving to null — a page with a
+  // header reading "Project" and every setting silently defaulted.
   useEffect(() => {
-    if (!active || !projectId) return;
-    api
-      .projects(active.id)
-      .then(({ projects }) => setProject(projects.find((p) => p.id === projectId) ?? null))
-      .catch(() => {});
-  }, [active, projectId]);
+    if (!projectId) return;
+    api.project(projectId).then(setProject).catch(() => setProject(null));
+  }, [projectId]);
 
   useEffect(() => {
     refresh().catch(() => {});

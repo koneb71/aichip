@@ -1,17 +1,37 @@
 import { describe, expect, it } from "vitest";
-import type { App, AppDetail, AppField, AppModel, AppView } from "./api";
+import type {
+  App,
+  AppBuild,
+  AppDetail,
+  AppField,
+  AppModel,
+  AppRuntime,
+  AppView,
+  ContainerState,
+} from "./api";
 import {
+  appOrigin,
   appState,
   baseType,
+  buildLine,
+  containerLine,
   bucketValue,
   cellText,
   fieldLabel,
   formRows,
+  isPaged,
   listColumns,
+  pageWindow,
   recordFor,
+  runtimeBlurb,
+  searchableField,
+  searchFilter,
   sortParam,
+  starterManifest,
   ungrantedScopes,
 } from "./apps";
+
+const RUNTIMES: AppRuntime[] = ["module", "node", "static"];
 
 const field = (over: Partial<AppField> & { name: string }): AppField => ({
   label: null,
@@ -54,6 +74,7 @@ const app = (over: Partial<App> = {}): App => ({
   runtime: "module",
   active: true,
   path: "/tmp/apps/expenses-abc123",
+  menu: [],
   ...over,
 });
 
@@ -209,6 +230,56 @@ describe("scopes", () => {
   });
 });
 
+describe("searching", () => {
+  it("searches the first text column", () => {
+    expect(searchableField(MODEL)).toBe("note");
+  });
+
+  it("offers no box when there is nothing text to search", () => {
+    // Better than a box that could never match anything.
+    const numbers: AppModel = {
+      name: "reading",
+      fields: [field({ name: "value", type: "decimal" }), field({ name: "at", type: "datetime" })],
+    };
+    expect(searchableField(numbers)).toBeNull();
+  });
+
+  it("builds a filter the query layer parses, and nothing when empty", () => {
+    expect(searchFilter("note", "rent")).toEqual(["note:like:rent"]);
+    expect(searchFilter("note", "  ")).toEqual([]);
+    expect(searchFilter(null, "rent")).toEqual([]);
+    // Not string-built: a term with a wildcard in it is handed over as-is and
+    // apps::query does the escaping.
+    expect(searchFilter("note", "50%")).toEqual(["note:like:50%"]);
+  });
+});
+
+describe("paging", () => {
+  it("pages a list but never a board", () => {
+    // A per-column count that silently means "on this page" is a number that
+    // lies, and adding the columns up is how someone finds out.
+    expect(isPaged("list")).toBe(true);
+    expect(isPaged("form")).toBe(true);
+    expect(isPaged("kanban")).toBe(false);
+    expect(isPaged("chart")).toBe(false);
+  });
+
+  it("counts from one and stops at the total", () => {
+    expect(pageWindow(0, 60, 50)).toMatchObject({ from: 1, to: 50, hasPrevious: false, hasNext: true });
+    expect(pageWindow(1, 60, 50)).toMatchObject({ from: 51, to: 60, hasPrevious: true, hasNext: false });
+  });
+
+  it("does not offer a pager that would always say the same thing", () => {
+    expect(pageWindow(0, 12, 50).needed).toBe(false);
+    expect(pageWindow(0, 50, 50).needed).toBe(false);
+    expect(pageWindow(0, 51, 50).needed).toBe(true);
+  });
+
+  it("says nothing rather than 1–0 of 0 when there is nothing", () => {
+    expect(pageWindow(0, 0, 50)).toMatchObject({ from: 0, to: 0, hasNext: false, needed: false });
+  });
+});
+
 describe("chart buckets", () => {
   it("reads the text the server sent as a number", () => {
     expect(bucketValue("12.5")).toBe(12.5);
@@ -216,5 +287,104 @@ describe("chart buckets", () => {
     // A sum over no rows comes back empty rather than as zero.
     expect(bucketValue("")).toBe(0);
     expect(bucketValue("not a number")).toBe(0);
+  });
+});
+
+describe("starting a new app", () => {
+  it("declares the runtime it was asked for", () => {
+    // The starter is installed as written, so a manifest saying `module` under
+    // a "node app" heading would quietly make the wrong kind of app.
+    for (const runtime of RUNTIMES) {
+      expect(starterManifest(runtime)).toContain(`runtime: ${runtime}`);
+    }
+  });
+
+  it("offers a container app no vocabulary the parser refuses", () => {
+    // A container draws its own pages, so `views:` is not a thing it may
+    // declare — and an example containing one is how someone comes to write it.
+    for (const runtime of ["node", "static"] as AppRuntime[]) {
+      const m = starterManifest(runtime);
+      expect(m).not.toContain("\nviews:");
+      expect(m).not.toContain("\nmenu:");
+      // Models it does get: the tables are the same tables.
+      expect(m).toContain("\nmodels:");
+    }
+    expect(starterManifest("module")).toContain("\nviews:");
+  });
+
+  it("says which runtimes need Docker before one is chosen", () => {
+    expect(runtimeBlurb("module")).not.toContain("Docker");
+    expect(runtimeBlurb("node")).toContain("Docker");
+    expect(runtimeBlurb("static")).toContain("Docker");
+  });
+});
+
+describe("build history", () => {
+  const b = (over: Partial<AppBuild>): AppBuild => ({
+    id: "b",
+    taskId: "t",
+    brief: "add a field",
+    status: "landed",
+    error: null,
+    landedCommit: null,
+    createdAt: "2026-08-03T00:00:00Z",
+    revertible: false,
+    ...over,
+  });
+
+  it("does not call a landed build with a broken manifest a success", () => {
+    // The files did land, so "failed" would be wrong — but the app is down,
+    // and a bare "Landed" is how someone fails to notice.
+    expect(buildLine(b({ status: "landed" }))).toBe("Landed.");
+    expect(buildLine(b({ status: "landed", error: "models.x: bad" }))).toContain("problem");
+  });
+
+  it("says where the work went when a merge failed", () => {
+    // Not "failed": the run worked and the diff is still on the card, which is
+    // the one thing a person needs to know to rescue it.
+    expect(buildLine(b({ status: "conflicted" }))).toContain("card");
+    expect(buildLine(b({ status: "failed" }))).toContain("did not finish");
+    expect(buildLine(b({ status: "reverted" }))).toBe("Undone.");
+    expect(buildLine(b({ status: "running" }))).toContain("…");
+  });
+});
+
+describe("container apps", () => {
+  it("builds the origin from the port the browser is already on", () => {
+    // The server does not know which port it is being served on; the browser
+    // does. Same reasoning as previewUrl.
+    expect(appOrigin("notes-abc123", "4820")).toBe("http://notes-abc123.app.localhost:4820");
+    expect(appOrigin("notes-abc123", "")).toBe("http://notes-abc123.app.localhost");
+  });
+
+  const state = (over: Partial<ContainerState>): ContainerState => ({
+    slug: "x",
+    preview: null,
+    docker: { usable: true, problem: null },
+    ...over,
+  });
+
+  it("distinguishes asleep from never built, because the button differs", () => {
+    // Waking is seconds because the image is still here; building is minutes.
+    // A single "Start" hiding both makes the wait a surprise.
+    const p = (status: string) =>
+      state({ preview: { status, canWake: true, portAssumed: false, error: null } as never });
+    expect(containerLine(p("idle"))).toContain("seconds");
+    expect(containerLine(p("building"))).toContain("minute");
+    expect(containerLine(state({}))).toBe("Not built yet.");
+    expect(containerLine(p("running"))).toBe("Running at");
+    expect(containerLine(p("failed"))).toContain("failed");
+  });
+
+  it("leads with Docker being absent, since nothing else can happen then", () => {
+    const missing = state({
+      docker: { usable: false, problem: "Docker isn't installed." },
+      preview: { status: "running", canWake: false, portAssumed: false, error: null } as never,
+    });
+    expect(containerLine(missing)).toContain("Docker");
+  });
+
+  it("says something rather than nothing before the first answer arrives", () => {
+    expect(containerLine(null)).toBe("Checking…");
   });
 });

@@ -85,6 +85,13 @@ pub const PREVIEW_SUFFIX: &str = ".preview.localhost";
 /// How long a preview nobody has looked at stays up.
 pub const IDLE_MINUTES: i64 = 30;
 
+/// How many *apps* may run at once, separately from previews.
+///
+/// Two, not three: an app is something you keep open, so the number that
+/// matters is how many you use side by side rather than how many branches you
+/// are reviewing.
+pub const MAX_LIVE_APPS: i64 = 2;
+
 /// The two numbers that decide whether previews are safe to forget about.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +100,11 @@ pub struct Limits {
     /// Zero means never idle-stop, which is a real choice for someone who
     /// leaves one open all day on purpose.
     pub idle_minutes: i64,
+    /// Apps get their own budget, and the reasoning above about the machine
+    /// being full does still apply — but a preview is looked at once and an app
+    /// is opened dozens of times a day, so making them compete means the thing
+    /// you use every day loses to three branches you have finished reviewing.
+    pub max_live_apps: i64,
 }
 
 impl Default for Limits {
@@ -100,6 +112,7 @@ impl Default for Limits {
         Self {
             max_live: MAX_LIVE,
             idle_minutes: IDLE_MINUTES,
+            max_live_apps: MAX_LIVE_APPS,
         }
     }
 }
@@ -122,6 +135,11 @@ pub async fn limits(db: &Db) -> Limits {
             .and_then(|x| x.as_i64())
             .unwrap_or(d.idle_minutes)
             .clamp(0, 24 * 60),
+        max_live_apps: v
+            .get("max_live_apps")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(d.max_live_apps)
+            .clamp(1, 20),
     }
 }
 
@@ -129,6 +147,7 @@ pub async fn set_limits(db: &Db, next: Limits) -> anyhow::Result<Limits> {
     let next = Limits {
         max_live: next.max_live.clamp(1, 20),
         idle_minutes: next.idle_minutes.clamp(0, 24 * 60),
+        max_live_apps: next.max_live_apps.clamp(1, 20),
     };
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES ('preview_limits', $1)
@@ -137,6 +156,7 @@ pub async fn set_limits(db: &Db, next: Limits) -> anyhow::Result<Limits> {
     .bind(serde_json::json!({
         "max_live": next.max_live,
         "idle_minutes": next.idle_minutes,
+        "max_live_apps": next.max_live_apps,
     }))
     .execute(&db.pool)
     .await?;
@@ -187,7 +207,70 @@ enum How {
     Single(Option<String>),
 }
 
+/// How an app builds, when this project is one.
+///
+/// It lives here rather than in the apps routes so that
+/// `POST /api/projects/{id}/preview` cannot reach an app's container by a
+/// different door and skip the gate below.
+///
+/// aichip owns the Dockerfile for each runtime, so the common case has nothing
+/// to approve. When the repository's copy differs from ours, *that* is what
+/// gets built — and it is agent-written code whose `RUN` lines execute on this
+/// machine, so it waits until someone has read it. Approval attaches to the
+/// text's hash, exactly as it does for a preview recipe, so the rewrite on the
+/// next build does not inherit the reading someone gave this one.
+async fn how_app(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<Option<(How, recipe::Port)>> {
+    use crate::apps::runtime::{self, Build};
+
+    let row = sqlx::query(
+        "SELECT a.runtime, a.dockerfile_sha256, a.name
+           FROM apps a WHERE a.project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+
+    let runtime = crate::apps::Runtime::parse(row.get::<String, _>("runtime").as_str())
+        .unwrap_or(crate::apps::Runtime::Module);
+    if !runtime.is_container() {
+        let name: String = row.get("name");
+        anyhow::bail!(
+            "\"{name}\" is a module — aichip draws it, so there is no container to build."
+        );
+    }
+
+    let committed = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
+    let text = match runtime::drift(runtime, committed.as_deref()) {
+        Build::None => return Ok(None),
+        Build::Owned(ours) => ours.to_string(),
+        Build::Drifted { text, sha } => {
+            let approved: Option<String> = row.get("dockerfile_sha256");
+            if approved.as_deref() != Some(sha.as_str()) {
+                anyhow::bail!(
+                    "this app's Dockerfile has been changed from the one aichip wrote. \
+                     Read it and approve it before it is built — its RUN lines execute \
+                     on this machine."
+                );
+            }
+            text
+        }
+    };
+
+    let port = recipe::plan(Some(&text)).map_err(|e| anyhow::anyhow!(e.message()))?;
+    // Fed on stdin like an approved recipe, so building never adds a file to
+    // the tree or changes what is committed.
+    Ok(Some((How::Single(Some(text)), port)))
+}
+
 async fn how(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<(How, recipe::Port)> {
+    // Before anything in the tree: an app's build is aichip's, not the
+    // repository's, and a stray compose file in a generated app must not
+    // quietly become how it runs.
+    if let Some(build) = how_app(db, source, project_id).await? {
+        return Ok(build);
+    }
+
     for name in compose::COMPOSE_FILES {
         let path = source.join(name);
         let Ok(text) = tokio::fs::read_to_string(&path).await else {
@@ -459,21 +542,40 @@ pub async fn start_base(db: &Db, project_id: Uuid) -> anyhow::Result<Preview> {
 
     let (build, port) = how(db, &source, project_id).await?;
 
-    // Base previews share the cap with card previews on purpose: they cost the
-    // same memory, and "the machine is full" does not care what a container is
-    // for.
+    // An app counts against the app budget and a branch against the preview
+    // one. The original reasoning — the machine being full does not care what a
+    // container is for — still holds for two things looked at once; it stops
+    // holding when one of them is opened dozens of times a day and the other
+    // is a branch someone has finished reviewing.
     let limits = limits(db).await;
-    let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM previews WHERE status IN ('building','running')
-           AND (task_id IS NOT NULL OR project_id <> $1)",
-    )
-    .bind(project_id)
-    .fetch_one(&db.pool)
-    .await?;
-    if live >= limits.max_live {
-        anyhow::bail!(
-            "{live} previews are already running, which is the limit. Stop one first."
-        );
+    let is_app: bool = sqlx::query_scalar("SELECT kind = 'app' FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&db.pool)
+        .await?
+        .unwrap_or(false);
+    let (live, cap, what) = if is_app {
+        let live: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM previews v JOIN projects p ON p.id = v.project_id
+              WHERE v.status IN ('building','running')
+                AND p.kind = 'app' AND v.project_id <> $1",
+        )
+        .bind(project_id)
+        .fetch_one(&db.pool)
+        .await?;
+        (live, limits.max_live_apps, "apps")
+    } else {
+        let live: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM previews v JOIN projects p ON p.id = v.project_id
+              WHERE v.status IN ('building','running')
+                AND p.kind <> 'app' AND (v.task_id IS NOT NULL OR v.project_id <> $1)",
+        )
+        .bind(project_id)
+        .fetch_one(&db.pool)
+        .await?;
+        (live, limits.max_live, "previews")
+    };
+    if live >= cap {
+        anyhow::bail!("{live} {what} are already running, which is the limit. Stop one first.");
     }
 
     if let Some(woken) = wake(db, Which::Base(project_id), port.number).await? {
