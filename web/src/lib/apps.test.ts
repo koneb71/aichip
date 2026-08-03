@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { App, AppDetail, AppField, AppModel, AppView } from "./api";
+import type { App, AppDetail, AppField, AppModel, AppView, ContainerState } from "./api";
 import {
+  appOrigin,
   appState,
   baseType,
+  containerLine,
   bucketValue,
   cellText,
   fieldLabel,
@@ -270,5 +272,45 @@ describe("chart buckets", () => {
     // A sum over no rows comes back empty rather than as zero.
     expect(bucketValue("")).toBe(0);
     expect(bucketValue("not a number")).toBe(0);
+  });
+});
+
+describe("container apps", () => {
+  it("builds the origin from the port the browser is already on", () => {
+    // The server does not know which port it is being served on; the browser
+    // does. Same reasoning as previewUrl.
+    expect(appOrigin("notes-abc123", "4820")).toBe("http://notes-abc123.app.localhost:4820");
+    expect(appOrigin("notes-abc123", "")).toBe("http://notes-abc123.app.localhost");
+  });
+
+  const state = (over: Partial<ContainerState>): ContainerState => ({
+    slug: "x",
+    preview: null,
+    docker: { usable: true, problem: null },
+    ...over,
+  });
+
+  it("distinguishes asleep from never built, because the button differs", () => {
+    // Waking is seconds because the image is still here; building is minutes.
+    // A single "Start" hiding both makes the wait a surprise.
+    const p = (status: string) =>
+      state({ preview: { status, canWake: true, portAssumed: false, error: null } as never });
+    expect(containerLine(p("idle"))).toContain("seconds");
+    expect(containerLine(p("building"))).toContain("minute");
+    expect(containerLine(state({}))).toBe("Not built yet.");
+    expect(containerLine(p("running"))).toBe("Running at");
+    expect(containerLine(p("failed"))).toContain("failed");
+  });
+
+  it("leads with Docker being absent, since nothing else can happen then", () => {
+    const missing = state({
+      docker: { usable: false, problem: "Docker isn't installed." },
+      preview: { status: "running", canWake: false, portAssumed: false, error: null } as never,
+    });
+    expect(containerLine(missing)).toContain("Docker");
+  });
+
+  it("says something rather than nothing before the first answer arrives", () => {
+    expect(containerLine(null)).toBe("Checking…");
   });
 });

@@ -15,15 +15,19 @@
 //! wants to store and reaches its rows through aichip, which is what keeps
 //! agent-written code away from everything it did not declare.
 
+pub mod bridge;
 pub mod bundle;
+pub mod client_js;
 pub mod data;
 pub mod expr;
 pub mod grants;
+pub mod host;
 pub mod introspect;
 pub mod manifest;
 pub mod query;
 pub mod render;
 pub mod run;
+pub mod runtime;
 pub mod scaffold;
 pub mod schema;
 pub mod scope;

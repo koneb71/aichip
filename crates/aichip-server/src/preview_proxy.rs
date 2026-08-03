@@ -11,6 +11,11 @@
 //!   store is concerned: log into one and the other is logged in too. Distinct
 //!   hostnames are what actually keeps them apart.
 //!
+//! The same machinery serves installed apps at `.app.localhost`, which is a
+//! different thing wearing the same shape: a preview is a branch under review
+//! and gets nothing, while an app may hold grants. Telling them apart is
+//! `apps::host::classify`, and its confusion matrix is pinned there.
+//!
 //! `*.localhost` resolves to loopback without any `/etc/hosts` entry — checked
 //! on this machine, not assumed — so this needs no setup and no DNS.
 //!
@@ -25,31 +30,12 @@
 //! itself may not contain a dot.
 
 use crate::AppState;
+use aichip_core::apps;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::middleware::Next;
 use sqlx::Row;
-
-/// The suffix a preview hostname must end with, exactly.
-pub const PREVIEW_SUFFIX: &str = ".preview.localhost";
-
-/// The preview slug in a `Host` value, if this is a preview hostname at all.
-///
-/// Returns `None` for everything else, which is how the dashboard keeps
-/// answering on `localhost` — this is a routing decision before it is a
-/// security one, but it is both.
-pub fn slug_of_host(host: &str) -> Option<&str> {
-    let bare = crate::bare_host(host);
-    let label = bare.strip_suffix(PREVIEW_SUFFIX)?;
-    // One label, and a real one. A dot here would mean a longer name that
-    // merely ends with our suffix — `x.preview.localhost.attacker.com` cannot
-    // reach this, but `a.b.preview.localhost` should not either.
-    if label.is_empty() || label.contains('.') {
-        return None;
-    }
-    Some(label)
-}
 
 /// Headers that describe one hop and must not be copied to the next.
 const HOP_BY_HOP: [&str; 8] = [
@@ -103,22 +89,55 @@ fn forwardable(headers: &HeaderMap) -> HeaderMap {
     out
 }
 
-/// Serve preview hostnames; hand everything else to the dashboard.
+/// Serve preview and app hostnames; hand everything else to the dashboard.
+///
+/// Two arms, and the difference between them is the whole point: a
+/// `.preview.localhost` name is a branch under review and gets nothing but its
+/// own container, while a `.app.localhost` name is an installed app and may
+/// hold grants. `apps::host::classify` is what keeps them apart, and its
+/// confusion matrix is pinned there.
 pub async fn route_previews(
     State(state): State<AppState>,
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    let Some(slug) = req
+    let host = req
         .headers()
         .get(axum::http::header::HOST)
         .and_then(|h| h.to_str().ok())
-        .and_then(|h| slug_of_host(h).map(str::to_string))
-    else {
+        .unwrap_or("")
+        .to_string();
+    let Some((kind, slug)) = apps::host::classify(&host) else {
         return next.run(req).await;
     };
+    let slug = slug.to_string();
 
-    match proxy(&state, &slug, req).await {
+    if kind == apps::host::HostKind::App {
+        let path = req.uri().path().to_string();
+        // The reserved prefix is answered here and never forwarded, so the
+        // container cannot see it, cannot serve it, and cannot learn it was
+        // asked for.
+        match apps::host::bridge_path(&path) {
+            Some(Err(apps::host::Traversal)) => {
+                return plain(StatusCode::BAD_REQUEST, "that path is not allowed")
+            }
+            Some(Ok(segments)) => {
+                let owned: Vec<String> = segments.into_iter().map(str::to_string).collect();
+                return crate::app_bridge::handle(&state, &slug, owned, req).await;
+            }
+            None => {}
+        }
+        // A name aichip answers to itself never reaches an app, so the probe
+        // gets an answer whether or not one exists.
+        if apps::host::RESERVED.contains(&slug.as_str()) {
+            return plain(
+                StatusCode::NOT_FOUND,
+                format!("\"{slug}\" is a name aichip keeps for itself."),
+            );
+        }
+    }
+
+    match proxy(&state, kind, &slug, req).await {
         Ok(response) => response,
         Err(message) => plain(StatusCode::BAD_GATEWAY, message),
     }
@@ -126,25 +145,46 @@ pub async fn route_previews(
 
 async fn proxy(
     state: &AppState,
+    kind: apps::host::HostKind,
     slug: &str,
     req: Request<Body>,
 ) -> Result<Response<Body>, String> {
-    // Only a *running* preview answers. A slug belonging to one that is idle
-    // or stopped gets a page saying so rather than a connection refused, which
-    // is the difference between "it went to sleep" and "aichip is broken".
-    let row = sqlx::query(
-        "SELECT status, host_port FROM previews WHERE slug = $1
-          ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(slug)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(|e| format!("could not look up this preview: {e}"))?;
+    // Only a *running* container answers. One that is idle or stopped gets a
+    // page saying so rather than a connection refused, which is the difference
+    // between "it went to sleep" and "aichip is broken".
+    //
+    // A preview is found by its own slug; an app by the slug on the `apps` row,
+    // whose live container is the project's base preview. Keeping the app's
+    // name off the preview row is what makes it survive a rebuild.
+    let row = match kind {
+        apps::host::HostKind::Preview => sqlx::query(
+            "SELECT status, host_port FROM previews WHERE slug = $1
+              ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(slug)
+        .fetch_optional(&state.db.pool)
+        .await,
+        apps::host::HostKind::App => sqlx::query(
+            "SELECT v.status, v.host_port
+               FROM apps a
+               JOIN previews v ON v.project_id = a.project_id AND v.task_id IS NULL
+              WHERE a.slug = $1
+              ORDER BY v.created_at DESC LIMIT 1",
+        )
+        .bind(slug)
+        .fetch_optional(&state.db.pool)
+        .await,
+    }
+    .map_err(|e| format!("could not look up this address: {e}"))?;
 
+    let thing = match kind {
+        apps::host::HostKind::Preview => "preview",
+        apps::host::HostKind::App => "app",
+    };
     let Some(row) = row else {
         return Ok(plain(
             StatusCode::NOT_FOUND,
-            format!("No preview is called \"{slug}\". It may have been stopped."),
+            format!("Nothing is running at \"{slug}\". The {thing} may have been stopped."),
         ));
     };
     let status: String = row.get("status");
@@ -152,7 +192,7 @@ async fn proxy(
         return Ok(plain(
             StatusCode::SERVICE_UNAVAILABLE,
             format!(
-                "This preview is {status}. Open its card in aichip and start it again — \
+                "This {thing} is {status}. Open it in aichip and start it again — \
                  if its image is still here that takes a few seconds."
             ),
         ));
@@ -191,6 +231,13 @@ async fn proxy(
         if HOP_BY_HOP.contains(&lower.as_str()) {
             continue;
         }
+        // An app is *meant* to be embedded — that is the whole feature — so a
+        // framework helpfully sending `X-Frame-Options: DENY` would leave the
+        // gallery showing a blank box. Dropped for apps only; a preview keeps
+        // whatever it sent, because nothing embeds a preview.
+        if kind == apps::host::HostKind::App && lower == "x-frame-options" {
+            continue;
+        }
         // The one header rewritten on the way back. A `Domain` attribute would
         // hand this preview's cookie to every other one and to the dashboard.
         if lower == "set-cookie" {
@@ -203,10 +250,20 @@ async fn proxy(
         }
         out = out.header(name, value);
     }
+    // Appended rather than replacing whatever the app sent: multiple CSP
+    // headers all apply and the intersection wins, so an app with a stricter
+    // policy of its own keeps it.
+    if kind == apps::host::HostKind::App {
+        out = out.header(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            crate::app_bridge::csp(),
+        );
+    }
+
     let bytes = upstream
         .bytes()
         .await
-        .map_err(|e| format!("this preview's response could not be read: {e}"))?;
+        .map_err(|e| format!("this {thing}'s response could not be read: {e}"))?;
     out.body(Body::from(bytes))
         .map_err(|e| format!("could not assemble the proxied response: {e}"))
 }
@@ -222,33 +279,6 @@ fn plain(status: StatusCode, message: impl Into<String>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn matches_only_a_single_label_under_our_own_suffix() {
-        assert_eq!(slug_of_host("card-a.preview.localhost"), Some("card-a"));
-        assert_eq!(slug_of_host("card-a.preview.localhost:4820"), Some("card-a"));
-        assert_eq!(
-            slug_of_host("http://card-a.preview.localhost:4820/"),
-            Some("card-a")
-        );
-    }
-
-    #[test]
-    fn refuses_names_that_merely_contain_the_suffix() {
-        // The attack this is here for: a name the attacker controls that ends
-        // up looking like ours to a sloppy `contains`.
-        assert_eq!(slug_of_host("card-a.preview.localhost.attacker.com"), None);
-        assert_eq!(slug_of_host("preview.localhost.evil.test"), None);
-        // Nested labels are not ours either.
-        assert_eq!(slug_of_host("a.b.preview.localhost"), None);
-        // The dashboard's own hosts must fall through, not be treated as slugs.
-        assert_eq!(slug_of_host("localhost:4820"), None);
-        assert_eq!(slug_of_host("127.0.0.1:4820"), None);
-        assert_eq!(slug_of_host("[::1]:4820"), None);
-        // An empty label is not a name.
-        assert_eq!(slug_of_host(".preview.localhost"), None);
-        assert_eq!(slug_of_host("preview.localhost"), None);
-    }
 
     #[test]
     fn strips_headers_that_describe_only_this_hop() {

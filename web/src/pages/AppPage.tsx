@@ -5,6 +5,8 @@ import { api, type AppDetail } from "../lib/api";
 import { AppView } from "../components/apps/AppView";
 import { SchemaGate } from "../components/apps/SchemaGate";
 import { ScopeGrant } from "../components/apps/ScopeGrant";
+import { AppFrame } from "../components/apps/AppFrame";
+import { DockerfileGate } from "../components/apps/DockerfileGate";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
@@ -200,7 +202,12 @@ export default function AppPage() {
               ))}
             </div>
           )}
-          {manifest && view ? (
+          {app.runtime !== "module" ? (
+            <>
+              <DockerfileGate appId={app.id} onApproved={refresh} />
+              <AppFrame app={app} />
+            </>
+          ) : manifest && view ? (
             <AppView
               app={app}
               manifest={manifest}

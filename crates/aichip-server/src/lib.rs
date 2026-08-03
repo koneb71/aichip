@@ -1,3 +1,4 @@
+pub mod app_bridge;
 pub mod mcp;
 pub mod preview_proxy;
 pub mod routes;
@@ -33,7 +34,14 @@ pub fn app(state: AppState) -> Router {
     let mut router = Router::new()
         .nest("/api", routes::api_router())
         .nest("/mcp", mcp::mcp_router())
-        .route("/ws", axum::routing::get(ws::ws_handler));
+        .route("/ws", axum::routing::get(ws::ws_handler))
+        // The capability bridge exists on app hostnames only, where the proxy
+        // layer above answers it and never calls through to here. Saying so
+        // explicitly, because the SPA fallback would otherwise serve
+        // `index.html` with a 200 for `/__aichip/me` on localhost — no
+        // capability leaked, but a very confusing thing to find while probing.
+        .route("/__aichip", axum::routing::any(no_bridge_here))
+        .route("/__aichip/{*rest}", axum::routing::any(no_bridge_here));
 
     // Dashboard assets: AICHIP_WEB_DIST overrides; defaults to ./web/dist
     // for dev checkouts. (v1.0 embeds these in the binary via rust-embed.)
@@ -62,6 +70,13 @@ pub fn app(state: AppState) -> Router {
             preview_proxy::route_previews,
         ))
         .with_state(state)
+}
+
+async fn no_bridge_here() -> (StatusCode, &'static str) {
+    (
+        StatusCode::NOT_FOUND,
+        "The app bridge is served on an app's own hostname, not here.",
+    )
 }
 
 /// Refuse to be displayed inside anyone else's frame.
