@@ -95,6 +95,22 @@ Two rules that are easy to break:
   which would drift. A plan with any destructive statement runs *nothing* and is
   stored whole, so what a person approved is byte-for-byte what executes.
 
+Changing an app is an ordinary card on the app's own project — worktree, diff and
+all — with two differences, both in
+[crates/aichip-core/src/apps/build.rs](crates/aichip-core/src/apps/build.rs):
+
+- **It lands without review, and that is why the undo has to work.** `settle()`
+  squash-merges when the run completes, so `app_builds.base_commit` is read
+  *before* the card exists; afterwards there is no way to ask git where the
+  branch stood. Only the newest landed build is revertible (`revertible()`) —
+  resetting to an older one would discard every build after it in silence.
+  Landing does *not* bypass the schema gate: the manifest is re-read from disk
+  and goes through `set_manifest`, so a dropped column still waits.
+- **Every write aichip makes to an app's folder is committed** (`apps::commit`).
+  A file written but not committed is not on `main`, so `git worktree add` hands
+  the next agent an empty folder — which is exactly what happened before it
+  existed, and cost a paid run.
+
 The expression language exists twice, in `apps/expr.rs` and `web/src/lib/expr.ts`,
 because `show_if` cannot afford a round trip and computed values cannot be
 decided by a browser. `crates/aichip-core/src/apps/expr_cases.json` is the

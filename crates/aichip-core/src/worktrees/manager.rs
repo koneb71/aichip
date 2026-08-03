@@ -182,6 +182,32 @@ async fn branch_exists(repo: &Path, branch: &str) -> bool {
         .is_ok()
 }
 
+/// The commit a repository is on. `None` before the first one.
+///
+/// Public because an app's build records where its branch stood before the
+/// build landed — which is the only thing that makes the undo real. Kept here
+/// rather than in `apps` so every `git` invocation still goes through one
+/// function with one error format.
+pub async fn head(path: &Path) -> Option<String> {
+    git(path, &["rev-parse", "HEAD"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Move the checked-out branch back to `commit`, discarding what came after.
+///
+/// Genuinely destructive, and only ever called with a commit this repository
+/// recorded itself. It exists for exactly one caller: undoing an app build that
+/// landed automatically. `--hard` rather than `revert` because the promise made
+/// at the point of landing is "put it back how it was", and a revert commit on
+/// top leaves the folder holding a history nobody asked to read.
+pub async fn reset_hard(repo: &Path, commit: &str) -> anyhow::Result<()> {
+    git(repo, &["reset", "--hard", commit]).await?;
+    Ok(())
+}
+
 /// The checked-out branch, which resolves even before the first commit.
 /// `None` when HEAD is detached.
 pub async fn current_branch(path: &Path) -> Option<String> {
@@ -295,7 +321,29 @@ async fn init_repo(path: &Path, default_branch: &str) -> anyhow::Result<()> {
 /// to branch from. Existing files are included deliberately: an empty first
 /// commit would hand the agent a worktree with none of the user's work in it.
 async fn commit_everything(path: &Path) -> anyhow::Result<()> {
+    commit_all(path, "Initial commit").await.map(|_| ())
+}
+
+/// Commit whatever is in a repository's working tree.
+///
+/// Public for apps, whose folder aichip writes to directly: a manifest written
+/// but never committed is invisible to `git worktree add`, so the next agent
+/// asked to change the app opens an **empty folder** — which is exactly what
+/// happened before this existed. Committing on write is what makes the branch
+/// and the folder the same thing.
+///
+/// Returns whether there was anything to commit, so a caller writing the file
+/// that is already committed (a landed merge, a revert) is a quiet no-op rather
+/// than an empty commit per save.
+pub async fn commit_all(path: &Path, message: &str) -> anyhow::Result<bool> {
     git(path, &["add", "-A"]).await?;
+    // An unborn HEAD has nothing to diff against, so the first commit is made
+    // unconditionally — `--allow-empty` is what lets a repo become branchable
+    // before it has any files at all.
+    let first = !has_commits(path).await;
+    if !first && git(path, &["diff", "--cached", "--quiet"]).await.is_ok() {
+        return Ok(false);
+    }
     // `-c` rather than `config`: identity is needed for this one commit and
     // writing it into the user's repo config would be presumptuous.
     git(
@@ -308,11 +356,11 @@ async fn commit_everything(path: &Path) -> anyhow::Result<()> {
             "commit",
             "--allow-empty",
             "-m",
-            "Initial commit",
+            message,
         ],
     )
     .await?;
-    Ok(())
+    Ok(true)
 }
 
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
@@ -403,6 +451,43 @@ mod tests {
             .unwrap();
         let carried = tokio::fs::read_to_string(wt.path.join("notes.md")).await.unwrap();
         assert_eq!(carried, "existing work\n");
+    }
+
+    #[tokio::test]
+    async fn a_file_written_after_the_repo_exists_still_reaches_a_worktree() {
+        // The bug this pins, found by running it rather than by a test: an app
+        // is `ensure_repo`'d and *then* has its manifest written, so the file
+        // was never on `main` — and the agent asked to change that app opened
+        // an empty folder and spent a paid run looking for it.
+        let dir = tempfile::tempdir().unwrap();
+        let wt_root = tempfile::tempdir().unwrap();
+        assert_eq!(ensure_repo(dir.path(), "main").await, Vcs::Git);
+        tokio::fs::write(dir.path().join("aichip.app.yaml"), "name: T\n")
+            .await
+            .unwrap();
+        assert!(commit_all(dir.path(), "Add T").await.unwrap());
+
+        let mgr = WorktreeManager::new(wt_root.path());
+        let wt = mgr.create(dir.path(), "main", Uuid::new_v4(), "t").await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(wt.path.join("aichip.app.yaml")).await.unwrap(),
+            "name: T\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn committing_an_unchanged_folder_writes_nothing() {
+        // Saving the manifest is what commits it, and a person pressing Save on
+        // text they did not change should not add a commit — nor should the
+        // re-read that follows a landed merge, where git already has the file.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(ensure_repo(dir.path(), "main").await, Vcs::Git);
+        tokio::fs::write(dir.path().join("a.txt"), "one").await.unwrap();
+        assert!(commit_all(dir.path(), "first").await.unwrap());
+        assert!(!commit_all(dir.path(), "again").await.unwrap());
+
+        let log = git(dir.path(), &["log", "--oneline"]).await.unwrap();
+        assert_eq!(log.lines().count(), 2, "got: {log}");
     }
 
     #[tokio::test]
