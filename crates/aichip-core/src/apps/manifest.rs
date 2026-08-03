@@ -257,8 +257,9 @@ pub struct View {
 /// One step of an action. A closed set — this is the whole logic layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    Create { model: String, values: Vec<(String, String)> },
-    Update { values: Vec<(String, String)> },
+    /// `None` for a value means clear that field — see [`pairs`].
+    Create { model: String, values: Vec<(String, Option<String>)> },
+    Update { values: Vec<(String, Option<String>)> },
     Delete,
     CreateTask { project: Option<String>, title: String, prompt: String },
     StartRun { project: Option<String>, prompt: String, agent: Option<String> },
@@ -1023,17 +1024,30 @@ fn parse_step(step: &Value, models: &[Model], views: &[View], at: &str) -> R<Ste
     })
 }
 
-fn parse_values(body: &Mapping, model: &Model, at: &str) -> R<Vec<(String, String)>> {
+fn parse_values(body: &Mapping, model: &Model, at: &str) -> R<Vec<(String, Option<String>)>> {
     let vat = format!("{at}.values");
     let Some(values) = body.get("values") else {
         return Ok(Vec::new());
     };
     let values = pairs(as_map(values, &vat)?, &vat)?;
-    for (field, _) in &values {
-        if model.field(field).is_none() {
+    for (field, value) in &values {
+        let Some(declared) = model.field(field) else {
             return Err(ManifestError::new(
                 format!("{vat}.{field}"),
                 format!("\"{field}\" is not a field of model \"{}\"", model.name),
+            ));
+        };
+        // Caught here rather than at the click, because a create names its
+        // model in the manifest — so this is knowable while somebody is still
+        // looking at the manifest, and a row that could never be written should
+        // not install.
+        if value.is_none() && declared.required {
+            return Err(ManifestError::new(
+                format!("{vat}.{field}"),
+                format!(
+                    "\"{field}\" is required, so it cannot be created empty — \
+                     give it a value, or drop `required` from the field"
+                ),
             ));
         }
     }
@@ -1151,14 +1165,29 @@ fn opt_seq_str(map: &Mapping, key: &str, at: &str) -> R<Vec<String>> {
     }
 }
 
-fn pairs(map: &Mapping, at: &str) -> R<Vec<(String, String)>> {
+/// The `field: value` pairs of a create or update step.
+///
+/// A key written with nothing after it — `checked_in_at:` — means **clear this
+/// field**, and `None` is how that travels. It is the only way to say it:
+/// values are templates rather than expressions, so there is no text a person
+/// could type that arrives as SQL NULL instead of as the characters they typed.
+///
+/// Refusing it, which is what this did, rejected a manifest whose keys were all
+/// spelled correctly — and the action that wants it is the ordinary one.
+/// Marking somebody a no-show has to take the check-in time back off the row,
+/// or the record says they both did and did not turn up.
+///
+/// Whether the field *may* be cleared is not decided here. For a create the
+/// model is known and [`parse_values`] refuses clearing a required field; for
+/// an update it is decided by the record the button sits on, so `data::writable`
+/// refuses it at the click, where the model is finally known.
+fn pairs(map: &Mapping, at: &str) -> R<Vec<(String, Option<String>)>> {
     let mut out = Vec::new();
-    for (k, v) in map {
+    for (k, _) in map {
         let name = key_name(k, at)?;
-        let value = opt_str(map, &name, at)?.ok_or_else(|| {
-            let _ = v;
-            ManifestError::new(format!("{at}.{name}"), "expected a value")
-        })?;
+        // `opt_str` already refuses a sequence or a map here, and already reads
+        // a bare key as `None` — the distinction this needed all along.
+        let value = opt_str(map, &name, at)?;
         out.push((name, value));
     }
     Ok(out)
@@ -1255,6 +1284,72 @@ menu:
         assert_eq!(m.views.len(), 3);
         assert_eq!(m.menu.len(), 2);
         assert_eq!(m.scopes, vec![Scope::ReadProjects, Scope::RunAgents]);
+    }
+
+    /// The manifest the "Write it for me" button produced for an event
+    /// attendance app, trimmed to the action that would not install.
+    ///
+    /// It failed on `checked_in_at:` with "expected a value" — a key spelled
+    /// exactly right, refused for saying the one thing an update of this kind
+    /// has to say. Marking somebody a no-show has to take the check-in time
+    /// back off the row, or the record says they both did and did not turn up.
+    #[test]
+    fn a_key_with_nothing_after_it_clears_that_field() {
+        let m = parse(
+            "name: Attendance\nruntime: module\n\
+             models:\n  attendee:\n    fields:\n      \
+             name: { type: text, required: true }\n      \
+             status: { type: text }\n      \
+             checked_in_at: { type: datetime }\n\
+             views:\n  list: { model: attendee }\n\
+             actions:\n  mark_no_show:\n    label: No show\n    steps:\n      \
+             - update: { status: \"no_show\", checked_in_at: }\n",
+        )
+        .expect("a manifest that clears a field must install");
+
+        let Step::Update { values } = &m.actions[0].steps[0] else {
+            panic!("expected an update step");
+        };
+        assert_eq!(
+            values,
+            &vec![
+                ("status".to_string(), Some("no_show".to_string())),
+                // The distinction the whole change exists for: `None` is
+                // "clear it", not "the author forgot".
+                ("checked_in_at".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn creating_a_row_with_a_required_field_left_empty_is_refused() {
+        // A create names its model, so this is knowable while somebody is
+        // still looking at the manifest — rather than at the click, on a row
+        // that could never have been written.
+        let e = err(
+            "name: T\nruntime: module\n\
+             models:\n  note:\n    fields:\n      \
+             title: { type: text, required: true }\n\
+             views:\n  list: { model: note }\n\
+             actions:\n  blank:\n    label: Blank\n    steps:\n      \
+             - create: { model: note, values: { title: } }\n",
+        );
+        assert!(e.at.ends_with("title"), "names the field: {}", e.at);
+        assert!(e.message.contains("required"), "{}", e.message);
+    }
+
+    #[test]
+    fn an_update_step_with_no_fields_at_all_is_still_refused() {
+        // Clearing a field is a write; clearing *nothing* is a step that does
+        // nothing, and stays an error.
+        let e = err(
+            "name: T\nruntime: module\n\
+             models:\n  note: { fields: { a: { type: text } } }\n\
+             views:\n  list: { model: note }\n\
+             actions:\n  nothing:\n    label: Nothing\n    steps:\n      \
+             - update: {}\n",
+        );
+        assert!(e.message.contains("needs values"), "{}", e.message);
     }
 
     #[test]

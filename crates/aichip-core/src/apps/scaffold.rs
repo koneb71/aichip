@@ -132,6 +132,7 @@ actions:
     show_if: \"<expr>\"        # optional
     steps:
       - update: {{ <field>: <value> }}
+      - update: {{ <field>: }}     # nothing after the colon clears that field
       - create: {{ model: <model_name>, values: {{ <field>: <value> }} }}
       - delete
       - notify: \"<message>\"

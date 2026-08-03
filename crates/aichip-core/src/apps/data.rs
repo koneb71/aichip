@@ -61,7 +61,22 @@ pub fn model_of<'a>(manifest: &'a Manifest, name: &str) -> Result<&'a Model, Dat
 /// Computed fields are refused for the same reason: a value someone sends for a
 /// field whose value is derived would be overwritten on the next save anyway,
 /// so accepting it would be a lie.
-fn writable(model: &Model, body: &Map<String, Value>) -> Result<Vec<(String, String)>, DataError> {
+///
+/// ## `None` is an explicit NULL, not an omission
+///
+/// Those were the same thing here until they were not: a null arrived, the
+/// field was optional, and it was skipped — so "clear the check-in time" left
+/// the old timestamp on the row and reported success. Silently doing nothing is
+/// the worst of the three possible answers; the other two are doing it and
+/// refusing.
+///
+/// A required field is still refused, which is the whole reason `required`
+/// exists given the column itself is nullable — see the note at the top of
+/// `schema.rs` on why `required` is not `NOT NULL`.
+fn writable(
+    model: &Model,
+    body: &Map<String, Value>,
+) -> Result<Vec<(String, Option<String>)>, DataError> {
     let mut out = Vec::new();
     for (key, value) in body {
         if RESERVED_FIELDS.contains(&key.as_str()) {
@@ -82,9 +97,10 @@ fn writable(model: &Model, body: &Map<String, Value>) -> Result<Vec<(String, Str
             if field.required {
                 return bad(format!("\"{key}\" is required"));
             }
+            out.push((field.name.clone(), None));
             continue;
         }
-        out.push((field.name.clone(), as_text(&field.ty, value)?));
+        out.push((field.name.clone(), Some(as_text(&field.ty, value)?)));
     }
     Ok(out)
 }
@@ -174,7 +190,7 @@ fn now_text() -> String {
 /// ordinary state rather than a broken manifest.
 fn derive(
     model: &Model,
-    values: &mut Vec<(String, String)>,
+    values: &mut Vec<(String, Option<String>)>,
     existing: Option<&Value>,
     creating: bool,
 ) -> Result<(), DataError> {
@@ -189,7 +205,7 @@ fn derive(
             let value = super::expr::run(src, &super::expr::Record::new(), &now)
                 .map_err(|e| DataError(format!("the default for \"{}\" failed: {e}", field.name)))?;
             if value != super::expr::Val::Null {
-                values.push((field.name.clone(), value.to_string()));
+                values.push((field.name.clone(), Some(value.to_string())));
             }
         }
     }
@@ -208,7 +224,11 @@ fn derive(
         }
     }
     for (name, text) in values.iter() {
-        record.insert(name.clone(), text_as_val(model, name, text));
+        let val = match text {
+            Some(text) => text_as_val(model, name, text),
+            None => super::expr::Val::Null,
+        };
+        record.insert(name.clone(), val);
     }
 
     for field in computed {
@@ -216,9 +236,14 @@ fn derive(
         let value = super::expr::run(src, &record, &now)
             .map_err(|e| DataError(format!("\"{}\" could not be worked out: {e}", field.name)))?;
         values.retain(|(n, _)| n != &field.name);
-        if value != super::expr::Val::Null {
-            values.push((field.name.clone(), value.to_string()));
-        }
+        // A compute that now works out to nothing writes NULL rather than being
+        // left out. On an update, leaving it out means the previous answer
+        // stays on the row — a derived value that no longer follows from the
+        // fields it is derived from.
+        values.push((
+            field.name.clone(),
+            (value != super::expr::Val::Null).then(|| value.to_string()),
+        ));
     }
     Ok(())
 }
@@ -251,11 +276,18 @@ fn text_as_val(model: &Model, name: &str, text: &str) -> super::expr::Val {
     }
 }
 
-fn missing_required(model: &Model, present: &[(String, String)]) -> Option<String> {
+fn missing_required(model: &Model, present: &[(String, Option<String>)]) -> Option<String> {
     model
         .fields
         .iter()
-        .find(|f| f.required && f.compute.is_none() && !present.iter().any(|(n, _)| n == &f.name))
+        // Present-but-cleared counts as missing. `writable` refuses an explicit
+        // null on a required field, so this only catches one arriving another
+        // way — a default expression that worked out to nothing.
+        .find(|f| {
+            f.required
+                && f.compute.is_none()
+                && !present.iter().any(|(n, v)| n == &f.name && v.is_some())
+        })
         .map(|f| f.name.clone())
 }
 
@@ -344,7 +376,7 @@ pub async fn create(
 
     let mut columns: Vec<String> = Vec::new();
     let mut holes: Vec<String> = Vec::new();
-    let mut params: Vec<String> = Vec::new();
+    let mut params: Vec<Option<String>> = Vec::new();
     for (name, text) in &values {
         let ty = &model.field(name).expect("writable only returns declared fields").ty;
         columns.push(query::quote(name));
@@ -373,7 +405,10 @@ pub async fn create(
 
     let mut q = sqlx::query_scalar::<_, Uuid>(&sql);
     for param in &params {
-        q = q.bind(param);
+        // `as_deref` rather than the `String`: `None` must reach Postgres as
+        // NULL, which is the difference between clearing a field and writing
+        // the four characters "null" into it.
+        q = q.bind(param.as_deref());
     }
     let id = q
         .fetch_one(&db.pool)
@@ -405,7 +440,7 @@ pub async fn update(
     derive(model, &mut values, existing.as_ref(), false)?;
 
     let mut sets: Vec<String> = Vec::new();
-    let mut params: Vec<String> = Vec::new();
+    let mut params: Vec<Option<String>> = Vec::new();
     for (name, text) in &values {
         let ty = &model.field(name).expect("writable only returns declared fields").ty;
         sets.push(format!(
@@ -430,7 +465,7 @@ pub async fn update(
     );
     let mut q = sqlx::query(&sql);
     for param in &params {
-        q = q.bind(param);
+        q = q.bind(param.as_deref());
     }
     let done = q
         .bind(id.to_string())
@@ -586,6 +621,7 @@ mod tests {
             .find(|(n, _)| n == "amount")
             .unwrap()
             .1
+            .expect("a decimal that was sent is never a clear")
     }
 
     #[test]
@@ -643,7 +679,7 @@ mod tests {
     fn json_fields_keep_their_shape() {
         let values = writable(&model(), &body(r#"{"note":"x","meta":{"a":[1,2]}}"#)).unwrap();
         let meta = values.iter().find(|(n, _)| n == "meta").unwrap();
-        assert_eq!(meta.1, r#"{"a":[1,2]}"#);
+        assert_eq!(meta.1.as_deref(), Some(r#"{"a":[1,2]}"#));
     }
 
     #[test]
@@ -652,6 +688,33 @@ mod tests {
         let values = writable(&model(), &body(r#"{"qty": 3}"#)).unwrap();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].0, "qty");
+    }
+
+    #[test]
+    fn an_optional_field_sent_as_null_is_cleared_rather_than_skipped() {
+        // The bug: absent and explicitly null were the same thing, so this
+        // dropped the field from the statement and the old value stayed on the
+        // row — while the write reported success. "Mark them a no-show" left
+        // the check-in time behind, so the record said they both did and did
+        // not turn up.
+        let values = writable(&model(), &body(r#"{"qty": null}"#)).unwrap();
+        assert_eq!(values, vec![("qty".to_string(), None)]);
+
+        // And the two really are different. Sending nothing about `qty` still
+        // leaves it alone — an update naming one field must not blank the rest.
+        assert!(writable(&model(), &body(r#"{"note": "x"}"#))
+            .unwrap()
+            .iter()
+            .all(|(n, _)| n != "qty"));
+    }
+
+    #[test]
+    fn a_required_field_still_cannot_be_cleared() {
+        // `required` is not `NOT NULL` on the column (see schema.rs), so this
+        // check is the only thing standing between a required field and an
+        // empty one.
+        let e = writable(&model(), &body(r#"{"note": null}"#)).unwrap_err();
+        assert!(e.0.contains("required"), "{e}");
     }
 
     #[test]

@@ -202,14 +202,26 @@ pub async fn run(
     Ok(out)
 }
 
+/// A step's values as the body `data::create`/`data::update` takes.
+///
+/// A value the manifest left empty becomes `Value::Null` — which `data::writable`
+/// reads as "clear this field", and which is the only way an action can take
+/// something back off a row. Interpolating `None` into an empty string instead
+/// would write two quotes where a date used to be.
 fn resolved(
-    values: &[(String, String)],
+    values: &[(String, Option<String>)],
     record: &expr::Record,
     now: &str,
 ) -> Map<String, Value> {
     values
         .iter()
-        .map(|(k, v)| (k.clone(), Value::String(interpolate(v, record, now))))
+        .map(|(k, v)| {
+            let value = match v {
+                Some(template) => Value::String(interpolate(template, record, now)),
+                None => Value::Null,
+            };
+            (k.clone(), value)
+        })
         .collect()
 }
 
