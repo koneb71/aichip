@@ -25,6 +25,14 @@ export interface Project {
   vcsNote: string | null;
   /** Agents may work here without stopping to ask. Requires a git project. */
   fullAutoOptIn: boolean;
+  /**
+   * `"repo"` for code you added, `"app"` for an app's own folder.
+   *
+   * The three places that *list* projects filter to `repo`, because an app
+   * belongs in the gallery; fetching one by id does not, because an app's
+   * files still have to be reachable.
+   */
+  kind: "repo" | "app";
 }
 
 export type PermissionMode = "reviewed" | "auto_edit" | "full_auto";
@@ -876,11 +884,20 @@ export interface AppAction {
   steps: { kind: string; scope: string | null }[];
 }
 
+/**
+ * Which of the two kinds of app this is.
+ *
+ * `module` executes nothing and aichip draws it; the other two are real code in
+ * a container. The manifest's `runtime:` is what picks, and it cannot be
+ * changed afterwards — that would be a different app, not an edit.
+ */
+export type AppRuntime = "module" | "node" | "static";
+
 export interface AppManifest {
   name: string;
   icon: string;
   summary: string;
-  runtime: "module" | "node" | "static";
+  runtime: AppRuntime;
   scopes: string[];
   models: AppModel[];
   views: AppView[];
@@ -897,10 +914,34 @@ export interface App {
   icon: string;
   summary: string;
   brief: string;
-  runtime: "module" | "node" | "static";
+  runtime: AppRuntime;
   /** Switched on. Off keeps every row — only uninstalling drops data. */
   active: boolean;
   path: string;
+  /** The manifest's own menu, so the sidebar can link straight to a screen. */
+  menu: { label: string; view: string }[];
+}
+
+/** One attempt to change an app, landed or otherwise. */
+export interface AppBuild {
+  id: string;
+  /** The card that did the work. Null once that card has been deleted. */
+  taskId: string | null;
+  brief: string;
+  status: "running" | "landed" | "conflicted" | "failed" | "reverted";
+  /** Why it did not land, or the manifest problem it landed with. */
+  error: string | null;
+  landedCommit: string | null;
+  createdAt: string;
+  /**
+   * Whether this is the one build that can still be undone.
+   *
+   * Decided by the server, not here: which build may be reverted is a rule
+   * about what `base_commit` can promise, and a second implementation of it in
+   * the browser would disagree exactly once — silently discarding a later
+   * change.
+   */
+  revertible: boolean;
 }
 
 export interface SchemaStatement {
@@ -1022,6 +1063,8 @@ export const api = {
     fetch(`/api/projects?workspace_id=${workspaceId}`).then((r) =>
       json<{ projects: Project[] }>(r),
     ),
+  /** One project, of any kind — the list above shows only repositories. */
+  project: (id: string) => fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),
   // Initializes a repository server-side when the folder needs one.
   addProject: (workspaceId: string, path: string) =>
     post("/api/projects", { workspace_id: workspaceId, path }).then((r) =>
@@ -1698,8 +1741,8 @@ export const api = {
   app: (id: string) => fetch(`/api/apps/${id}`).then((r) => json<AppDetail>(r)),
   // Returns the manifest unsaved, with `error` set when it does not parse —
   // the point of a declaration is that a person reads it before it is real.
-  generateApp: (description: string, engine?: string) =>
-    post("/api/apps/generate", { description, engine }).then((r) =>
+  generateApp: (description: string, runtime: AppRuntime = "module", engine?: string) =>
+    post("/api/apps/generate", { description, runtime, engine }).then((r) =>
       json<{ manifest: string; error: string | null }>(r),
     ),
   installApp: (workspaceId: string, manifest: string, brief = "") =>
@@ -1717,8 +1760,16 @@ export const api = {
   uninstallApp: (id: string) =>
     fetch(`/api/apps/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
 
-  appSchemaPlan: (id: string) =>
-    fetch(`/api/apps/${id}/schema`).then((r) => json<{ pending: SchemaPlan | null }>(r)),
+  /** Hand the app to an agent. It lands by itself when the card completes. */
+  changeApp: (id: string, brief: string, engine?: string) =>
+    post(`/api/apps/${id}/builds`, { brief, engine }).then((r) =>
+      json<{ buildId: string; taskId: string; runId: string }>(r),
+    ),
+  appBuilds: (id: string) =>
+    fetch(`/api/apps/${id}/builds`).then((r) => json<{ builds: AppBuild[] }>(r)),
+  revertAppBuild: (id: string, buildId: string) =>
+    post(`/api/apps/${id}/builds/${buildId}/revert`).then((r) => json<AppDetail>(r)),
+
   applyAppSchema: (id: string, planId: string) =>
     post(`/api/apps/${id}/schema/apply`, { plan_id: planId }).then((r) =>
       json<{ applied: number }>(r),
@@ -1740,8 +1791,6 @@ export const api = {
       json<{ rows: AppRow[]; total: number }>(r),
     );
   },
-  appRow: (id: string, model: string, rowId: string) =>
-    fetch(`/api/apps/${id}/data/${model}/${rowId}`).then((r) => json<AppRow>(r)),
   addAppRow: (id: string, model: string, values: AppRow) =>
     post(`/api/apps/${id}/data/${model}`, values).then((r) => json<AppRow>(r)),
   changeAppRow: (id: string, model: string, rowId: string, values: AppRow) =>

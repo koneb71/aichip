@@ -8,10 +8,12 @@
 
 import type {
   App,
+  AppBuild,
   AppDetail,
   AppField,
   AppModel,
   AppRow,
+  AppRuntime,
   AppView,
   ContainerState,
 } from "./api";
@@ -217,6 +219,96 @@ export function pageWindow(page: number, total: number, size: number): PageWindo
  */
 export function appOrigin(slug: string, port: string): string {
   return `http://${slug}.app.localhost${port ? `:${port}` : ""}`;
+}
+
+/** What choosing a runtime commits someone to, at the moment they choose. */
+export function runtimeBlurb(runtime: AppRuntime): string {
+  switch (runtime) {
+    case "module":
+      return "Models and screens, declared. Nothing executes, so there is nothing to approve.";
+    case "node":
+      return "A real Node server in a container. Needs Docker on this machine.";
+    case "static":
+      return "HTML, CSS and JavaScript in a container. Needs Docker on this machine.";
+  }
+}
+
+/**
+ * The manifest a new app starts from.
+ *
+ * A working example rather than an empty box and the word YAML — editing one is
+ * how most people learn the shape. The module's exercises most of the format in
+ * as few lines as possible: two field types, a computed column, a default, a
+ * list and a chart. A container's declares tables and no views, because it
+ * draws its own pages and a `views:` block would be refused.
+ */
+export function starterManifest(runtime: AppRuntime): string {
+  if (runtime === "module") {
+    return `name: Expenses
+icon: "▤"
+summary: Track spending by category
+runtime: module
+
+models:
+  expense:
+    fields:
+      description: { type: text, required: true }
+      amount:      { type: decimal }
+      qty:         { type: int, default: 1 }
+      total:       { type: decimal, compute: "amount * qty" }
+      spent_on:    { type: date, default: "today()" }
+      category:    { type: text }
+    indexes: [spent_on]
+
+views:
+  list:
+    columns: [spent_on, description, category, total]
+    sort: "-spent_on"
+  chart:
+    shape: bar
+    group_by: category
+    measure: "sum(total)"
+
+menu:
+  - { label: Expenses, view: list }
+  - { label: By category, view: chart }
+`;
+  }
+  return `name: Notes
+icon: "✎"
+summary: A place to keep notes
+runtime: ${runtime}
+
+models:
+  note:
+    fields:
+      title: { type: text, required: true }
+      body:  { type: text }
+`;
+}
+
+/**
+ * One line describing a build.
+ *
+ * `landed` with an error is the awkward one and the reason this is a function:
+ * the files did land, so calling it a failure would be wrong, but something is
+ * nonetheless broken and saying only "Landed" would hide it.
+ */
+export function buildLine(build: AppBuild): string {
+  switch (build.status) {
+    case "running":
+      return "Working on it…";
+    case "landed":
+      return build.error ? "Landed, but the app has a problem." : "Landed.";
+    case "conflicted":
+      return "Could not merge — the card still has the diff.";
+    case "failed":
+      return "The run did not finish.";
+    case "reverted":
+      return "Undone.";
+    default:
+      return build.status;
+  }
 }
 
 /** One line saying where a container app stands. */

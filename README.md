@@ -264,6 +264,42 @@ defence is the charset rather than the quoting. Unknown keys are refused rather
 than ignored — an agent that writes `colums:` has written a view with no
 columns, and silently rendering an empty table is worse than saying which key.
 
+### Changing one, and undoing it
+
+**Change this app** hands it back to an agent: say what should be different, and
+it works in a worktree of the app's own folder like any other card. For a module
+it rewrites the manifest; for a container app it writes real source.
+
+That change **lands on its own** when the card finishes — there is no review
+step, because the diff *is* the app, and asking you to read a patch before you
+can see whether the chart came out right turns a gallery back into a task board.
+The repository being merged into is the one aichip created for that app, never
+your code.
+
+What makes that bargain honest is that the undo is real. Every change records
+where the app stood before it, and **Undo** on the newest one puts the folder
+back exactly there. Only the newest, deliberately: an older change's starting
+point knows nothing about the ones after it, and offering that button would
+silently throw them away.
+
+Landing files is not landing schema. The manifest is read back off disk and goes
+through the same gate below, so a change that drops a column still waits for you
+even though the file it came in has already merged. If the merge conflicts,
+nothing lands — the card stays in review with its diff, which is the flow every
+other task already uses.
+
+### Sharing one
+
+An app is a folder, so sharing is a file. **Share** exports the app with empty
+tables — what you send someone. **Export with data** carries the rows too — what
+you move to another machine. Import regenerates the DDL from the manifest and
+never runs the bundled `schema.sql`, which is there to be read.
+
+For a team, commit it. Anything under `.aichip/apps/` in a repository you have
+added shows up on the gallery page with an **Install** next to it, and a manifest
+being plain YAML is what makes it reviewable in a pull request. Syncing an app
+you already have replaces its manifest and keeps its rows.
+
 ### Your tables are yours
 
 Change the manifest and the tables follow, but not unconditionally. New tables,

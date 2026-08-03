@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { App, AppDetail, AppField, AppModel, AppView, ContainerState } from "./api";
+import type {
+  App,
+  AppBuild,
+  AppDetail,
+  AppField,
+  AppModel,
+  AppRuntime,
+  AppView,
+  ContainerState,
+} from "./api";
 import {
   appOrigin,
   appState,
   baseType,
+  buildLine,
   containerLine,
   bucketValue,
   cellText,
@@ -13,11 +23,15 @@ import {
   listColumns,
   pageWindow,
   recordFor,
+  runtimeBlurb,
   searchableField,
   searchFilter,
   sortParam,
+  starterManifest,
   ungrantedScopes,
 } from "./apps";
+
+const RUNTIMES: AppRuntime[] = ["module", "node", "static"];
 
 const field = (over: Partial<AppField> & { name: string }): AppField => ({
   label: null,
@@ -60,6 +74,7 @@ const app = (over: Partial<App> = {}): App => ({
   runtime: "module",
   active: true,
   path: "/tmp/apps/expenses-abc123",
+  menu: [],
   ...over,
 });
 
@@ -272,6 +287,65 @@ describe("chart buckets", () => {
     // A sum over no rows comes back empty rather than as zero.
     expect(bucketValue("")).toBe(0);
     expect(bucketValue("not a number")).toBe(0);
+  });
+});
+
+describe("starting a new app", () => {
+  it("declares the runtime it was asked for", () => {
+    // The starter is installed as written, so a manifest saying `module` under
+    // a "node app" heading would quietly make the wrong kind of app.
+    for (const runtime of RUNTIMES) {
+      expect(starterManifest(runtime)).toContain(`runtime: ${runtime}`);
+    }
+  });
+
+  it("offers a container app no vocabulary the parser refuses", () => {
+    // A container draws its own pages, so `views:` is not a thing it may
+    // declare — and an example containing one is how someone comes to write it.
+    for (const runtime of ["node", "static"] as AppRuntime[]) {
+      const m = starterManifest(runtime);
+      expect(m).not.toContain("\nviews:");
+      expect(m).not.toContain("\nmenu:");
+      // Models it does get: the tables are the same tables.
+      expect(m).toContain("\nmodels:");
+    }
+    expect(starterManifest("module")).toContain("\nviews:");
+  });
+
+  it("says which runtimes need Docker before one is chosen", () => {
+    expect(runtimeBlurb("module")).not.toContain("Docker");
+    expect(runtimeBlurb("node")).toContain("Docker");
+    expect(runtimeBlurb("static")).toContain("Docker");
+  });
+});
+
+describe("build history", () => {
+  const b = (over: Partial<AppBuild>): AppBuild => ({
+    id: "b",
+    taskId: "t",
+    brief: "add a field",
+    status: "landed",
+    error: null,
+    landedCommit: null,
+    createdAt: "2026-08-03T00:00:00Z",
+    revertible: false,
+    ...over,
+  });
+
+  it("does not call a landed build with a broken manifest a success", () => {
+    // The files did land, so "failed" would be wrong — but the app is down,
+    // and a bare "Landed" is how someone fails to notice.
+    expect(buildLine(b({ status: "landed" }))).toBe("Landed.");
+    expect(buildLine(b({ status: "landed", error: "models.x: bad" }))).toContain("problem");
+  });
+
+  it("says where the work went when a merge failed", () => {
+    // Not "failed": the run worked and the diff is still on the card, which is
+    // the one thing a person needs to know to rescue it.
+    expect(buildLine(b({ status: "conflicted" }))).toContain("card");
+    expect(buildLine(b({ status: "failed" }))).toContain("did not finish");
+    expect(buildLine(b({ status: "reverted" }))).toBe("Undone.");
+    expect(buildLine(b({ status: "running" }))).toContain("…");
   });
 });
 

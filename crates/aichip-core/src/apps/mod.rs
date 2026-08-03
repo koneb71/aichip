@@ -16,6 +16,7 @@
 //! agent-written code away from everything it did not declare.
 
 pub mod bridge;
+pub mod build;
 pub mod bundle;
 pub mod client_js;
 pub mod data;
@@ -232,6 +233,19 @@ pub async fn install(
 
     write_manifest(&path, manifest_text).await?;
 
+    // A container app is created with the smallest tree its Dockerfile can
+    // build, for the same reason the schema is reconciled below rather than on
+    // first use: an app that installed should be an app that works. A folder
+    // holding only a manifest fails `COPY package*.json ./` outright.
+    for (name, body) in runtime::starter(parsed.runtime) {
+        tokio::fs::write(path.join(name), body).await?;
+    }
+
+    // …and committed, because `ensure_repo` ran before any of it was written.
+    // A file that is not committed is not on `main`, so `git worktree add`
+    // hands the next agent asked to change this app an empty folder.
+    commit(&path, &format!("Add {}", parsed.name)).await?;
+
     let mut tx = db.pool.begin().await?;
     let project_id: Uuid = sqlx::query_scalar(
         "INSERT INTO projects (workspace_id, path, name, default_branch, vcs, kind)
@@ -306,6 +320,9 @@ pub async fn set_manifest(
         );
     }
     write_manifest(&app.path, manifest_text).await?;
+    // A no-op when this call *came* from a landed merge or a revert, where the
+    // file on disk is already what git has.
+    commit(&app.path, &format!("Update {}", parsed.name)).await?;
 
     let scopes: Vec<String> = parsed.scopes.iter().map(|s| s.as_str().to_string()).collect();
     sqlx::query(
@@ -335,6 +352,24 @@ pub async fn set_manifest(
 
 async fn write_manifest(path: &Path, text: &str) -> anyhow::Result<()> {
     tokio::fs::write(path.join(MANIFEST_FILE), text).await?;
+    Ok(())
+}
+
+/// Commit what is in an app's folder.
+///
+/// Called after every write aichip makes to it, so the branch and the folder
+/// never disagree. Two things depend on that being true: a build's worktree is
+/// cut from `main` and would otherwise open on a stale manifest, and
+/// `squash_merge` checks out the base branch in this repository, which a dirty
+/// tree can refuse.
+///
+/// Best-effort by design — a folder that cannot be committed is worth a warning
+/// and not worth failing an install over, since the manifest in the database is
+/// what the app actually runs on.
+async fn commit(path: &Path, message: &str) -> anyhow::Result<()> {
+    if let Err(e) = crate::worktrees::manager::commit_all(path, message).await {
+        tracing::warn!(path = %path.display(), error = %e, "could not commit an app's folder");
+    }
     Ok(())
 }
 

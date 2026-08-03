@@ -1,23 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { useNavigate, useParams } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppDetail } from "../lib/api";
 import { AppView } from "../components/apps/AppView";
 import { SchemaGate } from "../components/apps/SchemaGate";
 import { ScopeGrant } from "../components/apps/ScopeGrant";
 import { AppFrame } from "../components/apps/AppFrame";
+import { BuildHistory } from "../components/apps/BuildHistory";
+import { ChangeAppModal } from "../components/apps/ChangeAppModal";
 import { DockerfileGate } from "../components/apps/DockerfileGate";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
   const { appId } = useParams();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [app, setApp] = useState<AppDetail | null>(null);
   const [screen, setScreen] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [perms, setPerms] = useState(false);
+  const [changing, setChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // The sidebar links straight to a screen, so `?view=` wins over the menu's
+  // first entry — otherwise every link in it would land on the same page.
+  const wanted = params.get("view");
 
   const refresh = useCallback(() => {
     if (!appId) return;
@@ -25,10 +33,18 @@ export default function AppPage() {
       .app(appId)
       .then((a) => {
         setApp(a);
-        setScreen((s) => s ?? a.declares?.menu[0]?.view ?? a.declares?.views[0]?.name ?? null);
+        setScreen(
+          (s) => s ?? wanted ?? a.declares?.menu[0]?.view ?? a.declares?.views[0]?.name ?? null,
+        );
       })
       .catch((e) => setError(String(e).replace(/^Error:\s*/, "")));
-  }, [appId]);
+  }, [appId, wanted]);
+
+  // A later click on a different sidebar entry is a new `?view=`, and the state
+  // above has already been set by then.
+  useEffect(() => {
+    if (wanted) setScreen(wanted);
+  }, [wanted]);
 
   useEffect(() => {
     refresh();
@@ -108,12 +124,26 @@ export default function AppPage() {
         >
           Export with data
         </a>
+        <Link
+          to={`/projects/${app.projectId}`}
+          title="This app's own folder, in the files editor."
+          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+        >
+          Files
+        </Link>
         <button
           onClick={() => setPerms((p) => !p)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
         >
           Permissions
         </button>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={() => setChanging(true)}
+          className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-white"
+        >
+          Change this app
+        </motion.button>
         <button
           onClick={() => setEditing(editing === null ? app.manifest : null)}
           className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
@@ -224,8 +254,22 @@ export default function AppPage() {
               </div>
             )
           )}
+          <BuildHistory appId={app.id} projectId={app.projectId} onChanged={refresh} />
         </>
       )}
+
+      <AnimatePresence>
+        {changing && (
+          <ChangeAppModal
+            app={app}
+            onClose={() => setChanging(false)}
+            onStarted={() => {
+              setChanging(false);
+              refresh();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

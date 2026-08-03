@@ -1,44 +1,13 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { api } from "../../lib/api";
+import { api, type AppRuntime } from "../../lib/api";
+import { runtimeBlurb, starterManifest } from "../../lib/apps";
 
-/**
- * A starting manifest, so the first thing someone sees is a working app rather
- * than an empty box and the word YAML.
- *
- * Chosen to exercise most of the format in as few lines as possible: two field
- * types, a computed column, a default, a list and a chart. Editing it is how
- * most people will learn the shape.
- */
-const STARTER = `name: Expenses
-icon: "▤"
-summary: Track spending by category
-runtime: module
-
-models:
-  expense:
-    fields:
-      description: { type: text, required: true }
-      amount:      { type: decimal }
-      qty:         { type: int, default: 1 }
-      total:       { type: decimal, compute: "amount * qty" }
-      spent_on:    { type: date, default: "today()" }
-      category:    { type: text }
-    indexes: [spent_on]
-
-views:
-  list:
-    columns: [spent_on, description, category, total]
-    sort: "-spent_on"
-  chart:
-    shape: bar
-    group_by: category
-    measure: "sum(total)"
-
-menu:
-  - { label: Expenses, view: list }
-  - { label: By category, view: chart }
-`;
+const RUNTIMES: { id: AppRuntime; label: string }[] = [
+  { id: "module", label: "Module" },
+  { id: "node", label: "Node" },
+  { id: "static", label: "Static" },
+];
 
 export function NewAppModal({
   workspaceId,
@@ -49,11 +18,25 @@ export function NewAppModal({
   onClose: () => void;
   onInstalled: () => void;
 }) {
-  const [manifest, setManifest] = useState(STARTER);
+  const [runtime, setRuntime] = useState<AppRuntime>("module");
+  const [manifest, setManifest] = useState(() => starterManifest("module"));
   const [brief, setBrief] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [writing, setWriting] = useState(false);
+
+  /**
+   * Switching runtime replaces the manifest, because the two starters declare
+   * different things and a container app's `views:` block would be refused.
+   * An edited manifest is kept rather than silently thrown away — losing typing
+   * to a radio button is worse than an inconsistent example.
+   */
+  const chooseRuntime = (next: AppRuntime) => {
+    setRuntime(next);
+    setManifest((current) =>
+      current === starterManifest(runtime) ? starterManifest(next) : current,
+    );
+  };
 
   /**
    * Ask an agent for a manifest, and put it in the box rather than installing
@@ -68,7 +51,7 @@ export function NewAppModal({
     setWriting(true);
     setError(null);
     try {
-      const r = await api.generateApp(brief.trim());
+      const r = await api.generateApp(brief.trim(), runtime);
       setManifest(r.manifest);
       // A manifest that does not parse still lands in the box, with the
       // parser's complaint above it: the fix is usually one line, and
@@ -113,9 +96,31 @@ export function NewAppModal({
       >
         <h3 className="text-sm font-semibold">New app</h3>
         <p className="mt-1 text-xs text-ink-dim">
-          An app is a manifest: models become real tables, views become screens. Nothing in
-          here executes.
+          Every app declares models, which become real tables. What draws it is the runtime.
         </p>
+
+        <div className="mt-4 flex items-center gap-1">
+          {RUNTIMES.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => chooseRuntime(r.id)}
+              className={
+                "rounded-lg border px-2.5 py-1 text-xs " +
+                (runtime === r.id
+                  ? "border-accent bg-accent/10 font-medium text-ink"
+                  : "border-line text-ink-dim hover:bg-line/40")
+              }
+            >
+              {r.label}
+            </button>
+          ))}
+          {/* Said at the moment of choosing rather than on the failed build:
+              a container app on a machine without Docker installs fine and
+              then never runs, which looks like a bug in the app. */}
+          <span className="ml-2 min-w-0 flex-1 truncate text-[11px] text-ink-dim">
+            {runtimeBlurb(runtime)}
+          </span>
+        </div>
 
         <div className="mt-4">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">

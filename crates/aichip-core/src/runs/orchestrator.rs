@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{oneshot, Semaphore};
 use uuid::Uuid;
 
+use crate::apps;
 use crate::bus::EventBus;
 use crate::db::Db;
 use crate::runs::attachments;
@@ -1518,6 +1519,22 @@ impl Orchestrator {
                     tracing::warn!(%run_id, error = %e, "agent memory write failed");
                 }
             }
+        }
+
+        // An app's own change lands by itself. A no-op for every other card,
+        // and best-effort like the memory write above: a build that failed to
+        // merge must not turn a completed run into a failed one — the build row
+        // records what happened and the card keeps its diff.
+        if let Err(e) = apps::build::settle(
+            &self.db,
+            &self.worktrees,
+            task_id,
+            outcome.status,
+            outcome.reason.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(%run_id, error = %e, "an app's change did not land");
         }
 
         // A task spawned from chat reports back into that chat.
