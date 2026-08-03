@@ -1494,6 +1494,10 @@ impl Orchestrator {
             return self.park_for_approval(run_id, &outcome).await;
         }
 
+        // Only the completed case here. A run that ended badly has already had
+        // its card moved off In Progress by `finish`, which is the one place
+        // every ending goes through — including the ones that never reach this
+        // function at all.
         if outcome.status == RunStatus::Completed {
             // Review exists to gate a diff onto the base branch. An in-place
             // run already wrote to the user's folder and produced no diff, so
@@ -2927,6 +2931,37 @@ this workflow manually."
         // A cancel mid-step, or a failure that skipped the per-step bookkeeping,
         // leaves step rows non-terminal under a terminal run. Normally a no-op.
         settle_steps(&mut tx, &[run_id], status).await?;
+
+        // A run that ended badly takes its card off In Progress with it.
+        // Without this the card sat under In Progress for good — nothing
+        // working on it, no pulse, and no way out but to drag it back by hand.
+        // It lives here rather than at the end of `run_task` because the
+        // endings that need it most never reach `run_task`: a dispatch that
+        // bailed on an unknown engine failed before the function was entered.
+        //
+        // Review, because that already means "a person needs to look at this"
+        // and is where the badge and the Retry button are — the same rule
+        // `org::epic::COLUMN_FOR_STEP` states for a step that ended badly.
+        //
+        // Two guards, both load bearing. Only a card actually *on* In Progress
+        // moves, so a failure never drags one out of Backlog or back from Done.
+        // And only when nothing else is still working on it: a bake-off runs
+        // several runs against one card, and the first variant to fail must not
+        // send it to review while the others are still going.
+        if status != RunStatus::Completed {
+            sqlx::query(
+                "UPDATE tasks SET board_column = 'review'
+                  WHERE id = (SELECT task_id FROM runs WHERE id = $1)
+                    AND board_column = 'running'
+                    AND NOT EXISTS (
+                          SELECT 1 FROM runs other
+                           WHERE other.task_id = tasks.id
+                             AND other.status NOT IN ('completed', 'failed', 'canceled'))",
+            )
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         // Every ending comes through here — completion, cancellation, a crash in
         // `execute`, a planning failure — which is why the epic mirror hangs off
