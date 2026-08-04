@@ -236,6 +236,14 @@ export default function AppPage() {
           {app.runtime !== "module" ? (
             <>
               <DockerfileGate appId={app.id} onApproved={refresh} />
+              {/* With one screen there is no tab bar, and the page's own title
+                  is hidden while framed — so the screen would go unnamed. Said
+                  here rather than un-hiding the app's h1, which is what makes
+                  the frame stop looking like a page in a box, and matching
+                  what AppView does for a module in the same position. */}
+              {tabs.length === 1 && tabs[0]?.label && (
+                <h2 className="mb-2 text-sm font-semibold">{tabs[0].label}</h2>
+              )}
               {/* The tab decides the screen; the frame only navigates to it.
                   No tab selected means the app's own front door. */}
               <AppFrame app={app} path={screen ? screenPath(app.runtime, screen) : ""} />

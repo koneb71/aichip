@@ -34,6 +34,26 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolves, setResolves] = useState<boolean | null>(null);
+  const [menu, setMenu] = useState(false);
+
+  // A menu with no way out is a trap: the only affordance that dismisses it
+  // would otherwise be picking one of its items. Escape and a click anywhere
+  // else both close it, and the listeners exist only while it is open.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(false);
+    };
+    // Capture, so a click on the button itself still toggles before this runs
+    // on the next tick rather than fighting it.
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [menu]);
 
   const refresh = useCallback(
     () => api.appContainer(app.id).then(setState).catch(() => {}),
@@ -81,18 +101,37 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   };
 
   const url = status === "running" ? appOrigin(app.slug, window.location.port) : null;
+  // The menu only exists while something is running; a container that stopped
+  // on its own would otherwise leave it floating over a dead frame.
+  if (menu && status !== "running") setMenu(false);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Named, always, and outside the frame. An app drawing a convincing
-          "grant this permission" dialog inside itself is only a problem if
-          there is no line saying where aichip stops and it begins. */}
-      <div className="mb-2 flex items-center gap-2 text-xs">
-        <span className="text-ink-dim">{containerLine(state)}</span>
-        {url && (
-          <a href={url} target="_blank" rel="noreferrer" className="font-mono text-accent hover:underline">
-            {url.replace(/^https?:\/\//, "")}
-          </a>
+      {/* Where aichip stops and the app begins, said once and quietly.
+          Deliberately not removed when everything is fine: an app can draw a
+          convincing "aichip needs your token" dialog inside itself, and the
+          only thing that gives it away is a line saying the content below is
+          the app's. What moved into the menu is the *controls* — they are
+          maintenance, and maintenance does not belong in the middle of a
+          screen someone is using. */}
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-dim">
+        {url ? (
+          <>
+            <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span>
+              running in this app&rsquo;s own container at{" "}
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono hover:text-ink hover:underline"
+              >
+                {url.replace(/^https?:\/\//, "")}
+              </a>
+            </span>
+          </>
+        ) : (
+          <span>{containerLine(state)}</span>
         )}
         <div className="flex-1" />
         {status !== "running" && (
@@ -100,27 +139,49 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
             whileTap={{ scale: 0.96 }}
             onClick={() => act(true)}
             disabled={busy || building || state?.docker.usable === false}
-            className="rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-50"
+            className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
           >
             {state?.preview?.canWake ? "Wake it" : "Build & run"}
           </motion.button>
         )}
         {status === "running" && (
-          <>
+          <div className="relative">
             <button
-              onClick={refresh}
-              className="rounded-lg border border-line px-2 py-1 hover:bg-line/40"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenu((m) => !m);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={menu}
+              aria-label="Container controls"
+              className="rounded px-1.5 py-0.5 hover:bg-line/40 hover:text-ink"
             >
-              Reload
+              &#8943;
             </button>
-            <button
-              onClick={() => act(false)}
-              disabled={busy}
-              className="rounded-lg px-2 py-1 text-ink-dim hover:text-ink"
-            >
-              Stop
-            </button>
-          </>
+            {menu && (
+              <div className="card-shadow absolute right-0 z-10 mt-1 w-36 rounded-lg border border-line bg-panel py-1 text-xs">
+                <button
+                  onClick={() => {
+                    setMenu(false);
+                    refresh();
+                  }}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40"
+                >
+                  Reload
+                </button>
+                <button
+                  onClick={() => {
+                    setMenu(false);
+                    act(false);
+                  }}
+                  disabled={busy}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40 disabled:opacity-50"
+                >
+                  Stop container
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -157,7 +218,10 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
           src={url + path}
           title={app.name}
           sandbox={SANDBOX}
-          className="min-h-0 flex-1 rounded-xl border border-line bg-white"
+          // No border, no card, no white: the app's own stylesheet leaves its
+          // background transparent when framed, so what shows through is the
+          // dashboard's surface and the seam disappears.
+          className="min-h-0 flex-1 bg-transparent"
         />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-line text-sm text-ink-dim">

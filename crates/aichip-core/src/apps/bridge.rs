@@ -29,6 +29,12 @@ pub enum Route {
     /// script with no data in it and no side effect, which has to load before
     /// anything can send the header it would otherwise need.
     ClientJs,
+    /// aichip's stylesheet, so an app's screens look like part of the
+    /// dashboard rather than like a site in a box. Exempt from the header gate
+    /// for the same reason as the client: a `<link>` cannot set one, and a
+    /// stylesheet with no data in it and no side effect is what makes the
+    /// exception safe rather than merely necessary.
+    AppCss,
     /// Answers whether this hostname resolves at all. Ungated, and also served
     /// on the reserved `probe` slug where no app exists.
     Health,
@@ -69,6 +75,7 @@ impl Route {
     pub fn scope(&self) -> Option<Scope> {
         match self {
             Route::ClientJs
+            | Route::AppCss
             | Route::Health
             | Route::Me
             | Route::Schema
@@ -92,12 +99,18 @@ impl Route {
 
     /// Whether this may be served without the `X-Aichip-App` header.
     ///
-    /// Exactly one path, and it has to be: the client library is what sets the
-    /// header, so requiring the header to fetch it would be a loop nothing can
-    /// enter. It carries no data and does nothing, which is what makes the
-    /// exception safe rather than merely necessary.
+    /// Three paths, and each has to be. The client library is what *sets* the
+    /// header, so requiring it to fetch itself would be a loop nothing can
+    /// enter; the stylesheet is fetched by a `<link>`, which cannot set a
+    /// header at all; and health answers before an app is even resolved, which
+    /// is the point of it.
+    ///
+    /// What makes the exceptions safe rather than merely necessary is the same
+    /// property in all three: each is a fixed response with no data of the
+    /// user's in it and no side effect. Nothing else may join them on
+    /// convenience alone.
     pub fn header_exempt(&self) -> bool {
-        matches!(self, Route::ClientJs | Route::Health)
+        matches!(self, Route::ClientJs | Route::AppCss | Route::Health)
     }
 }
 
@@ -120,6 +133,7 @@ pub fn route(method: &str, segments: &[&str]) -> Route {
 
     match segments {
         ["client.js"] => only(get, Route::ClientJs),
+        ["app.css"] => only(get, Route::AppCss),
         ["health"] => only(get, Route::Health),
         ["me"] => only(get, Route::Me),
         ["schema"] => only(get, Route::Schema),
@@ -175,9 +189,26 @@ mod tests {
         route(method, &segments)
     }
 
+    /// The stylesheet every scaffolded page links has to be reachable the way
+    /// a `<link>` reaches it: a plain GET with no header, since a `<link>`
+    /// cannot set one. Pinned here because the page that depends on it is a
+    /// string in another module, so nothing else would notice this route
+    /// changing shape.
+    #[test]
+    fn the_theme_is_reachable_the_way_a_link_tag_reaches_it() {
+        let route = r("GET", "/__aichip/app.css");
+        assert_eq!(route, Route::AppCss);
+        assert!(route.header_exempt(), "a <link> cannot send X-Aichip-App");
+        assert_eq!(route.scope(), None, "the theme is aichip's own text, not the user's data");
+        // It is a stylesheet, not a surface: nothing else may be asked of it.
+        assert_eq!(r("POST", "/__aichip/app.css"), Route::WrongMethod);
+        assert_eq!(r("DELETE", "/__aichip/app.css"), Route::WrongMethod);
+    }
+
     #[test]
     fn every_allowlisted_pair_resolves() {
         assert_eq!(r("GET", "/__aichip/client.js"), Route::ClientJs);
+        assert_eq!(r("GET", "/__aichip/app.css"), Route::AppCss);
         assert_eq!(r("GET", "/__aichip/me"), Route::Me);
         assert_eq!(r("GET", "/__aichip/schema"), Route::Schema);
         assert_eq!(r("GET", "/__aichip/data/note"), Route::DataList("note".into()));

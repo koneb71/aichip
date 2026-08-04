@@ -104,6 +104,14 @@ pub async fn handle(
                 .body(Body::from(apps::client_js::CLIENT_JS))
                 .expect("a static script is always well formed")
         }
+        Route::AppCss => {
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/css; charset=utf-8")
+                .header(header::CACHE_CONTROL, "no-store")
+                .body(Body::from(apps::skeleton::THEME))
+                .expect("a static stylesheet is always well formed")
+        }
         Route::Health => return reply(StatusCode::OK, json!({ "ok": true, "slug": slug })),
         Route::Unknown => return oops(StatusCode::NOT_FOUND, "no such thing"),
         Route::WrongMethod => {
@@ -356,7 +364,7 @@ async fn serve(
         }
 
         // Handled before an app was looked up.
-        Route::ClientJs | Route::Health | Route::Unknown | Route::WrongMethod => {
+        Route::ClientJs | Route::AppCss | Route::Health | Route::Unknown | Route::WrongMethod => {
             json!({ "ok": true })
         }
     };

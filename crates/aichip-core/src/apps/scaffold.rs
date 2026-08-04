@@ -43,6 +43,19 @@ fn file_contract(runtime: Runtime) -> String {
   served as files. Add a screen by adding a file *and* a `menu:` entry in
   `aichip.app.yaml` so it appears in the sidebar. Keep that routing (or
   something equivalent) if you rewrite the server.
+* **Every page needs the same two lines in its `<head>`, in this order** —
+  copy them from an existing `views/*.html`:
+
+      <script>if (window !== window.parent) document.documentElement.classList.add(\"embedded\");</script>
+      <link rel=\"stylesheet\" href=\"/__aichip/app.css\">
+
+  The stylesheet is aichip's own look, served by the dashboard — that is what
+  makes a screen part of the app rather than a page in a box, and
+  `assets/app.css` after it is where your overrides go. The script tells that
+  stylesheet the page is inside the dashboard, which already draws the app's
+  name and a tab per screen; a page missing it repeats both. Keep your `<nav>`
+  and your `<h1>` in the markup — they are hidden when framed and are the only
+  navigation when someone opens the app in its own tab.
 * **Dependencies go in `package.json`.** They are installed at build time and
   **nothing is fetched at run time** — the page is served under
   `connect-src 'self'`, so a CDN script tag or a runtime `fetch` to another
@@ -58,6 +71,19 @@ fn file_contract(runtime: Runtime) -> String {
 * **`index.html` at the top level is the page.** Everything beside it is served
   as-is by nginx; each screen in the manifest's `menu:` is `<name>.html`
   beside it.
+* **Every page needs the same two lines in its `<head>`, in this order** —
+  copy them from an existing page:
+
+      <script>if (window !== window.parent) document.documentElement.classList.add(\"embedded\");</script>
+      <link rel=\"stylesheet\" href=\"/__aichip/app.css\">
+
+  The stylesheet is aichip's own look, served by the dashboard — that is what
+  makes a screen part of the app rather than a page in a box, and
+  `assets/app.css` after it is where your overrides go. The script tells that
+  stylesheet the page is inside the dashboard, which already draws the app's
+  name and a tab per screen; a page missing it repeats both. Keep your `<nav>`
+  and your `<h1>` in the markup — they are hidden when framed and are the only
+  navigation when someone opens the app in its own tab.
 * **Nothing is fetched at run time** — the page is served under
   `connect-src 'self'`, so a CDN script tag or a font from another origin is
   blocked. Inline it or ship the file.
