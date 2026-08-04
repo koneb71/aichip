@@ -49,73 +49,11 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 "#;
 
-/// A minimal Node app: an http server and the manifest the Dockerfile copies.
-///
-/// `PORT` rather than a literal 3000 because the Dockerfile sets it and a
-/// future one may set something else; an app that reads it keeps working.
-const NODE_SERVER: &str = r#"// Replace this with your app. aichip builds and serves whatever is here.
-//
-// Two things this file has to keep doing:
-//   * listen on process.env.PORT — that is the port aichip proxies to
-//   * fetch nothing from the internet at run time — the page's CSP is
-//     connect-src 'self', so dependencies belong in package.json
-const http = require("node:http");
-
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(`<!doctype html>
-<meta charset="utf-8">
-<title>New app</title>
-<body style="font: 15px system-ui; margin: 3rem; color: #333">
-  <h1>This app has no pages yet.</h1>
-  <p>Ask aichip to change it, or edit <code>server.js</code>.</p>
-</body>`);
-});
-
-server.listen(process.env.PORT || 3000);
-"#;
-
-const NODE_PACKAGE: &str = r#"{
-  "name": "aichip-app",
-  "private": true,
-  "version": "0.1.0",
-  "main": "server.js",
-  "dependencies": {}
-}
-"#;
-
-const STATIC_INDEX: &str = r#"<!doctype html>
-<meta charset="utf-8">
-<title>New app</title>
-<body style="font: 15px system-ui; margin: 3rem; color: #333">
-  <h1>This app has no pages yet.</h1>
-  <p>Ask aichip to change it, or edit <code>index.html</code>.</p>
-</body>
-"#;
-
-/// The files a container app is created with.
-///
-/// It exists so that an app that installs is an app that *builds* — the same
-/// reasoning that has `install` reconcile the schema rather than waiting for
-/// first use. Without it a `runtime: node` app's folder holds only a manifest,
-/// and `COPY package*.json ./` fails the build outright, because a `COPY` whose
-/// pattern matches nothing is an error rather than a no-op.
-///
-/// Deliberately dependency-free and deliberately dull. This is a floor an agent
-/// replaces, not a framework someone has to learn to delete.
-pub fn starter(runtime: Runtime) -> &'static [(&'static str, &'static str)] {
-    match runtime {
-        Runtime::Module => &[],
-        Runtime::Node => &[("package.json", NODE_PACKAGE), ("server.js", NODE_SERVER)],
-        Runtime::Static => &[("index.html", STATIC_INDEX)],
-    }
-}
-
 /// The paths this runtime's Dockerfile needs to find.
 ///
-/// Named separately from [`starter`] so the test below can check one against
-/// the other: the invariant is that the tree aichip creates satisfies the
-/// Dockerfile aichip wrote, and a rule stated once in two places drifts.
+/// The invariant — the tree aichip creates satisfies the Dockerfile aichip
+/// wrote — is tested in [`super::skeleton`], against the tree that module
+/// actually derives from a manifest.
 pub fn required_files(runtime: Runtime) -> &'static [&'static str] {
     match runtime {
         Runtime::Module => &[],
@@ -212,29 +150,7 @@ mod tests {
         assert_eq!(dockerfile(Runtime::Module), None);
         assert_eq!(port(Runtime::Module), None);
         assert_eq!(drift(Runtime::Module, Some("FROM scratch")), Build::None);
-        assert!(starter(Runtime::Module).is_empty());
         assert!(required_files(Runtime::Module).is_empty());
-    }
-
-    #[test]
-    fn the_starter_tree_satisfies_the_dockerfile_that_will_build_it() {
-        // The bug this pins: `COPY package*.json ./` fails the build when
-        // nothing matches, so an app installed with nothing but a manifest
-        // could never be run at all. Checked against `required_files` rather
-        // than by parsing COPY lines, because the point is that the two
-        // answers agree.
-        for runtime in [Runtime::Static, Runtime::Node] {
-            let files = starter(runtime);
-            for needed in required_files(runtime) {
-                assert!(
-                    files.iter().any(|(name, _)| name == needed),
-                    "a new {runtime:?} app has no {needed}, so its first build would fail"
-                );
-            }
-            for (name, body) in files {
-                assert!(!body.trim().is_empty(), "{runtime:?}'s {name} is empty");
-            }
-        }
     }
 
     #[test]
@@ -257,23 +173,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn the_node_starter_listens_on_the_port_it_is_given() {
-        // A server hardcoding 3000 works until the Dockerfile's ENV changes,
-        // and then serves nothing with no error to read.
-        let files = starter(Runtime::Node);
-        let server = files.iter().find(|(n, _)| *n == "server.js").unwrap().1;
-        assert!(server.contains("process.env.PORT"));
-
-        let package = files.iter().find(|(n, _)| *n == "package.json").unwrap().1;
-        let parsed: serde_json::Value =
-            serde_json::from_str(package).expect("package.json has to be JSON npm can read");
-        assert_eq!(parsed["main"], "server.js", "npm and the Dockerfile must agree on the entry");
-        // Nothing to fetch is what makes `connect-src 'self'` honest, and it
-        // also means the first build does not need a network.
-        assert_eq!(parsed["dependencies"].as_object().unwrap().len(), 0);
     }
 
     #[test]

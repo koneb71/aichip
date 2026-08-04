@@ -24,6 +24,7 @@ import {
   pageWindow,
   recordFor,
   runtimeBlurb,
+  screenPath,
   searchableField,
   searchFilter,
   sortParam,
@@ -299,17 +300,28 @@ describe("starting a new app", () => {
     }
   });
 
-  it("offers a container app no vocabulary the parser refuses", () => {
+  it("offers a container app screens but no vocabulary the parser refuses", () => {
     // A container draws its own pages, so `views:` is not a thing it may
-    // declare — and an example containing one is how someone comes to write it.
+    // declare — and an example containing one is how someone comes to write
+    // it. `menu:` it now gets: each entry is a screen the skeleton scaffolds
+    // into a real HTML page, CRUD when it names a model.
     for (const runtime of ["node", "static"] as AppRuntime[]) {
       const m = starterManifest(runtime);
       expect(m).not.toContain("\nviews:");
-      expect(m).not.toContain("\nmenu:");
+      expect(m).toContain("\nmenu:");
+      expect(m).toContain("model: note");
       // Models it does get: the tables are the same tables.
       expect(m).toContain("\nmodels:");
     }
     expect(starterManifest("module")).toContain("\nviews:");
+  });
+
+  it("agrees with the skeleton's router about where a screen lives", () => {
+    // The node router serves views/<name>.html at /<name>; a static app has
+    // no router, so the file itself is the path. A tab pointing anywhere else
+    // is a 404 that looks like a broken app.
+    expect(screenPath("node", "tasks")).toBe("/tasks");
+    expect(screenPath("static", "tasks")).toBe("/tasks.html");
   });
 
   it("says which runtimes need Docker before one is chosen", () => {

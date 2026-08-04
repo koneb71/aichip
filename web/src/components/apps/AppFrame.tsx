@@ -24,7 +24,12 @@ import { appOrigin, containerLine } from "../../lib/apps";
  */
 export const SANDBOX = "allow-scripts allow-same-origin allow-forms allow-modals";
 
-export function AppFrame({ app }: { app: App }) {
+/**
+ * `path` is which screen the frame shows — `/tasks` for a node app's
+ * `views/tasks.html`, `/tasks.html` for static. The tab bar owns the choice;
+ * this component only navigates. Empty means the app's front door.
+ */
+export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   const [state, setState] = useState<ContainerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,10 +150,11 @@ export function AppFrame({ app }: { app: App }) {
 
       {url ? (
         <iframe
-          // Keyed on the URL so Reload actually reloads: React would otherwise
-          // keep the same element and the same document.
-          key={url}
-          src={url}
+          // Keyed on the full address so Reload reloads and switching tabs
+          // actually navigates: React would otherwise keep the same element
+          // and the same document.
+          key={url + path}
+          src={url + path}
           title={app.name}
           sandbox={SANDBOX}
           className="min-h-0 flex-1 rounded-xl border border-line bg-white"

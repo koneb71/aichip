@@ -227,7 +227,7 @@ export function runtimeBlurb(runtime: AppRuntime): string {
     case "module":
       return "Models and screens, declared. Nothing executes, so there is nothing to approve.";
     case "node":
-      return "A real Node server in a container. Needs Docker on this machine.";
+      return "A Node server with HTML screens, scaffolded from your models. Needs Docker.";
     case "static":
       return "HTML, CSS and JavaScript in a container. Needs Docker on this machine.";
   }
@@ -239,8 +239,9 @@ export function runtimeBlurb(runtime: AppRuntime): string {
  * A working example rather than an empty box and the word YAML — editing one is
  * how most people learn the shape. The module's exercises most of the format in
  * as few lines as possible: two field types, a computed column, a default, a
- * list and a chart. A container's declares tables and no views, because it
- * draws its own pages and a `views:` block would be refused.
+ * list and a chart. A container's declares tables and a menu of screens — each
+ * entry becomes a real HTML page aichip scaffolds, a CRUD page when it names a
+ * model. `views:` belongs to modules and is refused for containers.
  */
 export function starterManifest(runtime: AppRuntime): string {
   if (runtime === "module") {
@@ -284,7 +285,22 @@ models:
     fields:
       title: { type: text, required: true }
       body:  { type: text }
+
+menu:
+  - { label: Notes, view: notes, model: note }
 `;
+}
+
+/**
+ * Where a container screen lives inside its app's origin.
+ *
+ * The node router serves `views/<name>.html` at `/<name>`; a static app has
+ * no router, so its screens are the files themselves. Pure and exported for
+ * the same reason `fieldLabel` is: the tab bar and the skeleton's own nav
+ * must agree on the path or clicking a tab 404s.
+ */
+export function screenPath(runtime: AppRuntime, view: string): string {
+  return runtime === "static" ? `/${view}.html` : `/${view}`;
 }
 
 /**

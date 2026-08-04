@@ -29,6 +29,7 @@ pub mod query;
 pub mod render;
 pub mod run;
 pub mod runtime;
+pub mod skeleton;
 pub mod scaffold;
 pub mod schema;
 pub mod scope;
@@ -233,12 +234,19 @@ pub async fn install(
 
     write_manifest(&path, manifest_text).await?;
 
-    // A container app is created with the smallest tree its Dockerfile can
-    // build, for the same reason the schema is reconciled below rather than on
-    // first use: an app that installed should be an app that works. A folder
-    // holding only a manifest fails `COPY package*.json ./` outright.
-    for (name, body) in runtime::starter(parsed.runtime) {
-        tokio::fs::write(path.join(name), body).await?;
+    // A container app is created with a tree scaffolded *from its manifest* —
+    // a router and one views/<screen>.html per menu entry, CRUD when the entry
+    // names a model — for the same reason the schema is reconciled below
+    // rather than on first use: an app that installed should be an app that
+    // works. The floor case still holds: even an empty menu yields the files
+    // its Dockerfile needs, because `COPY package*.json ./` fails outright
+    // when nothing matches.
+    for (name, body) in skeleton::files(&parsed) {
+        let file = path.join(&name);
+        if let Some(parent) = file.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(file, body).await?;
     }
 
     // …and committed, because `ensure_repo` ran before any of it was written.

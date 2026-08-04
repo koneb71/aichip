@@ -24,6 +24,7 @@ export function NewAppModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [writing, setWriting] = useState(false);
+  const [polish, setPolish] = useState(false);
 
   /**
    * Switching runtime replaces the manifest, because the two starters declare
@@ -68,7 +69,15 @@ export function NewAppModal({
     setBusy(true);
     setError(null);
     try {
-      await api.installApp(workspaceId, manifest, brief);
+      const app = await api.installApp(workspaceId, manifest, brief);
+      // The scaffolded screens already work; this sends an agent to make them
+      // *good*. Fired after install so a failed run costs nothing but the run —
+      // the app is installed either way, and the card lands like any other
+      // change. Best-effort: an error here is the card's problem, not the
+      // install's.
+      if (polish && app.runtime !== "module" && brief.trim()) {
+        await api.changeApp(app.id, brief.trim()).catch(() => {});
+      }
       onInstalled();
     } catch (e) {
       // The parser names the key — "models.expense.fields.qty: unknown field
@@ -163,6 +172,17 @@ export function NewAppModal({
           <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 font-mono text-[11px] text-danger">
             {error}
           </div>
+        )}
+
+        {runtime !== "module" && (
+          <label className="mt-3 flex items-center gap-2 text-xs text-ink-dim">
+            <input
+              type="checkbox"
+              checked={polish}
+              onChange={(e) => setPolish(e.target.checked)}
+            />
+            Have an agent polish the screens after install (costs a run)
+          </label>
         )}
 
         <div className="mt-4 flex items-center gap-2">

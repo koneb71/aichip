@@ -38,6 +38,11 @@ fn file_contract(runtime: Runtime) -> String {
             "\
 * **`server.js` is the entry point** and must listen on `process.env.PORT`
   (aichip sets it to {port}). Do not hardcode a port.
+* **Screens are HTML files under `views/`.** `server.js` routes `/` to
+  `views/index.html` and `/<name>` to `views/<name>.html`; `/assets/` is
+  served as files. Add a screen by adding a file *and* a `menu:` entry in
+  `aichip.app.yaml` so it appears in the sidebar. Keep that routing (or
+  something equivalent) if you rewrite the server.
 * **Dependencies go in `package.json`.** They are installed at build time and
   **nothing is fetched at run time** — the page is served under
   `connect-src 'self'`, so a CDN script tag or a runtime `fetch` to another
@@ -51,7 +56,8 @@ fn file_contract(runtime: Runtime) -> String {
         Runtime::Static => format!(
             "\
 * **`index.html` at the top level is the page.** Everything beside it is served
-  as-is by nginx.
+  as-is by nginx; each screen in the manifest's `menu:` is `<name>.html`
+  beside it.
 * **Nothing is fetched at run time** — the page is served under
   `connect-src 'self'`, so a CDN script tag or a font from another origin is
   blocked. Inline it or ship the file.
@@ -83,10 +89,12 @@ pub fn manifest_prompt(description: &str, runtime: Runtime) -> String {
             "\
 An app declares models, which become real Postgres tables it can read and write
 through aichip. This one is a **{runtime_name} app**: it also has source code of
-its own, which aichip builds into a container and serves in the dashboard. Right
-now you are writing only the manifest — the code comes later — so declare the
-tables it will need and nothing else. It draws its own pages, so it has no
-`views:` and no `menu:`."
+its own, which aichip builds into a container and serves in the dashboard. You
+are writing only the manifest — but every `menu:` entry you declare becomes a
+real HTML screen aichip scaffolds from it, a working CRUD page when the entry
+names a `model:`. So declare the tables *and* the screens; the code is
+generated from this and refined afterwards. It has no `views:` and no
+`actions:` — those belong to declarative apps."
         )
     } else {
         "\
@@ -97,10 +105,17 @@ format below, leave it out rather than inventing syntax for it."
             .to_string()
     };
 
-    // A container app declares no views, so offering it the vocabulary would
-    // be inviting a manifest the parser then refuses.
+    // A container app declares no views — offering that vocabulary would be
+    // inviting a manifest the parser refuses — but it *does* declare screens,
+    // and each menu entry decides what gets scaffolded.
     let views_block = if runtime.is_container() {
-        String::new()
+        "\n\
+menu:
+  - {{ label: <what the tab says>, view: <screen_name>, model: <model_name> }}
+  # Each entry becomes views/<screen_name>.html. With `model:` it is scaffolded
+  # as a working CRUD page for that model; without, an empty page to fill in.
+  # Screen names are lower_snake, like every other name here.\n"
+            .to_string()
     } else {
         "\n\
 views:
@@ -144,10 +159,11 @@ actions:
 
     let what_to_build = if runtime.is_container() {
         "\
-Declare only the tables the app will store things in. Prefer one model over
-three. Use `compute` for anything derived rather than storing it twice. The
-pages, the styling and the behaviour are code you will write afterwards — none
-of that belongs here."
+Declare the tables the app will store things in and a menu of its screens.
+Prefer one model over three. Use `compute` for anything derived rather than
+storing it twice. Give each model's screen a `model:` so it scaffolds as a
+working page — custom behaviour is code, refined afterwards, and none of it
+belongs here."
     } else {
         "\
 Design the smallest thing that actually does the job. Prefer one model over
@@ -361,15 +377,17 @@ mod tests {
     }
 
     #[test]
-    fn a_container_app_is_not_offered_a_vocabulary_it_cannot_use() {
-        // It draws its own pages, so a `views:` or `menu:` block would be a
+    fn a_container_app_is_offered_screens_but_not_views_or_actions() {
+        // It draws its own pages, so a `views:` or `actions:` block would be a
         // manifest the parser refuses — and offering the syntax is how an
-        // agent comes to write one.
+        // agent comes to write one. `menu:` it now gets: each entry is a
+        // screen the skeleton scaffolds into a real HTML page.
         for runtime in [Runtime::Node, Runtime::Static] {
             let p = manifest_prompt("x", runtime);
             assert!(!p.contains("\nviews:"), "{runtime:?} was offered views");
-            assert!(!p.contains("\nmenu:"), "{runtime:?} was offered a menu");
             assert!(!p.contains("\nactions:"), "{runtime:?} was offered actions");
+            assert!(p.contains("\nmenu:"), "{runtime:?} was not told about screens");
+            assert!(p.contains("model:"), "{runtime:?} was not told model: selects CRUD");
             // Models it does get: the tables are the same tables.
             assert!(p.contains("\nmodels:"));
         }
@@ -387,6 +405,10 @@ mod tests {
         assert!(p.contains("Do not write a Dockerfile"));
         assert!(p.contains("add a page"), "the brief has to reach the model");
         assert!(p.contains("name: T"), "the agent needs the manifest as it stands");
+        // The screen convention: an agent that doesn't know views/ exists will
+        // bolt new pages onto server.js and the sidebar never learns of them.
+        assert!(p.contains("views/"), "the node contract never mentions the views/ layout");
+        assert!(p.contains("menu:"), "the contract never says screens are declared");
 
         let s = build_prompt("name: T", Runtime::Static, "x");
         assert!(s.contains("index.html"));

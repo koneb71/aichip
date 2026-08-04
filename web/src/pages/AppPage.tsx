@@ -6,6 +6,7 @@ import { AppView } from "../components/apps/AppView";
 import { SchemaGate } from "../components/apps/SchemaGate";
 import { ScopeGrant } from "../components/apps/ScopeGrant";
 import { AppFrame } from "../components/apps/AppFrame";
+import { screenPath } from "../lib/apps";
 import { BuildHistory } from "../components/apps/BuildHistory";
 import { ChangeAppModal } from "../components/apps/ChangeAppModal";
 import { DockerfileGate } from "../components/apps/DockerfileGate";
@@ -235,7 +236,9 @@ export default function AppPage() {
           {app.runtime !== "module" ? (
             <>
               <DockerfileGate appId={app.id} onApproved={refresh} />
-              <AppFrame app={app} />
+              {/* The tab decides the screen; the frame only navigates to it.
+                  No tab selected means the app's own front door. */}
+              <AppFrame app={app} path={screen ? screenPath(app.runtime, screen) : ""} />
             </>
           ) : manifest && view ? (
             <AppView

@@ -307,7 +307,14 @@ pub struct Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub label: String,
+    /// For a module, the name of a declared view. For a container, the name of
+    /// a screen — the file `views/<view>.html` the skeleton writes and the
+    /// app's server routes.
     pub view: String,
+    /// Container screens only: the model this screen is a CRUD page for, which
+    /// is what selects the scaffold template. A module's views already name
+    /// their model, so this stays `None` there.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,9 +403,29 @@ pub fn parse(yaml: &str) -> R<Manifest> {
 
     let scopes = parse_scopes(root)?;
     let models = parse_models(root)?;
+
+    // A container app draws its own pages, so `views:` and `actions:` have
+    // nothing to attach to. Refused rather than accepted-and-ignored, which is
+    // what happened before: the section parsed, nothing rendered it, and the
+    // author was left staring at a working manifest and a blank app.
+    if runtime.is_container() {
+        for section in ["views", "actions"] {
+            if root.get(section).is_some() {
+                return Err(ManifestError::new(
+                    section,
+                    format!(
+                        "a {} app draws its own pages — declare screens under \
+                         menu:, not {section}:",
+                        runtime.as_str()
+                    ),
+                ));
+            }
+        }
+    }
+
     let views = parse_views(root, &models)?;
     let actions = parse_actions(root, &models, &views)?;
-    let menu = parse_menu(root, &views)?;
+    let menu = parse_menu(root, runtime, &views, &models)?;
 
     let manifest = Manifest {
         name,
@@ -1054,7 +1081,25 @@ fn parse_values(body: &Mapping, model: &Model, at: &str) -> R<Vec<(String, Optio
     Ok(values)
 }
 
-fn parse_menu(root: &Mapping, views: &[View]) -> R<Vec<MenuItem>> {
+/// The menu means something different per runtime, and the parser says which.
+///
+/// For a **module** an entry points at a declared view, exactly as before. For
+/// a **container** an entry declares a *screen*: `view` names the HTML file
+/// the skeleton writes (`views/<view>.html`) and the path the app's server
+/// routes, so it goes through [`ident`] — it becomes a filename and a URL, and
+/// the charset is the defence, same as everywhere else identifiers travel.
+/// An optional `model:` binds the screen to a declared model, which is what
+/// selects the CRUD template at scaffold time.
+///
+/// Screens are declared here rather than inferred from the `views/` directory
+/// because the sidebar and the tab bar read the manifest — a screen that only
+/// exists as a file would be reachable but invisible.
+fn parse_menu(
+    root: &Mapping,
+    runtime: Runtime,
+    views: &[View],
+    models: &[Model],
+) -> R<Vec<MenuItem>> {
     let Some(menu) = root.get("menu") else {
         return Ok(Vec::new());
     };
@@ -1065,18 +1110,40 @@ fn parse_menu(root: &Mapping, views: &[View]) -> R<Vec<MenuItem>> {
     for (i, item) in seq.iter().enumerate() {
         let at = format!("menu[{i}]");
         let map = as_map(item, &at)?;
-        known_keys(map, &["label", "view"], &at)?;
-        let view = req_str(map, "view", &at)?;
-        let target = views.iter().find(|v| v.name == view).ok_or_else(|| {
-            ManifestError::new(
-                format!("{at}.view"),
-                format!("\"{view}\" is not a view this app declares"),
-            )
-        })?;
-        out.push(MenuItem {
-            label: opt_str(map, "label", &at)?.unwrap_or_else(|| target.name.clone()),
-            view,
-        });
+
+        if runtime.is_container() {
+            known_keys(map, &["label", "view", "model"], &at)?;
+            let view = req_str(map, "view", &at)?;
+            ident(&view, &format!("{at}.view"), "a screen name")?;
+            let model = opt_str(map, "model", &at)?;
+            if let Some(m) = &model {
+                if !models.iter().any(|declared| &declared.name == m) {
+                    return Err(ManifestError::new(
+                        format!("{at}.model"),
+                        format!("\"{m}\" is not a model this app declares"),
+                    ));
+                }
+            }
+            out.push(MenuItem {
+                label: opt_str(map, "label", &at)?.unwrap_or_else(|| view.clone()),
+                view,
+                model,
+            });
+        } else {
+            known_keys(map, &["label", "view"], &at)?;
+            let view = req_str(map, "view", &at)?;
+            let target = views.iter().find(|v| v.name == view).ok_or_else(|| {
+                ManifestError::new(
+                    format!("{at}.view"),
+                    format!("\"{view}\" is not a view this app declares"),
+                )
+            })?;
+            out.push(MenuItem {
+                label: opt_str(map, "label", &at)?.unwrap_or_else(|| target.name.clone()),
+                view,
+                model: None,
+            });
+        }
     }
     Ok(out)
 }
@@ -1284,6 +1351,67 @@ menu:
         assert_eq!(m.views.len(), 3);
         assert_eq!(m.menu.len(), 2);
         assert_eq!(m.scopes, vec![Scope::ReadProjects, Scope::RunAgents]);
+    }
+
+    // ── Container menus: screens, not views ─────────────────────────────────
+
+    const CONTAINER: &str = "\
+name: Tracker\nruntime: node\n\
+models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
+
+    #[test]
+    fn a_container_menu_declares_screens_with_an_optional_model() {
+        let m = parse(&format!(
+            "{CONTAINER}menu:\n  - {{ label: Tasks, view: tasks, model: task }}\n  - {{ view: about }}\n"
+        ))
+        .expect("a container app with screens must parse");
+        assert_eq!(m.menu.len(), 2);
+        assert_eq!(m.menu[0].view, "tasks");
+        assert_eq!(m.menu[0].model.as_deref(), Some("task"));
+        // No label falls back to the screen name; no model means a stub page.
+        assert_eq!(m.menu[1].label, "about");
+        assert_eq!(m.menu[1].model, None);
+    }
+
+    #[test]
+    fn a_screen_bound_to_a_model_the_app_does_not_declare_is_refused() {
+        let e = err(&format!("{CONTAINER}menu:\n  - {{ view: notes, model: note }}\n"));
+        assert_eq!(e.at, "menu[0].model");
+        assert!(e.message.contains("not a model"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_screen_name_becomes_a_filename_so_it_keeps_the_ident_charset() {
+        // `view` is written to disk as views/<view>.html and routed as a URL
+        // path. The charset is the defence — nothing to escape anywhere.
+        let e = err(&format!("{CONTAINER}menu:\n  - {{ view: \"../etc\" }}\n"));
+        assert_eq!(e.at, "menu[0].view");
+    }
+
+    #[test]
+    fn a_module_menu_does_not_take_a_model_key() {
+        // A module view already names its model; a second binding here could
+        // only agree or contradict it.
+        let e = err(
+            "name: T\nmodels:\n  a: { fields: { x: { type: text } } }\n\
+             views:\n  list: { model: a }\n\
+             menu:\n  - { view: list, model: a }\n",
+        );
+        assert!(e.at.starts_with("menu[0]"), "{}", e.at);
+    }
+
+    #[test]
+    fn a_container_app_declaring_views_is_refused_not_ignored() {
+        // Before this, the section parsed and nothing rendered it — a working
+        // manifest and a blank app, with no hint which line was dead weight.
+        let e = err(&format!("{CONTAINER}views:\n  list: {{ model: task }}\n"));
+        assert_eq!(e.at, "views");
+        assert!(e.message.contains("menu:"), "points at the fix: {}", e.message);
+
+        let e = err(&format!(
+            "{CONTAINER}actions:\n  go:\n    label: Go\n    steps: [ delete ]\n"
+        ));
+        assert_eq!(e.at, "actions");
     }
 
     /// The manifest the "Write it for me" button produced for an event
