@@ -125,6 +125,12 @@ pub async fn start(extra: &[String]) -> anyhow::Result<Started> {
         .map(String::as_str)
         .collect();
 
+    // Deliberately not `super::gh`, which is a one-shot `.output()` runner.
+    // This call is the opposite shape: it must be *spawned* and its stderr read
+    // incrementally, because the one-time code appears while the process is
+    // still running and waiting. Routing it through the runner would mean
+    // waiting for a process that does not exit until the login finishes — the
+    // code would arrive only after it was no longer any use.
     let mut cmd = Command::new("gh");
     cmd.args(["auth", "login", "--web", "--hostname", "github.com"]);
     if !allowed.is_empty() {
