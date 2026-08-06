@@ -89,11 +89,36 @@ impl WorktreeManager {
         message: &str,
     ) -> anyhow::Result<()> {
         // Commit any uncommitted agent work in the worktree first.
-        git(&worktree.path, &["add", "-A"]).await?;
-        let status = git(&worktree.path, &["status", "--porcelain"]).await?;
-        if !status.trim().is_empty() {
-            git(&worktree.path, &["commit", "-m", message]).await?;
+        commit_worktree(worktree, message).await?;
+
+        // Everything below this line runs in the **user's own checkout**, so
+        // it has to find one it is allowed to move.
+        //
+        // Without this check, `git checkout <base>` either refused — a 409 the
+        // user could do nothing with, because nothing said which files — or,
+        // worse, carried their uncommitted edits across onto the base branch
+        // and folded them into this card's commit. `merge --squash` stages
+        // into the same index those files sit in, so the message
+        // `aichip: {title}` ended up on work an agent never touched. Already
+        // being on the base branch with something staged is the same bug
+        // wearing a different hat: `checkout` is a no-op, the squash piles on
+        // top, and the `diff --cached` below sees the person's own work.
+        //
+        // Untracked files are deliberately not counted. `checkout` does not
+        // carry them and `merge --squash` does not stage them, so they are
+        // harmless — while counting them would make any repository with
+        // untracked build output permanently unmergeable.
+        let dirty = git(repo, &["status", "--porcelain", "--untracked-files=no"]).await?;
+        if !dirty.trim().is_empty() {
+            anyhow::bail!(
+                "your checkout at {} has uncommitted changes, and merging would \
+                 check out {base_branch} over them and fold them into this card's \
+                 commit — commit or stash them and merge again:\n{}",
+                repo.display(),
+                describe_dirty(&dirty)
+            );
         }
+
         let base = resolve_base(repo, base_branch).await?;
         git(repo, &["checkout", &base]).await?;
         git(repo, &["merge", "--squash", &worktree.branch]).await?;
@@ -363,6 +388,39 @@ pub async fn commit_all(path: &Path, message: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Commit whatever an agent left uncommitted in its own worktree.
+///
+/// Shared because both landing paths need it and for the same reason: a card
+/// in review can hold work the diff already showed but nothing has committed,
+/// and either path proceeding without it would act on a branch missing exactly
+/// the changes the person just approved.
+///
+/// Only ever touches aichip's own worktree, never the user's checkout, and is
+/// idempotent — a clean worktree commits nothing.
+async fn commit_worktree(worktree: &Worktree, message: &str) -> anyhow::Result<()> {
+    git(&worktree.path, &["add", "-A"]).await?;
+    let status = git(&worktree.path, &["status", "--porcelain"]).await?;
+    if !status.trim().is_empty() {
+        git(&worktree.path, &["commit", "-m", message]).await?;
+    }
+    Ok(())
+}
+
+/// `git status --porcelain` as something worth putting in an error.
+///
+/// Capped, because the point is to name the files in the way — a person with
+/// four hundred modified files does not need four hundred lines to understand
+/// that their tree is dirty, and an alert that long is one nobody reads.
+fn describe_dirty(porcelain: &str) -> String {
+    const SHOWN: usize = 10;
+    let lines: Vec<&str> = porcelain.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut out: Vec<String> = lines.iter().take(SHOWN).map(|l| format!("  {}", l.trim())).collect();
+    if lines.len() > SHOWN {
+        out.push(format!("  … and {} more", lines.len() - SHOWN));
+    }
+    out.join("\n")
+}
+
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = Command::new("git").current_dir(cwd).args(args).output().await?;
     if !out.status.success() {
@@ -627,6 +685,127 @@ mod tests {
 
         mgr.remove(repo_dir.path(), &wt).await.unwrap();
         assert!(!wt.path.exists());
+    }
+
+    /// The merge must not swallow work the person had in progress.
+    ///
+    /// The bug: `squash_merge` checked out the base branch in the user's own
+    /// repository with no idea what was in it. Git carried the uncommitted
+    /// edits across and `merge --squash` staged into the same index, so
+    /// unrelated in-progress work was committed under `aichip: {title}` —
+    /// silently, and attributed to a card that never touched it.
+    #[tokio::test]
+    async fn a_dirty_checkout_refuses_the_merge_instead_of_swallowing_it() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        // A tracked file the person is midway through editing, on a branch of
+        // their own — the ordinary state of a working checkout.
+        tokio::fs::write(repo_dir.path().join("mine.txt"), "draft\n").await.unwrap();
+        git(repo_dir.path(), &["add", "-A"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "mine"]).await.unwrap();
+        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
+        tokio::fs::write(repo_dir.path().join("mine.txt"), "half a thought\n").await.unwrap();
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
+            .await
+            .expect_err("a dirty checkout must refuse");
+        let text = err.to_string();
+        assert!(text.contains("uncommitted changes"), "{text}");
+        assert!(text.contains("mine.txt"), "the error must name the files: {text}");
+
+        // …and nothing happened: their edit is still theirs, still uncommitted,
+        // and the card's commit does not exist.
+        let still = tokio::fs::read_to_string(repo_dir.path().join("mine.txt")).await.unwrap();
+        assert_eq!(still, "half a thought\n");
+        assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
+        // `main`, not `--all`: the card's own branch is *supposed* to carry
+        // that commit — committing the agent's work in its own worktree is
+        // what the guard deliberately runs before refusing. What must not have
+        // happened is that commit reaching the base branch.
+        let log = git(repo_dir.path(), &["log", "main", "--oneline"]).await.unwrap();
+        assert!(!log.contains("aichip: card"), "the card landed on main anyway: {log}");
+    }
+
+    /// The same bug wearing a different hat, and the nastier one.
+    ///
+    /// Already on the base branch with something staged: `checkout` is a no-op
+    /// so nothing refuses, the squash stages on top, and the `diff --cached`
+    /// check sees the *person's* staged work — so it commits it under the
+    /// card's message.
+    #[tokio::test]
+    async fn staged_work_on_the_base_branch_is_not_committed_under_the_cards_message() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+
+        // Staged, on main, which is where a person often is.
+        tokio::fs::write(repo_dir.path().join("staged.txt"), "mine\n").await.unwrap();
+        git(repo_dir.path(), &["add", "staged.txt"]).await.unwrap();
+
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
+            .await
+            .expect_err("staged work must refuse");
+        assert!(err.to_string().contains("staged.txt"), "{err}");
+
+        let log = git(repo_dir.path(), &["log", "--oneline"]).await.unwrap();
+        assert!(!log.contains("aichip: card"), "their staged work was committed: {log}");
+        // Still staged, still theirs to finish.
+        let staged = git(repo_dir.path(), &["diff", "--cached", "--name-only"]).await.unwrap();
+        assert!(staged.contains("staged.txt"));
+    }
+
+    /// Untracked files are not in the way, and counting them would be.
+    ///
+    /// `checkout` does not carry them and `merge --squash` does not stage
+    /// them — while refusing on them would make any repository with untracked
+    /// build output permanently unmergeable.
+    #[tokio::test]
+    async fn untracked_files_do_not_block_a_merge() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        tokio::fs::write(repo_dir.path().join("target.log"), "noise\n").await.unwrap();
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
+            .await
+            .expect("untracked files must not block a merge");
+        let log = git(repo_dir.path(), &["log", "--oneline"]).await.unwrap();
+        assert!(log.contains("aichip: card"));
+        // And the untracked file is untouched.
+        assert!(repo_dir.path().join("target.log").exists());
+    }
+
+    #[test]
+    fn a_dirty_tree_is_described_without_becoming_the_whole_alert() {
+        let short = " M src/main.rs\nA  src/new.rs\n";
+        let described = describe_dirty(short);
+        assert!(described.contains("M src/main.rs"));
+        assert!(described.contains("A  src/new.rs"));
+        assert!(!described.contains("and"), "nothing was elided: {described}");
+
+        let many: String = (0..40).map(|i| format!(" M file{i}.rs\n")).collect();
+        let described = describe_dirty(&many);
+        assert_eq!(described.lines().count(), 11, "ten files plus the tally");
+        assert!(described.contains("… and 30 more"));
+
+        assert_eq!(describe_dirty(""), "");
     }
 
     /// Clicking Merge twice must be quiet, not an error.
