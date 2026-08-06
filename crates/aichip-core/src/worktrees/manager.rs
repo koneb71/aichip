@@ -139,6 +139,60 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Send this card's branch to `origin`, so a pull request has something to
+    /// point at.
+    ///
+    /// Note what this does **not** take: a path to the user's repository. It
+    /// runs entirely in the worktree, which is why the dirty-checkout guard on
+    /// [`Self::squash_merge`] neither applies here nor should. Opening a pull
+    /// request while you have unrelated work in progress is the ordinary state
+    /// of a working checkout; merging over it is not. Anyone tempted to hoist
+    /// that guard into a shared precondition would be removing the difference.
+    ///
+    /// Uncommitted agent work is committed first, for the reason it is on the
+    /// merge path too: a card in review can hold changes the diff showed and
+    /// nothing has committed, and a pull request opened without them shows a
+    /// reviewer something other than what was approved.
+    ///
+    /// `--set-upstream` so a later `gh pr create --head` finds the branch, and
+    /// `origin` by name rather than "the first remote", which in a fork would
+    /// silently pick `upstream` and try to push to somebody else's repository.
+    pub async fn push(
+        &self,
+        worktree: &Worktree,
+        message: &str,
+        force: bool,
+    ) -> anyhow::Result<()> {
+        commit_worktree(worktree, message).await?;
+
+        // Its absence *is* the condition — there is nowhere to push, which is
+        // a thing to tell somebody rather than a failure to log.
+        if git(&worktree.path, &["remote", "get-url", "origin"]).await.is_err() {
+            anyhow::bail!(
+                "this project has no `origin` remote, so there is nowhere to push \
+                 the branch — add one and try again"
+            );
+        }
+
+        let mut args = vec!["push", "--set-upstream", "origin", &worktree.branch];
+        if force {
+            // `--force-with-lease` and never `--force`: it refuses if the
+            // remote moved since we last saw it, so the second click can still
+            // only overwrite the history it was shown.
+            args.insert(1, "--force-with-lease");
+        }
+        match git(&worktree.path, &args).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let text = e.to_string();
+                if let Some(why) = push_rejection(&text) {
+                    anyhow::bail!("{why}");
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Remove a worktree known only by its path, taking its branch with it.
     ///
     /// `remove` needs a `Worktree` value; a losing bake-off variant is a row
@@ -404,6 +458,36 @@ async fn commit_worktree(worktree: &Worktree, message: &str) -> anyhow::Result<(
         git(&worktree.path, &["commit", "-m", message]).await?;
     }
     Ok(())
+}
+
+/// Whether a push was refused because the branch and the remote disagree.
+///
+/// Worth telling apart from every other push failure, because it is the one
+/// with a next step that only a person can authorise. A retry with "start from
+/// a clean checkout" deletes the branch and recreates it under the same name
+/// from a fresh base, so a card pushed once and retried has a history the
+/// remote cannot fast-forward to.
+///
+/// Force is not the automatic answer to that. A force-push silently discards
+/// review comments attached to the commits it replaces — the same category of
+/// thing as quietly downgrading a permission, which this codebase refuses at
+/// the click. It is offered as a second, explicit click instead.
+fn push_rejection(output: &str) -> Option<String> {
+    let lower = output.to_ascii_lowercase();
+    if !lower.contains("[rejected]") {
+        return None;
+    }
+    if lower.contains("non-fast-forward") || lower.contains("fetch first") {
+        return Some(
+            "the branch on GitHub has commits this one does not, so pushing would \
+             have to overwrite it — which discards any review comments on what is \
+             there now. Retrying a card from a clean checkout rewrites its branch, \
+             which is the usual reason. Push again with force if that is what you \
+             want."
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// `git status --porcelain` as something worth putting in an error.
@@ -790,6 +874,128 @@ mod tests {
         assert!(log.contains("aichip: card"));
         // And the untracked file is untouched.
         assert!(repo_dir.path().join("target.log").exists());
+    }
+
+    /// A bare repository beside the real one, so push has somewhere to go
+    /// without a network or a GitHub account.
+    async fn with_bare_origin(repo: &Path) -> tempfile::TempDir {
+        let bare = tempfile::tempdir().unwrap();
+        git(repo, &["init", "--bare", bare.path().to_str().unwrap()]).await.unwrap();
+        git(repo, &["remote", "add", "origin", bare.path().to_str().unwrap()])
+            .await
+            .unwrap();
+        bare
+    }
+
+    #[tokio::test]
+    async fn push_sends_the_branch_and_the_uncommitted_work_with_it() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let bare = with_bare_origin(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        // Left uncommitted, exactly as a card in review can be.
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+
+        mgr.push(&wt, "aichip: card", false).await.unwrap();
+
+        // The ref is on the remote, and it carries the file.
+        let refs = git(bare.path(), &["branch", "--list"]).await.unwrap();
+        assert!(refs.contains(&wt.branch), "branch missing from origin: {refs}");
+        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch]).await.unwrap();
+        assert!(
+            files.contains("theirs.txt"),
+            "a pull request would have shown less than the diff did: {files}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_push_after_another_commit_fast_forwards() {
+        // The ordinary case: a comment-driven fix run adds commits to a card
+        // whose pull request is already open. GitHub updates it itself.
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let bare = with_bare_origin(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("a.txt"), "one\n").await.unwrap();
+        mgr.push(&wt, "aichip: card", false).await.unwrap();
+
+        tokio::fs::write(wt.path.join("b.txt"), "two\n").await.unwrap();
+        mgr.push(&wt, "aichip: card", false).await.unwrap();
+
+        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch]).await.unwrap();
+        assert!(files.contains("a.txt") && files.contains("b.txt"), "{files}");
+    }
+
+    /// A retry from a clean checkout rewrites the branch under the same name,
+    /// so the remote cannot fast-forward to it. That must be a question, not
+    /// something that happens quietly — a force-push discards review comments
+    /// on the commits it replaces.
+    #[tokio::test]
+    async fn a_rewritten_branch_is_refused_until_someone_asks_for_force() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let bare = with_bare_origin(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+        let task_id = Uuid::new_v4();
+
+        let wt = mgr.create(repo_dir.path(), "main", task_id, "card").await.unwrap();
+        tokio::fs::write(wt.path.join("first.txt"), "one\n").await.unwrap();
+        mgr.push(&wt, "aichip: card", false).await.unwrap();
+
+        // Retry-from-clean: same branch name, different history.
+        mgr.remove(repo_dir.path(), &wt).await.unwrap();
+        let again = mgr.create(repo_dir.path(), "main", task_id, "card").await.unwrap();
+        assert_eq!(again.branch, wt.branch, "the retry must reuse the name for this to bite");
+        tokio::fs::write(again.path.join("second.txt"), "two\n").await.unwrap();
+
+        let err = mgr
+            .push(&again, "aichip: card", false)
+            .await
+            .expect_err("a rewritten branch must not be force-pushed silently");
+        let text = err.to_string();
+        assert!(text.contains("overwrite"), "{text}");
+        assert!(text.contains("review comments"), "the cost has to be stated: {text}");
+
+        // The remote still holds what a reviewer was looking at.
+        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch]).await.unwrap();
+        assert!(files.contains("first.txt") && !files.contains("second.txt"), "{files}");
+
+        // And force is the second, explicit answer.
+        mgr.push(&again, "aichip: card", true).await.unwrap();
+        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch]).await.unwrap();
+        assert!(files.contains("second.txt"), "{files}");
+    }
+
+    #[tokio::test]
+    async fn pushing_without_a_remote_says_so_rather_than_failing_obscurely() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        let err = mgr.push(&wt, "aichip: card", false).await.unwrap_err();
+        assert!(err.to_string().contains("no `origin` remote"), "{err}");
+    }
+
+    #[test]
+    fn only_a_history_disagreement_is_offered_force() {
+        let rejected = "git push failed: ! [rejected]        aichip/x -> aichip/x (non-fast-forward)";
+        assert!(push_rejection(rejected).is_some());
+        assert!(push_rejection("! [rejected] main -> main (fetch first)").is_some());
+
+        // Everything else is an ordinary failure, and offering force for it
+        // would be advice that cannot help.
+        assert_eq!(push_rejection("fatal: could not read Username"), None);
+        assert_eq!(push_rejection("Permission denied (publickey)"), None);
+        assert_eq!(push_rejection(""), None);
     }
 
     #[test]
