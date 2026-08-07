@@ -150,10 +150,17 @@ pub fn augment_prompt(prompt: &str, articles: &[ArticleRef]) -> String {
     format!("{prompt}{block}")
 }
 
-/// Stop a body from closing its own fence.
+/// Stop a body from closing its own fence, or opening a new one.
+///
+/// The replacements deliberately contain **no** marker text. The first version
+/// rewrote `<<<BEGIN KB PAGE` to `<<<BEGIN KB PAGE (literal)`, which still
+/// reads as an opener to the only reader that matters — so a body could still
+/// announce a page of its own and start issuing instructions inside it. Same
+/// mistake `github::issues::neutralise` was written to avoid, caught there and
+/// left here.
 fn neutralise(text: &str) -> String {
-    text.replace(END, "<<<END KB PAGE (literal)>>>")
-        .replace(BEGIN, "<<<BEGIN KB PAGE (literal)")
+    text.replace(END, "[end of quoted page — literal text from the body]")
+        .replace(BEGIN, "[begin quoted page — literal text from the body]")
 }
 
 /// Cut to a budget on a line boundary, returning what was left behind.

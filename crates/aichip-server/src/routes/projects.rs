@@ -15,6 +15,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
         .route("/projects/{id}", get(one).patch(update).delete(unload))
+        .route("/projects/{id}/brain", get(get_brain).put(put_brain))
+        .route("/projects/{id}/brain/revisions", get(brain_revisions))
         .route("/projects/{id}/storage", get(storage))
         .route("/projects/{id}/worktrees", get(worktrees))
         .route("/projects/{id}/worktrees/reclaim", post(reclaim_worktrees))
@@ -147,6 +149,79 @@ async fn unload(
         return Err((StatusCode::NOT_FOUND, "no such project".into()));
     }
     Ok(Json(json!({ "unloaded": true })))
+}
+
+/// The project's Brain — the standing context every run in it starts with.
+async fn get_brain(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let brain = aichip_core::brain::load(&state.db, id).await.map_err(internal)?;
+    // An unwritten brain is an empty one, not a 404: the editor opens on it.
+    Ok(Json(json!({
+        "body": brain.as_ref().map(|b| b.body.clone()).unwrap_or_default(),
+        "enabled": brain.as_ref().map(|b| b.enabled).unwrap_or(true),
+        "hash": brain.as_ref().map(|b| b.hash.clone()).unwrap_or_else(|| aichip_core::brain::hash("")),
+        "updatedAt": brain.as_ref().and_then(|b| b.updated_at),
+        "maxChars": aichip_core::brain::MAX_CHARS,
+    })))
+}
+
+#[derive(Deserialize)]
+struct BrainBody {
+    body: String,
+    #[serde(default = "yes")]
+    enabled: bool,
+    /// What the editor loaded. Absent only for a first write; a mismatch is a
+    /// 409 rather than an overwrite — the same rule the files editor and the
+    /// wiki carry, and the answer to two tabs open on the same text.
+    hash: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+async fn put_brain(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(body): Json<BrainBody>,
+) -> Result<Json<Value>, ApiError> {
+    use aichip_core::brain::SaveError;
+    match aichip_core::brain::save(&state.db, id, &body.body, body.enabled, body.hash.as_deref())
+        .await
+    {
+        Ok(b) => Ok(Json(json!({
+            "body": b.body,
+            "enabled": b.enabled,
+            "hash": b.hash,
+            "updatedAt": b.updated_at,
+        }))),
+        // Carries what is there now, so the editor can show the difference
+        // rather than only refusing.
+        Err(SaveError::Stale(now)) => Err((
+            StatusCode::CONFLICT,
+            format!(
+                "this was edited somewhere else since you opened it. Reload to see the \
+                 current text before saving over it.\n\n{}",
+                now.body
+            ),
+        )),
+        Err(SaveError::Secret(why)) => Err((StatusCode::BAD_REQUEST, why)),
+        Err(SaveError::Other(e)) => Err(internal(e)),
+    }
+}
+
+async fn brain_revisions(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = aichip_core::brain::revisions(&state.db, id).await.map_err(internal)?;
+    Ok(Json(json!({
+        "revisions": rows.iter().map(|(id, body, at)| json!({
+            "id": id, "body": body, "savedAt": at,
+        })).collect::<Vec<_>>(),
+    })))
 }
 
 /// Everything this project is holding, in one answer.

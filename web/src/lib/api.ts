@@ -13,6 +13,16 @@ export interface Workspace {
   color: string;
 }
 
+export interface ProjectBrain {
+  body: string;
+  /** Off means runs behave as though it were empty. It is still here. */
+  enabled: boolean;
+  /** What a save must carry back, so a stale editor is refused not merged. */
+  hash: string;
+  updatedAt: string | null;
+  maxChars: number;
+}
+
 export interface ProjectStorage {
   checkouts: {
     bytes: number;
@@ -1280,6 +1290,22 @@ export const api = {
   unloadProject: (projectId: string) =>
     fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
       json<{ unloaded: boolean }>(r),
+    ),
+  /** What every run in this project starts with. */
+  brain: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/brain`).then((r) => json<ProjectBrain>(r)),
+  saveBrain: (
+    projectId: string,
+    body: { body: string; enabled: boolean; hash?: string },
+  ) =>
+    fetch(`/api/projects/${projectId}/brain`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => json<ProjectBrain>(r)),
+  brainRevisions: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/brain/revisions`).then((r) =>
+      json<{ revisions: { id: number; body: string; savedAt: string }[] }>(r),
     ),
   /** Everything this project is holding, in one answer. */
   storage: (projectId: string) =>

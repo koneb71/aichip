@@ -1420,6 +1420,16 @@ impl Orchestrator {
         // A bound agent carries its memory into the run: what it did on this
         // project before is context, and what it does now becomes memory below.
         let project_id: Uuid = run.get("project_id");
+
+        // What the person who owns this project wants every run to know. Last,
+        // so the request and its attachments are read first and this is the
+        // background they sit against — and in the *prompt* rather than the
+        // system prompt, because standing context that outranked the request
+        // is the failure this is fenced against.
+        let prompt = crate::brain::augment_prompt(
+            &prompt,
+            crate::brain::for_run(&self.db, project_id).await.as_ref(),
+        );
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
                 .await
@@ -1782,7 +1792,7 @@ impl Orchestrator {
             // Lateral join rather than a scalar subquery: the turn needs the
             // message's id as well as its text, to look up its attachments.
             "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
-                    c.effort AS chat_effort, p.path AS project_path,
+                    c.effort AS chat_effort, p.path AS project_path, p.id AS project_id,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              JOIN projects p ON p.id = c.project_id
@@ -1834,6 +1844,15 @@ impl Orchestrator {
             .map(|(_, name)| name)
             .collect();
         let user_message = mentions::augment_prompt(&user_message, &mentioned);
+
+        // The same standing context a board run gets. A chat that has to be
+        // told where the code lives every time is the reason this feature
+        // exists — and the chat is where a person asks the questions the brain
+        // is written to answer.
+        let user_message = crate::brain::augment_prompt(
+            &user_message,
+            crate::brain::for_run(&self.db, row.get::<Uuid, _>("project_id")).await.as_ref(),
+        );
 
         let mcp = McpWiring {
             aichip_url: self
@@ -2022,6 +2041,13 @@ impl Orchestrator {
             .await
             .unwrap_or_default();
         prompt = crate::kb::augment_prompt(&prompt, &articles);
+        // The project's standing context reaches a reply too: an agent
+        // answering "where does this live?" on a card should know the same
+        // things as one doing the work.
+        prompt = crate::brain::augment_prompt(
+            &prompt,
+            crate::brain::for_run(&self.db, row.get::<Uuid, _>("project_id")).await.as_ref(),
+        );
         prompt.push_str(&format!(
             "\nThe comment mentioning you:\n{}\n\n\
              Reply as a comment on this card: concise, concrete, grounded in this \
