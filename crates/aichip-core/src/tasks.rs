@@ -63,6 +63,68 @@ pub async fn create_child(db: &Db, spec: NewChildTask) -> anyhow::Result<Uuid> {
     Ok(id)
 }
 
+/// A card imported from somewhere outside aichip.
+pub struct NewImportedTask {
+    pub project_id: Uuid,
+    pub title: String,
+    /// Already framed — see `github::issues::issue_prompt`. Never a raw body.
+    pub prompt: String,
+    pub engine: String,
+    /// `github_issue`. A discriminator, because what follows from it is
+    /// specific and the next importer must not inherit it.
+    pub source: String,
+    /// `owner/repo#42`, which is what makes a second import a no-op.
+    pub source_ref: String,
+    pub source_url: String,
+    pub source_number: i32,
+    /// Position within this import, so a batch keeps the order it was listed in.
+    pub order_hint: f64,
+}
+
+/// Create a card from an imported issue, or say it was already there.
+///
+/// `Ok(None)` means a card for this issue already exists — the ordinary answer
+/// to importing twice, not a failure. That is the partial-unique index doing
+/// the work, the same idiom `previews::start` uses for a double-click: the
+/// second insert loses rather than producing a duplicate.
+///
+/// Two things this deliberately does not do, both for the same reason — the
+/// text came from outside:
+///
+/// * **It never starts a run.** The card lands in `backlog` with no run and no
+///   enqueue, and this function has no parameter that could change that. On a
+///   public repository the person who wrote the prompt is a stranger, and the
+///   one place a human has to stand is between them and an agent holding Write
+///   and Bash.
+/// * **`parent_id` stays NULL.** An imported issue is a top-level request, not
+///   a sub-ticket some plan produced, and the epic roll-up counts children.
+pub async fn create_imported(db: &Db, spec: NewImportedTask) -> anyhow::Result<Option<Uuid>> {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        // `plan_first` because a plan is a second, cheaper look at what the
+        // issue actually asked for, approved before a file is touched. A
+        // default rather than a lock — it is editable on the card.
+        "INSERT INTO tasks
+            (project_id, title, prompt, engine, board_column, position, plan_first,
+             source, source_ref, source_url, source_number)
+         VALUES ($1,$2,$3,$4,'backlog', extract(epoch FROM now()) + $5, TRUE,
+                 $6,$7,$8,$9)
+         ON CONFLICT DO NOTHING
+         RETURNING id",
+    )
+    .bind(spec.project_id)
+    .bind(&spec.title)
+    .bind(&spec.prompt)
+    .bind(&spec.engine)
+    .bind(spec.order_hint)
+    .bind(&spec.source)
+    .bind(&spec.source_ref)
+    .bind(&spec.source_url)
+    .bind(spec.source_number)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(id)
+}
+
 /// Find the agent a plan named, within the project's workspace.
 ///
 /// Scoped through the project on purpose. `agents.name` stopped being globally

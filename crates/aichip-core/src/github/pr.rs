@@ -278,7 +278,33 @@ const MAX_BODY: usize = 60_000;
 /// Nothing here announces what wrote the code. That is not an oversight, it is
 /// the same rule the commit messages follow, and the test below is what keeps
 /// it true when somebody later reaches for a footer.
-pub fn pr_body(prompt: &str, branch: &str) -> String {
+/// Which issue this pull request should close, if any.
+///
+/// `Some` only when the card came from a GitHub issue **on the repository the
+/// pull request is being opened against**. GitHub's cross-repository form
+/// (`owner/repo#42`) only closes when the author has write access there, so a
+/// card whose issue lives elsewhere gets nothing rather than a keyword that
+/// silently does not work.
+pub fn closes_number(
+    source: Option<&str>,
+    source_ref: Option<&str>,
+    source_number: Option<i32>,
+    project_repo: Option<&str>,
+) -> Option<i32> {
+    if source? != "github_issue" {
+        return None;
+    }
+    let number = source_number?;
+    // A half-written row — a source with no number — must not become
+    // `Closes #` with nothing after it.
+    if number <= 0 {
+        return None;
+    }
+    let (issue_repo, _) = source_ref?.rsplit_once('#')?;
+    (issue_repo == project_repo?).then_some(number)
+}
+
+pub fn pr_body(prompt: &str, branch: &str, closes: Option<i32>) -> String {
     let prompt = prompt.trim();
     let mut body = String::from("### What this card asked for\n\n");
     if prompt.is_empty() {
@@ -296,6 +322,12 @@ pub fn pr_body(prompt: &str, branch: &str) -> String {
         body.push('\n');
     }
     body.push_str(&format!("\nBranch: `{branch}`\n"));
+    // Its own paragraph, and after the description rather than before it.
+    // GitHub does not link the keyword inside a code fence, and a card whose
+    // description ends in an unclosed fence would swallow a line placed above.
+    if let Some(number) = closes {
+        body.push_str(&format!("\nCloses #{number}\n"));
+    }
     body
 }
 
@@ -413,43 +445,109 @@ mod tests {
     /// for a footer.
     #[test]
     fn the_body_never_says_what_wrote_the_code() {
-        let body = pr_body("Add a retry button to the board", "aichip/retry-a1b2c3d4");
-        assert!(body.contains("Add a retry button"));
-        assert!(body.contains("aichip/retry-a1b2c3d4"));
-        for banned in [
-            "Co-Authored-By",
-            "Generated with",
-            "claude.ai",
-            "claude.com",
-            "Claude",
-            "🤖",
-            "AI-assisted",
-        ] {
-            assert!(
-                !body.contains(banned),
-                "the pull request body attributes itself: {banned}"
-            );
+        // Both arms, so the closing line cannot become the place an attribution
+        // slips in unnoticed.
+        for closes in [None, Some(42)] {
+            let body = pr_body("Add a retry button to the board", "aichip/retry-a1b2c3d4", closes);
+            assert!(body.contains("Add a retry button"));
+            assert!(body.contains("aichip/retry-a1b2c3d4"));
+            for banned in [
+                "Co-Authored-By",
+                "Generated with",
+                "claude.ai",
+                "claude.com",
+                "Claude",
+                "🤖",
+                "AI-assisted",
+            ] {
+                assert!(
+                    !body.contains(banned),
+                    "the pull request body attributes itself ({closes:?}): {banned}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_card_from_an_issue_closes_it_and_one_typed_by_hand_does_not() {
+        let with = pr_body("do the thing", "b", Some(42));
+        assert!(with.contains("\nCloses #42\n"), "{with}");
+        // After the description: GitHub does not link the keyword inside a code
+        // fence, and a prompt ending in an unclosed one would swallow it.
+        assert!(with.find("do the thing").unwrap() < with.find("Closes #42").unwrap());
+
+        // A card nobody imported gets byte-identical output to before.
+        assert_eq!(pr_body("do the thing", "b", None), pr_body_before("do the thing", "b"));
+    }
+
+    /// What the body was before `closes` existed, so the no-issue case is
+    /// pinned as unchanged rather than merely believed to be.
+    fn pr_body_before(prompt: &str, branch: &str) -> String {
+        format!("### What this card asked for\n\n{}\n\nBranch: `{branch}`\n", prompt.trim())
+    }
+
+    #[test]
+    fn an_overlong_description_still_carries_its_closing_line() {
+        // The naive implementation truncates and returns, losing it.
+        let body = pr_body(&"x".repeat(MAX_BODY + 5_000), "b", Some(7));
+        assert!(body.contains("too long to include"));
+        assert!(body.contains("Closes #7"), "truncation ate the closing line");
+    }
+
+    #[test]
+    fn only_an_issue_on_this_repository_is_closed() {
+        // The ordinary case.
+        assert_eq!(
+            closes_number(Some("github_issue"), Some("cli/cli#42"), Some(42), Some("cli/cli")),
+            Some(42)
+        );
+        // A card somebody typed.
+        assert_eq!(closes_number(None, None, None, Some("cli/cli")), None);
+        // An issue from another repository: the cross-repo form only closes
+        // with write access there, so promising it would be a lie.
+        assert_eq!(
+            closes_number(Some("github_issue"), Some("other/repo#42"), Some(42), Some("cli/cli")),
+            None
+        );
+        // A half-written row must not produce `Closes #`.
+        assert_eq!(
+            closes_number(Some("github_issue"), Some("cli/cli#42"), None, Some("cli/cli")),
+            None
+        );
+        assert_eq!(
+            closes_number(Some("github_issue"), Some("cli/cli#0"), Some(0), Some("cli/cli")),
+            None
+        );
+        // A project whose repository is unknown cannot be compared against.
+        assert_eq!(
+            closes_number(Some("github_issue"), Some("cli/cli#42"), Some(42), None),
+            None
+        );
+        // A future importer must not inherit GitHub's convention.
+        assert_eq!(
+            closes_number(Some("jira_ticket"), Some("cli/cli#42"), Some(42), Some("cli/cli")),
+            None
+        );
     }
 
     #[test]
     fn an_overlong_description_is_cut_visibly_rather_than_by_github() {
         let long = "x".repeat(MAX_BODY + 5_000);
-        let body = pr_body(&long, "b");
+        let body = pr_body(&long, "b", None);
         assert!(body.len() < MAX_BODY + 500);
         assert!(body.contains("too long to include"), "a silent cut is a lie");
 
         // A multi-byte character straddling the cut must not produce invalid
         // UTF-8 — the string is returned, so this would be a panic.
         let wide = "é".repeat(MAX_BODY);
-        let body = pr_body(&wide, "b");
+        let body = pr_body(&wide, "b", None);
         assert!(body.contains("too long to include"));
     }
 
     #[test]
     fn a_card_with_no_description_still_gets_a_body() {
         // `gh pr create --body ""` is legal but leaves a reviewer nothing.
-        let body = pr_body("   ", "b");
+        let body = pr_body("   ", "b", None);
         assert!(body.contains("no description"));
         assert!(!body.trim().is_empty());
     }
@@ -459,7 +557,7 @@ mod tests {
         // Everything is an argv element, never a shell string, so nothing here
         // needs escaping and nothing may be mangled on the way.
         let tricky = "run `$(rm -rf /)` and \"quote\" it\nplus a newline";
-        assert!(pr_body(tricky, "b").contains(tricky));
+        assert!(pr_body(tricky, "b", None).contains(tricky));
     }
 
     #[test]

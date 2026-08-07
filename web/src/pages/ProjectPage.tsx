@@ -12,6 +12,7 @@ import { FilesPanel } from "../components/files/FilesPanel";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { PreviewsPanel } from "../components/previews/PreviewsPanel";
+import { ImportIssuesModal } from "../components/ImportIssuesModal";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
@@ -31,6 +32,7 @@ export default function ProjectPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showNew, setShowNew] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [tab, setTab] = useState<Tab>("board");
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
   const narrow = useMediaQuery(NARROW);
@@ -146,6 +148,16 @@ export default function ProjectPage() {
               </button>
             ))}
           </div>
+          {/* Only when the project actually is a GitHub repository — a button
+              that could only refuse is worse than no button. */}
+          {activeTab === "board" && project?.githubRepo && (
+            <button
+              onClick={() => setShowImport(true)}
+              className="shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
+            >
+              Import issues
+            </button>
+          )}
           {activeTab === "board" && (
             <button
               onClick={() => setShowNew(true)}
@@ -184,6 +196,17 @@ export default function ProjectPage() {
           different card is a prop change that keeps the panel's scroll and tab
           where they were, instead of tearing it down and sliding a new one in. */}
       <AnimatePresence>
+        {showImport && project && (
+          <ImportIssuesModal
+            key="import-issues"
+            projectId={project.id}
+            onClose={() => setShowImport(false)}
+            onImported={() => {
+              setShowImport(false);
+              refresh();
+            }}
+          />
+        )}
         {showNew && project && (
           <NewTaskModal
             key="new-task"

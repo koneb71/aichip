@@ -26,6 +26,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks/{id}/pull-request", get(show).post(open))
         .route("/tasks/{id}/pull-request/refresh", post(refresh))
+        .route("/projects/{id}/github/issues", get(list_issues))
+        .route("/projects/{id}/github/issues/import", post(import_issues))
 }
 
 /// What a card needs before it can have a pull request at all.
@@ -37,6 +39,11 @@ struct Card {
     default_branch: String,
     worktree: aichip_core::worktrees::manager::Worktree,
     pr_number: Option<i32>,
+    /// Set when this card was imported from a GitHub issue, so the pull
+    /// request can say `Closes #42` and let GitHub close it on merge.
+    source: Option<String>,
+    source_ref: Option<String>,
+    source_number: Option<i32>,
 }
 
 /// Load a card, or say precisely which precondition it fails.
@@ -47,6 +54,7 @@ struct Card {
 async fn card(state: &AppState, id: Uuid) -> Result<Card, ApiError> {
     let row = sqlx::query(
         "SELECT t.title, t.prompt, t.worktree_path, t.branch, t.pr_number,
+                t.source, t.source_ref, t.source_number,
                 t.project_id, p.path AS project_path, p.default_branch, p.vcs
            FROM tasks t JOIN projects p ON p.id = t.project_id
           WHERE t.id = $1",
@@ -83,6 +91,9 @@ async fn card(state: &AppState, id: Uuid) -> Result<Card, ApiError> {
             branch,
         },
         pr_number: row.get("pr_number"),
+        source: row.get("source"),
+        source_ref: row.get("source_ref"),
+        source_number: row.get("source_number"),
     })
 }
 
@@ -209,12 +220,22 @@ async fn open(
     let pull = match found {
         Some(pull) => pull,
         None => {
+            // Only for an issue on this very repository — GitHub's cross-repo
+            // form needs write access there, so promising it would be a lie.
+            let project_repo =
+                aichip_core::github::repo::resolve(&state.db, card.project_id).await;
+            let closes = pr::closes_number(
+                card.source.as_deref(),
+                card.source_ref.as_deref(),
+                card.source_number,
+                project_repo.as_deref(),
+            );
             pr::create(
                 cwd,
                 &card.default_branch,
                 &card.worktree.branch,
                 &card.title,
-                &pr::pr_body(&card.prompt, &card.worktree.branch),
+                &pr::pr_body(&card.prompt, &card.worktree.branch, closes),
             )
             .await
             .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
@@ -296,4 +317,153 @@ async fn store(state: &AppState, id: Uuid, pull: &pr::PullRequest) -> Result<(),
             .map_err(internal)?;
     }
     Ok(())
+}
+
+// ── Issues ──────────────────────────────────────────────────────────────────
+
+/// The open issues on a project's repository, and which are already cards.
+///
+/// Already-imported issues are returned marked rather than filtered out: "why
+/// isn't #42 in this list" is a worse question than seeing it greyed with a
+/// link to the card it became.
+pub async fn list_issues(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    use aichip_core::github;
+
+    let Some(repo) = github::repo::resolve(&state.db, project_id).await else {
+        return Ok(Json(json!({
+            "repo": null,
+            "issues": [],
+            "refusal": "this project has no GitHub `origin` remote, so there are no \
+                        issues to import.",
+        })));
+    };
+
+    // What the modal needs to warn with: on a public repository the author of
+    // any issue is a stranger.
+    // Unknown counts as public, which is the fail-closed choice: the public
+    // path is the one that warns that anyone can file an issue here.
+    let public = match github::repo::parse_repo_ref(&repo) {
+        Ok(parsed) => github::repo::view(&parsed).await.map(|f| f.public).unwrap_or(true),
+        Err(_) => true,
+    };
+
+    let issues = match github::issues::list(&repo, 100).await {
+        Ok(issues) => issues,
+        Err(e) => {
+            return Ok(Json(json!({
+                "repo": repo,
+                "issues": [],
+                "refusal": e.to_string(),
+            })))
+        }
+    };
+
+    // One query rather than one per issue.
+    let existing: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT source_ref, id FROM tasks
+          WHERE project_id = $1 AND source = 'github_issue' AND source_ref IS NOT NULL",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    let already: std::collections::HashMap<String, Uuid> = existing.into_iter().collect();
+
+    let rows: Vec<Value> = issues
+        .iter()
+        .map(|i| {
+            let key = github::issues::source_ref(&repo, i.number);
+            json!({
+                "number": i.number,
+                "title": i.title,
+                "body": i.body,
+                "url": i.url,
+                "labels": i.labels,
+                "author": i.author,
+                "importedAs": already.get(&key),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "repo": repo,
+        "public": public,
+        "issues": rows,
+        "refusal": Value::Null,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ImportIssues {
+    /// Exactly the issues somebody ticked. There is no "import everything".
+    numbers: Vec<i32>,
+}
+
+/// Turn chosen issues into backlog cards.
+///
+/// Note what this route does **not** accept: anything resembling `start`.
+/// `POST /tasks` has one, and mirroring it here is the obvious convenience —
+/// and it would turn "a stranger opened an issue" into "an agent is editing
+/// your repository" with nobody in between. The one place a person has to
+/// stand is exactly there.
+pub async fn import_issues(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<ImportIssues>,
+) -> Result<Json<Value>, ApiError> {
+    use aichip_core::github;
+    use aichip_core::tasks::{create_imported, NewImportedTask};
+
+    let repo = github::repo::resolve(&state.db, project_id).await.ok_or((
+        axum::http::StatusCode::CONFLICT,
+        "this project has no GitHub `origin` remote".to_string(),
+    ))?;
+    let parsed = github::repo::parse_repo_ref(&repo)
+        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+    let public = github::repo::view(&parsed).await.map(|f| f.public).unwrap_or(true);
+
+    let wanted: std::collections::HashSet<i32> = body.numbers.iter().copied().collect();
+    if wanted.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "choose at least one issue to import".into(),
+        ));
+    }
+
+    let issues = github::issues::list(&repo, 100)
+        .await
+        .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
+    let engine = state.orchestrator.default_engine();
+
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    for (i, issue) in issues.iter().filter(|i| wanted.contains(&i.number)).enumerate() {
+        let prompt = github::issues::issue_prompt(
+            issue,
+            &repo,
+            github::issues::Provenance { author: &issue.author, public },
+        );
+        let spec = NewImportedTask {
+            project_id,
+            title: issue.title.clone(),
+            prompt,
+            engine: engine.clone(),
+            source: "github_issue".into(),
+            source_ref: github::issues::source_ref(&repo, issue.number),
+            source_url: issue.url.clone(),
+            source_number: issue.number,
+            order_hint: i as f64,
+        };
+        match create_imported(&state.db, spec).await {
+            Ok(Some(id)) => imported.push(json!({ "number": issue.number, "taskId": id })),
+            // Already a card. The ordinary answer to importing twice.
+            Ok(None) => skipped.push(issue.number),
+            Err(e) => return Err(internal(e)),
+        }
+    }
+
+    Ok(Json(json!({ "imported": imported, "skipped": skipped })))
 }

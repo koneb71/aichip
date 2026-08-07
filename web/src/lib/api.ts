@@ -348,6 +348,24 @@ export type CloneProgress =
     }
   | { state: "failed"; reason: string };
 
+/**
+ * An open issue, as offered for import.
+ *
+ * `body` is untrusted third-party text — it is rendered as plain text and
+ * never as markup, and it becomes an agent's prompt only after somebody has
+ * read it and ticked it.
+ */
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: string[];
+  author: string;
+  /** The card it already became, if it has been imported. */
+  importedAs: string | null;
+}
+
 /** A GitHub device flow waiting for the person to finish it. */
 export interface GitHubConnect {
   id: string;
@@ -1359,6 +1377,19 @@ export const api = {
   cloneStatus: (id: string) =>
     fetch(`/api/github/clone/${id}`).then((r) => json<CloneProgress>(r)),
   cancelClone: (id: string) => fetch(`/api/github/clone/${id}`, { method: "DELETE" }),
+  githubIssues: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/github/issues`).then((r) =>
+      json<{
+        repo: string | null;
+        public?: boolean;
+        issues: GitHubIssue[];
+        refusal: string | null;
+      }>(r),
+    ),
+  importIssues: (projectId: string, numbers: number[]) =>
+    post(`/api/projects/${projectId}/github/issues/import`, { numbers }).then((r) =>
+      json<{ imported: { number: number; taskId: string }[]; skipped: number[] }>(r),
+    ),
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),
