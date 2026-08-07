@@ -460,6 +460,19 @@ async fn commit_worktree(worktree: &Worktree, message: &str) -> anyhow::Result<(
     Ok(())
 }
 
+/// A remote's URL, or `None` when there is no such remote.
+///
+/// Its absence is a condition to report — "there is nowhere to push" — not a
+/// failure, which is why this returns an `Option` rather than an error. Lives
+/// here so every `git` invocation still goes through one runner; the pull
+/// request routes previously spawned their own `Command::new("git")` for this,
+/// which was the only exception to that rule.
+pub async fn remote_url(repo: &Path, remote: &str) -> Option<String> {
+    let out = git(repo, &["remote", "get-url", remote]).await.ok()?;
+    let url = out.trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
 /// Whether a push was refused because the branch and the remote disagree.
 ///
 /// Worth telling apart from every other push failure, because it is the one
@@ -983,6 +996,29 @@ mod tests {
         let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
         let err = mgr.push(&wt, "aichip: card", false).await.unwrap_err();
         assert!(err.to_string().contains("no `origin` remote"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_remote_is_reported_by_url_and_its_absence_is_not_an_error() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+
+        // No remote is a condition to report, not a failure to log — which is
+        // why this is an Option rather than a Result.
+        assert_eq!(remote_url(repo_dir.path(), "origin").await, None);
+
+        let bare = tempfile::tempdir().unwrap();
+        git(repo_dir.path(), &["init", "--bare", bare.path().to_str().unwrap()])
+            .await
+            .unwrap();
+        git(repo_dir.path(), &["remote", "add", "origin", bare.path().to_str().unwrap()])
+            .await
+            .unwrap();
+
+        let url = remote_url(repo_dir.path(), "origin").await.expect("origin is set");
+        assert_eq!(url, bare.path().to_str().unwrap(), "trimmed, and no trailing newline");
+        // A remote that is not there is still None even when another one is.
+        assert_eq!(remote_url(repo_dir.path(), "upstream").await, None);
     }
 
     #[test]

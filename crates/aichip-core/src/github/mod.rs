@@ -13,6 +13,7 @@
 
 pub mod connect;
 pub mod pr;
+pub mod repo;
 
 use serde::Deserialize;
 use std::path::Path;

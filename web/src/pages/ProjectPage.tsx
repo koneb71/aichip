@@ -121,6 +121,17 @@ export default function ProjectPage() {
               edits in place
             </span>
           )}
+          {project?.githubRepo && (
+            <a
+              href={`https://github.com/${project.githubRepo}`}
+              target="_blank"
+              rel="noreferrer"
+              title="Open this repository on GitHub"
+              className="truncate rounded-full bg-panel-2 px-2 py-0.5 font-mono text-[11px] text-ink-dim hover:text-ink"
+            >
+              {project.githubRepo}
+            </a>
+          )}
           {project && <AutonomyToggle project={project} onChanged={setProject} />}
           <div className="flex min-w-0 gap-1 overflow-x-auto rounded-lg bg-panel-2 p-0.5">
             {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (

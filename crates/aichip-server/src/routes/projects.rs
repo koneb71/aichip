@@ -17,7 +17,7 @@ pub fn router() -> Router<AppState> {
 }
 
 const PROJECT_COLUMNS: &str =
-    "id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in, kind";
+    "id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in, kind, github_repo";
 
 fn project_json(r: &sqlx::postgres::PgRow) -> Value {
     json!({
@@ -30,6 +30,10 @@ fn project_json(r: &sqlx::postgres::PgRow) -> Value {
         "vcsNote": r.get::<Option<String>, _>("vcs_note"),
         "fullAutoOptIn": r.get::<bool, _>("full_auto_opt_in"),
         "kind": r.get::<String, _>("kind"),
+        // Resolved lazily on first use and cached, so this is NULL until some
+        // GitHub feature has asked. Absent means "not asked yet", never "not a
+        // GitHub project".
+        "githubRepo": r.get::<Option<String>, _>("github_repo"),
     })
 }
 
@@ -50,7 +54,19 @@ async fn one(
         .await
         .map_err(internal)?
         .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
-    Ok(Json(project_json(&row)))
+
+    // The point of use for the repository's identity: this is what the project
+    // page fetches, so a GitHub project learns its own name the first time
+    // somebody opens it, and every surface after that reads a column. Resolving
+    // is a `git remote get-url` at most once per project, and never for a
+    // project that has no remote to read.
+    let mut body = project_json(&row);
+    if row.get::<Option<String>, _>("github_repo").is_none() {
+        if let Some(slug) = aichip_core::github::repo::resolve(&state.db, id).await {
+            body["githubRepo"] = Value::String(slug);
+        }
+    }
+    Ok(Json(body))
 }
 
 #[derive(Deserialize)]

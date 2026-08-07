@@ -26,6 +26,14 @@ export interface Project {
   /** Agents may work here without stopping to ask. Requires a git project. */
   fullAutoOptIn: boolean;
   /**
+   * `owner/repo`, once some GitHub feature has resolved it from `origin`.
+   *
+   * Null means nothing has asked yet — never "this is not a GitHub project".
+   * Resolved lazily and cached, so it appears after the first time a GitHub
+   * surface is opened.
+   */
+  githubRepo?: string | null;
+  /**
    * `"repo"` for code you added, `"app"` for an app's own folder.
    *
    * The three places that *list* projects filter to `repo`, because an app

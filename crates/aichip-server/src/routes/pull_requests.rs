@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
 struct Card {
     title: String,
     prompt: String,
+    project_id: Uuid,
     project_path: String,
     default_branch: String,
     worktree: aichip_core::worktrees::manager::Worktree,
@@ -46,7 +47,7 @@ struct Card {
 async fn card(state: &AppState, id: Uuid) -> Result<Card, ApiError> {
     let row = sqlx::query(
         "SELECT t.title, t.prompt, t.worktree_path, t.branch, t.pr_number,
-                p.path AS project_path, p.default_branch, p.vcs
+                t.project_id, p.path AS project_path, p.default_branch, p.vcs
            FROM tasks t JOIN projects p ON p.id = t.project_id
           WHERE t.id = $1",
     )
@@ -74,6 +75,7 @@ async fn card(state: &AppState, id: Uuid) -> Result<Card, ApiError> {
     Ok(Card {
         title: row.get("title"),
         prompt: row.get("prompt"),
+        project_id: row.get("project_id"),
         project_path: row.get("project_path"),
         default_branch: row.get("default_branch"),
         worktree: aichip_core::worktrees::manager::Worktree {
@@ -88,7 +90,7 @@ async fn card(state: &AppState, id: Uuid) -> Result<Card, ApiError> {
 ///
 /// Deliberately not an error on the read path: the panel wants to say "install
 /// the GitHub CLI" in a dim line, not fail to load.
-async fn refusal(card: &Card) -> Option<String> {
+async fn refusal(state: &AppState, card: &Card) -> Option<String> {
     let Some(info) = github::detect().await else {
         return Some(
             "the GitHub CLI (gh) is not installed, so aichip cannot open a pull \
@@ -104,24 +106,18 @@ async fn refusal(card: &Card) -> Option<String> {
             .unwrap_or_else(|| "no account is signed in".into());
         return Some(format!("the GitHub CLI is installed but not usable: {problem}"));
     }
-    if !has_origin(&card.worktree.path).await {
+    // Resolving doubles as the check: no `origin` that parses as a GitHub
+    // repository means there is nowhere to open one. It also *remembers* the
+    // answer, so the next render and every poll tick read a column instead of
+    // spawning git.
+    if aichip_core::github::repo::resolve(&state.db, card.project_id).await.is_none() {
         return Some(
-            "this project has no `origin` remote, so there is nowhere to open a \
-             pull request."
+            "this project has no GitHub `origin` remote, so there is nowhere to \
+             open a pull request."
                 .into(),
         );
     }
     None
-}
-
-async fn has_origin(cwd: &std::path::Path) -> bool {
-    tokio::process::Command::new("git")
-        .current_dir(cwd)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// What the drawer renders.
@@ -141,7 +137,7 @@ async fn show(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Jso
     // worth showing rather than throwing.
     let (refusal_text, can_open) = match card(&state, id).await {
         Ok(c) => {
-            let why = refusal(&c).await;
+            let why = refusal(&state, &c).await;
             (why.clone(), why.is_none())
         }
         Err((_, why)) => (Some(why), false),
@@ -188,7 +184,7 @@ async fn open(
 ) -> Result<Json<Value>, ApiError> {
     let force = body.map(|b| b.0.force).unwrap_or(false);
     let card = card(&state, id).await?;
-    if let Some(why) = refusal(&card).await {
+    if let Some(why) = refusal(&state, &card).await {
         return Err((axum::http::StatusCode::CONFLICT, why));
     }
 
