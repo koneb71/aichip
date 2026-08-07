@@ -10,6 +10,7 @@ import HomePage from "./pages/HomePage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import AgentsPage from "./pages/AgentsPage";
+import SkillsPage from "./pages/SkillsPage";
 import AppsPage from "./pages/AppsPage";
 import AppPage from "./pages/AppPage";
 import ActivityPage from "./pages/ActivityPage";
@@ -41,6 +42,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="projects/:projectId" element={<ProjectPage />} />
               <Route path="activity" element={<ActivityPage />} />
               <Route path="agents" element={<AgentsPage />} />
+              <Route path="skills" element={<SkillsPage />} />
               <Route path="apps" element={<AppsPage />} />
               <Route path="apps/:appId" element={<AppPage />} />
               <Route path="knowledge" element={<KnowledgeLayout />}>

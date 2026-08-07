@@ -64,6 +64,7 @@ async fn list(
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 a.name AS agent_name, a.color AS agent_color,
+                t.skill_id, sk.name AS skill_name,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 t.parent_id, parent.title AS parent_title,
                 COALESCE(kids.total, 0) AS child_count,
@@ -91,6 +92,7 @@ async fn list(
          FROM tasks t
          JOIN projects p ON p.id = t.project_id
          LEFT JOIN agents a ON a.id = t.agent_id
+         LEFT JOIN skills sk ON sk.id = t.skill_id
          LEFT JOIN teams tm ON tm.id = t.team_id
          LEFT JOIN tasks parent ON parent.id = t.parent_id
          LEFT JOIN steps s ON s.task_id = t.id
@@ -147,6 +149,8 @@ async fn list(
                 "projectId": r.get::<Uuid, _>("project_id"),
                 "agentId": r.get::<Option<Uuid>, _>("agent_id"),
                 "agentName": r.get::<Option<String>, _>("agent_name"),
+                "skillId": r.get::<Option<Uuid>, _>("skill_id"),
+                "skillName": r.get::<Option<String>, _>("skill_name"),
                 "agentColor": r.get::<Option<String>, _>("agent_color"),
                 "teamId": r.get::<Option<Uuid>, _>("team_id"),
                 "teamName": r.get::<Option<String>, _>("team_name"),
@@ -212,6 +216,9 @@ struct CreateTask {
     #[serde(default)]
     start: bool,
     agent_id: Option<Uuid>,
+    /// How this job gets done here. Composes with the agent: one is who, the
+    /// other is how.
+    skill_id: Option<Uuid>,
     /// Hand the whole task to a team instead of a single agent.
     team_id: Option<Uuid>,
     /// Engine id from `/api/engines`. Omitted means the machine default.
@@ -243,8 +250,8 @@ async fn create(
         .permission_mode
         .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, team_id, board_column, plan_first, effort)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'backlog',$9,$10) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -253,6 +260,7 @@ async fn create(
     .bind(mode.as_deref())
     .bind(body.engine.clone().unwrap_or_else(|| state.orchestrator.default_engine()))
     .bind(body.agent_id)
+    .bind(body.skill_id)
     .bind(body.team_id)
     .bind(body.plan_first)
     .bind(body.effort.map(|e| e.as_str().to_string()))
@@ -324,7 +332,8 @@ async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
     let row = sqlx::query(
         "SELECT COALESCE(a.engine, t.engine) AS engine,
                 COALESCE(a.permission_preset, t.permission_mode) AS mode
-         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
+         LEFT JOIN skills sk ON sk.id = t.skill_id WHERE t.id = $1",
     )
     .bind(task_id)
     .fetch_optional(&state.db.pool)
@@ -585,6 +594,12 @@ struct MoveTask {
     agent_id: Option<Option<Uuid>>,
     #[serde(default, deserialize_with = "present")]
     team_id: Option<Option<Uuid>>,
+    /// How this job gets done. Nested for the same three states as the
+    /// assignee — and it is not grouped with the reassignment refusal below,
+    /// because a skill carries no memory: it only shapes the next run's
+    /// prompt, which is the `plan_first` case rather than the agent one.
+    #[serde(default, deserialize_with = "present")]
+    skill_id: Option<Option<Uuid>>,
     /// Which CLI runs this card. Absent leaves it alone; a card always has
     /// one, so unlike the assignee there is no "clear it" case.
     #[serde(default)]
@@ -691,6 +706,9 @@ async fn move_task(
     if let Some(Some(team_id)) = team_id {
         require_same_workspace(&state, id, "teams", team_id).await?;
     }
+    if let Some(Some(skill_id)) = body.skill_id {
+        require_same_workspace(&state, id, "skills", skill_id).await?;
+    }
 
     sqlx::query(
         "UPDATE tasks SET board_column = coalesce($2, board_column),
@@ -700,7 +718,8 @@ async fn move_task(
                           engine   = coalesce($8, engine),
                           plan_first = coalesce($9, plan_first),
                           model_tier = coalesce($10, model_tier),
-                          effort = CASE WHEN $11 THEN $12 ELSE effort END
+                          effort = CASE WHEN $11 THEN $12 ELSE effort END,
+                          skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END
          WHERE id = $1",
     )
     .bind(id)
@@ -715,6 +734,8 @@ async fn move_task(
     .bind(body.model_tier.map(|t| t.as_str()))
     .bind(body.effort.is_some())
     .bind(body.effort.flatten().map(|e| e.as_str().to_string()))
+    .bind(body.skill_id.is_some())
+    .bind(body.skill_id.flatten())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -784,6 +805,7 @@ async fn comments(
         "SELECT c.id, c.author, c.agent_id, c.content, c.run_id, c.created_at,
                 c.file_path, c.line, c.hunk,
                 a.name AS agent_name, a.color AS agent_color,
+                t.skill_id, sk.name AS skill_name,
                 r.status AS run_status
          FROM task_comments c
          LEFT JOIN agents a ON a.id = c.agent_id
@@ -812,6 +834,8 @@ async fn comments(
             "author": r.get::<String, _>("author"),
             "agentId": r.get::<Option<Uuid>, _>("agent_id"),
             "agentName": r.get::<Option<String>, _>("agent_name"),
+                "skillId": r.get::<Option<Uuid>, _>("skill_id"),
+                "skillName": r.get::<Option<String>, _>("skill_name"),
             "agentColor": r.get::<Option<String>, _>("agent_color"),
             "content": r.get::<String, _>("content"),
             "runId": r.get::<Option<Uuid>, _>("run_id"),
@@ -1015,6 +1039,8 @@ async fn bakeoff(
             "label": r.get::<String, _>("variant_label"),
             "status": r.get::<String, _>("status"),
             "agentName": r.get::<Option<String>, _>("agent_name"),
+                "skillId": r.get::<Option<Uuid>, _>("skill_id"),
+                "skillName": r.get::<Option<String>, _>("skill_name"),
             "model": r.get::<Option<String>, _>("model"),
             "engine": r.get::<String, _>("engine"),
             "costUsd": r.get::<Option<f64>, _>("cost_usd"),

@@ -9,6 +9,26 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Everything that could reach outside the reply.
+///
+/// Deliberately wider than the chat assistant's list: chat is allowed to read
+/// the checkout, a utility run has nothing to read. `Read`/`Grep`/`Glob` are in
+/// here because the cwd is a scratch directory — a run that went looking would
+/// find nothing and waste a turn doing it.
+const DENIED: &[&str] = &[
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Bash",
+    "Read",
+    "Grep",
+    "Glob",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+];
+
 pub async fn utility_run(
     engine: Arc<dyn Engine>,
     model_id: String,
@@ -29,7 +49,12 @@ pub async fn utility_run(
         permission_mode: PermissionMode::Reviewed,
         allowed_tools: vec![], // no tools: pure generation
         append_system_prompt: None,
-        denied_tools: vec![],
+        // An empty allow-list pre-approves nothing; it does not forbid. The CLI
+        // will still reach for `Bash`, and the only thing that stopped it here
+        // was having no way to ask — which is a property of the plumbing, not a
+        // rule. A utility run's whole contract is that it produces text and
+        // changes nothing, so say so by name.
+        denied_tools: DENIED.iter().map(|t| t.to_string()).collect(),
         mcp: Default::default(),
         run_key: "utility".to_string(),
         extra_read_dirs: vec![],

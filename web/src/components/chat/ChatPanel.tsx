@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, Agent, ChatMessage, ChatSummary, Effort, Tier } from "../../lib/api";
+import { api, Agent, ChatMessage, ChatSummary, Effort, Skill, Tier } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
 import { useAttachments } from "../../lib/useAttachments";
 import { agentSpans } from "../../lib/mention";
@@ -42,6 +42,10 @@ export function ChatPanel({
   // bubbles resolve names against this one list, so a chip is only ever drawn
   // for an agent that exists.
   const [agents, setAgents] = useState<Agent[]>([]);
+  // Skills share that `@` namespace, so they are offered from the same picker
+  // and drawn as the same chip. Only the enabled ones: a switched-off skill
+  // binds to nothing on the server, and offering it would promise otherwise.
+  const [skills, setSkills] = useState<Skill[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
   const att = useAttachments(projectId);
@@ -52,6 +56,7 @@ export function ChatPanel({
   const mention = useMentionPicker({
     projectId,
     agents,
+    skills,
     text: draft,
     caret,
     onApply: (text, nextCaret) => {
@@ -69,10 +74,20 @@ export function ChatPanel({
   useEffect(() => {
     if (!workspaceId) return;
     setAgents([]); // a stale library would resolve mentions against the wrong workspace
+    setSkills([]);
     api.agents(workspaceId).then((r) => setAgents(r.agents)).catch(() => {});
+    api
+      .skills(workspaceId)
+      .then((r) => setSkills(r.skills.filter((s) => s.enabled)))
+      .catch(() => {});
   }, [workspaceId]);
 
-  const agentNames = useMemo(() => agents.map((a) => a.name), [agents]);
+  // One list, because the server parses one namespace: a chip is drawn for
+  // anything that would actually bind, whichever kind it turns out to be.
+  const agentNames = useMemo(
+    () => [...agents.map((a) => a.name), ...skills.map((s) => s.name)],
+    [agents, skills],
+  );
 
   const refreshChats = useCallback(
     () =>

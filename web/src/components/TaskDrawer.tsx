@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Task, Team, tierColor } from "../lib/api";
+import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
@@ -12,6 +12,7 @@ import { PermissionRow } from "./PermissionRow";
 import { BakeoffView } from "./BakeoffView";
 import { RunStream, ActivityLine } from "./RunStream";
 import { AssigneePicker } from "./AssigneePicker";
+import { SkillPicker } from "./SkillPicker";
 import { PlanReviewPanel } from "./PlanReviewPanel";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { useTierModel } from "../lib/models";
@@ -50,6 +51,7 @@ export function TaskDrawer({
   // The bake-off panel: same brief, several attempts, compare and keep one.
   const [bakeoff, setBakeoff] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [reassignError, setReassignError] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
@@ -147,6 +149,10 @@ export function TaskDrawer({
     api
       .teams(workspaceId)
       .then((r) => setTeams(r.teams))
+      .catch(() => {});
+    api
+      .skills(workspaceId)
+      .then((r) => setSkills(r.skills))
       .catch(() => {});
   }, [workspaceId]);
 
@@ -367,6 +373,27 @@ export function TaskDrawer({
         {reassignError && (
           <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
             {reassignError}
+          </div>
+        )}
+
+        {/* Beside who, not inside it: the two compose. Hidden until the
+            workspace has one, and shown regardless once this card carries
+            one — a card pointing at a skill has to say so. */}
+        {(skills.some((s) => s.enabled) || task.skillId) && (
+          <div className="mt-3">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+              How
+            </div>
+            <SkillPicker
+              value={task.skillId ?? null}
+              skills={skills}
+              disabled={running}
+              disabledReason="Cancel the run to change how this card is done."
+              onChange={async (next) => {
+                await api.moveTask(task.id, { skill_id: next });
+                onChanged();
+              }}
+            />
           </div>
         )}
         <div className="mt-3">

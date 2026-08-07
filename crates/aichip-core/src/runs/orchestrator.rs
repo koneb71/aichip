@@ -1131,7 +1131,7 @@ impl Orchestrator {
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
                     a.effort AS agent_effort,
                     a.allowed_tools AS agent_tools, a.permission_preset AS agent_preset,
-                    a.name AS agent_name
+                    a.name AS agent_name, t.skill_id
              FROM runs r
              JOIN tasks t ON t.id = r.task_id
              JOIN projects p ON p.id = t.project_id
@@ -1429,6 +1429,17 @@ impl Orchestrator {
         let prompt = crate::brain::augment_prompt(
             &prompt,
             crate::brain::for_run(&self.db, project_id).await.as_ref(),
+        );
+
+        // And the skill this card was created with, if any: how the person
+        // wants this kind of job done. After the brain, because the brain is
+        // background and this is method — and both after the request, which
+        // outranks them.
+        let prompt = crate::skills::augment_prompt(
+            &prompt,
+            crate::skills::for_run(&self.db, run.get::<Option<Uuid>, _>("skill_id"))
+                .await
+                .as_ref(),
         );
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
@@ -1844,6 +1855,17 @@ impl Orchestrator {
             .map(|(_, name)| name)
             .collect();
         let user_message = mentions::augment_prompt(&user_message, &mentioned);
+
+        // And which skills. Same lookup, same reason — but a different message:
+        // a mentioned skill needs no action from the assistant, only for it not
+        // to stop and ask about a name it cannot find in the agent library.
+        let named_skills: Vec<String> = mentions::latest_skills_for_chat(&self.db, chat_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        let user_message = mentions::augment_skills_prompt(&user_message, &named_skills);
 
         // The same standing context a board run gets. A chat that has to be
         // told where the code lives every time is the reason this feature

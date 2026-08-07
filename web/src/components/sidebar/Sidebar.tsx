@@ -14,6 +14,7 @@ const NAV = [
   { to: "/projects", label: "Projects", icon: "▤", end: false },
   { to: "/activity", label: "Activity", icon: "◈", end: false },
   { to: "/agents", label: "Agents", icon: "◉", end: false },
+  { to: "/skills", label: "Skills", icon: "✦", end: false },
   { to: "/teams", label: "Teams", icon: "◫", end: false },
   { to: "/apps", label: "Apps", icon: "◳", end: false },
   { to: "/knowledge", label: "Knowledge", icon: "▦", end: false },

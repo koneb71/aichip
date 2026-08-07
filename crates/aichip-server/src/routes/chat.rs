@@ -265,10 +265,13 @@ async fn send(
     // Who the user named with `@`, decided from the agent library rather than
     // from anything the client sent. The dashboard parses the same text to draw
     // the chips, but what binds a task is this row.
-    let mentioned = mentions::resolve(&state.db, workspace_id, &body.content)
+    let (mentioned, skills) = mentions::resolve_all(&state.db, workspace_id, &body.content)
         .await
         .map_err(internal)?;
     mentions::record(&state.db, message_id, &mentioned)
+        .await
+        .map_err(internal)?;
+    mentions::record_skills(&state.db, message_id, &skills)
         .await
         .map_err(internal)?;
 

@@ -24,20 +24,31 @@ export interface AgentHit {
   description: string;
 }
 
+/** Just enough of a skill to offer it. Skills have no colour or icon: they
+ *  are not someone, so drawing them like an agent would say they were. */
+export interface SkillHit {
+  id: string;
+  name: string;
+  description: string;
+}
+
 /** Agents shown at once. The list is who you employ, not what you have —
  *  a handful, and the query narrows it. */
 const AGENT_LIMIT = 6;
 
-/** One offer in the picker. Agents and files share a cursor because they
- *  share one Enter key. */
-type Row = { kind: "agent"; agent: AgentHit } | { kind: "file"; hit: FileHit };
+/** One offer in the picker. Every kind shares a cursor because they share
+ *  one Enter key. */
+type Row =
+  | { kind: "agent"; agent: AgentHit }
+  | { kind: "skill"; skill: SkillHit }
+  | { kind: "file"; hit: FileHit };
 
 /** Lines rendered at once. A 20k-line file must not become 20k DOM nodes. */
 const LINE_WINDOW = 300;
 
 /**
- * `@`-mention picker: agents from the library, then project files, with an
- * optional line/line-range step on a file.
+ * `@`-mention picker: agents from the library, then skills, then project
+ * files, with an optional line/line-range step on a file.
  *
  * Returned as a hook rather than a plain component because the composer has to
  * hand it keystrokes *before* acting on them — otherwise Enter sends the
@@ -45,11 +56,13 @@ const LINE_WINDOW = 300;
  *
  * Agents come first because they are the smaller and more deliberate choice: a
  * file mention is context for the request, an agent mention decides who does
- * the work.
+ * the work. Skills sit between the two — they decide *how*, and they share the
+ * agents' `@` namespace, which is why one list offers both.
  */
 export function useMentionPicker({
   projectId,
   agents,
+  skills = [],
   text,
   caret,
   onApply,
@@ -58,6 +71,8 @@ export function useMentionPicker({
   /** The workspace's agents. Passed in rather than fetched here, so the
    *  composer and the message bubbles resolve mentions against one list. */
   agents: AgentHit[];
+  /** The workspace's enabled skills, for the same reason. */
+  skills?: SkillHit[];
   text: string;
   caret: number;
   /** Called with the rewritten text and where to put the caret. */
@@ -178,6 +193,8 @@ export function useMentionPicker({
     [token, text, caret, onApply, reset],
   );
 
+  // Named after the syntax, not the kind: a skill is mentioned exactly the way
+  // an agent is, which is the whole point of one namespace.
   const commitAgent = useCallback(
     (name: string) => {
       if (!token) return;
@@ -205,12 +222,21 @@ export function useMentionPicker({
     [agents, token, inLineMode],
   );
 
+  const skillHits = useMemo(
+    () =>
+      inLineMode || !token
+        ? []
+        : skills.filter((s) => agentMatches(token.query, s.name)).slice(0, AGENT_LIMIT),
+    [skills, token, inLineMode],
+  );
+
   const rows: Row[] = useMemo(
     () => [
       ...agentHits.map((agent) => ({ kind: "agent" as const, agent })),
+      ...skillHits.map((skill) => ({ kind: "skill" as const, skill })),
       ...files.map((hit) => ({ kind: "file" as const, hit })),
     ],
-    [agentHits, files],
+    [agentHits, skillHits, files],
   );
 
   // Keep the highlight inside the list.
@@ -274,6 +300,7 @@ export function useMentionPicker({
         // send the message is the right answer.
         if (!row) return false;
         if (row.kind === "agent") commitAgent(row.agent.name);
+        else if (row.kind === "skill") commitAgent(row.skill.name);
         else commit(row.hit.path);
         return true;
       }
@@ -342,6 +369,7 @@ export function useMentionPicker({
               query={token?.query ?? ""}
               onHover={setCursor}
               onPickAgent={(agent) => commitAgent(agent.name)}
+              onPickSkill={(skill) => commitAgent(skill.name)}
               onPick={(hit) => commit(hit.path)}
               onPickLines={(hit) => setLinePath(hit.path)}
             />
@@ -361,6 +389,7 @@ function OfferList({
   query,
   onHover,
   onPickAgent,
+  onPickSkill,
   onPick,
   onPickLines,
 }: {
@@ -370,27 +399,72 @@ function OfferList({
   query: string;
   onHover: (i: number) => void;
   onPickAgent: (agent: AgentHit) => void;
+  onPickSkill: (skill: SkillHit) => void;
   onPick: (hit: FileHit) => void;
   onPickLines: (hit: FileHit) => void;
 }) {
   if (!rows.length) {
     return (
       <div className="px-2 py-3 text-xs text-ink-dim">
-        {query ? `Nothing matches “${query}”.` : "Type to find an agent or a file."}
+        {query ? `Nothing matches “${query}”.` : "Type to find an agent, a skill or a file."}
       </div>
     );
   }
-  const agents = rows.filter((r) => r.kind === "agent").length;
+  // The first row of each kind, so a heading hangs off it. Computed rather
+  // than counted forwards: with three kinds and any of them empty, arithmetic
+  // on the counts is one off-by-one away from a heading over the wrong row.
+  const firstOfKind = new Map<Row["kind"], number>();
+  rows.forEach((row, i) => {
+    if (!firstOfKind.has(row.kind)) firstOfKind.set(row.kind, i);
+  });
+  const heading: Partial<Record<Row["kind"], string>> = {
+    agent: "Assign to",
+    skill: "Do it this way",
+    file: "Files",
+  };
+
   return (
     <>
       {rows.map((row, i) => (
-        <div key={row.kind === "agent" ? `a:${row.agent.id}` : `f:${row.hit.path}`}>
+        <div
+          key={
+            row.kind === "agent"
+              ? `a:${row.agent.id}`
+              : row.kind === "skill"
+                ? `s:${row.skill.id}`
+                : `f:${row.hit.path}`
+          }
+        >
           {/* Headers hang off the first row of each kind rather than being
               rows themselves — the cursor indexes this list, and a header it
-              could land on would be a dead Enter. */}
-          {i === 0 && row.kind === "agent" && <Heading>Assign to</Heading>}
-          {i === agents && row.kind === "file" && agents > 0 && <Heading>Files</Heading>}
-          {row.kind === "agent" ? (
+              could land on would be a dead Enter. The Files heading is
+              suppressed when files are all there is: a single heading over
+              the whole list labels nothing. */}
+          {firstOfKind.get(row.kind) === i && (row.kind !== "file" || rows.length > files(rows)) && (
+            <Heading>{heading[row.kind]}</Heading>
+          )}
+          {row.kind === "skill" ? (
+            <button
+              onMouseEnter={() => onHover(i)}
+              onMouseDown={(e) => {
+                e.preventDefault(); // keep focus in the composer
+                onPickSkill(row.skill);
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left ${
+                i === cursor ? "bg-panel-2" : ""
+              }`}
+            >
+              {/* A hollow marker where an agent has a filled dot: same slot,
+                  visibly not a person. */}
+              <span className="size-2 shrink-0 rounded-full border border-ink-dim" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{row.skill.name}</span>
+                <span className="block truncate text-[11px] text-ink-dim">
+                  {row.skill.description || "a way of doing something"}
+                </span>
+              </span>
+            </button>
+          ) : row.kind === "agent" ? (
             <button
               onMouseEnter={() => onHover(i)}
               onMouseDown={(e) => {
@@ -452,6 +526,11 @@ function OfferList({
       )}
     </>
   );
+}
+
+/** How many of the rows are files. */
+function files(rows: Row[]): number {
+  return rows.filter((r) => r.kind === "file").length;
 }
 
 function Heading({ children }: { children: React.ReactNode }) {

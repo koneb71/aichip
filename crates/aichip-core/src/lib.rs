@@ -10,6 +10,7 @@ pub mod previews;
 pub mod queue;
 pub mod runs;
 pub mod scheduler;
+pub mod skills;
 pub mod spend;
 pub mod storage;
 pub mod tasks;

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Agent, api, Effort, Project, Team, TierChoice, tierColor, tierSoft } from "../lib/api";
+import { Agent, api, Effort, Project, Skill, Team, TierChoice, tierColor, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar } from "./AttachmentBar";
 import { useMentionPicker } from "./MentionPicker";
 import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
+import { SkillPicker } from "./SkillPicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
 import { ArticlePicker } from "./kb/ArticlePicker";
@@ -29,7 +30,9 @@ export function NewTaskModal({
   const [tier, setTier] = useState<TierChoice>("medium");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [assignee, setAssignee] = useState<string>("");
+  const [skillId, setSkillId] = useState<string | null>(null);
   // null = the machine default, which is what the server picks.
   const [engine, setEngine] = useState<string | null>(null);
   // null = inherit: the agent's budget if it has one, else the machine default.
@@ -63,6 +66,7 @@ export function NewTaskModal({
     if (!active) return;
     api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
     api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
+    api.skills(active.id).then((r) => setSkills(r.skills)).catch(() => {});
   }, [active]);
 
   // One picker, two kinds of assignee — a task goes to a person or a team,
@@ -84,6 +88,7 @@ export function NewTaskModal({
         model_tier: tier,
         agent_id: kind === "agent" ? id : null,
         team_id: kind === "team" ? id : null,
+        skill_id: skillId,
         start,
         engine: engine ?? undefined,
         plan_first: planFirst,
@@ -216,6 +221,17 @@ export function NewTaskModal({
             />
           </div>
         </div>
+
+        {/* Only once there is something to pick. An empty control here would
+            just be a question nobody in this workspace can answer yet. */}
+        {skills.some((s) => s.enabled) && (
+          <div className="mb-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+              How
+            </div>
+            <SkillPicker value={skillId} skills={skills} onChange={setSkillId} />
+          </div>
+        )}
 
         {!!engines && engines.length > 1 && (
           <div className="mb-4">

@@ -126,11 +126,19 @@ async fn call_tool(
             };
             let (agent_id, agent_name) =
                 resolve_agent(state, chat_id, workspace_id, args.get("agent_name")).await?;
+            // A skill the user named with `@`, on the same reasoning as the
+            // agent: they asked for the work to be done a particular way, and
+            // whether that survives should not depend on the assistant
+            // remembering to say so.
+            let skill = aichip_core::runs::mentions::latest_skills_for_chat(&state.db, chat_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let skill_id = (skill.len() == 1).then(|| skill[0].0);
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
 
             let row = sqlx::query(
-                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, chat_id, board_column)
-                 VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $7 THEN 'running' ELSE 'backlog' END)
+                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, skill_id, chat_id, board_column)
+                 VALUES ($1,$2,$3,$4,$5,$8,$6, CASE WHEN $7 THEN 'running' ELSE 'backlog' END)
                  RETURNING id",
             )
             .bind(project_id)
@@ -140,6 +148,7 @@ async fn call_tool(
             .bind(agent_id)
             .bind(chat_id)
             .bind(start)
+            .bind(skill_id)
             .fetch_one(&state.db.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -165,6 +174,7 @@ async fn call_tool(
                 "run_id": run_id,
                 "started": start,
                 "agent": agent_name,
+                "skill": skill_id.and_then(|_| skill.first().map(|(_, n)| n.clone())),
             }))
         }
         "start_task" => {

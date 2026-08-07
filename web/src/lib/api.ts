@@ -13,6 +13,18 @@ export interface Workspace {
   color: string;
 }
 
+export interface Skill {
+  id: string;
+  name: string;
+  /** When to reach for it. All you see in the picker. */
+  description: string;
+  instructions: string;
+  /** Kept apart from the instructions, and put last in the prompt. */
+  mustNot: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
 export interface ProjectBrain {
   body: string;
   /** Off means runs behave as though it were empty. It is still here. */
@@ -146,6 +158,9 @@ export interface Task {
   projectId: string;
   agentId: string | null;
   agentName: string | null;
+  /** How this job gets done — composes with the agent. */
+  skillId?: string | null;
+  skillName?: string | null;
   agentColor: string | null;
   teamId: string | null;
   teamName: string | null;
@@ -1291,6 +1306,36 @@ export const api = {
     fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
       json<{ unloaded: boolean }>(r),
     ),
+  skills: (workspaceId: string) =>
+    fetch(`/api/skills?workspace_id=${workspaceId}`).then((r) =>
+      json<{ skills: Skill[] }>(r),
+    ),
+  createSkill: (body: {
+    workspace_id: string;
+    name: string;
+    description?: string;
+    instructions?: string;
+    must_not?: string;
+  }) => post("/api/skills", body).then((r) => json<Skill>(r)),
+  updateSkill: (
+    id: string,
+    body: {
+      name?: string;
+      description?: string;
+      instructions?: string;
+      must_not?: string;
+      enabled?: boolean;
+    },
+  ) => patch(`/api/skills/${id}`, body).then((r) => json<Skill>(r)),
+  deleteSkill: (id: string) =>
+    fetch(`/api/skills/${id}`, { method: "DELETE" }).then((r) =>
+      json<{ deleted: boolean }>(r),
+    ),
+  /** Run it once against a harmless prompt, with no tools and no repository. */
+  trySkill: (id: string, prompt: string) =>
+    post(`/api/skills/${id}/try`, { prompt }).then((r) =>
+      json<{ output: string; prompt: string }>(r),
+    ),
   /** What every run in this project starts with. */
   brain: (projectId: string) =>
     fetch(`/api/projects/${projectId}/brain`).then((r) => json<ProjectBrain>(r)),
@@ -1390,6 +1435,7 @@ export const api = {
     model_tier: TierChoice;
     start: boolean;
     agent_id?: string | null;
+    skill_id?: string | null;
     team_id?: string | null;
     engine?: string;
     plan_first?: boolean;
@@ -1424,6 +1470,11 @@ export const api = {
        * one. Passing `undefined` omits it, which is what you want.
        */
       effort?: Effort | null;
+      /**
+       * How this job gets done. Nested the same way — omit to leave it, null to
+       * go back to the usual way, an id to pin a skill.
+       */
+      skill_id?: string | null;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>

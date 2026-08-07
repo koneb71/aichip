@@ -141,6 +141,16 @@ async fn create(
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
     }
+
+    // One `@` namespace: a skill and an agent are both things you write after
+    // an `@`, so one name can only mean one of them. Checked from both sides —
+    // the other half lives in `skills::check_name_free`.
+    if let Err(why) = aichip_core::skills::agent_name_free(&state.db, body.workspace_id, &body.name)
+        .await
+        .map_err(internal)?
+    {
+        return Err((StatusCode::CONFLICT, why));
+    }
     let tier = serde_json::to_value(body.model_tier).unwrap();
     let row = sqlx::query(
         "INSERT INTO agents (workspace_id, name, icon, color, description, system_prompt,
