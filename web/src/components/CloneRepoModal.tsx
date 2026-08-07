@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { api, type CloneProgress } from "../lib/api";
+import { FolderBrowserModal } from "./FolderBrowserModal";
+
+/**
+ * Where the last clone went.
+ *
+ * People keep their code in one place, so asking again every time is asking a
+ * question already answered. Same idea as the knowledge base remembering which
+ * space you were in. If the folder has since gone, the server refuses and the
+ * picker is one click away.
+ */
+const LAST_PARENT = "aichip.clone.parent";
 
 /**
  * Clone a repository from GitHub into a new project.
@@ -24,10 +35,24 @@ export function CloneRepoModal({
 }) {
   const [repo, setRepo] = useState("");
   const [name, setName] = useState("");
+  const [parent, setParent] = useState<string | null>(
+    () => localStorage.getItem(LAST_PARENT),
+  );
+  const [browsing, setBrowsing] = useState(false);
   const [id, setId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const cloneId = useRef<string | null>(null);
+
+  // The default location, asked of the server rather than guessed: it is
+  // `AICHIP_BROWSE_ROOT` or `$HOME`, and only the server knows which.
+  useEffect(() => {
+    if (parent) return;
+    api
+      .fsList()
+      .then((l) => setParent(l.path))
+      .catch(() => {});
+  }, [parent]);
 
   // Only while one is running.
   useEffect(() => {
@@ -53,6 +78,18 @@ export function CloneRepoModal({
     return () => clearInterval(t);
   }, [id, onCloned]);
 
+  // What the server would call the folder if nothing is typed — the last
+  // segment of the repository, which is what `gh repo clone` uses.
+  const defaultName = repo
+    .trim()
+    .replace(/\.git$/, "")
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter(Boolean)
+    .pop()
+    ?.split(":")
+    .pop() ?? "";
+
   const start = async () => {
     if (!repo.trim()) {
       setError("Paste a repository — owner/repo, or its URL.");
@@ -64,9 +101,10 @@ export function CloneRepoModal({
       const started = await api.cloneRepo(
         workspaceId,
         repo.trim(),
-        undefined,
+        parent ?? undefined,
         name.trim() || undefined,
       );
+      if (parent) localStorage.setItem(LAST_PARENT, parent);
       cloneId.current = started.id;
       setId(started.id);
     } catch (e) {
@@ -119,6 +157,27 @@ export function CloneRepoModal({
           />
         </label>
 
+        <div className="mt-3">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Location
+          </span>
+          <div className="flex items-center gap-2">
+            {/* Shown rather than assumed. It used to be the folder aichip
+                browses from, silently — so the only way to find out where a
+                repository had gone was to go looking for it. */}
+            <span className="min-w-0 flex-1 truncate rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-xs text-ink-dim">
+              {parent ?? "…"}
+            </span>
+            <button
+              onClick={() => setBrowsing(true)}
+              disabled={busy}
+              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-50"
+            >
+              Change
+            </button>
+          </div>
+        </div>
+
         <label className="mt-3 block">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
             Folder name <span className="font-normal normal-case">— optional</span>
@@ -127,10 +186,18 @@ export function CloneRepoModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
-            placeholder="the repository's own name"
+            placeholder={defaultName || "the repository's own name"}
             className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
         </label>
+
+        {/* The whole answer to "where will this end up", in one line, before
+            anything is downloaded. */}
+        {parent && (name.trim() || defaultName) && (
+          <p className="mt-2 truncate font-mono text-[11px] text-ink-dim">
+            → {parent.replace(/\/$/, "")}/{name.trim() || defaultName}
+          </p>
+        )}
 
         {error && (
           <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
@@ -159,6 +226,22 @@ export function CloneRepoModal({
           </button>
         </div>
       </motion.div>
+
+      {browsing && (
+        <FolderBrowserModal
+          start={parent ?? undefined}
+          title="Where should it be cloned?"
+          confirmLabel="Clone here"
+          // Choosing a place to put a clone initialises nothing — the clone
+          // brings its own repository with it.
+          initialisesGit={false}
+          onClose={() => setBrowsing(false)}
+          onPick={async (path) => {
+            setParent(path);
+            setBrowsing(false);
+          }}
+        />
+      )}
     </motion.div>
   );
 }

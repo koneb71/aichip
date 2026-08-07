@@ -2,13 +2,38 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, FsListing } from "../lib/api";
 
+/**
+ * Browse for a folder.
+ *
+ * Two jobs, which are not the same job. Adding a project cares how the folder
+ * ends up version controlled and says so before closing; *choosing a place to
+ * put something* does not — the answer is a path. So `onPick` may resolve with
+ * nothing, and when it does this closes without a word about git.
+ */
 export function FolderBrowserModal({
   onClose,
   onPick,
+  title = "Choose a project folder",
+  confirmLabel = "Use this folder",
+  start,
+  initialisesGit = true,
 }: {
   onClose: () => void;
-  /** Resolves with how the project ended up being version controlled. */
-  onPick: (path: string) => Promise<{ vcs: string; vcsNote: string | null }>;
+  /**
+   * Resolves with how the project ended up being version controlled — or with
+   * nothing, when the caller only wanted the path.
+   */
+  onPick: (path: string) => Promise<{ vcs: string; vcsNote: string | null } | void>;
+  title?: string;
+  confirmLabel?: string;
+  /** Where to open. Omitted starts at the folder aichip browses from. */
+  start?: string;
+  /**
+   * Whether picking this folder makes it a repository. A claim about what the
+   * *caller* does, so the caller says it — a picker choosing where to clone
+   * into initialises nothing.
+   */
+  initialisesGit?: boolean;
 }) {
   const [listing, setListing] = useState<FsListing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -27,7 +52,10 @@ export function FolderBrowserModal({
       .catch((e) => setError(String(e)));
 
   useEffect(() => {
-    load();
+    load(start);
+    // Only on mount: re-running this on every `start` change would yank the
+    // browser back while somebody is navigating.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // No separate "initialize git" step: adding the project does it server-side
@@ -39,7 +67,8 @@ export function FolderBrowserModal({
     setError(null);
     try {
       const result = await onPick(listing.path);
-      if (result.vcs === "git") onClose();
+      // Nothing to report means the caller only wanted a path.
+      if (!result || result.vcs === "git") onClose();
       else setNoVcs(result.vcsNote ?? "This folder has no version control.");
     } catch (e) {
       setError(String(e));
@@ -84,7 +113,7 @@ export function FolderBrowserModal({
       >
         <div className="border-b border-line p-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="text-base font-semibold">Choose a project folder</div>
+            <div className="text-base font-semibold">{title}</div>
             <button
               onClick={() => setNewName(newName === null ? "" : null)}
               className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
@@ -188,7 +217,7 @@ export function FolderBrowserModal({
         <div className="flex items-center justify-between border-t border-line p-4">
           <div className="min-w-0 flex-1 truncate text-xs text-ink-dim">
             {listing?.path}
-            {listing && !listing.isGitRepo && !noVcs && (
+            {listing && !listing.isGitRepo && !noVcs && initialisesGit && (
               <span className="ml-1 opacity-80">· git will be initialized here</span>
             )}
           </div>
@@ -207,7 +236,7 @@ export function FolderBrowserModal({
               disabled={busy || !listing}
               className="shrink-0 rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
-              {busy ? "Adding…" : "Use this folder"}
+              {busy ? "Working…" : confirmLabel}
             </motion.button>
           )}
         </div>
