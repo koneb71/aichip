@@ -98,6 +98,38 @@ fn aichip_home() -> PathBuf {
 }
 
 async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
+    // Decided first, before a database is started or a port is claimed: a
+    // refusal that arrives ten seconds in has already cost something, and the
+    // thing it refuses is a configuration mistake somebody wants to hear about
+    // immediately.
+    // Loopback by default: this is a local-first app with no authentication of
+    // any kind, and that is only affordable while the only possible caller is
+    // this machine. Binding anywhere else spends that, so it has to be said out
+    // loud — see `aichip_server::exposure`, which also explains why refusing
+    // non-loopback *callers* would not work.
+    let bind: std::net::IpAddr = std::env::var("AICHIP_BIND")
+        .ok()
+        .and_then(|b| b.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let acknowledged = std::env::var(aichip_server::TRUST_NETWORK)
+        .is_ok_and(|v| !v.trim().is_empty() && v.trim() != "0");
+    match aichip_server::exposure(bind, acknowledged) {
+        aichip_server::Exposure::Local => {}
+        aichip_server::Exposure::Network => {
+            tracing::warn!(
+                %bind,
+                "aichip is reachable from your network and has no authentication — \
+                 anyone who can reach this port can read transcripts, browse files \
+                 and start agents"
+            );
+        }
+        aichip_server::Exposure::Unacknowledged => {
+            // Refused rather than warned: a warning in a log is not read by the
+            // person who copied a line from somewhere and moved on.
+            anyhow::bail!(aichip_server::unacknowledged_message(bind));
+        }
+    }
+
     let home = aichip_home();
     tokio::fs::create_dir_all(&home).await?;
 
@@ -212,17 +244,10 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     };
     let app = aichip_server::app(state);
 
-    // Loopback by default: this is a local-first app and binding wide on a
-    // laptop would expose it to the network. A container overrides it,
-    // because there the port is only reachable through an explicit mapping
-    // — and the Host-header allowlist still guards it either way.
-    let bind: std::net::IpAddr = std::env::var("AICHIP_BIND")
-        .ok()
-        .and_then(|b| b.parse().ok())
-        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
     let addr = std::net::SocketAddr::new(bind, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("aichip dashboard: http://127.0.0.1:{port}");
+    // The address it is actually on, not an assumed loopback one.
+    tracing::info!("aichip dashboard: http://{}:{port}", displayable(bind));
 
     if !headless {
         let _ = tokio::process::Command::new("open")
@@ -232,6 +257,21 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// How to spell a bind address in a URL somebody can click.
+///
+/// `0.0.0.0` is not an address you connect to, so printing it as a link sends
+/// people somewhere that does not answer; from this machine the answer is
+/// loopback either way.
+fn displayable(bind: std::net::IpAddr) -> String {
+    if bind.is_unspecified() {
+        "127.0.0.1".to_string()
+    } else if bind.is_ipv6() {
+        format!("[{bind}]")
+    } else {
+        bind.to_string()
+    }
 }
 
 async fn start_embedded_postgres(
@@ -375,4 +415,20 @@ async fn run_version(bin: &str, args: &[&str]) -> Option<String> {
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::displayable;
+
+    #[test]
+    fn an_unspecified_bind_is_shown_as_somewhere_you_can_actually_click() {
+        // `http://0.0.0.0:4820` is not a place; from this machine the answer is
+        // loopback whatever it bound to.
+        assert_eq!(displayable("0.0.0.0".parse().unwrap()), "127.0.0.1");
+        assert_eq!(displayable("::".parse().unwrap()), "127.0.0.1");
+        // A specific address is itself, and IPv6 needs its brackets in a URL.
+        assert_eq!(displayable("192.168.1.5".parse().unwrap()), "192.168.1.5");
+        assert_eq!(displayable("::1".parse().unwrap()), "[::1]");
+    }
 }

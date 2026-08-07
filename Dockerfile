@@ -52,9 +52,16 @@ COPY --from=server /src/target/release/aichip /usr/local/bin/aichip
 COPY --from=web /web/dist /srv/aichip/web
 
 ENV AICHIP_WEB_DIST=/srv/aichip/web
-# Bind wide inside the container; the port is only reachable through the
-# mapping you declare in compose. The Host-header allowlist still applies.
+# Bind wide inside the container: the container's own loopback is not the
+# host's, so nothing outside the namespace could reach it otherwise. What is
+# actually exposed is decided by the port mapping you declare in compose — and
+# `-p 4820:4820` publishes on every interface, so it is reachable from your
+# network. aichip has no authentication, so bind `127.0.0.1:4820:4820` unless
+# you mean to share it.
 ENV AICHIP_BIND=0.0.0.0
+# Acknowledged here because binding wide is the only way a container can work,
+# not because the exposure is smaller. See `aichip_server::exposure`.
+ENV AICHIP_TRUST_NETWORK=1
 EXPOSE 4820
 
 USER aichip

@@ -197,9 +197,110 @@ async fn reject_non_local_callers(
     }
 }
 
+/// What binding to an address exposes, and whether aichip should do it.
+///
+/// The whole design rests on one assumption — that only this machine can reach
+/// the server — and that assumption is what pays for having no authentication
+/// at all. Binding anywhere but loopback spends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exposure {
+    /// Loopback. Only this machine can connect; the kernel enforces it.
+    Local,
+    /// Reachable from the network, and somebody said so on purpose.
+    Network,
+    /// Reachable from the network, and nobody said so.
+    Unacknowledged,
+}
+
+/// The variable that acknowledges what binding wide means.
+pub const TRUST_NETWORK: &str = "AICHIP_TRUST_NETWORK";
+
+/// Decide what this bind address means.
+///
+/// ## Why an acknowledgement rather than a check on the caller
+///
+/// The obvious guard is "refuse callers whose peer address is not loopback",
+/// and it does not work. Bound to loopback the kernel already guarantees it, so
+/// the check is a no-op; bound wide, the legitimate caller is *also* remote —
+/// in the shipped container the browser arrives via the Docker gateway — so the
+/// check cannot tell the person who set this up from anybody else on their
+/// network.
+///
+/// What the `Host` allowlist does and does not do matters here, because the
+/// comment beside the bind used to claim it "still guards it either way". It
+/// guards **browsers**: a page on the internet cannot make one send
+/// `Host: localhost` to another machine. It does not guard anything else, and
+/// it is not meant to — `curl -H 'Host: localhost'` from across the room sets
+/// that header itself, and a missing `Origin` is deliberately allowed so the
+/// spawned agent CLIs can reach `/mcp`.
+///
+/// So the realistic failure is not an attack, it is an accident: somebody
+/// copies `AICHIP_BIND=0.0.0.0` to reach the dashboard from their phone and
+/// does not know there is no password. This makes that a decision rather than a
+/// side effect.
+pub fn exposure(bind: std::net::IpAddr, acknowledged: bool) -> Exposure {
+    if bind.is_loopback() {
+        // Includes 127.0.0.0/8 and ::1. `0.0.0.0` is *not* loopback: it is
+        // every interface, loopback among them.
+        Exposure::Local
+    } else if acknowledged {
+        Exposure::Network
+    } else {
+        Exposure::Unacknowledged
+    }
+}
+
+/// What to tell somebody who bound wide without saying so.
+pub fn unacknowledged_message(bind: std::net::IpAddr) -> String {
+    format!(
+        "refusing to start: AICHIP_BIND is {bind}, which is reachable from your \
+         network, and aichip has no authentication of any kind — anyone who can \
+         reach this port can read every run's transcript, browse your files and \
+         start agents on your machine. The Host-header check does not stop this; \
+         it only stops a web page, and any other program sets that header \
+         itself.\n\n\
+         If that is what you want, set {TRUST_NETWORK}=1 as well. If it is not, \
+         leave AICHIP_BIND unset and reach the dashboard over an SSH tunnel."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::net::IpAddr;
+
+    #[test]
+    fn only_loopback_needs_no_saying_so() {
+        for local in ["127.0.0.1", "127.0.0.2", "::1"] {
+            let ip: IpAddr = local.parse().unwrap();
+            assert_eq!(exposure(ip, false), Exposure::Local, "{local}");
+        }
+    }
+
+    #[test]
+    fn every_address_the_network_can_reach_has_to_be_acknowledged() {
+        // `0.0.0.0` is the one people reach for, and it is not loopback — it is
+        // every interface, loopback among them. The shipped Dockerfile sets it.
+        for wide in ["0.0.0.0", "::", "192.168.1.5", "10.0.0.7"] {
+            let ip: IpAddr = wide.parse().unwrap();
+            assert_eq!(exposure(ip, false), Exposure::Unacknowledged, "{wide}");
+            assert_eq!(exposure(ip, true), Exposure::Network, "{wide}");
+        }
+    }
+
+    /// The refusal has to say what is actually at stake, because the person
+    /// reading it is about to decide whether to override it.
+    #[test]
+    fn the_refusal_names_the_thing_that_is_missing() {
+        let message = unacknowledged_message("0.0.0.0".parse().unwrap());
+        assert!(message.contains("no authentication"), "{message}");
+        // And corrects the belief that used to sit next to the bind.
+        assert!(message.contains("Host-header check does not stop this"), "{message}");
+        // Names the way out, and a safer alternative to it.
+        assert!(message.contains(TRUST_NETWORK), "{message}");
+        assert!(message.contains("SSH tunnel"), "{message}");
+    }
 
     #[test]
     fn ipv6_hosts_keep_their_brackets_and_lose_their_port() {
