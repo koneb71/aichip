@@ -254,6 +254,280 @@ pub async fn view(repo: &RepoRef) -> Result<RepoFacts, GhError> {
     parse_repo_view(&out).map_err(GhError::Failed)
 }
 
+// ── Cloning ─────────────────────────────────────────────────────────────────
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use tokio::process::Child;
+
+/// A clone still running.
+struct Cloning {
+    child: Child,
+    /// Where it is being written, which is *not* where it will end up.
+    temp: PathBuf,
+    /// Where it will end up.
+    destination: PathBuf,
+    started: std::time::Instant,
+    facts: RepoFacts,
+    workspace_id: Uuid,
+}
+
+/// Long enough for a large repository on a slow line, short enough that a
+/// wedged process is not tracked forever.
+const CLONE_EXPIRES_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+fn clones() -> &'static Mutex<HashMap<Uuid, Cloning>> {
+    static R: OnceLock<Mutex<HashMap<Uuid, Cloning>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// How a clone is going.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+// `rename_all` renames the *variants*; the fields inside them need their own
+// rule, or `project_id` reaches a browser expecting `projectId` and the clone
+// appears to succeed into nothing.
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "state")]
+pub enum CloneProgress {
+    Cloning,
+    /// Cloned, and the project row exists.
+    Done {
+        project_id: Uuid,
+        path: String,
+        name: String,
+        github_repo: String,
+        default_branch: String,
+    },
+    Failed {
+        reason: String,
+    },
+}
+
+/// The name a repository's folder should have.
+///
+/// Separate from `parse_repo_ref` because the two constrain different things:
+/// `.github` is a legal repository name and an illegal folder name here, since
+/// the browser hides dotfiles and the person would never find it again. The
+/// refusal is shown rather than silently rewritten — a folder that quietly
+/// became `github` is one they cannot correlate with anything.
+pub fn destination_name(repo: &RepoRef) -> Result<&str, String> {
+    let name = repo.name.as_str();
+    if name.starts_with('.') {
+        return Err(format!(
+            "\"{name}\" would be a hidden folder, which the browser will not show \
+             you — choose a different name for it"
+        ));
+    }
+    Ok(name)
+}
+
+/// The folder a clone is written into before it is anything.
+///
+/// A killed login is harmless and you retry it; a killed clone leaves half a
+/// repository on disk, which the folder browser would then offer as a project.
+/// So the work happens under a dotted temporary name — hidden from the browser,
+/// which already skips dotfiles — and the finished tree is moved into place in
+/// one step. A rename within a directory is atomic, so the destination only
+/// ever exists complete.
+fn temp_for(parent: &Path, id: Uuid) -> PathBuf {
+    parent.join(format!(".aichip-cloning-{id}"))
+}
+
+/// Begin a clone. Returns as soon as it has started, never when it finishes.
+///
+/// `gh repo clone`, not `git clone`, and the reason is the same one
+/// `connect.rs` documents: `worktrees::manager::git` sets no stdin, so an
+/// HTTPS clone of a private repository prompts for a password against a
+/// console that does not exist and hangs forever. `gh` is already signed in,
+/// already sets `stdin(null)`, and honours the person's own git protocol.
+pub async fn start_clone(
+    repo: &RepoRef,
+    parent: &Path,
+    name: &str,
+    workspace_id: Uuid,
+) -> Result<(Uuid, PathBuf), String> {
+    let facts = view(repo).await.map_err(|e| e.to_string())?;
+
+    // Refused here rather than after cloning, because the repair is worse than
+    // the refusal: `ensure_repo_state` writes an *empty* commit authored by
+    // aichip into a repository that has a remote, which is aichip inventing
+    // history in somebody's GitHub repository.
+    if facts.is_empty {
+        return Err(format!(
+            "{} has no commits yet, so there is nothing to clone — push a first \
+             commit and try again",
+            facts.slug
+        ));
+    }
+
+    let destination = parent.join(name);
+    if destination.exists() {
+        return Err(format!("\"{name}\" already exists here"));
+    }
+
+    let id = Uuid::new_v4();
+    let temp = temp_for(parent, id);
+    let child = super::spawn_gh(&[
+        "repo",
+        "clone",
+        &facts.slug,
+        temp.to_str().ok_or("that folder's name is not valid text")?,
+    ])
+    .map_err(|e| e.to_string())?;
+
+    clones().lock().unwrap().insert(
+        id,
+        Cloning {
+            child,
+            temp,
+            destination: destination.clone(),
+            started: std::time::Instant::now(),
+            facts,
+            workspace_id,
+        },
+    );
+    Ok((id, destination))
+}
+
+/// Where a clone has got to, finishing it if it is done.
+pub async fn poll_clone(db: &Db, id: Uuid) -> CloneProgress {
+    let finished = {
+        let mut reg = clones().lock().unwrap();
+        let Some(pending) = reg.get_mut(&id) else {
+            return CloneProgress::Failed {
+                reason: "aichip is no longer tracking this clone — it may have been \
+                         cancelled, or the server restarted"
+                    .into(),
+            };
+        };
+        if pending.started.elapsed() > CLONE_EXPIRES_AFTER {
+            let mut done = reg.remove(&id).unwrap();
+            let _ = done.child.start_kill();
+            let _ = std::fs::remove_dir_all(&done.temp);
+            return CloneProgress::Failed {
+                reason: "this clone took longer than half an hour and was given up on".into(),
+            };
+        }
+        match pending.child.try_wait() {
+            Ok(Some(status)) => Some(status),
+            Ok(None) => None,
+            Err(e) => {
+                let done = reg.remove(&id).unwrap();
+                let _ = std::fs::remove_dir_all(&done.temp);
+                return CloneProgress::Failed {
+                    reason: format!("could not tell whether the clone finished: {e}"),
+                };
+            }
+        }
+    };
+    let Some(status) = finished else {
+        return CloneProgress::Cloning;
+    };
+
+    let done = clones().lock().unwrap().remove(&id);
+    let Some(done) = done else {
+        // Another poll won the race and already settled it.
+        return CloneProgress::Cloning;
+    };
+
+    if !status.success() {
+        let _ = tokio::fs::remove_dir_all(&done.temp).await;
+        return CloneProgress::Failed {
+            reason: format!(
+                "gh could not clone {} — check the name and that you have access to it",
+                done.facts.slug
+            ),
+        };
+    }
+
+    settle(db, done).await
+}
+
+/// Move the finished clone into place and record the project.
+async fn settle(db: &Db, done: Cloning) -> CloneProgress {
+    // Belt and braces for the empty repository. `gh repo view` said it was not
+    // empty, but that answer is a moment old and this is the check that keeps
+    // aichip from writing a commit into somebody's repository — cheap, local,
+    // and already `pub`.
+    if crate::worktrees::manager::head(&done.temp).await.is_none() {
+        let _ = tokio::fs::remove_dir_all(&done.temp).await;
+        return CloneProgress::Failed {
+            reason: format!(
+                "{} came back with no commits, so aichip has not kept it — a project \
+                 needs something to branch from",
+                done.facts.slug
+            ),
+        };
+    }
+
+    if let Err(e) = tokio::fs::rename(&done.temp, &done.destination).await {
+        let _ = tokio::fs::remove_dir_all(&done.temp).await;
+        return CloneProgress::Failed {
+            reason: format!("the clone finished but could not be moved into place: {e}"),
+        };
+    }
+
+    let path = done.destination.to_string_lossy().to_string();
+    let name = done
+        .destination
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| done.facts.slug.clone());
+
+    // Recorded here rather than by the browser, so somebody who navigates away
+    // mid-clone does not end up with a folder aichip made and nothing knows
+    // about. `ON CONFLICT` because two polls can see the same exit.
+    //
+    // Deliberately not through `POST /api/projects`: that route has no sandbox,
+    // and it calls `ensure_repo_state`, which is the very thing that would
+    // write a commit into a fresh clone. A clone already knows it is a git
+    // repository and has the real default branch from `gh` — better
+    // information than that function could produce.
+    let inserted = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (path, name, default_branch, workspace_id, vcs, github_repo)
+         VALUES ($1, $2, $3, $4, 'git', $5)
+         ON CONFLICT (path) DO UPDATE
+            SET name = EXCLUDED.name, github_repo = EXCLUDED.github_repo
+         RETURNING id",
+    )
+    .bind(&path)
+    .bind(&name)
+    .bind(&done.facts.default_branch)
+    .bind(done.workspace_id)
+    .bind(&done.facts.slug)
+    .fetch_one(&db.pool)
+    .await;
+
+    match inserted {
+        Ok(project_id) => CloneProgress::Done {
+            project_id,
+            path,
+            name,
+            github_repo: done.facts.slug,
+            default_branch: done.facts.default_branch,
+        },
+        Err(e) => CloneProgress::Failed {
+            // The folder is left alone: it is a complete clone, and the person
+            // can add it by hand. Deleting somebody's freshly cloned code
+            // because a database write failed would be the wrong repair.
+            reason: format!(
+                "cloned into {path}, but the project could not be recorded: {e} — \
+                 add the folder by hand"
+            ),
+        },
+    }
+}
+
+/// Give up on a clone and leave nothing behind.
+pub async fn cancel_clone(id: Uuid) {
+    let done = clones().lock().unwrap().remove(&id);
+    if let Some(mut done) = done {
+        let _ = done.child.start_kill();
+        let _ = done.child.wait().await;
+        let _ = tokio::fs::remove_dir_all(&done.temp).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +669,36 @@ mod tests {
     fn nonsense_is_an_error_rather_than_a_repository_that_looks_fine() {
         assert!(parse_repo_view("not json").is_err());
         assert!(parse_repo_view(r#"{"isEmpty":false}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    /// The browser reads these keys by name. `rename_all` renames variants and
+    /// not their fields, so without `rename_all_fields` a clone answered with
+    /// `project_id` to a page looking for `projectId` — succeeding into
+    /// nothing, which is the worst way to fail.
+    #[test]
+    fn progress_speaks_the_shape_the_browser_reads() {
+        let json = serde_json::to_string(&CloneProgress::Done {
+            project_id: Uuid::nil(),
+            path: "/tmp/x".into(),
+            name: "x".into(),
+            github_repo: "cli/cli".into(),
+            default_branch: "trunk".into(),
+        })
+        .unwrap();
+        assert!(json.contains("\"state\":\"done\""), "{json}");
+        assert!(json.contains("\"projectId\""), "{json}");
+        assert!(json.contains("\"githubRepo\""), "{json}");
+        assert!(json.contains("\"defaultBranch\""), "{json}");
+        assert!(!json.contains("project_id"), "{json}");
+
+        let json = serde_json::to_string(&CloneProgress::Cloning).unwrap();
+        assert_eq!(json, "{\"state\":\"cloning\"}");
+        let json = serde_json::to_string(&CloneProgress::Failed { reason: "no".into() }).unwrap();
+        assert!(json.contains("\"state\":\"failed\"") && json.contains("\"reason\":\"no\""));
     }
 }

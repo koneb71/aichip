@@ -76,28 +76,27 @@ fn classify_gh_failure(output: &str) -> GhError {
     })
 }
 
-/// Run `gh` once and return its stdout.
+/// A `gh` process to wait on later, with the same environment [`gh`] gives one.
 ///
-/// The counterpart of `worktrees::manager::git`, and deliberately shaped like
-/// it: an explicit argument vector that is never a shell string, and both
-/// streams merged into the error because `gh` is inconsistent about which it
-/// uses — JSON goes to stdout while "no pull requests found for branch" goes
-/// to stderr.
-///
-/// ## The environment is the compliance surface
-///
-/// `GH_TOKEN` and `GITHUB_TOKEN` are never set here, and that is not a
-/// nicety. `gh help environment` states they "take precedence over previously
-/// stored credentials" — so setting one would both hand a credential to a
-/// spawned process, which this project does not do, *and* silently change
-/// which account the user's commands run as. `gh` is already logged in as
-/// somebody, or the feature is off.
-///
-/// `env_clear()` is equally deliberate *not* to be here: `gh` needs the user's
-/// `HOME` and `PATH` to find its own configuration, which is the thing aichip
-/// declines to read but must not prevent `gh` from using.
-pub(crate) async fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, GhError> {
+/// For the calls that outlive their request — a clone can take minutes, and
+/// `previews.rs` already says why a button that hangs for them is a button
+/// people press twice. The environment is built by the same function, so the
+/// credential rules cannot hold for one shape and quietly not the other.
+pub(crate) fn spawn_gh(args: &[&str]) -> std::io::Result<tokio::process::Child> {
     let mut cmd = Command::new(GH);
+    prepare(&mut cmd, args, None);
+    cmd.kill_on_drop(true).spawn()
+}
+
+/// The environment every `gh` invocation gets, in one place.
+///
+/// `GH_TOKEN`/`GITHUB_TOKEN` are never set — `gh help environment` says they
+/// take precedence over stored credentials, so setting one would both hand a
+/// credential to a spawned process and silently change which account acts.
+/// `env_clear()` is equally deliberately absent: `gh` needs `HOME` and `PATH`
+/// to find the configuration aichip declines to read but must not prevent it
+/// from using.
+fn prepare(cmd: &mut Command, args: &[&str], cwd: Option<&Path>) {
     cmd.args(args)
         // No console exists on a server. A prompt is not a slow answer, it is
         // a process that never returns — the hazard `connect.rs` documents.
@@ -115,6 +114,19 @@ pub(crate) async fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, GhEr
     for key in aichip_shared::env_guard::AICHIP_OWN_SECRETS {
         cmd.env_remove(key);
     }
+}
+
+/// Run `gh` once and return its stdout.
+///
+/// The counterpart of `worktrees::manager::git`, and deliberately shaped like
+/// it: an explicit argument vector that is never a shell string, and both
+/// streams merged into the error because `gh` is inconsistent about which it
+/// uses — JSON goes to stdout while "no pull requests found for branch" goes
+/// to stderr. The environment comes from [`prepare`], which is where the
+/// credential rules are written down.
+pub(crate) async fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, GhError> {
+    let mut cmd = Command::new(GH);
+    prepare(&mut cmd, args, cwd);
 
     let out = match cmd.output().await {
         Ok(out) => out,

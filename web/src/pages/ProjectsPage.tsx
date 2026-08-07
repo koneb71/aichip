@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { FolderBrowserModal } from "../components/FolderBrowserModal";
+import { CloneRepoModal } from "../components/CloneRepoModal";
 
 export default function ProjectsPage() {
   const { active } = useWorkspace();
   const [projects, setProjects] = useState<Project[]>([]);
   const [params, setParams] = useSearchParams();
   const showBrowser = params.get("new") === "1";
+  const showClone = params.get("new") === "clone";
+  const navigate = useNavigate();
 
   const refresh = useCallback(() => {
     if (!active) return;
@@ -22,13 +25,22 @@ export default function ProjectsPage() {
     <div className="h-full overflow-y-auto p-8">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold tracking-tight">Projects</h1>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={() => setParams({ new: "1" })}
-          className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
-        >
-          + Load folder
-        </motion.button>
+        <div className="flex items-center gap-2">
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={() => setParams({ new: "clone" })}
+            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-ink-dim"
+          >
+            Clone from GitHub
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={() => setParams({ new: "1" })}
+            className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
+          >
+            + Load folder
+          </motion.button>
+        </div>
       </div>
 
       <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -64,6 +76,17 @@ export default function ProjectsPage() {
       </div>
 
       <AnimatePresence>
+        {showClone && active && (
+          <CloneRepoModal
+            workspaceId={active.id}
+            onClose={() => setParams({})}
+            onCloned={(projectId: string) => {
+              setParams({});
+              refresh();
+              navigate(`/projects/${projectId}`);
+            }}
+          />
+        )}
         {showBrowser && active && (
           <FolderBrowserModal
             onClose={() => setParams({})}

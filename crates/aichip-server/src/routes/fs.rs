@@ -32,7 +32,7 @@ pub(crate) fn browse_root() -> PathBuf {
 
 /// Canonicalize `requested` and require it to live under `root`.
 /// Returns None for anything that escapes (symlinks included).
-fn sandboxed(root: &Path, requested: &Path) -> Option<PathBuf> {
+pub(crate) fn sandboxed(root: &Path, requested: &Path) -> Option<PathBuf> {
     let canonical = std::fs::canonicalize(requested).ok()?;
     let root_canonical = std::fs::canonicalize(root).ok()?;
     canonical.starts_with(&root_canonical).then_some(canonical)
@@ -132,7 +132,7 @@ async fn mkdir(Json(body): Json<MkdirBody>) -> Result<Json<Value>, ApiError> {
 /// Rejecting separators and `..` is what keeps the sandbox check meaningful:
 /// the parent is canonicalized and verified, but `../../..` appended to a
 /// perfectly valid parent lands anywhere at all.
-fn safe_dir_name(raw: &str) -> Result<&str, String> {
+pub(crate) fn safe_dir_name(raw: &str) -> Result<&str, String> {
     let name = raw.trim();
     if name.is_empty() {
         return Err("a folder name is required".into());

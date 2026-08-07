@@ -335,6 +335,19 @@ export interface PullRequestState {
   refusal: string | null;
 }
 
+/** How a clone is going. Polled; a clone can take minutes. */
+export type CloneProgress =
+  | { state: "cloning" }
+  | {
+      state: "done";
+      projectId: string;
+      path: string;
+      name: string;
+      githubRepo: string;
+      defaultBranch: string;
+    }
+  | { state: "failed"; reason: string };
+
 /** A GitHub device flow waiting for the person to finish it. */
 export interface GitHubConnect {
   id: string;
@@ -1336,6 +1349,16 @@ export const api = {
     post(`/api/tasks/${taskId}/pull-request/refresh`).then((r) =>
       json<{ pr: TaskPullRequest }>(r),
     ),
+  cloneRepo: (workspaceId: string, repo: string, parent?: string, name?: string) =>
+    post("/api/github/clone", {
+      workspace_id: workspaceId,
+      repo,
+      parent,
+      name,
+    }).then((r) => json<{ id: string; destination: string }>(r)),
+  cloneStatus: (id: string) =>
+    fetch(`/api/github/clone/${id}`).then((r) => json<CloneProgress>(r)),
+  cancelClone: (id: string) => fetch(`/api/github/clone/${id}`, { method: "DELETE" }),
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),
