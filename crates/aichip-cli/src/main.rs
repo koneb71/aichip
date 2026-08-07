@@ -203,6 +203,22 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         tracing::warn!(error=%e, "could not reconcile previews with docker");
     }
 
+    // Worktrees nothing can reach any more: a bake-off variant whose run
+    // cascaded away with its card, a workflow fan-out directory whose id was
+    // never written down, an uninstalled app's leftovers. Same reason previews
+    // and attachments get a sweep — Postgres can drop a row but not a
+    // directory, and these are the largest thing aichip puts on disk.
+    match aichip_core::worktrees::sweep::reconcile(&db, &orchestrator.worktrees).await {
+        Ok(s) if s.worktrees > 0 || s.dead_projects > 0 => tracing::info!(
+            worktrees = s.worktrees,
+            mb = s.bytes / 1_000_000,
+            dead_projects = s.dead_projects,
+            "reclaimed worktrees nothing was using"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "could not sweep worktrees"),
+    }
+
     let orphans = orchestrator.recover_orphans().await?;
     if orphans > 0 {
         tracing::warn!(orphans, "marked orphaned runs from previous session as failed");

@@ -418,6 +418,26 @@ async fn merge(
         .execute(&state.db.pool)
         .await
         .map_err(internal)?;
+
+    // The card has landed, so the checkout it was built in is finished with.
+    //
+    // Until this line, merging was the one way a card could end without ever
+    // giving anything back: `drop_worktree` was reached only from Delete and
+    // from a fresh Retry, so *every card anyone ever merged* kept a worktree
+    // and an `aichip/*` branch permanently. On this machine that was 2.9 GB
+    // across 22 directories before anybody noticed.
+    //
+    // Safe precisely here and not in general: the operation that just
+    // succeeded is what put this branch into the base, so there is no
+    // unmerged work to lose. The pull request survives — `tasks.pr_number`
+    // and friends are columns for exactly this reason, so nothing needs the
+    // branch name to find it again.
+    //
+    // Best-effort: a merge that landed must not report failure because a
+    // directory could not be removed.
+    if let Err(e) = drop_worktree(&state, id).await {
+        tracing::warn!(task = %id, error = ?e, "merged, but could not reclaim the worktree");
+    }
     Ok(Json(json!({ "merged": true })))
 }
 

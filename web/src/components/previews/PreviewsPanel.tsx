@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, DockerStatus, ProjectPreview } from "../../lib/api";
+import { size } from "../../lib/bytes";
 import { RecipeGate } from "../RecipeGate";
 import { PreviewLogs } from "./PreviewLogs";
 
@@ -297,8 +298,3 @@ function named(slug: string): string {
   return `http://${slug}.preview.localhost${port}`;
 }
 
-function size(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  return `${bytes} B`;
-}

@@ -7,7 +7,9 @@ import {
   FileListing,
   Task,
   Tree,
+  WorktreeHeld,
 } from "../../lib/api";
+import { size } from "../../lib/bytes";
 import { languageFor } from "../../lib/language";
 import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
 
@@ -393,6 +395,7 @@ function TreePicker({
   const value = tree.kind === "project" ? "" : tree.id;
   return (
     <div className="border-b border-line px-3 py-2">
+      <HeldDisk projectId={projectId} />
       <select
         value={value}
         onChange={(e) =>
@@ -446,4 +449,62 @@ function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * What the cards on this project are still holding on disk.
+ *
+ * Here because this is already the one place that lists a card's checkout —
+ * the picker below turns them into somewhere you can browse. Modelled on the
+ * previews tab's disk line, down to the reclaim link appearing only when there
+ * is something to reclaim: a permanent "0 to reclaim" is a row that never
+ * changes and so is never read.
+ */
+function HeldDisk({ projectId }: { projectId: string }) {
+  const [held, setHeld] = useState<WorktreeHeld | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.worktrees(projectId).then(setHeld).catch(() => setHeld(null));
+  }, [projectId]);
+  useEffect(load, [load]);
+
+  if (!held || held.worktrees.length === 0) return null;
+
+  const reclaim = async () => {
+    setBusy(true);
+    try {
+      const r = await api.reclaimWorktrees(projectId);
+      // Both halves, always. "Freed 83 MB" alone leaves someone wondering why
+      // the big one is still there.
+      const kept = r.kept.length ? ` · kept ${r.kept.length} (${r.kept[0].why})` : "";
+      setNote(`Freed ${size(r.bytes)} from ${r.released.length}${kept}`);
+      load();
+    } catch (e) {
+      setNote(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-2 flex flex-wrap items-baseline gap-x-2 text-[11px] text-ink-dim">
+      <span>
+        {held.worktrees.length} worktree{held.worktrees.length === 1 ? "" : "s"} ·{" "}
+        {size(held.bytes)}
+      </span>
+      {held.reclaimable > 0 && (
+        <button
+          onClick={reclaim}
+          disabled={busy}
+          title="Remove the checkouts whose work is already on the base branch"
+          className="text-accent underline disabled:opacity-50"
+        >
+          {busy ? "reclaiming…" : `reclaim ${held.reclaimable} · ${size(held.reclaimableBytes)}`}
+        </button>
+      )}
+      {note && <span className="basis-full text-ink-dim/80">{note}</span>}
+    </div>
+  );
 }

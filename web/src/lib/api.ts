@@ -13,6 +13,24 @@ export interface Workspace {
   color: string;
 }
 
+export interface WorktreeHeld {
+  worktrees: {
+    path: string;
+    branch: string;
+    bytes: number;
+    dirty: boolean;
+    /** Its work is in the base branch, so the directory is a copy. */
+    landed: boolean;
+    reclaimable: boolean;
+    /** Why it stays. Null when it can go. */
+    keptBecause: string | null;
+    title: string | null;
+  }[];
+  bytes: number;
+  reclaimable: number;
+  reclaimableBytes: number;
+}
+
 /** One file standing between a person and a merge. */
 export interface DirtyFile {
   /** Git's staged-state letter; a space means "not staged". */
@@ -1219,6 +1237,17 @@ export const api = {
     projectId: string,
     body: { name?: string; default_branch?: string; full_auto_opt_in?: boolean },
   ) => patch(`/api/projects/${projectId}`, body).then((r) => json<Project>(r)),
+  /** What this project's finished cards are still holding on disk. */
+  worktrees: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/worktrees`).then((r) => json<WorktreeHeld>(r)),
+  reclaimWorktrees: (projectId: string) =>
+    post(`/api/projects/${projectId}/worktrees/reclaim`, {}).then((r) =>
+      json<{
+        released: { branch: string; bytes: number }[];
+        kept: { branch: string; why: string }[];
+        bytes: number;
+      }>(r),
+    ),
   /** What the merge guard is looking at. Read-only. */
   projectCheckout: (projectId: string) =>
     fetch(`/api/projects/${projectId}/checkout`).then((r) => json<CheckoutState>(r)),

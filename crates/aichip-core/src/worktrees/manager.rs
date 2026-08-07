@@ -32,6 +32,20 @@ impl WorktreeManager {
         path.starts_with(&self.root)
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The directory a project's worktrees live in, by name.
+    ///
+    /// Exposed so the sweep can work out which directories under the root
+    /// belong to a project that still exists — the only way to recognise the
+    /// leftovers of an uninstalled app, whose repository is gone along with any
+    /// chance of asking git about them.
+    pub fn project_dir_name(repo_path: &str) -> String {
+        short_hash(repo_path)
+    }
+
     pub async fn create(
         &self,
         repo: &Path,
@@ -578,6 +592,144 @@ fn describe_dirty(porcelain: &str) -> String {
     out.join("\n")
 }
 
+/// A worktree this repository is still holding, and whether it can go.
+#[derive(Debug, Clone)]
+pub struct Held {
+    pub path: PathBuf,
+    pub branch: String,
+    pub bytes: u64,
+    /// Uncommitted work in the worktree itself. Reclaiming would lose it.
+    pub dirty: bool,
+    /// Every commit on this branch has an equivalent in the base, so deleting
+    /// it loses nothing. See [`landed`] for why this is not `--merged`.
+    pub landed: bool,
+}
+
+impl Held {
+    /// Only when the answer is provable. Everything else is kept and explained.
+    pub fn reclaimable(&self) -> bool {
+        self.landed && !self.dirty
+    }
+
+    /// Why this one is being kept, for a person who expected it to go.
+    pub fn kept_because(&self) -> Option<&'static str> {
+        match (self.dirty, self.landed) {
+            (true, _) => Some("it has uncommitted changes in it"),
+            (_, false) => Some("its work is not in the base branch"),
+            _ => None,
+        }
+    }
+}
+
+/// Has this branch's work reached the base branch?
+///
+/// `git cherry`, not `git branch --merged`, and the difference is the whole
+/// feature. `--merged` asks an ancestry question, and a *squash* merge — which
+/// is the only kind aichip performs — writes a brand-new commit, so the branch
+/// it came from is never an ancestor of anything. Every card anyone had ever
+/// merged would have read as unlanded, and the sweep would have declined to
+/// reclaim the exact directories it exists to reclaim.
+///
+/// `git cherry <base> <branch>` compares patch-ids instead: `-` for a commit
+/// with an equivalent upstream, `+` for one without. Empty output — a branch
+/// with nothing the base does not have — counts as landed. Checked against the
+/// real repositories on this machine, where it correctly separates a
+/// squash-merged card from a 742 MB branch that never landed, and `--merged`
+/// gets the first of those wrong.
+///
+/// An error is `false`. Not knowing must never read as safe.
+async fn has_landed(repo: &Path, base: &str, branch: &str) -> bool {
+    match git(repo, &["cherry", base, branch]).await {
+        Ok(out) => !out.lines().any(|l| l.starts_with('+')),
+        Err(_) => false,
+    }
+}
+
+/// Every worktree this repository is holding, with the two facts that decide
+/// whether it may go.
+///
+/// Deliberately read from git rather than from the database. A row can be
+/// deleted while its directory survives — a bake-off variant whose run
+/// cascaded away with its card, a workflow fan-out worktree whose id was never
+/// persisted at all — and those are exactly the ones nothing would otherwise
+/// ever look at again.
+pub async fn inventory(repo: &Path, base_branch: &str) -> anyhow::Result<Vec<Held>> {
+    let listed = git(repo, &["worktree", "list", "--porcelain"]).await?;
+    let base = resolve_base(repo, base_branch).await?;
+
+    let mut out = Vec::new();
+    // `skip(1)`, not a path comparison. The first record is always the main
+    // checkout — the person's own repository, which is not a worktree in the
+    // sense that matters here and must never be offered for removal. Comparing
+    // paths looked equivalent and was not: on macOS a project under `/var` is
+    // reported by git as `/private/var`, so the comparison silently failed and
+    // the repository itself appeared in the list.
+    for (path, branch) in parse_worktree_list(&listed).into_iter().skip(1) {
+        let Some(branch) = branch else { continue };
+        let dirty = git(&path, &["status", "--porcelain"])
+            .await
+            .map(|s| !s.trim().is_empty())
+            // A directory git can no longer read is not "clean" — it is
+            // unknown, and unknown must not be reclaimable.
+            .unwrap_or(true);
+        out.push(Held {
+            bytes: dir_size(&path).await,
+            landed: has_landed(repo, &base, &branch).await,
+            dirty,
+            path,
+            branch,
+        });
+    }
+    Ok(out)
+}
+
+/// `git worktree list --porcelain` into (path, branch).
+///
+/// Pure: the format is a blank-line-separated record per worktree, and a
+/// detached one has no `branch` line at all.
+pub fn parse_worktree_list(out: &str) -> Vec<(PathBuf, Option<String>)> {
+    let mut all = Vec::new();
+    let mut path: Option<PathBuf> = None;
+    let mut branch: Option<String> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(prev) = path.take() {
+                all.push((prev, branch.take()));
+            }
+            path = Some(PathBuf::from(p));
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            branch = Some(b.trim_start_matches("refs/heads/").to_string());
+        }
+    }
+    if let Some(p) = path {
+        all.push((p, branch));
+    }
+    all
+}
+
+/// Bytes on disk. Approximate on purpose — this is a figure to show a person,
+/// not an accounting record, and it must never fail the request it is part of.
+async fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            // `symlink_metadata`: following a link out of the worktree would
+            // count somebody else's disk, and a loop would never finish.
+            let Ok(meta) = entry.metadata().await else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
 /// One file standing between a person and a merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirtyFile {
@@ -961,6 +1113,61 @@ mod tests {
 
         mgr.remove(repo_dir.path(), &wt).await.unwrap();
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    fn a_worktree_list_yields_paths_and_branches() {
+        let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                   worktree /wt/one\nHEAD def\nbranch refs/heads/aichip/card-1234\n\n\
+                   worktree /wt/detached\nHEAD 999\ndetached\n";
+        let all = parse_worktree_list(out);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0], (PathBuf::from("/repo"), Some("main".to_string())));
+        assert_eq!(all[1].1.as_deref(), Some("aichip/card-1234"));
+        // A detached worktree has no branch line, and must not inherit the
+        // previous record's — which is what a naive line-by-line parse does.
+        assert_eq!(all[2].1, None);
+    }
+
+    #[tokio::test]
+    async fn inventory_tells_apart_what_may_go_from_what_may_not() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        // Landed: merged, clean.
+        let landed = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "landed").await.unwrap();
+        tokio::fs::write(landed.path.join("a.txt"), "a\n").await.unwrap();
+        mgr.squash_merge(repo_dir.path(), &landed, "main", "aichip: landed").await.unwrap();
+
+        // Never landed: its work exists nowhere else.
+        let open = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "open").await.unwrap();
+        tokio::fs::write(open.path.join("b.txt"), "b\n").await.unwrap();
+        git(&open.path, &["add", "-A"]).await.unwrap();
+        git(&open.path, &["commit", "-m", "wip"]).await.unwrap();
+
+        // Merged, but someone has been editing in it since.
+        let touched = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "touched").await.unwrap();
+        tokio::fs::write(touched.path.join("c.txt"), "c\n").await.unwrap();
+        mgr.squash_merge(repo_dir.path(), &touched, "main", "aichip: touched").await.unwrap();
+        tokio::fs::write(touched.path.join("c.txt"), "edited\n").await.unwrap();
+
+        let held = inventory(repo_dir.path(), "main").await.unwrap();
+        assert_eq!(held.len(), 3, "the repo's own checkout is not a worktree: {held:?}");
+
+        let by = |name: &str| held.iter().find(|h| h.branch.contains(name)).unwrap().clone();
+        // The one that matters: a *squash*-merged branch is never an ancestor
+        // of the base, so `git branch --merged` calls it unlanded and this
+        // whole sweep would decline to reclaim the directories it exists for.
+        assert!(by("landed").landed, "a squash-merged branch has landed");
+        assert!(by("landed").reclaimable());
+        assert_eq!(by("landed").kept_because(), None);
+        assert!(!by("open").reclaimable(), "unlanded work must be kept");
+        assert_eq!(by("open").kept_because(), Some("its work is not in the base branch"));
+        assert!(!by("touched").reclaimable(), "a dirty worktree must be kept");
+        assert_eq!(by("touched").kept_because(), Some("it has uncommitted changes in it"));
+        assert!(by("landed").bytes > 0, "a size worth showing");
     }
 
     #[test]

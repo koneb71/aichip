@@ -14,6 +14,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
         .route("/projects/{id}", get(one).patch(update))
+        .route("/projects/{id}/worktrees", get(worktrees))
+        .route("/projects/{id}/worktrees/reclaim", post(reclaim_worktrees))
         .route("/projects/{id}/checkout", get(checkout))
         .route("/projects/{id}/checkout/stash", post(stash_checkout))
         .route("/projects/{id}/checkout/commit", post(commit_checkout))
@@ -70,6 +72,150 @@ async fn one(
         }
     }
     Ok(Json(body))
+}
+
+/// What this project's finished cards are still holding on disk.
+///
+/// Previews got a disk figure and a reclaim link; worktrees are the larger
+/// artifact and got neither, so they accumulated silently — 2.9 GB across 22
+/// directories on the machine this was written on, every one of them belonging
+/// to a card that had already landed.
+async fn worktrees(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let held = held_for(&state, id).await?;
+
+    // Which card each directory belongs to, so the list reads as work rather
+    // than as paths. A directory with no row is exactly the kind this sweep
+    // exists for — a bake-off variant whose run cascaded away, or a workflow
+    // fan-out worktree whose id was never written down at all.
+    let owners = sqlx::query(
+        "SELECT worktree_path, title FROM tasks
+         WHERE project_id = $1 AND worktree_path IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let rows: Vec<Value> = held
+        .iter()
+        .map(|h| {
+            let title = owners
+                .iter()
+                .find(|r| r.get::<String, _>("worktree_path") == h.path.to_string_lossy())
+                .map(|r| r.get::<String, _>("title"));
+            json!({
+                "path": h.path,
+                "branch": h.branch,
+                "bytes": h.bytes,
+                "dirty": h.dirty,
+                "landed": h.landed,
+                "reclaimable": h.reclaimable(),
+                "keptBecause": h.kept_because(),
+                "title": title,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "worktrees": rows,
+        "bytes": held.iter().map(|h| h.bytes).sum::<u64>(),
+        "reclaimable": held.iter().filter(|h| h.reclaimable()).count(),
+        "reclaimableBytes": held.iter().filter(|h| h.reclaimable()).map(|h| h.bytes).sum::<u64>(),
+    })))
+}
+
+/// Release the ones that can be proved safe, and say why each of the rest stays.
+///
+/// Explicit rather than automatic, for the reason `previews::reclaim_disk` is:
+/// disk you can see and choose to free is a different thing from disk something
+/// frees behind you.
+async fn reclaim_worktrees(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let (path, _) = git_project(&state, id).await?;
+    let repo = std::path::PathBuf::from(&path);
+    let held = held_for(&state, id).await?;
+
+    // A card whose agent is working right now owns its worktree, whatever git
+    // thinks of the branch.
+    let busy: Vec<String> = sqlx::query_scalar(
+        "SELECT t.worktree_path FROM tasks t
+         WHERE t.project_id = $1 AND t.worktree_path IS NOT NULL
+           AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id
+                       AND r.status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let mut freed = 0u64;
+    let mut released: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+    for h in &held {
+        let running = busy.iter().any(|p| *p == h.path.to_string_lossy());
+        let why = if running {
+            Some("its agent is still working")
+        } else {
+            h.kept_because()
+        };
+        if let Some(why) = why {
+            kept.push(json!({ "branch": h.branch, "why": why }));
+            continue;
+        }
+        let wt = aichip_core::worktrees::manager::Worktree {
+            path: h.path.clone(),
+            branch: h.branch.clone(),
+        };
+        match state.orchestrator.worktrees.remove(&repo, &wt).await {
+            Ok(()) => {
+                freed += h.bytes;
+                released.push(json!({ "branch": h.branch, "bytes": h.bytes }));
+            }
+            Err(e) => {
+                tracing::warn!(branch = %h.branch, error = %e, "could not reclaim worktree");
+                kept.push(json!({ "branch": h.branch, "why": "git would not remove it" }));
+            }
+        }
+    }
+
+    // The rows that named what was just removed would otherwise point at
+    // nothing, and the Files tab reads them to build its tree picker.
+    for r in &released {
+        sqlx::query("UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE project_id=$1 AND branch=$2")
+            .bind(id)
+            .bind(r["branch"].as_str().unwrap_or_default())
+            .execute(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    }
+
+    Ok(Json(json!({ "released": released, "kept": kept, "bytes": freed })))
+}
+
+async fn held_for(
+    state: &AppState,
+    id: Uuid,
+) -> Result<Vec<aichip_core::worktrees::manager::Held>, ApiError> {
+    let row = sqlx::query("SELECT path, vcs, default_branch FROM projects WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+    if row.get::<String, _>("vcs") != "git" {
+        return Ok(vec![]);
+    }
+    manager::inventory(
+        std::path::Path::new(&row.get::<String, _>("path")),
+        &row.get::<String, _>("default_branch"),
+    )
+    .await
+    .map_err(internal)
 }
 
 /// The project's own checkout, and what is standing in a merge's way.
