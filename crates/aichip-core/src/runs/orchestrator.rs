@@ -581,6 +581,16 @@ impl Orchestrator {
                     tracing::warn!(%loser, error=%e, "could not remove losing variant's worktree");
                 }
             }
+            // Forget the path whether or not the removal worked, and this is
+            // load-bearing twice over. The row pointed at a directory that is
+            // gone; and `worktrees::sweep` treats every path any row names as
+            // *claimed*, so a stale one made that directory permanently
+            // unsweepable — the sweep would skip it forever while nothing else
+            // could ever name it either.
+            let _ = sqlx::query("UPDATE runs SET worktree_path = NULL WHERE id = $1")
+                .bind(loser)
+                .execute(&self.db.pool)
+                .await;
         }
         Ok(())
     }

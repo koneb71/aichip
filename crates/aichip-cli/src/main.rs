@@ -219,6 +219,19 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "could not sweep worktrees"),
     }
 
+    // One small file per run and per preview, in three directories, none of
+    // which anything had ever cleaned. Individually kilobytes; unbounded in
+    // count, and every one keyed by an id the database can be asked about.
+    match aichip_core::leftovers::sweep(&db).await {
+        Ok(s) if s.files > 0 => tracing::info!(
+            files = s.files,
+            kb = s.bytes / 1024,
+            "removed per-run files whose run is long finished"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "could not sweep per-run files"),
+    }
+
     let orphans = orchestrator.recover_orphans().await?;
     if orphans > 0 {
         tracing::warn!(orphans, "marked orphaned runs from previous session as failed");
