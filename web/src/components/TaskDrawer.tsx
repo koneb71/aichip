@@ -468,14 +468,26 @@ export function TaskDrawer({
             >
               View diff
             </button>
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={merge}
-              disabled={merging}
-              className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
-            >
-              {merging ? "Merging…" : "Squash-merge"}
-            </motion.button>
+            {/* Once it is merged on GitHub, squash-merging is a trap rather
+                than a shortcut: your base branch has not pulled yet, so the
+                squash would write the same change again under this card's
+                message. What is needed is a pull, and saying so is more use
+                than a button that quietly duplicates a commit. */}
+            {task.prState === "merged" ? (
+              <span className="text-xs text-ink-dim">
+                Merged on GitHub — <code className="font-mono">git pull</code> to update
+                your checkout.
+              </span>
+            ) : (
+              <motion.button
+                whileTap={{ scale: 0.96 }}
+                onClick={merge}
+                disabled={merging}
+                className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
+              >
+                {merging ? "Merging…" : "Squash-merge"}
+              </motion.button>
+            )}
           </>
         )}
         {!running && (

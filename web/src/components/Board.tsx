@@ -4,6 +4,7 @@ import { displayTier, Task, tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
+import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
 
 const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -222,6 +223,17 @@ function TaskCard({
             {task.teamPattern === "org" ? "🏛" : "👥"} {task.teamName}
           </span>
         )}
+        {(() => {
+          const pr = prOnCard(task);
+          return pr ? (
+            <span
+              className={`rounded-full bg-panel-2 px-2 py-0.5 ${prTone(pr).text}`}
+              title={`Pull request #${pr.number} — ${prSummary(pr)}`}
+            >
+              ⑂ #{pr.number}
+            </span>
+          ) : null;
+        })()}
         {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
       </div>
     </motion.button>

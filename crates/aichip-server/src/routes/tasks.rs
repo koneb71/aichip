@@ -60,6 +60,7 @@ async fn list(
         // deleted, which is exactly when someone is looking back at what an epic
         // turned into.
         "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch, t.position,
+                t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 a.name AS agent_name, a.color AS agent_color,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
@@ -166,6 +167,14 @@ async fn list(
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
                 "runStatus": r.get::<Option<String>, _>("run_status"),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                // Enough for the chip. Anything more — how fresh it is, why
+                // the button is refused — is the drawer's own fetch, because
+                // this list refreshes every couple of seconds.
+                "prNumber": r.get::<Option<i32>, _>("pr_number"),
+                "prUrl": r.get::<Option<String>, _>("pr_url"),
+                "prState": r.get::<Option<String>, _>("pr_state"),
+                "prChecks": r.get::<Option<String>, _>("pr_checks"),
+                "prReview": r.get::<Option<String>, _>("pr_review"),
                 "model": r.get::<Option<String>, _>("model"),
                 // What the last run actually ran at, and why — the whole
                 // point of an automatic choice being allowed to happen at all.

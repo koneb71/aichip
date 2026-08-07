@@ -9,6 +9,31 @@
 import type { TaskPullRequest } from "./api";
 
 /**
+ * The board list carries a pull request as flat columns, since it refreshes
+ * every couple of seconds and cannot afford a nested fetch. This is the one
+ * place that shape becomes the one `prSummary` and `prTone` read, so the chip
+ * and the drawer row can never disagree about the same pull request.
+ */
+export function prOnCard(task: {
+  prNumber?: number | null;
+  prUrl?: string | null;
+  prState?: TaskPullRequest["state"];
+  prChecks?: TaskPullRequest["checks"];
+  prReview?: TaskPullRequest["review"];
+}): TaskPullRequest | null {
+  if (task.prNumber == null) return null;
+  return {
+    number: task.prNumber,
+    url: task.prUrl ?? null,
+    state: task.prState ?? null,
+    checks: task.prChecks ?? null,
+    review: task.prReview ?? null,
+    // The board never claims freshness; the drawer is where that is shown.
+    syncedAt: null,
+  };
+}
+
+/**
  * The single worst thing true about a pull request, which is what a chip has
  * room for.
  *

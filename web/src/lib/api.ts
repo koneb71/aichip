@@ -59,6 +59,12 @@ export interface Task {
    */
   tierReason: string | null;
   boardColumn: "backlog" | "running" | "review" | "done";
+  /** Present once the card has been finished as a pull request. */
+  prNumber?: number | null;
+  prUrl?: string | null;
+  prState?: TaskPullRequest["state"];
+  prChecks?: TaskPullRequest["checks"];
+  prReview?: TaskPullRequest["review"];
   /** Manual kanban ordering within a column; smaller sorts first. */
   position: number;
   branch: string | null;
