@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_core::runs::mentions;
 use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
 use axum::extract::{Path, Query, State};
@@ -738,17 +739,20 @@ async fn require_same_workspace(
     ))
 }
 
-/// Which agents does a comment speak to? An agent is mentioned when
-/// `@its-name` appears, case-insensitively; names may contain spaces, so this
-/// is a per-agent substring check rather than token parsing.
+/// Which agents does a comment speak to?
+///
+/// The same rule the chat composer uses — `mentions::mentioned`, which reads
+/// `mention_cases.json` — rather than a second one. It was a bare substring
+/// check, which has no notion of where a token starts or ends, so
+/// `dev@Frontend.example` mentioned an agent called Frontend and this route
+/// answers a mention by *starting a run*: a false positive here spends money.
+/// An agent called `Front` matching inside `@Frontend` was the same bug facing
+/// the other way.
 fn mentioned_agents(content: &str, agents: &[(Uuid, String)]) -> Vec<Uuid> {
-    let lower = content.to_lowercase();
-    agents
-        .iter()
-        .filter(|(_, name)| {
-            !name.is_empty() && lower.contains(&format!("@{}", name.to_lowercase()))
-        })
-        .map(|(id, _)| *id)
+    let names: Vec<String> = agents.iter().map(|(_, name)| name.clone()).collect();
+    mentions::mentioned(content, &names)
+        .into_iter()
+        .filter_map(|name| agents.iter().find(|(_, n)| *n == name).map(|(id, _)| *id))
         .collect()
 }
 
@@ -1112,6 +1116,24 @@ mod tests {
         );
         assert!(mentioned_agents("mail me at rex@example.com", &agents).is_empty());
         assert!(mentioned_agents("no mentions here", &agents).is_empty());
+    }
+
+    #[test]
+    fn an_address_that_ends_in_an_agents_name_does_not_start_a_run() {
+        // The old substring check said yes to this, and answering a mention
+        // here dispatches a paid run.
+        let rex = Uuid::new_v4();
+        let agents = vec![(rex, "Rex".to_string())];
+        assert!(mentioned_agents("mail me at dev@Rex.example", &agents).is_empty());
+        assert!(mentioned_agents("ship it (@Rex)", &agents).is_empty());
+    }
+
+    #[test]
+    fn a_shorter_name_does_not_claim_half_of_a_longer_word() {
+        let front = Uuid::new_v4();
+        let agents = vec![(front, "Front".to_string())];
+        assert!(mentioned_agents("@Frontend please", &agents).is_empty());
+        assert_eq!(mentioned_agents("@Front please", &agents), vec![front]);
     }
 }
 

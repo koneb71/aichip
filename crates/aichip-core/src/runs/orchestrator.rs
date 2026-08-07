@@ -27,6 +27,7 @@ use crate::bus::EventBus;
 use crate::db::Db;
 use crate::runs::attachments;
 use crate::runs::memory;
+use crate::runs::mentions;
 use crate::runs::task_plan;
 use crate::runs::usage_tally::{UsageDelta, UsageTally};
 use crate::queue::rate_limit_backoff;
@@ -91,8 +92,10 @@ dashboard. You can inspect this repository (Read/Grep/Glob) but you cannot edit 
 To do coding work, create a task with mcp__aichip__create_task (set start=true to launch it \
 immediately); each task runs a coding agent in an isolated git worktree and its result appears \
 on the user's board for review. Use mcp__aichip__list_tasks / get_task_status to report \
-progress, and mcp__aichip__list_agents to pick a specialized agent for a task. Keep replies \
-short and conversational; the user sees them in a chat panel.";
+progress, and mcp__aichip__list_agents to pick a specialized agent for a task. When the user \
+writes @Name in their message they are naming an agent from their library — assign that work to \
+them by passing agent_name, spelled exactly. Keep replies short and conversational; the user \
+sees them in a chat panel.";
 
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
@@ -1809,6 +1812,18 @@ impl Orchestrator {
             None => vec![],
         };
         let (user_message, extra_read_dirs) = attachments::augment_prompt(&user_message, &atts);
+
+        // Who the user named with `@`. Resolved when the message was sent, so
+        // this is a lookup rather than a second parse — and `create_task` reads
+        // the same rows, which is what makes the binding hold even if the model
+        // forgets to pass `agent_name`.
+        let mentioned: Vec<String> = mentions::latest_for_chat(&self.db, chat_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        let user_message = mentions::augment_prompt(&user_message, &mentioned);
 
         let mcp = McpWiring {
             aichip_url: self

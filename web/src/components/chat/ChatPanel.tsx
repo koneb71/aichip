@@ -1,14 +1,30 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, ChatMessage, ChatSummary, Effort, Tier } from "../../lib/api";
+import { api, Agent, ChatMessage, ChatSummary, Effort, Tier } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
 import { useAttachments } from "../../lib/useAttachments";
+import { agentSpans } from "../../lib/mention";
 import { AttachmentBar, AttachmentList } from "../AttachmentBar";
 import { ComposerSettings } from "./ComposerSettings";
 import { useMentionPicker } from "../MentionPicker";
 import { Markdown } from "../Markdown";
 
-export function ChatPanel({ projectId }: { projectId: string }) {
+export function ChatPanel({
+  projectId,
+  workspaceId,
+}: {
+  projectId: string;
+  /**
+   * The workspace this *project* belongs to — not whichever one the sidebar is
+   * showing. Those differ: switching workspace does not navigate away from an
+   * open project, and a bookmarked link opens one while the switcher sits on
+   * the first workspace in the list. The server resolves `@mentions` against
+   * the project's workspace, so resolving them here against any other list
+   * would offer agents that cannot bind and draw chips for mentions that
+   * did not.
+   */
+  workspaceId?: string;
+}) {
   const [chatId, setChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -22,6 +38,10 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [tier, setTier] = useState<Tier>("medium");
   const [effort, setEffort] = useState<Effort | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The agent library, fetched once. Both the `@` picker and the message
+  // bubbles resolve names against this one list, so a chip is only ever drawn
+  // for an agent that exists.
+  const [agents, setAgents] = useState<Agent[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
   const att = useAttachments(projectId);
@@ -31,6 +51,7 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   const [caret, setCaret] = useState(0);
   const mention = useMentionPicker({
     projectId,
+    agents,
     text: draft,
     caret,
     onApply: (text, nextCaret) => {
@@ -44,6 +65,14 @@ export function ChatPanel({ projectId }: { projectId: string }) {
       });
     },
   });
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    setAgents([]); // a stale library would resolve mentions against the wrong workspace
+    api.agents(workspaceId).then((r) => setAgents(r.agents)).catch(() => {});
+  }, [workspaceId]);
+
+  const agentNames = useMemo(() => agents.map((a) => a.name), [agents]);
 
   const refreshChats = useCallback(
     () =>
@@ -266,12 +295,13 @@ export function ChatPanel({ projectId }: { projectId: string }) {
           <div className="mt-8 px-4 text-center text-sm text-ink-dim">
             Describe what you want done — e.g. “fix the flaky login test and
             open it for review”. The assistant creates tasks on the board and
-            keeps you posted here.
+            keeps you posted here. Type <span className="font-medium">@</span> to
+            hand the work to one of your agents, or to point at a file.
           </div>
         )}
         <div className="flex flex-col gap-3">
           {messages.map((m) => (
-            <Message key={m.id + m.ts} message={m} />
+            <Message key={m.id + m.ts} message={m} agentNames={agentNames} />
           ))}
           {activeRunId && (
             <div className="flex flex-col gap-2">
@@ -379,7 +409,13 @@ export function ChatPanel({ projectId }: { projectId: string }) {
   );
 }
 
-function Message({ message }: { message: ChatMessage }) {
+function Message({
+  message,
+  agentNames,
+}: {
+  message: ChatMessage;
+  agentNames: string[];
+}) {
   if (message.role === "user") {
     return (
       <motion.div
@@ -392,7 +428,7 @@ function Message({ message }: { message: ChatMessage }) {
         <AttachmentList attachments={message.attachments} />
         {message.content && (
           <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
-            {message.content}
+            <WithMentions text={message.content} agentNames={agentNames} />
           </div>
         )}
       </motion.div>
@@ -416,10 +452,44 @@ function Message({ message }: { message: ChatMessage }) {
   );
 }
 
+/**
+ * The message as sent, with `@Name` drawn as a chip.
+ *
+ * Not decoration: the mention is what decides who does the work, and the only
+ * way to tell a mention that bound from a name that merely looks like one is to
+ * show the difference. A name with no agent behind it stays plain text —
+ * exactly what the server did with it.
+ */
+function WithMentions({ text, agentNames }: { text: string; agentNames: string[] }) {
+  const spans = agentSpans(text, agentNames);
+  if (!spans.length) return <>{text}</>;
+
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  spans.forEach((span, i) => {
+    if (span.start > at) parts.push(text.slice(at, span.start));
+    parts.push(
+      <span
+        key={i}
+        className="rounded bg-white/25 px-1 font-medium"
+        title={`Assigned to ${span.name}`}
+      >
+        {text.slice(span.start, span.end)}
+      </span>,
+    );
+    at = span.end;
+  });
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
 function ToolChip({ name, input }: { name: string; input: unknown }) {
   const label = (() => {
     const args = (input ?? {}) as Record<string, unknown>;
-    if (name === "mcp__aichip__create_task") return `Creating task: ${args.title ?? ""}`;
+    if (name === "mcp__aichip__create_task") {
+      const who = typeof args.agent_name === "string" ? ` — ${args.agent_name}` : "";
+      return `Creating task: ${args.title ?? ""}${who}`;
+    }
     if (name === "mcp__aichip__start_task") return "Starting task";
     if (name === "mcp__aichip__list_tasks") return "Checking the board";
     if (name === "mcp__aichip__get_task_status") return "Checking task status";

@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod memory;
+pub mod mentions;
 pub mod orchestrator;
 pub mod org;
 pub mod permissions;

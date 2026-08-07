@@ -72,7 +72,7 @@ pub fn tools_list() -> Value {
                 "inputSchema": obj(json!({
                     "title": { "type": "string" },
                     "prompt": { "type": "string", "description": "full instructions for the coding agent" },
-                    "agent_name": { "type": "string", "description": "optional: bind a named agent from the library" },
+                    "agent_name": { "type": "string", "description": "optional: bind a named agent from the library, spelled exactly as list_agents reports it. An unknown name is rejected. Omit it and a single agent the user @mentioned in their message is used instead." },
                     "model_tier": { "type": "string", "enum": ["easy", "medium", "complex"] },
                     "start": { "type": "boolean" }
                 }), vec!["title", "prompt"])
@@ -122,18 +122,8 @@ async fn call_tool(
                 Some(t @ ("easy" | "medium" | "complex")) => t,
                 _ => "medium",
             };
-            let agent_id: Option<Uuid> = match args.get("agent_name").and_then(Value::as_str) {
-                Some(agent_name) => sqlx::query(
-                    "SELECT id FROM agents WHERE workspace_id=$1 AND name=$2",
-                )
-                .bind(workspace_id)
-                .bind(agent_name)
-                .fetch_optional(&state.db.pool)
-                .await
-                .map_err(|e| e.to_string())?
-                .map(|r| r.get("id")),
-                None => None,
-            };
+            let (agent_id, agent_name) =
+                resolve_agent(state, chat_id, workspace_id, args.get("agent_name")).await?;
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
 
             let row = sqlx::query(
@@ -164,7 +154,16 @@ async fn call_tool(
             } else {
                 None
             };
-            Ok(json!({ "task_id": task_id, "run_id": run_id, "started": start }))
+            // The bound agent is echoed back so the assistant reports what
+            // actually happened rather than what it asked for — those differ
+            // exactly when it left `agent_name` off and the user's `@mention`
+            // supplied it.
+            Ok(json!({
+                "task_id": task_id,
+                "run_id": run_id,
+                "started": start,
+                "agent": agent_name,
+            }))
         }
         "start_task" => {
             let task_id = parse_task_id(&args)?;
@@ -245,6 +244,71 @@ async fn call_tool(
     }
 }
 
+/// Which agent a new task binds to: what the assistant asked for, or failing
+/// that, who the user named with `@` in the message being answered.
+///
+/// Two behaviours worth stating, because both used to be absent:
+///
+/// * **An unknown `agent_name` is an error**, not a shrug. It used to resolve
+///   to `NULL`, so a single typo produced an unassigned task while the
+///   assistant cheerfully reported it had assigned one. The error lists the
+///   real names, which is something the model can act on.
+/// * **A single `@mention` binds even when the model forgets to pass it
+///   through.** That is the whole point of resolving the mention at send time:
+///   the user's instruction does not depend on the model relaying it. Two or
+///   more mentions are left to the model, because "which of these two tasks is
+///   whose" is a question only the request can answer — and the prompt block
+///   `mentions::augment_prompt` adds tells it to answer it.
+async fn resolve_agent(
+    state: &AppState,
+    chat_id: Uuid,
+    workspace_id: Uuid,
+    asked: Option<&Value>,
+) -> Result<(Option<Uuid>, Option<String>), String> {
+    if let Some(name) = asked.and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+        // Matched without regard to case, because everything upstream is:
+        // `@frontend` finds the agent called Frontend, and a model echoing the
+        // user's own typing back must not turn a mention that already resolved
+        // into a hard error. `agents_ws_name` is unique per workspace, and two
+        // names differing only in case would be a library nobody could use.
+        let row = sqlx::query(
+            "SELECT id, name FROM agents WHERE workspace_id=$1 AND lower(name)=lower($2)",
+        )
+        .bind(workspace_id)
+        .bind(name)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        return match row {
+            Some(r) => Ok((Some(r.get("id")), Some(r.get("name")))),
+            None => {
+                let known = sqlx::query("SELECT name FROM agents WHERE workspace_id=$1 ORDER BY name")
+                    .bind(workspace_id)
+                    .fetch_all(&state.db.pool)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(if known.is_empty() {
+                    format!("no agent named \"{name}\" — this workspace has no agents yet")
+                } else {
+                    format!("no agent named \"{name}\". The agents here are: {known}")
+                })
+            }
+        };
+    }
+
+    let mentioned = aichip_core::runs::mentions::latest_for_chat(&state.db, chat_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    match mentioned.len() {
+        1 => Ok((Some(mentioned[0].0), Some(mentioned[0].1.clone()))),
+        _ => Ok((None, None)),
+    }
+}
+
 fn parse_task_id(args: &Value) -> Result<Uuid, String> {
     args.get("task_id")
         .and_then(Value::as_str)
@@ -286,5 +350,19 @@ mod tests {
             names,
             ["create_task", "start_task", "list_tasks", "get_task_status", "list_agents"]
         );
+    }
+
+    /// The schema is the only place the model learns these two rules, and both
+    /// are behaviour `resolve_agent` will actually enforce — a description that
+    /// drifts from it is how a model ends up retrying a call that can never
+    /// succeed, or omitting an argument thinking something else will fill it in.
+    #[test]
+    fn create_task_tells_the_model_what_agent_name_does() {
+        let v = tools_list();
+        let described = v["tools"][0]["inputSchema"]["properties"]["agent_name"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(described.contains("unknown name is rejected"));
+        assert!(described.contains("@mention"));
     }
 }

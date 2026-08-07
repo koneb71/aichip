@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { applyMention, formatMention, mentionToken, parseLineSpec } from "./mention";
+import cases from "../../../crates/aichip-core/src/runs/mention_cases.json";
+import {
+  agentMatches,
+  agentMentions,
+  agentSpans,
+  applyAgentMention,
+  applyMention,
+  formatMention,
+  mentionToken,
+  parseLineSpec,
+} from "./mention";
 
 describe("mentionToken", () => {
   it("finds a token at the caret", () => {
@@ -107,5 +117,74 @@ describe("formatMention / applyMention", () => {
   it("carries a line range into the inserted reference", () => {
     const { text } = applyMention("@api", 0, 4, "web/api.ts", { start: 10, end: 25 });
     expect(text).toBe("`web/api.ts:10-25` ");
+  });
+});
+
+/**
+ * The shared specification.
+ *
+ * This corpus and `crates/aichip-core/src/runs/mentions.rs` read the same file,
+ * and that is the only thing keeping two implementations of one rule honest
+ * with each other. The Rust side decides which agent a task binds to; this side
+ * only draws the chip — so a case that passes there and fails here means the
+ * dashboard is claiming a binding that did not happen. Add a case to the
+ * corpus, not to one side.
+ */
+describe("the shared agent-mention corpus", () => {
+  type Case = { why: string; agents: string[]; text: string; expect: string[] };
+  const corpus = cases as Case[];
+
+  it("is worth sharing", () => {
+    expect(corpus.length).toBeGreaterThanOrEqual(20);
+  });
+
+  for (const c of corpus) {
+    it(c.why, () => {
+      expect(agentMentions(c.text, c.agents)).toEqual(c.expect);
+    });
+  }
+});
+
+describe("agentSpans", () => {
+  it("covers the @ and the name, so the bubble can draw a chip", () => {
+    const text = "go @Frontend now";
+    const [span] = agentSpans(text, ["Frontend"]);
+    expect(text.slice(span.start, span.end)).toBe("@Frontend");
+  });
+
+  it("keeps repeats that agentMentions collapses", () => {
+    expect(agentSpans("@A and @A", ["A"])).toHaveLength(2);
+    expect(agentMentions("@A and @A", ["A"])).toEqual(["A"]);
+  });
+
+  it("slices a multi-byte name on a character boundary", () => {
+    const text = "ship @Café now";
+    const [span] = agentSpans(text, ["Café"]);
+    expect(text.slice(span.start, span.end)).toBe("@Café");
+  });
+});
+
+describe("agentMatches", () => {
+  it("finds a multi-word name from a token that cannot contain spaces", () => {
+    expect(agentMatches("airbnbvibe", "Airbnb-Vibe Frontend")).toBe(true);
+    expect(agentMatches("vibefrontend", "Airbnb-Vibe Frontend")).toBe(true);
+    expect(agentMatches("frontend", "Airbnb-Vibe Frontend")).toBe(true);
+  });
+
+  it("shows everything for a bare @", () => {
+    expect(agentMatches("", "Anything")).toBe(true);
+  });
+
+  it("still says no to something that is not in there", () => {
+    expect(agentMatches("backend", "Airbnb-Vibe Frontend")).toBe(false);
+  });
+});
+
+describe("applyAgentMention", () => {
+  it("writes the name bare, not backticked — it is a person, not a path", () => {
+    expect(applyAgentMention("ask @front", 4, 10, "Frontend Reviewer")).toEqual({
+      text: "ask @Frontend Reviewer ",
+      caret: 23,
+    });
   });
 });

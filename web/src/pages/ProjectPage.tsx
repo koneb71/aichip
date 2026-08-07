@@ -110,7 +110,7 @@ export default function ProjectPage() {
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] lg:grid-cols-[380px_minmax(0,1fr)]">
-      {!narrow && <ChatPanel projectId={projectId} />}
+      {!narrow && <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />}
 
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel px-4 py-3 lg:px-6">
@@ -184,7 +184,9 @@ export default function ProjectPage() {
             <FilesPanel projectId={projectId} tasks={tasks} />
           )}
           {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
-          {activeTab === "chat" && <ChatPanel projectId={projectId} />}
+          {activeTab === "chat" && (
+            <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />
+          )}
         </div>
       </div>
 

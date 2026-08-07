@@ -1,0 +1,176 @@
+[
+  {
+    "why": "the ordinary case",
+    "agents": ["Frontend"],
+    "text": "@Frontend build the login page",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "no @ at all",
+    "agents": ["Frontend"],
+    "text": "build the login page",
+    "expect": []
+  },
+  {
+    "why": "an @ inside a word is not a mention -- this is what keeps addresses out",
+    "agents": ["Frontend"],
+    "text": "mail me at dev@Frontend.example",
+    "expect": []
+  },
+  {
+    "why": "and neither is one glued to a bracket, same rule the file picker uses",
+    "agents": ["Frontend"],
+    "text": "ship it (@Frontend)",
+    "expect": []
+  },
+  {
+    "why": "mid-sentence, after a space",
+    "agents": ["Frontend"],
+    "text": "please ask @Frontend to help",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "after a newline",
+    "agents": ["Frontend"],
+    "text": "two things:\n@Frontend the header",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "after a tab",
+    "agents": ["Frontend"],
+    "text": "\t@Frontend the header",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "a name with spaces in it -- the token cannot stop at whitespace",
+    "agents": ["Airbnb-Vibe Frontend"],
+    "text": "@Airbnb-Vibe Frontend build the settings page",
+    "expect": ["Airbnb-Vibe Frontend"]
+  },
+  {
+    "why": "the longest matching name wins, or the shorter one truncates it",
+    "agents": ["Frontend", "Frontend Reviewer"],
+    "text": "@Frontend Reviewer take a look",
+    "expect": ["Frontend Reviewer"]
+  },
+  {
+    "why": "and the shorter one still matches when the longer does not follow",
+    "agents": ["Frontend Reviewer", "Frontend"],
+    "text": "@Frontend go",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "a name must end on a boundary: letters, digits, - and _ continue a word",
+    "agents": ["Front"],
+    "text": "@Frontend go",
+    "expect": []
+  },
+  {
+    "why": "hyphens continue a word too, so a prefix does not steal a longer name",
+    "agents": ["Front"],
+    "text": "@Front-end go",
+    "expect": []
+  },
+  {
+    "why": "a dot does not, so a name ending at one binds -- documented, not accidental",
+    "agents": ["v2"],
+    "text": "@v2.api ship it",
+    "expect": ["v2"]
+  },
+  {
+    "why": "typing is case-insensitive, but the library's own spelling is what binds",
+    "agents": ["Frontend"],
+    "text": "@frontend go",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "trailing punctuation ends the name",
+    "agents": ["Frontend"],
+    "text": "@Frontend, please start",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "so does an apostrophe",
+    "agents": ["Frontend"],
+    "text": "@Frontend's turn",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "two agents, both bound, in the order they appear",
+    "agents": ["Frontend", "Backend"],
+    "text": "@Backend the API and @Frontend the page",
+    "expect": ["Backend", "Frontend"]
+  },
+  {
+    "why": "repeats collapse to one, keeping first appearance",
+    "agents": ["Frontend", "Backend"],
+    "text": "@Backend then @Frontend then @Backend again",
+    "expect": ["Backend", "Frontend"]
+  },
+  {
+    "why": "a name nobody has is not a mention -- it stays literal text",
+    "agents": ["Frontend"],
+    "text": "@Nobody do it",
+    "expect": []
+  },
+  {
+    "why": "an empty library mentions nobody",
+    "agents": [],
+    "text": "@Frontend go",
+    "expect": []
+  },
+  {
+    "why": "a bare @",
+    "agents": ["Frontend"],
+    "text": "@ go",
+    "expect": []
+  },
+  {
+    "why": "a backticked file mention alongside is untouched",
+    "agents": ["Frontend"],
+    "text": "look at `web/src/lib/api.ts:10-25` then @Frontend fix it",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "non-ASCII names match, and case-folding still returns the library spelling",
+    "agents": ["Café"],
+    "text": "@café ship it",
+    "expect": ["Café"]
+  },
+  {
+    "why": "a non-breaking space is whitespace on both sides",
+    "agents": ["Frontend"],
+    "text": "ask @Frontend nicely",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "so is a next-line, which JS's \\s would have missed",
+    "agents": ["Frontend"],
+    "text": "ask@Frontend nicely",
+    "expect": ["Frontend"]
+  },
+  {
+    "why": "a zero-width no-break space is not, which JS's \\s would have counted",
+    "agents": ["Frontend"],
+    "text": "ask﻿@Frontend nicely",
+    "expect": []
+  },
+  {
+    "why": "an astral-plane character before the @ is not whitespace either",
+    "agents": ["Frontend"],
+    "text": "🚀@Frontend go",
+    "expect": []
+  },
+  {
+    "why": "and one inside a name still matches, code point for code point",
+    "agents": ["Ship 🚀 It"],
+    "text": "@Ship 🚀 It now",
+    "expect": ["Ship 🚀 It"]
+  },
+  {
+    "why": "an ampersand ends a word, so a real name containing one binds whole",
+    "agents": ["Review & QA"],
+    "text": "@Review & QA please check",
+    "expect": ["Review & QA"]
+  }
+]

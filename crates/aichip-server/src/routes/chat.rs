@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_core::runs::mentions;
 use aichip_shared::{ModelTier, ReasoningEffort};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -237,14 +238,19 @@ async fn send(
         ));
     }
 
-    // The claim needs the owning project, which only the chat row knows.
-    let project_id: Uuid = sqlx::query("SELECT project_id FROM chats WHERE id=$1")
-        .bind(chat_id)
-        .fetch_optional(&state.db.pool)
-        .await
-        .map_err(internal)?
-        .ok_or((StatusCode::NOT_FOUND, "no such chat".to_string()))?
-        .get("project_id");
+    // The claim needs the owning project, and resolving `@agent` needs the
+    // workspace above it — only the chat row knows either.
+    let owner = sqlx::query(
+        "SELECT p.id AS project_id, p.workspace_id FROM chats c
+         JOIN projects p ON p.id = c.project_id WHERE c.id=$1",
+    )
+    .bind(chat_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such chat".to_string()))?;
+    let project_id: Uuid = owner.get("project_id");
+    let workspace_id: Uuid = owner.get("workspace_id");
 
     let row = sqlx::query(
         "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
@@ -255,6 +261,16 @@ async fn send(
     .await
     .map_err(internal)?;
     let message_id: Uuid = row.get("id");
+
+    // Who the user named with `@`, decided from the agent library rather than
+    // from anything the client sent. The dashboard parses the same text to draw
+    // the chips, but what binds a task is this row.
+    let mentioned = mentions::resolve(&state.db, workspace_id, &body.content)
+        .await
+        .map_err(internal)?;
+    mentions::record(&state.db, message_id, &mentioned)
+        .await
+        .map_err(internal)?;
 
     attachments::claim(
         &state.db,

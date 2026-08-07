@@ -1,30 +1,63 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../lib/api";
-import { applyMention, LineSpec, mentionToken, parseLineSpec } from "../lib/mention";
+import {
+  agentMatches,
+  applyAgentMention,
+  applyMention,
+  LineSpec,
+  mentionToken,
+  parseLineSpec,
+} from "../lib/mention";
 
 interface FileHit {
   path: string;
   name: string;
 }
 
+/** Just enough of an agent to offer it and draw it. */
+export interface AgentHit {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  description: string;
+}
+
+/** Agents shown at once. The list is who you employ, not what you have —
+ *  a handful, and the query narrows it. */
+const AGENT_LIMIT = 6;
+
+/** One offer in the picker. Agents and files share a cursor because they
+ *  share one Enter key. */
+type Row = { kind: "agent"; agent: AgentHit } | { kind: "file"; hit: FileHit };
+
 /** Lines rendered at once. A 20k-line file must not become 20k DOM nodes. */
 const LINE_WINDOW = 300;
 
 /**
- * `@`-mention picker for project files, with an optional line/line-range step.
+ * `@`-mention picker: agents from the library, then project files, with an
+ * optional line/line-range step on a file.
  *
  * Returned as a hook rather than a plain component because the composer has to
  * hand it keystrokes *before* acting on them — otherwise Enter sends the
  * message instead of choosing a file.
+ *
+ * Agents come first because they are the smaller and more deliberate choice: a
+ * file mention is context for the request, an agent mention decides who does
+ * the work.
  */
 export function useMentionPicker({
   projectId,
+  agents,
   text,
   caret,
   onApply,
 }: {
   projectId: string;
+  /** The workspace's agents. Passed in rather than fetched here, so the
+   *  composer and the message bubbles resolve mentions against one list. */
+  agents: AgentHit[];
   text: string;
   caret: number;
   /** Called with the rewritten text and where to put the caret. */
@@ -34,7 +67,7 @@ export function useMentionPicker({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [files, setFiles] = useState<FileHit[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [cursor, setCursor] = useState(0);
+  const [rawCursor, setCursor] = useState(0);
 
   // Line mode: set once a file is chosen with ':' or typed with a suffix.
   const [linePath, setLinePath] = useState<string | null>(null);
@@ -67,6 +100,16 @@ export function useMentionPicker({
     }
   }, [open, token, linePath, reset]);
 
+  // Back to the top whenever the query changes.
+  //
+  // On the token rather than on the search result: the agent rows above the
+  // files are filtered synchronously, so resetting when the *answer* arrived
+  // moved the highlight 180ms after the user had already started arrowing
+  // through them.
+  useEffect(() => {
+    setCursor(0);
+  }, [tokenKey]);
+
   // Debounced file search. `stale` guards a slow response landing last.
   useEffect(() => {
     if (!open || !token || inLineMode) return;
@@ -78,7 +121,6 @@ export function useMentionPicker({
           if (stale) return;
           setFiles(r.files);
           setTruncated(r.truncated);
-          setCursor(0);
         })
         .catch(() => {
           if (!stale) setFiles([]);
@@ -136,6 +178,51 @@ export function useMentionPicker({
     [token, text, caret, onApply, reset],
   );
 
+  const commitAgent = useCallback(
+    (name: string) => {
+      if (!token) return;
+      const { text: next, caret: nextCaret } = applyAgentMention(
+        text,
+        token.start,
+        caret,
+        name,
+      );
+      onApply(next, nextCaret);
+      reset();
+      setDismissed(null);
+    },
+    [token, text, caret, onApply, reset],
+  );
+
+  // Agents are matched here rather than fetched: the library is small and
+  // already in memory, so there is nothing to debounce and no empty frame
+  // between typing and seeing who is available.
+  const agentHits = useMemo(
+    () =>
+      inLineMode || !token
+        ? []
+        : agents.filter((a) => agentMatches(token.query, a.name)).slice(0, AGENT_LIMIT),
+    [agents, token, inLineMode],
+  );
+
+  const rows: Row[] = useMemo(
+    () => [
+      ...agentHits.map((agent) => ({ kind: "agent" as const, agent })),
+      ...files.map((hit) => ({ kind: "file" as const, hit })),
+    ],
+    [agentHits, files],
+  );
+
+  // Keep the highlight inside the list.
+  //
+  // It used to be enough that the only thing that changed `files` also called
+  // `setCursor(0)`. Agents broke that: they are filtered synchronously on every
+  // keystroke while the file search is still 180ms behind, so a list the cursor
+  // was pointing into can shrink under it between renders. An out-of-range
+  // cursor made `handleKey` return false for Enter — and the composer's
+  // fall-through for an unhandled Enter is to *send the message*.
+  const cursor = Math.min(rawCursor, Math.max(0, rows.length - 1));
+
   /**
    * Consume a keystroke. Returns true when the picker handled it, in which
    * case the composer must not also act on it.
@@ -174,26 +261,51 @@ export function useMentionPicker({
       }
 
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (!files.length) return false;
+        if (!rows.length) return false;
         const delta = e.key === "ArrowDown" ? 1 : -1;
-        setCursor((c) => (c + delta + files.length) % files.length);
+        // From the clamped cursor, not the stored one: wrapping a stale index
+        // that is past the end lands somewhere the user was not looking.
+        setCursor((cursor + delta + rows.length) % rows.length);
         return true;
       }
       if (e.key === "Enter") {
-        const hit = files[cursor];
-        if (!hit) return false;
-        commit(hit.path);
+        const row = rows[cursor];
+        // Only reachable with nothing to offer, where letting Enter through to
+        // send the message is the right answer.
+        if (!row) return false;
+        if (row.kind === "agent") commitAgent(row.agent.name);
+        else commit(row.hit.path);
         return true;
       }
-      // ':' on a highlighted row jumps straight to picking lines.
-      if (e.key === ":" && files[cursor]) {
-        e.preventDefault();
-        setLinePath(files[cursor].path);
-        return true;
+      // ':' jumps straight to picking lines. Only a file has lines, so it
+      // takes the highlighted row when that is a file and otherwise the first
+      // one — without the fallback, having any agent match the query put the
+      // cursor on an agent and silently disabled the shortcut.
+      if (e.key === ":") {
+        const row = rows[cursor];
+        const file = row?.kind === "file" ? row.hit : rows.find((r) => r.kind === "file")?.hit;
+        if (file) {
+          e.preventDefault();
+          setLinePath(file.path);
+          return true;
+        }
       }
       return false;
     },
-    [open, inLineMode, lines, lineCursor, anchor, files, cursor, commit, linePath, tokenKey, reset],
+    [
+      open,
+      inLineMode,
+      lines,
+      lineCursor,
+      anchor,
+      rows,
+      cursor,
+      commit,
+      commitAgent,
+      linePath,
+      tokenKey,
+      reset,
+    ],
   );
 
   // Once a file turns out to have no showable lines, insert the bare path.
@@ -223,12 +335,13 @@ export function useMentionPicker({
               onPick={(i) => commit(linePath!, { start: i + 1 })}
             />
           ) : (
-            <FileList
-              files={files}
+            <OfferList
+              rows={rows}
               cursor={cursor}
               truncated={truncated}
               query={token?.query ?? ""}
               onHover={setCursor}
+              onPickAgent={(agent) => commitAgent(agent.name)}
               onPick={(hit) => commit(hit.path)}
               onPickLines={(hit) => setLinePath(hit.path)}
             />
@@ -241,60 +354,95 @@ export function useMentionPicker({
   return { open, handleKey, node };
 }
 
-function FileList({
-  files,
+function OfferList({
+  rows,
   cursor,
   truncated,
   query,
   onHover,
+  onPickAgent,
   onPick,
   onPickLines,
 }: {
-  files: FileHit[];
+  rows: Row[];
   cursor: number;
   truncated: boolean;
   query: string;
   onHover: (i: number) => void;
+  onPickAgent: (agent: AgentHit) => void;
   onPick: (hit: FileHit) => void;
   onPickLines: (hit: FileHit) => void;
 }) {
-  if (!files.length) {
+  if (!rows.length) {
     return (
       <div className="px-2 py-3 text-xs text-ink-dim">
-        {query ? `No files match “${query}”.` : "Type to find a file."}
+        {query ? `Nothing matches “${query}”.` : "Type to find an agent or a file."}
       </div>
     );
   }
+  const agents = rows.filter((r) => r.kind === "agent").length;
   return (
     <>
-      {files.map((hit, i) => (
-        <div
-          key={hit.path}
-          onMouseEnter={() => onHover(i)}
-          className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${
-            i === cursor ? "bg-panel-2" : ""
-          }`}
-        >
-          <button
-            onMouseDown={(e) => {
-              e.preventDefault(); // keep focus in the composer
-              onPick(hit);
-            }}
-            className="flex min-w-0 flex-1 flex-col text-left"
-          >
-            <span className="truncate text-sm">{hit.name}</span>
-            <span className="truncate text-[11px] text-ink-dim">{hit.path}</span>
-          </button>
-          <button
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onPickLines(hit);
-            }}
-            title="Pick specific lines"
-            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-ink-dim hover:bg-panel hover:text-ink"
-          >
-            :lines
-          </button>
+      {rows.map((row, i) => (
+        <div key={row.kind === "agent" ? `a:${row.agent.id}` : `f:${row.hit.path}`}>
+          {/* Headers hang off the first row of each kind rather than being
+              rows themselves — the cursor indexes this list, and a header it
+              could land on would be a dead Enter. */}
+          {i === 0 && row.kind === "agent" && <Heading>Assign to</Heading>}
+          {i === agents && row.kind === "file" && agents > 0 && <Heading>Files</Heading>}
+          {row.kind === "agent" ? (
+            <button
+              onMouseEnter={() => onHover(i)}
+              onMouseDown={(e) => {
+                e.preventDefault(); // keep focus in the composer
+                onPickAgent(row.agent);
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left ${
+                i === cursor ? "bg-panel-2" : ""
+              }`}
+            >
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ background: row.agent.color }}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{row.agent.name}</span>
+                {row.agent.description && (
+                  <span className="block truncate text-[11px] text-ink-dim">
+                    {row.agent.description}
+                  </span>
+                )}
+              </span>
+            </button>
+          ) : (
+            <div
+              onMouseEnter={() => onHover(i)}
+              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${
+                i === cursor ? "bg-panel-2" : ""
+              }`}
+            >
+              <button
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onPick(row.hit);
+                }}
+                className="flex min-w-0 flex-1 flex-col text-left"
+              >
+                <span className="truncate text-sm">{row.hit.name}</span>
+                <span className="truncate text-[11px] text-ink-dim">{row.hit.path}</span>
+              </button>
+              <button
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onPickLines(row.hit);
+                }}
+                title="Pick specific lines"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-ink-dim hover:bg-panel hover:text-ink"
+              >
+                :lines
+              </button>
+            </div>
+          )}
         </div>
       ))}
       {truncated && (
@@ -303,6 +451,14 @@ function FileList({
         </div>
       )}
     </>
+  );
+}
+
+function Heading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+      {children}
+    </div>
   );
 }
 

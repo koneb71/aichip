@@ -43,6 +43,10 @@ export function NewTaskModal({
   const [caret, setCaret] = useState(0);
   const mention = useMentionPicker({
     projectId: project.id,
+    // Files only. This form already has a picker for who does the work, and an
+    // `@agent` typed into the prompt here would bind nothing — it would just be
+    // a sentence the coding agent reads about itself.
+    agents: [],
     text: prompt,
     caret,
     onApply: (text, nextCaret) => {
