@@ -296,6 +296,31 @@ export interface UsagePattern {
   timesBlocked: number;
 }
 
+/**
+ * The pull request a card was finished as, as aichip last saw it.
+ *
+ * Every field but `number` and `url` is a cache of what `gh` reported, which
+ * is why `syncedAt` is here: "checks are passing" and "checks were passing an
+ * hour ago" are different claims, and only one of them is ours to make.
+ */
+export interface TaskPullRequest {
+  number: number;
+  url: string | null;
+  state: "open" | "draft" | "merged" | "closed" | null;
+  /** `none` means the repository runs no checks — not that they passed. */
+  checks: "none" | "pending" | "passing" | "failing" | null;
+  review: "approved" | "changes_requested" | "review_required" | null;
+  syncedAt: string | null;
+}
+
+/** What the drawer needs to render the pull request row, refusal included. */
+export interface PullRequestState {
+  pr: TaskPullRequest | null;
+  canOpen: boolean;
+  /** Why not, in a sentence — shown rather than thrown. */
+  refusal: string | null;
+}
+
 /** A GitHub device flow waiting for the person to finish it. */
 export interface GitHubConnect {
   id: string;
@@ -1287,6 +1312,16 @@ export const api = {
     ),
   cancelGitHubConnect: (id: string) =>
     fetch(`/api/github/connect/${id}`, { method: "DELETE" }),
+  pullRequest: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/pull-request`).then((r) => json<PullRequestState>(r)),
+  openPullRequest: (taskId: string, force = false) =>
+    post(`/api/tasks/${taskId}/pull-request`, { force }).then((r) =>
+      json<{ pr: TaskPullRequest }>(r),
+    ),
+  refreshPullRequest: (taskId: string) =>
+    post(`/api/tasks/${taskId}/pull-request/refresh`).then((r) =>
+      json<{ pr: TaskPullRequest }>(r),
+    ),
   usage: () =>
     fetch("/api/usage").then((r) =>
       json<{ limits: PlanLimit[]; worst: string | null }>(r),

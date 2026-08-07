@@ -19,6 +19,7 @@ import { EnginePicker, useEngines } from "../lib/engines";
 import { PreviewPanel } from "./PreviewPanel";
 import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
+import { PullRequestPanel } from "./PullRequestPanel";
 
 export function TaskDrawer({
   onOpenPreviews,
@@ -495,6 +496,14 @@ export function TaskDrawer({
           {busy === "delete" ? "Deleting…" : "Delete"}
         </button>
       </div>
+
+      {/* Below the row rather than in it: the status line wants the full
+          width, and a card keeps its pull request after it leaves review. */}
+      {(task.boardColumn === "review" || task.boardColumn === "done") && (
+        <div className="border-b border-line px-5 py-2">
+          <PullRequestPanel taskId={task.id} />
+        </div>
+      )}
 
       {error && (
         <div className="border-b border-line bg-red-50 px-5 py-2 text-xs text-danger">

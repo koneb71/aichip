@@ -12,6 +12,7 @@
 //! file. Same rule as `Engine::detect`, same reason.
 
 pub mod connect;
+pub mod pr;
 
 use serde::Deserialize;
 use std::path::Path;
