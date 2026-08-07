@@ -5,7 +5,7 @@
 //! container on one loopback port, so the question can be answered by looking.
 //!
 //! Deliberately *not* a deployment feature. It manages no standing
-//! environments and assigns no hostnames; a preview exists because you are
+//! environments assigned no hostnames until slice 2 gave them one; a preview exists because you are
 //! looking at a card right now.
 //!
 //! It does outlive an aichip restart, but only as far as the container itself
@@ -73,8 +73,9 @@ pub struct Preview {
 /// Each one is capped at 2 GB and 2 CPUs, so this is the number that decides
 /// whether a laptop keeps working while you review a column of cards. Three is
 /// deliberately low — the failure it prevents is not "a preview is slow", it is
-/// "the machine running your editor stops responding". Slice 4 makes it a
-/// setting; until then a wrong constant is much cheaper than no constant.
+/// "the machine running your editor stops responding". This is the default;
+/// `limits()` reads a workspace override from `settings.preview_limits`, so a
+/// machine with room to spare can say so.
 pub const MAX_LIVE: i64 = 3;
 
 /// The hostname suffix previews answer on. Duplicated nowhere: the server's
@@ -479,7 +480,11 @@ pub async fn list_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<Vec<V
            FROM previews p
            LEFT JOIN tasks t ON t.id = p.task_id
           WHERE p.project_id = $1
-            AND p.status IN ('building','running','idle','failed')
+            -- 'stopped' included. Leaving it out meant a preview you stopped
+            -- from this very tab vanished off it, and could only be started
+            -- again from the card drawer — a row that disappears when you use
+            -- the button on it reads as a delete.
+            AND p.status IN ('building','running','idle','failed','stopped')
           -- One row per target, newest first. Without the DISTINCT a card that
           -- failed and was then rebuilt appears twice — two rows with the same
           -- name and different states, which reads as a bug in the thing being

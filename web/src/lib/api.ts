@@ -294,7 +294,7 @@ export interface ProjectPreview {
   taskId: string | null;
   /** The card's title, or "main". */
   title: string;
-  status: "building" | "running" | "idle" | "failed";
+  status: "building" | "running" | "idle" | "stopped" | "failed";
   url: string | null;
   hostPort: number | null;
   containerPort: number | null;

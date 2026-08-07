@@ -110,10 +110,12 @@ async fn call_tool(
     let (project_id, workspace_id) = chat_project(state, chat_id).await?;
     match name {
         "create_task" => {
-            let title = args
-                .get("title")
-                .and_then(Value::as_str)
-                .ok_or("title is required")?;
+            let title = unescape_html(
+                args.get("title")
+                    .and_then(Value::as_str)
+                    .ok_or("title is required")?,
+            );
+            let title = title.as_str();
             let prompt = args
                 .get("prompt")
                 .and_then(Value::as_str)
@@ -309,6 +311,30 @@ async fn resolve_agent(
     }
 }
 
+/// Undo HTML escaping a model applied to a plain-text field.
+///
+/// Not hypothetical: `Snakes &amp; Ladders board game app` is in this
+/// database, from an assistant that escaped its own title on the way into
+/// `create_task`. Nothing downstream renders a card title as HTML — the board,
+/// the drawer and the commit message all treat it as text — so the escape has
+/// no reader and shows up verbatim in every one of them, including the git
+/// history a merge writes.
+///
+/// The five XML entities only, and applied once. A title that genuinely
+/// contains `&amp;` is a title about HTML, which is rarer than a title about
+/// something and someone else.
+fn unescape_html(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        // Last, or `&amp;lt;` would decode two steps into `<`.
+        .replace("&amp;", "&")
+}
+
 fn parse_task_id(args: &Value) -> Result<Uuid, String> {
     args.get("task_id")
         .and_then(Value::as_str)
@@ -356,6 +382,21 @@ mod tests {
     /// are behaviour `resolve_agent` will actually enforce — a description that
     /// drifts from it is how a model ends up retrying a call that can never
     /// succeed, or omitting an argument thinking something else will fill it in.
+    #[test]
+    fn a_title_the_model_escaped_is_stored_as_the_words_it_meant() {
+        // `Snakes &amp; Ladders board game app` is really in the database.
+        assert_eq!(
+            super::unescape_html("Snakes &amp; Ladders board game app"),
+            "Snakes & Ladders board game app"
+        );
+        assert_eq!(super::unescape_html("Fix &lt;head&gt; ordering"), "Fix <head> ordering");
+        // Applied once: `&amp;` is decoded last, so this stays as the text it
+        // was rather than decoding twice into `<`.
+        assert_eq!(super::unescape_html("&amp;lt;"), "&lt;");
+        // Untouched when there is nothing to undo.
+        assert_eq!(super::unescape_html("Add a README"), "Add a README");
+    }
+
     #[test]
     fn create_task_tells_the_model_what_agent_name_does() {
         let v = tools_list();

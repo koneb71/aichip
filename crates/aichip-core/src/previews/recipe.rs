@@ -6,8 +6,9 @@
 //! worse than no preview.
 //!
 //! Deliberately narrow. Slice 1 handles exactly one shape: a `Dockerfile` at
-//! the root of the branch. Compose is not here, and its absence is a decision
-//! rather than an omission — compose brings multi-service graphs, named
+//! the root of the branch. Compose is handled by `compose.rs` instead, and
+//! `start` prefers it when a branch has both — this module's narrowness was
+//! deliberate rather than an omission, because compose brings multi-service graphs, named
 //! volumes and user-defined networks, and those are what turn "preview one
 //! card" into "quietly exhaust the machine your other projects run on".
 

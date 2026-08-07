@@ -47,6 +47,19 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
     api.dockerStatus().then(setDocker).catch(() => {});
   }, [refresh]);
 
+  // Keep asking while Docker is unusable. It is probed live rather than cached
+  // precisely because someone starts it in another window — and asking once
+  // meant the whole panel stayed a dead end until the tab was remounted, which
+  // is the one moment they most want it to notice.
+  const dockerBroken = docker != null && !docker.usable;
+  useEffect(() => {
+    if (!dockerBroken) return;
+    const t = setInterval(() => {
+      api.dockerStatus().then(setDocker).catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [dockerBroken]);
+
   // Only while something is mid-build. A settled list has nothing left to say,
   // and this page is not where a running container reports to.
   const building = rows.some((r) => r.status === "building");
@@ -91,8 +104,11 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
             than read its diff. They run on this machine and on loopback only.
           </p>
         </div>
-        <span className="text-xs text-ink-dim">
-          {live} of {maxLive} running · {size(disk)} of images
+        {/* "of {maxLive}" is a workspace-wide budget, and saying so stops the
+            number reading as a per-project one that another project can
+            silently eat. */}
+        <span className="text-xs text-ink-dim" title="Across every project, not just this one">
+          {live} of {maxLive} running everywhere · {size(disk)} of images
           {reclaimable > 0 && (
             <>
               {" · "}
@@ -151,7 +167,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                     Open
                   </a>
                 )}
-                {(r.status === "idle" || r.status === "failed") && (
+                {(r.status === "idle" || r.status === "failed" || r.status === "stopped") && (
                   <button
                     onClick={() =>
                       act(r.id, () =>
@@ -163,10 +179,10 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                     disabled={busy === r.id}
                     className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
                   >
-                    {r.canWake ? "Wake" : "Try again"}
+                    {r.status === "stopped" ? "Start" : r.canWake ? "Wake" : "Try again"}
                   </button>
                 )}
-                {r.status !== "failed" && (
+                {r.status !== "failed" && r.status !== "stopped" && (
                   <button
                     onClick={() =>
                       act(r.id, () =>
@@ -277,6 +293,9 @@ function detail(r: ProjectPreview): React.ReactNode {
     return r.canWake
       ? "Stopped while nobody was looking. Its image is here, so waking takes seconds."
       : "Stopped. Its image is gone, so this rebuilds from scratch.";
+  // Told apart from idle on purpose: one of these you did, the other happened
+  // to you, and only the second is worth explaining.
+  if (r.status === "stopped") return "You stopped this. Start it again whenever.";
   return (
     <span className="flex flex-wrap items-baseline gap-2">
       <span className="font-mono">{r.slug}.preview.localhost</span>
