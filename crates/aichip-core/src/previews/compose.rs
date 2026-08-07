@@ -53,14 +53,18 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// The final compose file: no declared bindings, plus one loopback
-    /// publication of the service we chose.
+    /// The final compose file: no declared bindings, one loopback publication
+    /// of the service we chose, and every image this stack *builds* under a
+    /// name of aichip's own.
     ///
     /// The binding is written into the file rather than passed as a flag
     /// because `docker compose up` has no `--publish`. That is also why the
-    /// port has to be chosen before the file is written.
-    pub fn render(&self, host_port: u16) -> String {
+    /// port has to be chosen before the file is written — and it is why the
+    /// image names go here too: `docker compose up --build` has no `--label`
+    /// either, so the file is the only place to say either thing.
+    pub fn render(&self, preview_id: &uuid::Uuid, host_port: u16) -> String {
         let mut doc = self.doc.clone();
+        namespace_built_images(&mut doc, preview_id);
         if let Some(spec) = doc
             .get_mut("services")
             .and_then(Value::as_mapping_mut)
@@ -82,6 +86,91 @@ impl Plan {
     pub fn stripped(&self) -> String {
         serde_yaml::to_string(&self.doc).unwrap_or_default()
     }
+}
+
+/// Give every image this stack builds a name that is unmistakably aichip's.
+///
+/// The third thing that makes a stack preview safe, and the one that was
+/// missing. Networks, volumes and container names are all namespaced by
+/// compose's own project prefix; images are not, because their names come from
+/// the file. So a preview of a project whose compose file says
+/// `image: win11-frontend:latest` *built over* the image the user's own
+/// `docker compose up` uses — and, worse, was invisible afterwards:
+/// `image_disk_bytes` filters on aichip's label, compose applies no label, and
+/// the disk figure read `0 B` while gigabytes sat there. Reclaiming by that tag
+/// would have taken the user's image with it.
+///
+/// Under its own name neither can happen. The label goes on as well, so the
+/// existing accounting works unchanged.
+///
+/// **Only services that build.** A service with `image:` and no `build:` is a
+/// pulled base image — postgres, redis, nginx — shared with everything else on
+/// the machine that uses it. Renaming would force a redundant pull; removing it
+/// later would be spending somebody else's disk.
+///
+/// The cost is a full first build per preview instead of reusing the user's
+/// image by tag. Layer cache still applies, and it is the same trade already
+/// made for volumes.
+fn namespace_built_images(doc: &mut Value, preview_id: &uuid::Uuid) {
+    let prefix = super::recipe::container_name(preview_id);
+    let Some(services) = doc.get_mut("services").and_then(Value::as_mapping_mut) else {
+        return;
+    };
+    for (name, spec) in services.iter_mut() {
+        let Some(name) = name.as_str().map(str::to_string) else { continue };
+        let Some(map) = spec.as_mapping_mut() else { continue };
+        if !map.contains_key(Value::String("build".into())) {
+            continue;
+        }
+        map.insert(
+            Value::String("image".into()),
+            Value::String(format!("{prefix}-{}", slug(&name))),
+        );
+        label_build(map);
+    }
+}
+
+/// Add aichip's label to a `build:` section, whichever of its two shapes it is.
+///
+/// `build: .` is shorthand for `build: { context: . }`, and a label cannot be
+/// attached to the short form — so it is expanded first.
+fn label_build(service: &mut serde_yaml::Mapping) {
+    let key = Value::String("build".into());
+    let build = service.get_mut(&key);
+    let expanded = match build {
+        Some(Value::String(context)) => {
+            let mut m = serde_yaml::Mapping::new();
+            m.insert(Value::String("context".into()), Value::String(context.clone()));
+            Some(m)
+        }
+        _ => None,
+    };
+    if let Some(m) = expanded {
+        service.insert(key.clone(), Value::Mapping(m));
+    }
+    let Some(map) = service.get_mut(&key).and_then(Value::as_mapping_mut) else {
+        return;
+    };
+    let mut labels = serde_yaml::Mapping::new();
+    labels.insert(
+        Value::String(super::docker::OWNER_LABEL.into()),
+        Value::String("1".into()),
+    );
+    // Replaced rather than merged: the only label aichip cares about is its
+    // own, and a file that already set it was set by a previous render.
+    map.insert(Value::String("labels".into()), Value::Mapping(labels));
+}
+
+/// A service name that is safe in an image tag: lower-case, and nothing outside
+/// what Docker accepts in a repository name.
+fn slug(name: &str) -> String {
+    let cleaned: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let trimmed = cleaned.trim_matches('-').to_string();
+    if trimmed.is_empty() { "service".into() } else { trimmed }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,6 +312,9 @@ fn parse_port(text: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    /// A fixed id, so the expected image names in these tests are readable.
+    const ID: uuid::Uuid = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
+
     use super::*;
 
     /// The user's own `windows11`, trimmed — the file this has to get right.
@@ -277,9 +369,95 @@ services:
     }
 
     #[test]
+    fn every_image_the_stack_builds_gets_a_name_of_our_own() {
+        // The bug this pins, measured rather than imagined: the user's own
+        // compose file says `image: win11-frontend:latest`, aichip built over
+        // that tag, and the preview panel then reported `0 B of images` while
+        // gigabytes sat there — `image_disk_bytes` filters on aichip's label
+        // and compose applies none. Reclaiming by that tag would have taken
+        // the image their own `docker compose up` uses.
+        let out = plan(REAL).unwrap().render(&ID, 54321);
+        let doc: Value = serde_yaml::from_str(&out).unwrap();
+        let services = doc.get("services").unwrap().as_mapping().unwrap();
+
+        for name in ["backend", "frontend"] {
+            let spec = services.get(Value::String(name.into())).unwrap();
+            let image = spec.get(Value::String("image".into())).unwrap().as_str().unwrap();
+            assert_eq!(image, format!("aichip-preview-123456789abc-{name}"), "{out}");
+            // And the label, so the existing accounting works unchanged.
+            let labels = spec
+                .get(Value::String("build".into()))
+                .and_then(|b| b.get(Value::String("labels".into())))
+                .unwrap_or_else(|| panic!("no build labels on {name}: {out}"));
+            assert_eq!(
+                labels.get(Value::String(super::super::docker::OWNER_LABEL.into())),
+                Some(&Value::String("1".into())),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pulled_image_is_left_exactly_as_it_was() {
+        // postgres is shared with everything else on the machine that uses it.
+        // Renaming would force a redundant pull; removing it later would be
+        // spending somebody else's disk.
+        let text = r#"
+services:
+  db:
+    image: postgres:16
+    ports: ["5432:5432"]
+  web:
+    build: .
+    ports: ["3000:3000"]
+"#;
+        let out = plan(text).unwrap().render(&ID, 5000);
+        let doc: Value = serde_yaml::from_str(&out).unwrap();
+        let services = doc.get("services").unwrap().as_mapping().unwrap();
+
+        let db = services.get(Value::String("db".into())).unwrap();
+        assert_eq!(
+            db.get(Value::String("image".into())).unwrap().as_str(),
+            Some("postgres:16"),
+        );
+        assert!(db.get(Value::String("build".into())).is_none(), "{out}");
+
+        // …while the one that builds is renamed, and its shorthand `build: .`
+        // is expanded so a label can be attached to it at all.
+        let web = services.get(Value::String("web".into())).unwrap();
+        assert_eq!(
+            web.get(Value::String("image".into())).unwrap().as_str(),
+            Some("aichip-preview-123456789abc-web"),
+        );
+        assert_eq!(
+            web.get(Value::String("build".into()))
+                .and_then(|b| b.get(Value::String("context".into())))
+                .and_then(Value::as_str),
+            Some("."),
+            "the shorthand has to survive expansion: {out}"
+        );
+    }
+
+    #[test]
+    fn a_service_that_both_builds_and_names_an_image_takes_our_name() {
+        // The shape the user's own file has, and the one that used to collide.
+        let text = "services:\n  api:\n    build: ./api\n    image: my-api:local\n";
+        let out = plan(text).unwrap().render(&ID, 5000);
+        assert!(out.contains("aichip-preview-123456789abc-api"), "{out}");
+        assert!(!out.contains("my-api:local"), "the colliding tag must be gone: {out}");
+    }
+
+    #[test]
+    fn a_service_name_that_is_not_a_legal_tag_is_made_into_one() {
+        let text = "services:\n  \"Web UI\":\n    build: .\n";
+        let out = plan(text).unwrap().render(&ID, 5000);
+        assert!(out.contains("aichip-preview-123456789abc-web-ui"), "{out}");
+    }
+
+    #[test]
     fn renders_exactly_one_loopback_binding_back() {
         let p = plan(REAL).unwrap();
-        let out = p.render(54321);
+        let out = p.render(&ID, 54321);
         // One binding, on loopback, for the service we chose.
         assert!(out.contains("127.0.0.1:54321:80"), "{out}");
         assert_eq!(out.matches("127.0.0.1:").count(), 1, "{out}");

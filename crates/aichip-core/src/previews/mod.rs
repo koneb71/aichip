@@ -957,7 +957,15 @@ pub async fn reclaim_disk(db: &Db) -> anyhow::Result<u64> {
     .fetch_all(&db.pool)
     .await?;
     for id in &ids {
+        // The single-Dockerfile image…
         docker::remove_image(&recipe::image_tag(id)).await;
+        // …and every image a *stack* built, which until images were namespaced
+        // this could not name and so never removed. That is why the disk figure
+        // read 0 B: the images it could see were the only ones it could delete,
+        // and compose built neither.
+        for tag in docker::images_for(&recipe::container_name(id)).await {
+            docker::remove_image(&tag).await;
+        }
     }
     Ok(ids.len() as u64)
 }
@@ -979,7 +987,7 @@ async fn build_and_run(
     // its own services, so there is no single image and no `docker run`.
     if let How::Stack(plan, project_dir) = &build {
         let host_port = free_port().map_err(|e| format!("no free port: {e}"))?;
-        let rendered = compose_file_for(id, &plan.render(host_port))
+        let rendered = compose_file_for(id, &plan.render(&id, host_port))
             .await
             .map_err(|e| format!("could not write the compose file: {e}"))?;
         // Recorded *before* the stack comes up, not after. A stack that fails
@@ -1185,6 +1193,18 @@ async fn stop_which(db: &Db, which: Which) -> anyhow::Result<bool> {
     } else {
         docker::remove_image(&recipe::image_tag(&id)).await;
     }
+    // A stack has no single image either — it has one per service, and neither
+    // branch above names any of them. So stopping a stack set `image_kept =
+    // FALSE`, which is what `disk()` counts and `reclaim_disk()` selects on,
+    // while the images stayed on disk: the row said they were gone, so nothing
+    // ever looked for them again. `compose down` does not take images.
+    //
+    // Only reachable now that they are namespaced — before, the images were
+    // called whatever the user's compose file called them, and there was no
+    // safe way to name them here at all.
+    for tag in docker::images_for(&recipe::container_name(&id)).await {
+        docker::remove_image(&tag).await;
+    }
     Ok(true)
 }
 
@@ -1255,6 +1275,10 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
     for id in &dead {
         docker::remove(&recipe::container_name(id)).await;
         docker::remove_image(&recipe::image_tag(id)).await;
+        // A stack builds one image per service, all under the same prefix.
+        for tag in docker::images_for(&recipe::container_name(id)).await {
+            docker::remove_image(&tag).await;
+        }
     }
 
     let settled = if dead.is_empty() {
@@ -1280,6 +1304,12 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
             // compose rejects — so the stack survived every sweep.
             docker::compose_down_project(&name).await;
             let _ = tokio::fs::remove_file(compose_path_for_name(&name)).await;
+            // `compose down` takes containers, networks and volumes; images it
+            // built are left. They share the project's name, which is exactly
+            // what makes them findable now that they are namespaced.
+            for tag in docker::images_for(&name).await {
+                docker::remove_image(&tag).await;
+            }
         }
     }
 
@@ -1297,8 +1327,44 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
             swept += 1;
         }
     }
-    if settled > 0 || swept > 0 {
-        tracing::info!(settled, swept, "previews reconciled with docker at boot");
+    // Images belonging to no preview that could still be woken.
+    //
+    // The three sweeps above are keyed on containers and stacks; an image
+    // outlives both. A stopped stack is the case that made this necessary — its
+    // row says `image_kept = FALSE`, so `disk()` counts nothing and
+    // `reclaim_disk()` selects nothing, while the images sit there. Anything
+    // whose id is not a preview that can still be woken is unreachable by
+    // definition: nothing will ever name it again.
+    //
+    // Safe only because the names are aichip's own. Before they were
+    // namespaced, this sweep would have been deleting images called whatever
+    // the user's compose file called them.
+    let wakeable: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM previews WHERE status IN ('building','running','idle')",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    let keep: std::collections::HashSet<String> =
+        wakeable.iter().map(recipe::container_name).collect();
+    let mut images = 0usize;
+    for tag in docker::images_for("aichip-preview-").await {
+        // `aichip-preview-<short>-<service>:tag` — the prefix up to the last
+        // dash before the tag is the preview it belongs to.
+        let named = tag.split(':').next().unwrap_or(&tag);
+        let owner = match named.rsplit_once('-') {
+            Some((owner, _service)) => owner.to_string(),
+            None => named.to_string(),
+        };
+        if keep.contains(&owner) || keep.contains(named) {
+            continue;
+        }
+        docker::remove_image(&tag).await;
+        images += 1;
+    }
+
+    if settled > 0 || swept > 0 || images > 0 {
+        tracing::info!(settled, swept, images, "previews reconciled with docker at boot");
     }
     Ok((settled, swept))
 }

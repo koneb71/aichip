@@ -331,6 +331,30 @@ fn parse_size(text: &str) -> Option<u64> {
 }
 
 /// Remove a built image once nothing points at it. Ignores "still in use".
+/// Every image aichip built for one preview, by its own tag prefix.
+///
+/// A stack builds one image per service, so a preview's images are
+/// `aichip-preview-<short>-web`, `-api`, and so on. Found by prefix rather than
+/// by label because the prefix is the thing that *guarantees* they are ours —
+/// see `compose::namespace_built_images`. The label is on them too, but a label
+/// is a claim about an image and the name is the image.
+pub async fn images_for(prefix: &str) -> Vec<String> {
+    Command::new(DOCKER)
+        .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+        .output()
+        .await
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with(prefix))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub async fn remove_image(tag: &str) {
     let _ = Command::new(DOCKER).args(["rmi", "--force", tag]).output().await;
 }
