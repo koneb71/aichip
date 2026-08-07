@@ -1,6 +1,7 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_core::worktrees::manager::{self, ensure_repo_state, Vcs};
+use aichip_shared::{ReasoningEffort, TierChoice};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -13,7 +14,7 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
-        .route("/projects/{id}", get(one).patch(update))
+        .route("/projects/{id}", get(one).patch(update).delete(unload))
         .route("/projects/{id}/worktrees", get(worktrees))
         .route("/projects/{id}/worktrees/reclaim", post(reclaim_worktrees))
         .route("/projects/{id}/checkout", get(checkout))
@@ -21,8 +22,8 @@ pub fn router() -> Router<AppState> {
         .route("/projects/{id}/checkout/commit", post(commit_checkout))
 }
 
-const PROJECT_COLUMNS: &str =
-    "id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in, kind, github_repo";
+const PROJECT_COLUMNS: &str = "id, path, name, default_branch, workspace_id, vcs, vcs_note, \
+     full_auto_opt_in, kind, github_repo, default_engine, default_tier, default_effort";
 
 fn project_json(r: &sqlx::postgres::PgRow) -> Value {
     json!({
@@ -39,6 +40,11 @@ fn project_json(r: &sqlx::postgres::PgRow) -> Value {
         // GitHub feature has asked. Absent means "not asked yet", never "not a
         // GitHub project".
         "githubRepo": r.get::<Option<String>, _>("github_repo"),
+        // Null means inherit, everywhere. A project that pins nothing behaves
+        // exactly as it did before these existed.
+        "defaultEngine": r.get::<Option<String>, _>("default_engine"),
+        "defaultTier": r.get::<Option<String>, _>("default_tier"),
+        "defaultEffort": r.get::<Option<String>, _>("default_effort"),
     })
 }
 
@@ -72,6 +78,74 @@ async fn one(
         }
     }
     Ok(Json(body))
+}
+
+/// Take a project out of aichip. Its folder stays exactly where it is.
+///
+/// "Remove" next to a filesystem path reads as "delete my code", so this is
+/// called unload everywhere it is offered and the confirm says outright that
+/// nothing on disk is touched. What goes is aichip's own record — the cards,
+/// their runs and comments, the chats — plus the worktrees and `aichip/*`
+/// branches aichip created, which is the one thing it *would* leave behind.
+///
+/// Until this existed, the only way to remove a project was to delete its whole
+/// workspace, which has no UI either. Load the wrong folder once and it was in
+/// the sidebar forever.
+async fn unload(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    // Same shape as deleting a card: a live agent owns its worktree, and
+    // pulling the project row out from under a running process leaves it
+    // writing into a directory nothing will ever look at.
+    let live: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM runs r JOIN tasks t ON t.id = r.task_id
+             WHERE t.project_id = $1 AND r.status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if live {
+        return Err((
+            StatusCode::CONFLICT,
+            "an agent is still working in this project — cancel its run first".into(),
+        ));
+    }
+
+    // Before the row goes: afterwards nothing knows the repository's path, and
+    // a worktree whose repo cannot be named can never be removed by git again.
+    // Best-effort, and the unload proceeds either way — a folder left behind is
+    // recoverable, a project you cannot remove is not.
+    if let Ok(held) = held_for(&state, id).await {
+        let (path, _) = git_project(&state, id).await?;
+        let repo = std::path::PathBuf::from(&path);
+        for h in &held {
+            let wt = aichip_core::worktrees::manager::Worktree {
+                path: h.path.clone(),
+                branch: h.branch.clone(),
+            };
+            if let Err(e) = state.orchestrator.worktrees.remove(&repo, &wt).await {
+                tracing::warn!(branch = %h.branch, error = %e, "could not remove worktree while unloading");
+            }
+        }
+    }
+
+    // Containers outlive rows too.
+    if let Err(e) = aichip_core::previews::stop_for_project(&state.db, id).await {
+        tracing::warn!(project = %id, error = %e, "could not stop previews while unloading");
+    }
+
+    let done = sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    if done.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "no such project".into()));
+    }
+    Ok(Json(json!({ "unloaded": true })))
 }
 
 /// What this project's finished cards are still holding on disk.
@@ -421,6 +495,29 @@ struct UpdateProject {
     /// two clones of the same repository are both called `cli`, and only the
     /// person looking at them knows which is which.
     name: Option<String>,
+    /// What new cards here start on. `Some(None)` clears the pin and goes back
+    /// to inheriting; the field being absent leaves it alone. Typed so a client
+    /// that invents a tier is a 422 rather than a row the orchestrator has to
+    /// shrug at when a run actually starts.
+    #[serde(default, deserialize_with = "double_option")]
+    default_engine: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    default_tier: Option<Option<TierChoice>>,
+    #[serde(default, deserialize_with = "double_option")]
+    default_effort: Option<Option<ReasoningEffort>>,
+}
+
+/// Tell "absent" apart from "explicitly null".
+///
+/// `COALESCE` cannot express "clear this", and without the distinction there is
+/// no way to un-pin a project once pinned — the same shape `chats` needed for
+/// its own inheritable settings.
+fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
 }
 
 async fn update(
@@ -465,11 +562,16 @@ async fn update(
     // and puts it straight into state. So one click on the autonomy toggle made
     // the GitHub chip and the Import-issues button disappear until a reload,
     // because the fields behind them came back absent rather than unchanged.
+    // `$n IS NOT DISTINCT FROM` would be neater but cannot express "leave it";
+    // the paired boolean is what carries absent-versus-null through to SQL.
     let row = sqlx::query(&format!(
         "UPDATE projects
             SET full_auto_opt_in = COALESCE($2, full_auto_opt_in),
                 default_branch   = COALESCE($3, default_branch),
-                name             = COALESCE($4, name)
+                name             = COALESCE($4, name),
+                default_engine   = CASE WHEN $5 THEN $6  ELSE default_engine END,
+                default_tier     = CASE WHEN $7 THEN $8  ELSE default_tier   END,
+                default_effort   = CASE WHEN $9 THEN $10 ELSE default_effort END
           WHERE id = $1
       RETURNING {PROJECT_COLUMNS}"
     ))
@@ -477,6 +579,12 @@ async fn update(
     .bind(body.full_auto_opt_in)
     .bind(body.default_branch.as_deref())
     .bind(name.as_deref())
+    .bind(body.default_engine.is_some())
+    .bind(body.default_engine.clone().flatten())
+    .bind(body.default_tier.is_some())
+    .bind(body.default_tier.flatten().map(|t| t.as_str().to_string()))
+    .bind(body.default_effort.is_some())
+    .bind(body.default_effort.flatten().map(|e| e.as_str().to_string()))
     .fetch_optional(&state.db.pool)
     .await
     .map_err(internal)?

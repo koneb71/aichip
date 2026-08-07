@@ -1101,6 +1101,37 @@ pub async fn stop_base(db: &Db, project_id: Uuid) -> anyhow::Result<bool> {
     stop_which(db, Which::Base(project_id)).await
 }
 
+/// Stop everything this project is running — its base preview and every
+/// card's.
+///
+/// For unloading a project: the rows cascade away with it, and a container
+/// whose row is gone is one `reconcile` will only meet at the next boot, still
+/// holding its port in the meantime.
+pub async fn stop_for_project(db: &Db, project_id: Uuid) -> anyhow::Result<usize> {
+    let tasks: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT task_id FROM previews
+          WHERE project_id = $1 AND task_id IS NOT NULL
+            AND status IN ('building','running','idle')",
+    )
+    .bind(project_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut stopped = 0;
+    for task_id in tasks {
+        // One failure must not leave the rest running.
+        match stop(db, task_id).await {
+            Ok(true) => stopped += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!(%task_id, error = %e, "could not stop a card preview"),
+        }
+    }
+    if stop_base(db, project_id).await.unwrap_or(false) {
+        stopped += 1;
+    }
+    Ok(stopped)
+}
+
 async fn stop_which(db: &Db, which: Which) -> anyhow::Result<bool> {
     let row = match which {
         Which::Card(task_id) => sqlx::query(

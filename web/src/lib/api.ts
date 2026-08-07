@@ -59,6 +59,10 @@ export interface Project {
   vcsNote: string | null;
   /** Agents may work here without stopping to ask. Requires a git project. */
   fullAutoOptIn: boolean;
+  /** Null everywhere means inherit — the machine default, or the card's own. */
+  defaultEngine?: string | null;
+  defaultTier?: TierChoice | null;
+  defaultEffort?: Effort | null;
   /**
    * `owner/repo`, once some GitHub feature has resolved it from `origin`.
    *
@@ -1243,8 +1247,21 @@ export const api = {
     ),
   updateProject: (
     projectId: string,
-    body: { name?: string; default_branch?: string; full_auto_opt_in?: boolean },
+    /** A field left out is left alone; an explicit `null` clears the pin. */
+    body: {
+      name?: string;
+      default_branch?: string;
+      full_auto_opt_in?: boolean;
+      default_engine?: string | null;
+      default_tier?: TierChoice | null;
+      default_effort?: Effort | null;
+    },
   ) => patch(`/api/projects/${projectId}`, body).then((r) => json<Project>(r)),
+  /** Take a project out of aichip. Its folder is not touched. */
+  unloadProject: (projectId: string) =>
+    fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
+      json<{ unloaded: boolean }>(r),
+    ),
   /** What this project's finished cards are still holding on disk. */
   worktrees: (projectId: string) =>
     fetch(`/api/projects/${projectId}/worktrees`).then((r) => json<WorktreeHeld>(r)),

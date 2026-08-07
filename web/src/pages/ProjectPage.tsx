@@ -13,6 +13,8 @@ import { OrgRunView } from "../components/orgs/OrgRunView";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { PreviewsPanel } from "../components/previews/PreviewsPanel";
 import { ImportIssuesModal } from "../components/ImportIssuesModal";
+import { ProjectSettings } from "../components/ProjectSettings";
+import { PublishModal } from "../components/PublishModal";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
@@ -33,6 +35,8 @@ export default function ProjectPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [tab, setTab] = useState<Tab>("board");
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
   const narrow = useMediaQuery(NARROW);
@@ -135,6 +139,27 @@ export default function ProjectPage() {
             </a>
           )}
           {project && <AutonomyToggle project={project} onChanged={setProject} />}
+          {/* Publishing turns a local-only project into one the whole GitHub
+              arc works on, so it belongs beside the repo chip it fills in. */}
+          {project?.vcs === "git" && !project.githubRepo && (
+            <button
+              onClick={() => setPublishing(true)}
+              title="Create a GitHub repository for this project"
+              className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+            >
+              publish to GitHub
+            </button>
+          )}
+          {project && (
+            <button
+              onClick={() => setSettings(true)}
+              title="Project settings"
+              aria-label="Project settings"
+              className="shrink-0 rounded-lg px-1.5 py-0.5 text-sm text-ink-dim hover:text-ink"
+            >
+              ⚙
+            </button>
+          )}
           <div className="flex min-w-0 gap-1 overflow-x-auto rounded-lg bg-panel-2 p-0.5">
             {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (
               <button
@@ -198,6 +223,25 @@ export default function ProjectPage() {
           different card is a prop change that keeps the panel's scroll and tab
           where they were, instead of tearing it down and sliding a new one in. */}
       <AnimatePresence>
+        {settings && project && (
+          <ProjectSettings
+            key="project-settings"
+            project={project}
+            onChanged={setProject}
+            onClose={() => setSettings(false)}
+          />
+        )}
+        {publishing && project && (
+          <PublishModal
+            key="publish"
+            projectId={project.id}
+            onClose={() => setPublishing(false)}
+            onDone={() => {
+              setPublishing(false);
+              api.project(project.id).then(setProject).catch(() => {});
+            }}
+          />
+        )}
         {showImport && project && (
           <ImportIssuesModal
             key="import-issues"
