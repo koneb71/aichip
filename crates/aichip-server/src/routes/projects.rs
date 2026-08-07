@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
         .route("/projects/{id}", get(one).patch(update).delete(unload))
+        .route("/projects/{id}/storage", get(storage))
         .route("/projects/{id}/worktrees", get(worktrees))
         .route("/projects/{id}/worktrees/reclaim", post(reclaim_worktrees))
         .route("/projects/{id}/checkout", get(checkout))
@@ -146,6 +147,87 @@ async fn unload(
         return Err((StatusCode::NOT_FOUND, "no such project".into()));
     }
     Ok(Json(json!({ "unloaded": true })))
+}
+
+/// Everything this project is holding, in one answer.
+///
+/// The parts existed already and were scattered: checkouts in the Files tab,
+/// preview images in the Previews tab, and the per-run leftovers nowhere at
+/// all. Nobody could answer "what is this costing me" without visiting two
+/// tabs and knowing to ask — which is how 2.9 GB of worktrees went unnoticed
+/// until somebody measured the directory by hand.
+///
+/// Composed from the existing accounting rather than a second implementation:
+/// `manager::inventory` and `previews::disk` are the same calls the two tabs
+/// make, so this page cannot disagree with them.
+async fn storage(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let held = held_for(&state, id).await.unwrap_or_default();
+
+    // Preview rows for this project, with what each is holding. Images are
+    // aichip's own now, so their size is a real number rather than the 0 B the
+    // panel used to report for every compose stack.
+    let previews = sqlx::query(
+        "SELECT p.id, p.status, p.image_kept, t.title
+           FROM previews p LEFT JOIN tasks t ON t.id = p.task_id
+          WHERE p.project_id = $1 AND p.status IN ('building','running','idle','failed')",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let (image_bytes, image_reclaimable) =
+        aichip_core::previews::disk(&state.db).await.unwrap_or((0, 0));
+
+    // Kept, and said so rather than shown as a number with a dead button next
+    // to it. Run history is what a reconnecting client replays from, so
+    // trimming it is a policy decision nobody has made yet.
+    let history: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), coalesce(sum(pg_column_size(e.payload)), 0)
+           FROM events e
+           JOIN runs r ON r.id = e.run_id
+           JOIN tasks t ON t.id = r.task_id
+          WHERE t.project_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or((0, 0));
+
+    let checkout_bytes: u64 = held.iter().map(|h| h.bytes).sum();
+    Ok(Json(json!({
+        "checkouts": {
+            "bytes": checkout_bytes,
+            "count": held.len(),
+            "reclaimable": held.iter().filter(|h| h.reclaimable()).count(),
+            "reclaimableBytes": held.iter().filter(|h| h.reclaimable()).map(|h| h.bytes).sum::<u64>(),
+            "items": held.iter().map(|h| json!({
+                "branch": h.branch,
+                "bytes": h.bytes,
+                "reclaimable": h.reclaimable(),
+                "keptBecause": h.kept_because(),
+            })).collect::<Vec<_>>(),
+        },
+        "previews": {
+            // Workspace-wide, and labelled as such by the caller: Docker
+            // images are not attributable to one project without asking Docker
+            // per image, and a per-project figure that was really a global one
+            // would be a worse lie than an honest global.
+            "bytes": image_bytes,
+            "reclaimable": image_reclaimable,
+            "items": previews.iter().map(|r| json!({
+                "id": r.get::<Uuid, _>("id"),
+                "status": r.get::<String, _>("status"),
+                "imageKept": r.get::<bool, _>("image_kept"),
+                "title": r.get::<Option<String>, _>("title"),
+            })).collect::<Vec<_>>(),
+        },
+        "history": { "events": history.0, "bytes": history.1 },
+        "total": checkout_bytes + image_bytes,
+    })))
 }
 
 /// What this project's finished cards are still holding on disk.

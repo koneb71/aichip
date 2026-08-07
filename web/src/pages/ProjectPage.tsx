@@ -14,6 +14,7 @@ import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { PreviewsPanel } from "../components/previews/PreviewsPanel";
 import { ImportIssuesModal } from "../components/ImportIssuesModal";
 import { ProjectSettings } from "../components/ProjectSettings";
+import { StoragePanel } from "../components/StoragePanel";
 import { PublishModal } from "../components/PublishModal";
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
   { key: "workflows", label: "Workflows" },
   { key: "files", label: "Files" },
   { key: "previews", label: "Previews" },
+  { key: "storage", label: "Storage" },
   // Docked beside the board on a wide screen; below `lg` there is no room for
   // a 380px column, so the chat becomes a tab like the others.
   { key: "chat", label: "Chat", narrowOnly: true },
@@ -209,6 +211,7 @@ export default function ProjectPage() {
             <FilesPanel projectId={projectId} tasks={tasks} />
           )}
           {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
+          {activeTab === "storage" && <StoragePanel projectId={projectId} />}
           {activeTab === "chat" && (
             <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />
           )}

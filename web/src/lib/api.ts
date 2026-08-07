@@ -13,6 +13,25 @@ export interface Workspace {
   color: string;
 }
 
+export interface ProjectStorage {
+  checkouts: {
+    bytes: number;
+    count: number;
+    reclaimable: number;
+    reclaimableBytes: number;
+    items: { branch: string; bytes: number; reclaimable: boolean; keptBecause: string | null }[];
+  };
+  previews: {
+    /** Workspace-wide: Docker cannot attribute an image to one project. */
+    bytes: number;
+    reclaimable: number;
+    items: { id: string; status: string; imageKept: boolean; title: string | null }[];
+  };
+  /** Kept on purpose — replay reads it. Reported so the total is honest. */
+  history: { events: number; bytes: number };
+  total: number;
+}
+
 export interface WorktreeHeld {
   worktrees: {
     path: string;
@@ -1262,6 +1281,9 @@ export const api = {
     fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
       json<{ unloaded: boolean }>(r),
     ),
+  /** Everything this project is holding, in one answer. */
+  storage: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/storage`).then((r) => json<ProjectStorage>(r)),
   /** What this project's finished cards are still holding on disk. */
   worktrees: (projectId: string) =>
     fetch(`/api/projects/${projectId}/worktrees`).then((r) => json<WorktreeHeld>(r)),
