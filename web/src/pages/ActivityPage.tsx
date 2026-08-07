@@ -9,6 +9,8 @@ import { isWorking, statusColor, statusLabel } from "../lib/runStatus";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { PermissionRow } from "../components/PermissionRow";
 import { ActivityLine } from "../components/RunStream";
+import { Stat } from "../components/Stat";
+import { SpendBars } from "../components/spend/SpendBars";
 import { SpendPanel } from "../components/spend/SpendPanel";
 import { UsagePanel } from "../components/usage/UsagePanel";
 import { useRunStream } from "../lib/ws";
@@ -110,7 +112,7 @@ export default function ActivityPage() {
         )}
       </AnimatePresence>
 
-      <div className="mt-6 grid max-w-3xl grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="mt-6 grid max-w-3xl grid-cols-[repeat(2,minmax(0,1fr))] gap-4 sm:grid-cols-[repeat(4,minmax(0,1fr))]">
         <Stat label="Working now" value={String(working.length)} accent="var(--color-tier-medium)" />
         <Stat label="Waiting on you" value={String(blocked.length)} accent="#d97706" />
         <Stat label="Queued" value={String(queued.length)} accent="var(--color-ink-dim)" />
@@ -208,7 +210,9 @@ export default function ActivityPage() {
             </div>
             <BudgetControl current={data?.budgetUsd ?? null} onSaved={load} />
           </div>
-          <Bars daily={data?.spend.daily ?? []} />
+          <div className="mt-4">
+            <SpendBars daily={data?.spend.daily ?? []} />
+          </div>
         </div>
 
         {(data?.spend.byAgent.length ?? 0) > 0 && (
@@ -532,56 +536,6 @@ function Elapsed({ since }: { since: string }) {
   );
 }
 
-function Bars({ daily }: { daily: { day: string; cost: number; runs: number }[] }) {
-  // The API only returns days that had runs. Plotting those alone turns two
-  // busy days into two half-width bars that read as a single line and hides
-  // the fact that nothing happened in between — so the axis is always the
-  // full window, quiet days included.
-  const byDay = new Map(daily.map((d) => [d.day.slice(0, 10), d]));
-  const days = Array.from({ length: 14 }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (13 - i));
-    const key = date.toISOString().slice(0, 10);
-    return byDay.get(key) ?? { day: key, cost: 0, runs: 0 };
-  });
-  const top = Math.max(...days.map((d) => d.cost), 0.0001);
-
-  return (
-    <div className="mt-4">
-      <div className="flex h-24 items-end gap-1.5">
-        {days.map((d) => (
-          <div key={d.day} className="group relative flex-1">
-            {/* A CSS transition rather than a motion value. A JS-driven
-                animation writes the *current* frame to the element, and
-                rAF is suspended in a background tab — so the bars freeze
-                part-grown and the chart reads as wrong data rather than as
-                an unfinished animation. With a transition the final height
-                is in the style immediately and only the approach animates. */}
-            <div
-              style={{ height: d.cost > 0 ? Math.max(3, (d.cost / top) * 96) : 2 }}
-              className={`w-full rounded-t transition-[height] duration-500 ease-out ${
-                d.cost > 0 ? "bg-accent/70 group-hover:bg-accent" : "bg-line"
-              }`}
-            />
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[11px] text-white group-hover:block">
-              {formatDay(d.day)} · ${d.cost.toFixed(2)} · {d.runs} run
-              {d.runs === 1 ? "" : "s"}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-1.5 flex justify-between text-[11px] text-ink-dim">
-        <span>{formatDay(days[0].day)}</span>
-        <span>today</span>
-      </div>
-    </div>
-  );
-}
-
-function formatDay(day: string): string {
-  return new Date(day).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <>
@@ -590,17 +544,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       <div className="mt-3 max-w-3xl">{children}</div>
     </>
-  );
-}
-
-function Stat({ label, value, accent }: { label: string; value: string; accent: string }) {
-  return (
-    <div className="card-shadow rounded-xl border border-line bg-panel p-4">
-      <div className="text-2xl font-bold" style={{ color: accent }}>
-        {value}
-      </div>
-      <div className="mt-1 text-xs text-ink-dim">{label}</div>
-    </div>
   );
 }
 
