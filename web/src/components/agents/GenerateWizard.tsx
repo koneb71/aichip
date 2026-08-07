@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { AgentDraft, api, Tier, tierColor, tierSoft } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
-import { TIERS } from "../TierPicker";
+import { TIERS, TierPicker } from "../TierPicker";
 
 type Phase = "describe" | "generating" | "review";
 
@@ -18,6 +18,10 @@ export function GenerateWizard({
   const tierModel = useTierModel();
   const [phase, setPhase] = useState<Phase>("describe");
   const [description, setDescription] = useState("");
+  // Which model does the designing. Complex by default, so nothing about the
+  // existing behaviour changes for somebody who never opens this — but it is
+  // no longer the only option, and the label names what it will actually cost.
+  const [tier, setTier] = useState<Tier>("complex");
   const [drafts, setDrafts] = useState<AgentDraft[]>([]);
   const [saved, setSaved] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +31,7 @@ export function GenerateWizard({
     setPhase("generating");
     setError(null);
     try {
-      const r = await api.generateAgents(description.trim());
+      const r = await api.generateAgents(description.trim(), undefined, tier);
       setDrafts(r.drafts);
       setSaved(new Set());
       setPhase("review");
@@ -80,8 +84,8 @@ export function GenerateWizard({
         <div className="border-b border-line p-5">
           <div className="text-base font-semibold">✦ Generate agents with AI</div>
           <div className="mt-0.5 text-xs text-ink-dim">
-            Runs on your own Claude Code (Fable tier). Drafts are yours to edit — nothing
-            is saved until you say so.
+            Runs on your own Claude Code login. Drafts are yours to edit — nothing is
+            saved until you say so.
           </div>
         </div>
 
@@ -96,6 +100,15 @@ export function GenerateWizard({
                 placeholder="Describe what you need… e.g. “a team that triages GitHub issues, fixes the easy ones, and drafts PRs with tests”"
                 className="w-full resize-none rounded-xl border border-line bg-panel px-3 py-2.5 text-sm outline-none focus:border-accent"
               />
+              {/* Designing a team is one-shot judgement, which thinking time
+                  serves better than model size — so this is worth choosing
+                  rather than always paying for the largest one. The picker
+                  names the model each tier resolves to, since "Complex" alone
+                  does not tell you what you are about to spend. */}
+              <label className="mt-3 flex items-center gap-2 text-xs text-ink-dim">
+                Designed by
+                <TierPicker value={tier} onChange={setTier} />
+              </label>
               {error && (
                 <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
                   {error}

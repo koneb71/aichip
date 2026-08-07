@@ -248,6 +248,14 @@ struct GenerateBody {
     description: String,
     /// Engine id from `/api/engines`. Omitted means the machine default.
     engine: Option<String>,
+    /// Which tier designs the agents. Omitted keeps the previous behaviour.
+    ///
+    /// Worth choosing rather than fixed, because the tier resolves through the
+    /// person's own settings: somebody who mapped Complex to Fable was paying
+    /// the most expensive model for every generation without ever being asked.
+    /// The note below about effort is the argument — this is one-shot judgement,
+    /// which thinking time serves better than model size.
+    model_tier: Option<ModelTier>,
 }
 
 const GENERATE_PROMPT: &str = r##"You are designing coding agents for a multi-agent workflow platform.
@@ -276,7 +284,8 @@ async fn generate(
         .orchestrator
         .engine(engine_id)
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
-    let model_id = state.orchestrator.model_for(engine_id, ModelTier::Complex);
+    let tier = body.model_tier.unwrap_or(ModelTier::Complex);
+    let model_id = state.orchestrator.model_for(engine_id, tier);
     let prompt = format!("{GENERATE_PROMPT}{}\"", body.description.trim());
 
     // Designing a team is the kind of one-shot judgement that repays

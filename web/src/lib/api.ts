@@ -1665,8 +1665,8 @@ export const api = {
     fetch(`/api/agent-memories/${id}`, { method: "DELETE" }).then((r) =>
       json<{ deleted: boolean }>(r),
     ),
-  generateAgents: (description: string, engine?: string) =>
-    post("/api/agents/generate", { description, engine }).then((r) =>
+  generateAgents: (description: string, engine?: string, modelTier?: Tier) =>
+    post("/api/agents/generate", { description, engine, model_tier: modelTier }).then((r) =>
       json<{ drafts: AgentDraft[] }>(r),
     ),
 
