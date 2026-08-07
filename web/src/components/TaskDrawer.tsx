@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, displayTier, PendingPermission, Task, Team, tierColor } from "../lib/api";
+import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
@@ -53,6 +53,11 @@ export function TaskDrawer({
   const [teams, setTeams] = useState<Team[]>([]);
   const [reassignError, setReassignError] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
+  // What the merge guard refused over, once it has refused. Null until then —
+  // asking the server what is dirty before anything has gone wrong would be a
+  // request per drawer open for a question nobody asked.
+  const [blocked, setBlocked] = useState<CheckoutState | null>(null);
+  const [resolving, setResolving] = useState<"stash" | "commit" | null>(null);
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -245,6 +250,7 @@ export function TaskDrawer({
     if (merging) return;
     setMerging(true);
     setError(null);
+    setBlocked(null);
     try {
       await api.merge(task.id);
       onChanged();
@@ -252,9 +258,41 @@ export function TaskDrawer({
     } catch (e) {
       // Inline, like every other failure in this drawer. A native alert()
       // loses the drawer's context and can't be copied out of easily.
-      setError(`Merge failed. ${String(e).replace(/^Error:\s*/, "")}`);
+      const text = String(e).replace(/^Error:\s*/, "");
+      setError(`Merge failed. ${text}`);
+      // The one refusal with something to do about it. The guard names the
+      // files in prose; fetching them as data is what lets the buttons below
+      // exist, and it asks the same endpoint the guard reads so the list
+      // cannot disagree with what is actually in the way.
+      if (text.includes("uncommitted changes")) {
+        api.projectCheckout(task.projectId).then(setBlocked).catch(() => {});
+      }
     } finally {
       setMerging(false);
+    }
+  };
+
+  /// Clear the way, then let them press Merge again.
+  ///
+  /// Deliberately not an auto-retry: folding a remedy into the merge is exactly
+  /// the silent behaviour the guard was written to stop.
+  const clearTheWay = async (how: "stash" | "commit") => {
+    setResolving(how);
+    try {
+      const r =
+        how === "stash"
+          ? await api.stashCheckout(task.projectId)
+          : await api.commitCheckout(task.projectId);
+      setBlocked(null);
+      setError(
+        how === "stash"
+          ? `Set aside. Your changes are in the stash — \`${r.undo}\` brings them back. Merge again when you're ready.`
+          : `Committed as its own commit, separate from this card's. \`${r.undo}\` undoes it. Merge again when you're ready.`,
+      );
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setResolving(null);
     }
   };
 
@@ -479,14 +517,28 @@ export function TaskDrawer({
                 your checkout.
               </span>
             ) : (
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={merge}
-                disabled={merging}
-                className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
-              >
-                {merging ? "Merging…" : "Squash-merge"}
-              </motion.button>
+              <>
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={merge}
+                  disabled={merging}
+                  className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
+                >
+                  {merging ? "Merging…" : "Squash-merge"}
+                </motion.button>
+                {/* A run that failed or was cancelled still lands its card in
+                    review, and the button looks identical — so merging what an
+                    agent left half-finished is one click away and reads like
+                    accepting finished work. Landing partial work is sometimes
+                    the right call, which is why this says so rather than
+                    disabling the button. */}
+                {(task.runStatus === "failed" || task.runStatus === "canceled") && (
+                  <span className="text-[11px] text-amber-700">
+                    this run {task.runStatus === "failed" ? "failed" : "was cancelled"} —
+                    merging lands whatever it got to
+                  </span>
+                )}
+              </>
             )}
           </>
         )}
@@ -517,9 +569,52 @@ export function TaskDrawer({
         </div>
       )}
 
+      {/* `whitespace-pre-wrap`: the merge guard formats the blocking files one
+          per line, and without this they arrived as a single run-on sentence.
+          Same treatment app build errors already get. */}
       {error && (
-        <div className="border-b border-line bg-red-50 px-5 py-2 text-xs text-danger">
+        <div className="whitespace-pre-wrap border-b border-line bg-red-50 px-5 py-2 text-xs leading-relaxed text-danger">
           {error}
+        </div>
+      )}
+
+      {blocked && blocked.dirty.length > 0 && (
+        <div className="border-b border-line bg-amber-50 px-5 py-3">
+          <div className="text-xs font-medium text-amber-900">
+            {blocked.dirty.length === 1
+              ? "One file in your checkout is in the way"
+              : `${blocked.dirty.length} files in your checkout are in the way`}
+            {blocked.branch && <span className="font-normal"> — on {blocked.branch}</span>}
+          </div>
+          <ul className="mt-1.5 max-h-40 overflow-y-auto">
+            {blocked.dirty.map((f) => (
+              <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-amber-900/90">
+                <span className="w-4 shrink-0 text-amber-700">{`${f.index}${f.worktree}`.trim()}</span>
+                <span className="truncate">{f.path}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => clearTheWay("stash")}
+              disabled={resolving !== null}
+              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
+            >
+              {resolving === "stash" ? "Setting aside…" : "Stash them"}
+            </button>
+            <button
+              onClick={() => clearTheWay("commit")}
+              disabled={resolving !== null}
+              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
+            >
+              {resolving === "commit" ? "Committing…" : "Commit them"}
+            </button>
+            {/* Which one to press is a real choice, so say what each does
+                rather than leaving it to be discovered. */}
+            <span className="text-[11px] text-amber-900/80">
+              Stashing sets them aside; committing keeps them, in their own commit.
+            </span>
+          </div>
         </div>
       )}
 

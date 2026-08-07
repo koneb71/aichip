@@ -13,6 +13,22 @@ export interface Workspace {
   color: string;
 }
 
+/** One file standing between a person and a merge. */
+export interface DirtyFile {
+  /** Git's staged-state letter; a space means "not staged". */
+  index: string;
+  worktree: string;
+  path: string;
+}
+
+export interface CheckoutState {
+  /** False for a project that edits in place — it has no merge to block. */
+  vcs: boolean;
+  path?: string;
+  branch: string | null;
+  dirty: DirtyFile[];
+}
+
 export interface Project {
   id: string;
   path: string;
@@ -1198,6 +1214,21 @@ export const api = {
   setProjectFullAuto: (projectId: string, on: boolean) =>
     patch(`/api/projects/${projectId}`, { full_auto_opt_in: on }).then((r) =>
       json<Project>(r),
+    ),
+  updateProject: (
+    projectId: string,
+    body: { name?: string; default_branch?: string; full_auto_opt_in?: boolean },
+  ) => patch(`/api/projects/${projectId}`, body).then((r) => json<Project>(r)),
+  /** What the merge guard is looking at. Read-only. */
+  projectCheckout: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/checkout`).then((r) => json<CheckoutState>(r)),
+  stashCheckout: (projectId: string) =>
+    post(`/api/projects/${projectId}/checkout/stash`, {}).then((r) =>
+      json<{ stashed: boolean; undo: string }>(r),
+    ),
+  commitCheckout: (projectId: string) =>
+    post(`/api/projects/${projectId}/checkout/commit`, {}).then((r) =>
+      json<{ committed: boolean; undo: string }>(r),
     ),
   effortSettings: () =>
     fetch("/api/settings/effort").then((r) => json<EffortSettings>(r)),

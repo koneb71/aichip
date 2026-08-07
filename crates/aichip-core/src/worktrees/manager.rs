@@ -119,24 +119,57 @@ impl WorktreeManager {
             );
         }
 
+        // Where the person was standing, so we can put them back.
+        //
+        // Everything from here on moves their checkout, and the two ways out of
+        // this function used to leave it somewhere else: a success left them on
+        // the base branch with no notice, and a conflict left them there *and*
+        // holding conflict markers and a conflicted index. `git merge --abort`
+        // does not undo a `--squash` — there is no `MERGE_HEAD` — so the
+        // recovery is `reset --merge`, which nothing told them. The next Merge
+        // click then hit the dirty guard and reported the debris as if it were
+        // their own work.
+        let was_on = current_branch(repo).await;
         let base = resolve_base(repo, base_branch).await?;
         git(repo, &["checkout", &base]).await?;
-        git(repo, &["merge", "--squash", &worktree.branch]).await?;
+
+        let merged = git(repo, &["merge", "--squash", &worktree.branch]).await;
 
         // A squash that staged nothing means this branch is already in the
         // base — a second click on Merge, or work that was merged by hand.
         // `git commit` exits non-zero for that, so committing unconditionally
         // turned a successful, already-done merge into an error alert while
         // the change sat safely on the branch. Merging twice should be quiet.
-        if git(repo, &["diff", "--cached", "--quiet"]).await.is_ok() {
-            tracing::info!(
-                branch = %worktree.branch,
-                "nothing to merge — the branch is already in {base}"
-            );
-            return Ok(());
+        let outcome = match merged {
+            Err(e) => Err(e),
+            Ok(_) if git(repo, &["diff", "--cached", "--quiet"]).await.is_ok() => {
+                tracing::info!(
+                    branch = %worktree.branch,
+                    "nothing to merge — the branch is already in {base}"
+                );
+                Ok(())
+            }
+            Ok(_) => git(repo, &["commit", "-m", message]).await.map(|_| ()),
+        };
+
+        match outcome {
+            Ok(()) => {
+                restore_checkout(repo, was_on.as_deref(), &base, false).await;
+                Ok(())
+            }
+            Err(e) => {
+                restore_checkout(repo, was_on.as_deref(), &base, true).await;
+                // The recovery is named in the error, not just performed, so a
+                // person who goes to look at their repository knows what was
+                // already done on their behalf.
+                anyhow::bail!(
+                    "{e}\n\nYour checkout was put back on {} and the half-finished merge \
+                     was cleared, so nothing is left staged. Resolve the conflict on the \
+                     branch itself and merge again.",
+                    was_on.as_deref().unwrap_or(&base)
+                )
+            }
         }
-        git(repo, &["commit", "-m", message]).await?;
-        Ok(())
     }
 
     /// Send this card's branch to `origin`, so a pull request has something to
@@ -222,6 +255,33 @@ impl WorktreeManager {
         .await?;
         let _ = git(repo, &["branch", "-D", &worktree.branch]).await;
         Ok(())
+    }
+}
+
+/// Put the user's checkout back where it was.
+///
+/// Best-effort and logged rather than fallible: a merge that actually landed
+/// must not be reported as a failure because a `checkout` afterwards did not
+/// work, and a merge that failed already has an error worth more than this one.
+///
+/// `clear` runs `reset --merge` first, which is the only thing that undoes a
+/// conflicted `merge --squash`. It is deliberately not run on the success path
+/// — there is a commit there we have no business touching.
+async fn restore_checkout(repo: &Path, was_on: Option<&str>, base: &str, clear: bool) {
+    if clear {
+        if let Err(e) = git(repo, &["reset", "--merge"]).await {
+            tracing::warn!(repo = %repo.display(), error = %e, "could not clear the failed merge");
+        }
+    }
+    let Some(branch) = was_on else { return };
+    if branch == base {
+        return;
+    }
+    if let Err(e) = git(repo, &["checkout", branch]).await {
+        tracing::warn!(
+            repo = %repo.display(), %branch, error = %e,
+            "merged, but could not put the checkout back on the branch it came from"
+        );
     }
 }
 
@@ -518,6 +578,125 @@ fn describe_dirty(porcelain: &str) -> String {
     out.join("\n")
 }
 
+/// One file standing between a person and a merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirtyFile {
+    /// Git's staged-state letter. A space means "not staged".
+    pub index: char,
+    /// Git's working-tree letter.
+    pub worktree: char,
+    pub path: String,
+}
+
+/// What the merge guard is looking at, as data rather than as a sentence.
+///
+/// The guard has always been able to name these files; nothing could ever
+/// *read* them. So the only way to act on "commit or stash them and merge
+/// again" was to leave the product, and the only way to find out which files it
+/// meant was to squint at an error string. Same query, same flags — the two
+/// must agree, or the dashboard would offer to resolve a set the merge does not
+/// care about.
+pub async fn checkout_status(repo: &Path) -> anyhow::Result<(Option<String>, Vec<DirtyFile>)> {
+    let out = git(
+        repo,
+        // `quotePath=false` so a path with an accent in it comes back readable
+        // rather than as octal escapes. Genuinely awkward paths — a quote, a
+        // backslash, a newline — are still quoted, and `parse_porcelain`
+        // unquotes them.
+        &[
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ],
+    )
+    .await?;
+    Ok((current_branch(repo).await, parse_porcelain(&out)))
+}
+
+/// `git status --porcelain` into rows.
+///
+/// Pure and separately tested because the format has more corners than it
+/// looks: two status columns where either may be a space, a rename written as
+/// `old -> new`, and C-quoting for paths git thinks are awkward.
+pub fn parse_porcelain(out: &str) -> Vec<DirtyFile> {
+    out.lines()
+        .filter(|l| l.len() > 3)
+        .map(|line| {
+            let mut chars = line.chars();
+            let index = chars.next().unwrap_or(' ');
+            let worktree = chars.next().unwrap_or(' ');
+            let rest = line[3..].trim_end();
+            // A rename names both ends; the new one is the file that is there
+            // now, and the one a person would go and look at.
+            let path = rest.rsplit(" -> ").next().unwrap_or(rest);
+            DirtyFile {
+                index,
+                worktree,
+                path: unquote(path),
+            }
+        })
+        .collect()
+}
+
+/// Undo git's C-style quoting of an awkward path.
+///
+/// Left as-is when unquoted, which is almost always. Octal escapes are decoded
+/// as bytes and only then read as UTF-8 — a multi-byte character arrives as
+/// several `\NNN` in a row, so decoding them one at a time would produce
+/// mojibake instead of the name.
+fn unquote(path: &str) -> String {
+    if !(path.starts_with('"') && path.ends_with('"') && path.len() >= 2) {
+        return path.to_string();
+    }
+    let inner = &path[1..path.len() - 1];
+    let mut bytes: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => bytes.push(b'\n'),
+            Some('t') => bytes.push(b'\t'),
+            Some('r') => bytes.push(b'\r'),
+            Some(d @ '0'..='7') => {
+                let mut octal = d.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    match chars.peek().and_then(|c| c.to_digit(8)) {
+                        Some(v) => {
+                            octal = octal * 8 + v;
+                            chars.next();
+                        }
+                        None => break,
+                    }
+                }
+                bytes.push(octal as u8);
+            }
+            Some(other) => {
+                let mut buf = [0u8; 4];
+                bytes.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+            None => bytes.push(b'\\'),
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Set the checkout's changes aside so a merge can proceed.
+///
+/// The other half of what the guard's own message tells people to do. Tracked
+/// files only, matching the guard exactly — sweeping untracked build output
+/// into a stash would be doing something nobody asked for to files that were
+/// never in the way.
+pub async fn stash(repo: &Path, message: &str) -> anyhow::Result<()> {
+    git(repo, &["stash", "push", "-m", message]).await?;
+    Ok(())
+}
+
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = Command::new("git").current_dir(cwd).args(args).output().await?;
     if !out.status.success() {
@@ -782,6 +961,135 @@ mod tests {
 
         mgr.remove(repo_dir.path(), &wt).await.unwrap();
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    fn porcelain_rows_carry_both_status_columns() {
+        let rows = parse_porcelain(" M src/main.rs\nA  src/new.rs\nMM both.rs\n D gone.rs\n");
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0], DirtyFile { index: ' ', worktree: 'M', path: "src/main.rs".into() });
+        assert_eq!(rows[1], DirtyFile { index: 'A', worktree: ' ', path: "src/new.rs".into() });
+        assert_eq!(rows[2], DirtyFile { index: 'M', worktree: 'M', path: "both.rs".into() });
+        assert_eq!(rows[3].path, "gone.rs");
+    }
+
+    #[test]
+    fn a_rename_reports_where_the_file_is_now() {
+        // Not where it was: the new name is the one you would go and look at.
+        let rows = parse_porcelain("R  old/name.rs -> new/name.rs\n");
+        assert_eq!(rows[0].path, "new/name.rs");
+    }
+
+    #[test]
+    fn an_awkward_path_is_unquoted_rather_than_shown_as_escapes() {
+        assert_eq!(parse_porcelain(" M \"with space.rs\"\n")[0].path, "with space.rs");
+        assert_eq!(parse_porcelain(" M \"say \\\"hi\\\".rs\"\n")[0].path, "say \"hi\".rs");
+        // Octal escapes are bytes, and a multi-byte character is several of
+        // them — decoding one at a time would produce mojibake.
+        assert_eq!(parse_porcelain(" M \"caf\\303\\251.rs\"\n")[0].path, "café.rs");
+    }
+
+    #[test]
+    fn nothing_dirty_is_no_rows_rather_than_one_empty_one() {
+        assert!(parse_porcelain("").is_empty());
+        assert!(parse_porcelain("\n\n").is_empty());
+    }
+
+    #[tokio::test]
+    async fn checkout_status_sees_exactly_what_the_merge_guard_sees() {
+        // If these ever disagree, the dashboard offers to resolve a set of
+        // files the merge does not care about — or misses one that it does.
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        tokio::fs::write(repo_dir.path().join("tracked.txt"), "one").await.unwrap();
+        git(repo_dir.path(), &["add", "-A"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "add"]).await.unwrap();
+
+        tokio::fs::write(repo_dir.path().join("tracked.txt"), "two").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("untracked.txt"), "new").await.unwrap();
+
+        let (branch, dirty) = checkout_status(repo_dir.path()).await.unwrap();
+        assert_eq!(branch.as_deref(), Some("main"));
+        assert_eq!(dirty.len(), 1, "untracked files are not in the way: {dirty:?}");
+        assert_eq!(dirty[0].path, "tracked.txt");
+
+        // And stashing it clears exactly that.
+        stash(repo_dir.path(), "aichip: test").await.unwrap();
+        assert!(checkout_status(repo_dir.path()).await.unwrap().1.is_empty());
+        assert!(repo_dir.path().join("untracked.txt").exists(), "stash took the wrong files");
+    }
+
+    /// A merge that lands must not move the person somewhere else.
+    ///
+    /// `squash_merge` checks out the base branch to do its work. It never
+    /// checked back, so anyone standing on a branch of their own was silently
+    /// on `main` afterwards — noticed, if at all, by their next commit landing
+    /// in the wrong place.
+    #[tokio::test]
+    async fn a_successful_merge_puts_the_checkout_back_where_it_was() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
+            .await
+            .unwrap();
+
+        assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
+        let log = git(repo_dir.path(), &["log", "main", "--oneline"]).await.unwrap();
+        assert!(log.contains("aichip: card"), "the merge still has to land: {log}");
+    }
+
+    /// A conflicting merge must not strand the checkout mid-merge.
+    ///
+    /// The nastiest shape this had: the `?` on `merge --squash` propagated with
+    /// no recovery, leaving the person's own repository on the base branch,
+    /// holding conflict markers, with a conflicted index. `git merge --abort`
+    /// does not undo a `--squash` — there is no `MERGE_HEAD` — so they were one
+    /// `reset --merge` away from working and nothing said so. Worse, the next
+    /// Merge click hit the dirty guard and reported the conflict debris back to
+    /// them as if it were their own uncommitted work.
+    #[tokio::test]
+    async fn a_conflicting_merge_leaves_the_checkout_clean_and_where_it_was() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        tokio::fs::write(repo_dir.path().join("shared.txt"), "original\n").await.unwrap();
+        git(repo_dir.path(), &["add", "-A"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "shared"]).await.unwrap();
+
+        // The card edits the line…
+        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        tokio::fs::write(wt.path.join("shared.txt"), "from the agent\n").await.unwrap();
+
+        // …and so does `main`, after the worktree branched. Committed, so the
+        // dirty guard passes and the conflict is what fails.
+        tokio::fs::write(repo_dir.path().join("shared.txt"), "from a person\n").await.unwrap();
+        git(repo_dir.path(), &["add", "-A"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "mine"]).await.unwrap();
+        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
+
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
+            .await
+            .expect_err("a conflicting merge must fail");
+        assert!(
+            err.to_string().contains("put back on wip"),
+            "the error has to say what was done for them: {err}"
+        );
+
+        assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
+        let dirty = git(repo_dir.path(), &["status", "--porcelain"]).await.unwrap();
+        assert!(dirty.trim().is_empty(), "left behind: {dirty}");
+        let content = tokio::fs::read_to_string(repo_dir.path().join("shared.txt")).await.unwrap();
+        assert!(!content.contains("<<<<"), "conflict markers survived: {content}");
     }
 
     /// The merge must not swallow work the person had in progress.

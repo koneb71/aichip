@@ -1,9 +1,9 @@
 use super::{internal, ApiError};
 use crate::AppState;
-use aichip_core::worktrees::manager::{ensure_repo_state, Vcs};
+use aichip_core::worktrees::manager::{self, ensure_repo_state, Vcs};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,6 +14,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
         .route("/projects/{id}", get(one).patch(update))
+        .route("/projects/{id}/checkout", get(checkout))
+        .route("/projects/{id}/checkout/stash", post(stash_checkout))
+        .route("/projects/{id}/checkout/commit", post(commit_checkout))
 }
 
 const PROJECT_COLUMNS: &str =
@@ -67,6 +70,107 @@ async fn one(
         }
     }
     Ok(Json(body))
+}
+
+/// The project's own checkout, and what is standing in a merge's way.
+///
+/// The merge guard has always been able to *name* these files; nothing could
+/// read them, so "commit or stash them and merge again" was an instruction you
+/// could only follow in a terminal. Read-only, and it runs the same query the
+/// guard does, so the two cannot disagree about which files count.
+async fn checkout(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let (path, vcs) = git_project(&state, id).await?;
+    if !vcs {
+        // Not an error: a project that edits in place has no merge to block,
+        // so the honest answer is an empty one.
+        return Ok(Json(json!({ "vcs": false, "branch": null, "dirty": [] })));
+    }
+    let (branch, dirty) = manager::checkout_status(std::path::Path::new(&path))
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "vcs": true,
+        "path": path,
+        "branch": branch,
+        "dirty": dirty.iter().map(|f| json!({
+            "index": f.index.to_string(),
+            "worktree": f.worktree.to_string(),
+            "path": f.path,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// Set the checkout's changes aside. Reversible, and the response says how.
+async fn stash_checkout(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let path = dirty_git_project(&state, id).await?;
+    let repo = std::path::Path::new(&path);
+    manager::stash(repo, "aichip: set aside so a card could merge")
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({
+        "stashed": true,
+        "undo": "git stash pop",
+    })))
+}
+
+/// Commit the checkout's changes as their own commit, under the person's name.
+///
+/// Their work, so their commit — never folded into the card's, which is the
+/// whole reason the merge refuses in the first place.
+async fn commit_checkout(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let path = dirty_git_project(&state, id).await?;
+    let repo = std::path::Path::new(&path);
+    let wrote = manager::commit_all(repo, "Work in progress")
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({
+        "committed": wrote,
+        "undo": "git reset --soft HEAD~1",
+    })))
+}
+
+/// A project that has a repository, or an explanation of why the request makes
+/// no sense for it.
+async fn git_project(state: &AppState, id: Uuid) -> Result<(String, bool), ApiError> {
+    let row = sqlx::query("SELECT path, vcs FROM projects WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+    Ok((row.get("path"), row.get::<String, _>("vcs") == "git"))
+}
+
+/// The same, for the two routes that change something: they need a repository
+/// *and* something to act on. Refusing an empty checkout rather than writing an
+/// empty commit or an empty stash keeps a double-click from doing anything.
+async fn dirty_git_project(state: &AppState, id: Uuid) -> Result<String, ApiError> {
+    let (path, vcs) = git_project(state, id).await?;
+    if !vcs {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "this project has no version control, so there is nothing to commit or stash".into(),
+        ));
+    }
+    let (_, dirty) = manager::checkout_status(std::path::Path::new(&path))
+        .await
+        .map_err(internal)?;
+    if dirty.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            "your checkout has no uncommitted changes — nothing to set aside".into(),
+        ));
+    }
+    Ok(path)
 }
 
 #[derive(Deserialize)]
@@ -167,6 +271,10 @@ struct UpdateProject {
     /// action with no way to turn it off.
     full_auto_opt_in: Option<bool>,
     default_branch: Option<String>,
+    /// What to call it. The folder's basename until somebody says otherwise —
+    /// two clones of the same repository are both called `cli`, and only the
+    /// person looking at them knows which is which.
+    name: Option<String>,
 }
 
 async fn update(
@@ -174,6 +282,15 @@ async fn update(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateProject>,
 ) -> Result<Json<Value>, ApiError> {
+    // Rejected rather than trimmed to nothing: a project with a blank name is
+    // an unclickable row in the sidebar.
+    let name = match body.name.as_deref().map(str::trim) {
+        Some("") => {
+            return Err((StatusCode::BAD_REQUEST, "a project needs a name".into()));
+        }
+        other => other.map(str::to_string),
+    };
+
     // Working without prompts is only safe because the run happens in an
     // aichip-managed worktree you review before merging. A project with no
     // version control edits your files directly, so there is nothing to
@@ -195,29 +312,29 @@ async fn update(
         }
     }
 
-    let row = sqlx::query(
+    // `PROJECT_COLUMNS` and `project_json`, not a hand-written pair.
+    //
+    // This used to return its own shorter list, which omitted `kind` and
+    // `github_repo` — and the client types the response as a whole `Project`
+    // and puts it straight into state. So one click on the autonomy toggle made
+    // the GitHub chip and the Import-issues button disappear until a reload,
+    // because the fields behind them came back absent rather than unchanged.
+    let row = sqlx::query(&format!(
         "UPDATE projects
             SET full_auto_opt_in = COALESCE($2, full_auto_opt_in),
-                default_branch   = COALESCE($3, default_branch)
+                default_branch   = COALESCE($3, default_branch),
+                name             = COALESCE($4, name)
           WHERE id = $1
-      RETURNING id, path, name, default_branch, workspace_id, vcs, vcs_note, full_auto_opt_in",
-    )
+      RETURNING {PROJECT_COLUMNS}"
+    ))
     .bind(id)
     .bind(body.full_auto_opt_in)
     .bind(body.default_branch.as_deref())
+    .bind(name.as_deref())
     .fetch_optional(&state.db.pool)
     .await
     .map_err(internal)?
     .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
 
-    Ok(Json(json!({
-        "id": row.get::<Uuid, _>("id"),
-        "path": row.get::<String, _>("path"),
-        "name": row.get::<String, _>("name"),
-        "defaultBranch": row.get::<String, _>("default_branch"),
-        "workspaceId": row.get::<Uuid, _>("workspace_id"),
-        "vcs": row.get::<String, _>("vcs"),
-        "vcsNote": row.get::<Option<String>, _>("vcs_note"),
-        "fullAutoOptIn": row.get::<bool, _>("full_auto_opt_in"),
-    })))
+    Ok(Json(project_json(&row)))
 }
