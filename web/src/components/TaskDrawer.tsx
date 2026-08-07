@@ -565,7 +565,11 @@ export function TaskDrawer({
           width, and a card keeps its pull request after it leaves review. */}
       {(task.boardColumn === "review" || task.boardColumn === "done") && (
         <div className="border-b border-line px-5 py-2">
-          <PullRequestPanel taskId={task.id} />
+          <PullRequestPanel
+            taskId={task.id}
+            projectId={task.projectId}
+            onPublished={onChanged}
+          />
         </div>
       )}
 

@@ -1179,6 +1179,14 @@ export const api = {
   // Probed live rather than cached: `gh auth login` happens in a terminal
   // while aichip is running, and this is what tells you to go and do it.
   github: () => fetch("/api/github").then((r) => json<GitHubStatus>(r)),
+  /** Create a GitHub repository for a project that only exists on this disk. */
+  publishProject: (
+    projectId: string,
+    body: { name?: string; visibility: "private" | "public" },
+  ) =>
+    post(`/api/projects/${projectId}/github/publish`, body).then((r) =>
+      json<{ repo: string; url: string }>(r),
+    ),
 
   // workspaces
   workspaces: () =>

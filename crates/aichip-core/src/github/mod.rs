@@ -14,6 +14,7 @@
 pub mod connect;
 pub mod issues;
 pub mod pr;
+pub mod publish;
 pub mod repo;
 
 use serde::Deserialize;

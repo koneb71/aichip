@@ -23,6 +23,10 @@ pub fn router() -> Router<AppState> {
             "/github/connect/{id}",
             get(connect_status).delete(cancel_connect),
         )
+        .route(
+            "/projects/{id}/github/publish",
+            axum::routing::post(publish_project),
+        )
         .route("/github/clone", axum::routing::post(clone))
         .route(
             "/github/clone/{id}",
@@ -196,4 +200,46 @@ async fn status() -> Json<Value> {
             "problem": a.problem,
         })).collect::<Vec<_>>(),
     }))
+}
+
+/// The `owner/name` a publish would create, before anything is created.
+///
+/// A separate read so the confirm can show the real target — `gh` resolves the
+/// owner from whoever is signed in, and the person deciding whether to make
+/// something public should not have to guess whose account it lands in.
+#[derive(serde::Deserialize)]
+struct PublishBody {
+    name: Option<String>,
+    /// `"private"` or `"public"`. Required, and unparseable is a refusal: the
+    /// default that would be wrong is the one that publishes somebody's code.
+    visibility: String,
+}
+
+async fn publish_project(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(body): Json<PublishBody>,
+) -> Result<Json<Value>, super::ApiError> {
+    let visibility = aichip_core::github::publish::Visibility::parse(&body.visibility).ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "visibility must be \"private\" or \"public\"".to_string(),
+    ))?;
+
+    match aichip_core::github::publish::publish(
+        &state.db,
+        id,
+        body.name.as_deref(),
+        visibility,
+    )
+    .await
+    {
+        Ok(slug) => Ok(Json(json!({
+            "repo": slug,
+            "url": format!("https://github.com/{slug}"),
+        }))),
+        // A refusal is a 409 carrying its own sentence: every one of these has
+        // a different next step, and flattening them into "could not publish"
+        // would send someone to install `gh` when their folder has no commits.
+        Err(e) => Err((axum::http::StatusCode::CONFLICT, e.message())),
+    }
 }

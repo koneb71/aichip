@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api, type PullRequestState } from "../lib/api";
+import { PublishModal } from "./PublishModal";
 import { prSummary, prTone, shouldPoll, syncedLabel } from "../lib/pullRequest";
 
 /**
@@ -17,12 +18,22 @@ import { prSummary, prTone, shouldPoll, syncedLabel } from "../lib/pullRequest";
  * what "update my pull request" means — GitHub updates the request itself from
  * the branch, so there is nothing to re-open.
  */
-export function PullRequestPanel({ taskId }: { taskId: string }) {
+export function PullRequestPanel({
+  taskId,
+  projectId,
+  onPublished,
+}: {
+  taskId: string;
+  /** Only needed to offer publishing; the panel works without it. */
+  projectId?: string;
+  onPublished?: () => void;
+}) {
   const [state, setState] = useState<PullRequestState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The branch and the remote disagree; force is the second, explicit click. */
   const [needsForce, setNeedsForce] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   const load = useCallback(
     () =>
@@ -139,7 +150,34 @@ export function PullRequestPanel({ taskId }: { taskId: string }) {
               </Link>
             </>
           )}
+          {/* The one refusal that used to be permanent. "No origin remote" is
+              not a fact about the world — it is a step nobody had been given a
+              way to take, so every GitHub feature stayed dark on a project
+              that started life on this disk. */}
+          {projectId && refusal.includes("no GitHub `origin` remote") && (
+            <>
+              {" "}
+              <button
+                onClick={() => setPublishing(true)}
+                className="text-accent hover:underline"
+              >
+                Publish it to GitHub
+              </button>
+            </>
+          )}
         </p>
+      )}
+
+      {publishing && projectId && (
+        <PublishModal
+          projectId={projectId}
+          onClose={() => setPublishing(false)}
+          onDone={() => {
+            setPublishing(false);
+            load();
+            onPublished?.();
+          }}
+        />
       )}
 
       {error && (
