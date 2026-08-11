@@ -19,7 +19,8 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{oneshot, Semaphore};
+use std::sync::atomic::Ordering;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::apps;
@@ -45,6 +46,11 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
     "mcp__aichip__list_tasks",
     "mcp__aichip__get_task_status",
     "mcp__aichip__list_agents",
+    "mcp__aichip__cancel_task",
+    "mcp__aichip__get_diff",
+    "mcp__aichip__get_spend",
+    "mcp__aichip__list_skills",
+    "mcp__aichip__move_task",
 ];
 
 /// Named explicitly rather than left to the allow-list.
@@ -95,7 +101,11 @@ on the user's board for review. Use mcp__aichip__list_tasks / get_task_status to
 progress, and mcp__aichip__list_agents to pick a specialized agent for a task. When the user \
 writes @Name in their message they are naming an agent from their library — assign that work to \
 them by passing agent_name, spelled exactly. Keep replies short and conversational; the user \
-sees them in a chat panel.";
+sees them in a chat panel. \
+You can also stop a task, summarise what it changed, file it in a column, and say what it has \
+cost — but you cannot merge anything into the user's checkout, and there is no tool for it. \
+When a card looks ready, say so and what it changed, and let them press Merge on the card, \
+where they can read the diff first.";
 
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
@@ -135,7 +145,11 @@ pub struct Orchestrator {
     tiers: Arc<std::sync::RwLock<EngineTierMapping>>,
     tier_efforts: Arc<std::sync::RwLock<EngineTierEffort>>,
     pub worktrees: Arc<WorktreeManager>,
-    pub(crate) semaphore: Arc<Semaphore>,
+    pub(crate) slots: Arc<crate::runs::slots::Slots>,
+    /// Whether the over-budget hook has already fired for the current spell.
+    /// The gate is read every 750ms, so this is what turns a state into an
+    /// event.
+    announced_over_budget: std::sync::atomic::AtomicBool,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
     /// None disables MCP wiring (mock engine / tests).
     pub(crate) mcp_base_url: Option<String>,
@@ -234,10 +248,45 @@ impl Orchestrator {
             tiers: Arc::new(std::sync::RwLock::new(EngineTierMapping::default())),
             tier_efforts: Arc::new(std::sync::RwLock::new(EngineTierEffort::default())),
             worktrees,
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            slots: Arc::new(crate::runs::slots::Slots::new(max_concurrent)),
+            announced_over_budget: std::sync::atomic::AtomicBool::new(false),
             mcp_base_url,
             cancels: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// What to set `MCP_TOOL_TIMEOUT` to, in milliseconds.
+    ///
+    /// Derived from the attention window rather than written out, because the
+    /// two numbers have to agree and used to agree only by comment. The CLI
+    /// abandoning the tool call before the broker's window closes is the same
+    /// silent lie the window was widened to remove — the engine would get a
+    /// timeout error nobody chose, at a moment when the person was still
+    /// perfectly able to answer.
+    ///
+    /// "Wait forever" has no expressible value here, so it becomes the ceiling
+    /// the setting itself clamps to.
+    ///
+    /// The margin is load-bearing, not padding. Set the two to the same number
+    /// and they race — and the CLI won, so the engine got
+    /// `MCP server "aichip" tool "approve" timed out after 60s` instead of
+    /// aichip's own sentence, then carried on trying other ways to do the same
+    /// edit. The broker has to be the one that decides how a wait ends,
+    /// because it is the only one of the two that knows the difference between
+    /// a refusal and an empty room.
+    pub(crate) async fn mcp_tool_timeout_ms(&self) -> String {
+        let cfg = crate::attention::load(&self.db).await;
+        let secs = cfg
+            .window()
+            .map(|d| d.as_secs() + crate::attention::CLI_GRACE_SECS)
+            .unwrap_or(crate::attention::MAX_WINDOW_SECS as u64);
+        (secs * 1000).to_string()
+    }
+
+    /// The queue's concurrency budget, so the permission broker can lend a
+    /// parked run's slot back while it waits.
+    pub fn slots(&self) -> Arc<crate::runs::slots::Slots> {
+        self.slots.clone()
     }
 
     pub fn register_engine(&mut self, engine: Arc<dyn Engine>) {
@@ -712,9 +761,19 @@ impl Orchestrator {
     /// process. Mark failed; the UI offers one-click resume via session_id.
     pub async fn recover_orphans(&self) -> anyhow::Result<u64> {
         let mut tx = self.db.pool.begin().await?;
+        // A run that was waiting on a person already recorded what it was
+        // waiting for, and "orphaned by server restart" would throw that away.
+        // This is the whole reason pending prompts need no table of their own:
+        // the restart kills the run either way, and all persistence would have
+        // bought is a truthful sentence, which `park` has already written.
         let orphans: Vec<Uuid> = sqlx::query_scalar(
-            "UPDATE runs SET status='failed', error_reason='orphaned by server restart',
-             finished_at=now() WHERE status IN ('starting','running','waiting_permission')
+            "UPDATE runs SET status='failed',
+                    error_reason = CASE WHEN status='waiting_permission'
+                        THEN 'the server restarted while this run was '
+                             || COALESCE(error_reason, 'waiting for you')
+                        ELSE 'orphaned by server restart' END,
+                    finished_at=now()
+             WHERE status IN ('starting','running','waiting_permission')
              RETURNING id",
         )
         .fetch_all(&mut *tx)
@@ -737,7 +796,16 @@ impl Orchestrator {
     /// Queue loop: claim ready runs under the concurrency semaphore.
     pub async fn run_loop(self: Arc<Self>) {
         loop {
-            let permit = self.semaphore.clone().acquire_owned().await.expect("semaphore");
+            let permit = self.slots.sem().acquire_owned().await.expect("semaphore");
+            // A run that parked on a permission prompt lent this slot to the
+            // queue and has since taken it back. Pay that debt here rather than
+            // where the person clicked Allow: their engine is holding an HTTP
+            // request open, and making the click wait on someone else's
+            // twenty-minute run is how the call they just approved times out.
+            if self.slots.take_debt() {
+                permit.forget();
+                continue;
+            }
             match self.claim_next().await {
                 Ok(Some(run_id)) => {
                     let this = self.clone();
@@ -1071,7 +1139,30 @@ impl Orchestrator {
     }
 
     async fn claim_next(&self) -> anyhow::Result<Option<Uuid>> {
-        if !matches!(self.queue_gate().await, QueueGate::Open) {
+        let gate = self.queue_gate().await;
+        // On the edge, never on the state: `claim_next` runs every 750ms, so
+        // firing on "is over budget" would be a notification every three
+        // quarters of a second until midnight.
+        let over = matches!(gate, QueueGate::OverBudget { .. });
+        if over != self.announced_over_budget.swap(over, Ordering::SeqCst) && over {
+            let spent = match &gate {
+                QueueGate::OverBudget { spent_today, cap_usd } => {
+                    format!("${spent_today:.2} of ${cap_usd:.2} spent — the queue is holding until midnight")
+                }
+                _ => String::new(),
+            };
+            crate::attention::fire(
+                &self.db,
+                crate::attention::Event::OverBudget,
+                crate::attention::Ctx {
+                    title: "aichip: daily budget reached".to_string(),
+                    body: spent,
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+        if !matches!(gate, QueueGate::Open) {
             return Ok(None);
         }
         let row = sqlx::query(
@@ -1463,6 +1554,7 @@ impl Orchestrator {
             _ => resume_session_id,
         };
 
+        let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         let spec = RunSpec {
             cwd,
             prompt,
@@ -1504,9 +1596,10 @@ impl Orchestrator {
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
                 // Permission prompts block the MCP tools/call until the user
-                // answers in the dashboard; raise the CLI's tool timeout so
-                // it waits as long as the broker does (15 min).
-                ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
+                // answers in the dashboard, so the CLI has to be willing to
+                // wait exactly as long as the broker is. See
+                // `mcp_tool_timeout_ms` — one value, three call sites.
+                ("MCP_TOOL_TIMEOUT".to_string(), tool_timeout_ms.clone()),
                 // Server startup. 60s was ample when the only server was
                 // aichip's own local HTTP endpoint; a user-connected server
                 // may cold-start `npx -y …` and fetch a package first, and a
@@ -2274,15 +2367,17 @@ impl Orchestrator {
                 );
                 let permission_mode = resolved.mode;
 
-                // Nobody is at the keyboard at 3am. A step that stops to ask
-                // doesn't just go unanswered — it holds its concurrency permit
-                // for the whole of `execute`, so two parked scheduled runs
-                // deadlock a default `max_concurrent` of 2 until the server is
-                // restarted. Refusing is louder and recoverable; parking is a
-                // silent deadlock.
+                // Nobody is at the keyboard at 3am. Parking no longer freezes
+                // the queue — a parked run lends its slot back — but a
+                // scheduled step that stops to ask would still burn tokens
+                // getting to the question, wait out the whole attention
+                // window, and then be cancelled unanswered. Refusing at
+                // dispatch is the same outcome for free, and it says so.
                 //
-                // Manual runs still park: someone chose to start them and can
-                // answer.
+                // Manual runs still park, and that is now a real offer rather
+                // than an assumption: someone chose to start them, the card
+                // says plainly that it is waiting, and the hook can go and
+                // tell them.
                 if trigger == "schedule" && permission_mode == PermissionMode::Reviewed {
                     anyhow::bail!(
                         "{}",
@@ -2377,15 +2472,20 @@ this workflow manually."
                 // permit; extra ones are taken only if immediately free, so a
                 // fan-out can never deadlock against another workflow.
                 let extra: Vec<_> = (1..plans.len())
-                    .filter_map(|_| self.semaphore.clone().try_acquire_owned().ok())
+                    .filter_map(|_| self.slots.sem().try_acquire_owned().ok())
                     .collect();
                 let concurrency = 1 + extra.len();
+                // Read once for the fan-out rather than per step: it is the
+                // same setting for all of them, and the closure below is not
+                // async.
+                let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
 
                 let results = futures::stream::iter(plans.into_iter().map(
                     |(db_step_id, step_key, cwd)| {
                         let this = self.clone();
                         let engine = step_engine.clone();
                         let seq = seq.clone();
+                        let tool_timeout_ms = tool_timeout_ms.clone();
                         let spec = RunSpec {
                             cwd,
                             prompt: prompt.clone(),
@@ -2408,7 +2508,7 @@ this workflow manually."
                             extra_env: HashMap::from([
                                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
                                 ("AICHIP_STEP".to_string(), step_key.clone()),
-                                ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
+                                ("MCP_TOOL_TIMEOUT".to_string(), tool_timeout_ms.clone()),
                             ]),
                         };
                         async move {
@@ -2519,6 +2619,11 @@ this workflow manually."
         // — and certainly not done. The activity view already sorts
         // awaiting_approval to the top and lists it as a blocker.
         self.set_status(run_id, RunStatus::AwaitingApproval).await?;
+        let ctx = crate::attention::Ctx {
+            title: "aichip: a plan needs your review".to_string(),
+            ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+        };
+        crate::attention::fire(&self.db, crate::attention::Event::Plan, ctx).await;
         Ok(())
     }
 
@@ -2917,6 +3022,16 @@ this workflow manually."
                         }
                         AichipEvent::RateLimited { reset_at, message } => {
                             self.requeue_rate_limited(run_id, *reset_at).await?;
+                            let ctx = crate::attention::Ctx {
+                                title: "aichip: rate limited".to_string(),
+                                ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+                            };
+                            crate::attention::fire(
+                                &self.db,
+                                crate::attention::Event::RateLimited,
+                                ctx,
+                            )
+                            .await;
                             outcome = Some((RunStatus::RateLimited, Some(message.clone())));
                         }
                         _ => {}
@@ -2995,7 +3110,14 @@ this workflow manually."
     ) -> anyhow::Result<()> {
         self.forget_cancel(run_id);
         let mut tx = self.db.pool.begin().await?;
-        sqlx::query("UPDATE runs SET status=$1, error_reason=$2, finished_at=now() WHERE id=$3")
+        // `COALESCE`, because a cancel carries `reason: None` and the broker
+        // may already have written the true one — "nobody answered the request
+        // to allow Bash". Safe only because `unpark` clears the column, so a
+        // run that parked and then finished cleanly reports nothing.
+        sqlx::query(
+            "UPDATE runs SET status=$1, error_reason=COALESCE($2, error_reason),
+             finished_at=now() WHERE id=$3",
+        )
             .bind(status.as_str())
             .bind(reason)
             .bind(run_id)

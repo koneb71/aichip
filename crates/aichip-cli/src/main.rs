@@ -1,3 +1,4 @@
+use aichip_core::runs::gate::DbGate;
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
@@ -263,11 +264,27 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         }
     };
 
+    // Built before the state literal, which moves `db` on its first line.
+    // The broker needs a database of its own to park and unpark runs, and the
+    // orchestrator's slots so a run waiting on a person stops occupying one.
+    let attention = aichip_core::attention::load(&db).await;
+    let permissions = {
+        let cancel_orchestrator = orchestrator.clone();
+        PermissionBroker::new(
+            bus.clone(),
+            Arc::new(DbGate::new(db.clone(), move |run_id| {
+                cancel_orchestrator.cancel(run_id);
+            })),
+            orchestrator.slots(),
+            attention.window(),
+        )
+    };
+
     let state = aichip_server::AppState {
         db,
         bus: bus.clone(),
         orchestrator,
-        permissions: PermissionBroker::new(bus),
+        permissions,
         storage,
         file_writes: Default::default(),
     };

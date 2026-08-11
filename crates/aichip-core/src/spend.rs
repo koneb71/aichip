@@ -124,6 +124,43 @@ impl Dimension {
     }
 }
 
+/// The same sums, for one project.
+///
+/// Built from the same `PROJECT_JOIN` as `totals` rather than a second join of
+/// its own — that const's doc says it is "kept identical on purpose, so the two
+/// screens can never disagree about which runs belong to a workspace", and a
+/// third reader must not be the one that breaks it.
+pub async fn for_project(db: &Db, project_id: Uuid, days: i32) -> anyhow::Result<Totals> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(r.cost_usd), 0)              AS cost,
+                COUNT(*)                                   AS runs,
+                COALESCE(SUM(r.input_tokens), 0)::bigint           AS input,
+                COALESCE(SUM(r.output_tokens), 0)::bigint          AS output,
+                COALESCE(SUM(r.cache_read_tokens), 0)::bigint      AS cache_read,
+                COALESCE(SUM(r.cache_creation_tokens), 0)::bigint  AS cache_creation,
+                COUNT(*) FILTER (WHERE r.tokens_provisional) AS provisional,
+                COUNT(*) FILTER (WHERE r.cost_usd IS NULL AND r.input_tokens > 0) AS unpriced
+         FROM runs r {PROJECT_JOIN}
+         WHERE r.created_at > now() - make_interval(days => $2)
+           AND p.id = $1"
+    );
+    let row = sqlx::query(&sql)
+        .bind(project_id)
+        .bind(days)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(Totals {
+        cost_usd: row.get("cost"),
+        runs: row.get("runs"),
+        input_tokens: row.get("input"),
+        output_tokens: row.get("output"),
+        cache_read_tokens: row.get("cache_read"),
+        cache_creation_tokens: row.get("cache_creation"),
+        provisional_runs: row.get("provisional"),
+        unpriced_runs: row.get("unpriced"),
+    })
+}
+
 /// Sums across the whole window.
 pub async fn totals(db: &Db, ws: Option<Uuid>, days: i32) -> anyhow::Result<Totals> {
     let sql = format!(

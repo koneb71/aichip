@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { api, Effort, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
+import { AttentionSettings } from "../components/AttentionSettings";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -220,6 +221,7 @@ export default function SettingsPage() {
       </div>
 
       <PreviewSettings />
+      <AttentionSettings />
 
       <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Models

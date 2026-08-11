@@ -85,6 +85,50 @@ pub fn tools_list() -> Value {
               "inputSchema": obj(json!({ "task_id": { "type": "string" } }), vec!["task_id"]) },
             { "name": "list_agents", "description": "List available agents in this workspace.",
               "inputSchema": obj(json!({}), vec![]) },
+            {
+                "name": "cancel_task",
+                "description": "Stop a task that is queued or running. Use it when the user says stop, or when you started something you should not have. It does not undo what the agent already wrote — the worktree and its diff survive for review. A task that already finished is reported as finished, which is not an error.",
+                "inputSchema": obj(json!({ "task_id": { "type": "string" } }), vec!["task_id"])
+            },
+            {
+                "name": "get_diff",
+                "description": "What a task changed: one line per file, with lines added and removed. Use it to tell the user what a finished card did, or to judge whether it is worth their time to look at. Pass a path from that summary to read one file's actual diff, capped — it will be cut off, and asking for file after file to rebuild the whole change is not what this is for. A task that has not run has no diff.",
+                "inputSchema": obj(json!({
+                    "task_id": { "type": "string" },
+                    "path": { "type": "string", "description": "optional: one file, spelled exactly as the summary reports it. Omit it for the summary." }
+                }), vec!["task_id"])
+            },
+            {
+                "name": "get_spend",
+                "description": "What this project's runs have cost, and whether the queue will accept more work. Check it before starting anything large, and when the user asks what something cost. Runs still in flight report what they have spent so far, not what they will. Some engines never report a price; those runs are counted separately rather than folded in as zero. The budget and queue state are machine-wide, the totals are this project's.",
+                "inputSchema": obj(json!({
+                    "days": { "type": "integer", "description": "how far back to look, 1-365. Defaults to 7." }
+                }), vec![])
+            },
+            {
+                "name": "list_skills",
+                "description": "The skills in this workspace: saved instructions for how the user wants a kind of job done. Use it to answer what skills they have, and to pass skill_name to create_task. You are given each skill's name and what it is for, never its text — the instructions are handed to whoever runs the task, so repeating them into a prompt would send them twice.",
+                "inputSchema": obj(json!({}), vec![])
+            },
+            {
+                "name": "move_task",
+                "description": "File a card in a different column. Bookkeeping only: it changes nothing in git, and moving a card to done does not merge its branch. Use start_task to start a card. It refuses while the card is being worked on.",
+                "inputSchema": obj(json!({
+                    "task_id": { "type": "string" },
+                    "column": { "type": "string", "enum": ["backlog", "review", "done"] }
+                }), vec!["task_id", "column"])
+            },
+            // Deliberately absent: merge_task. `squash_merge` runs four git
+            // commands in the user's real checkout, which is the same reason
+            // Edit/Write/Bash are denied by name for chat runs — a front door
+            // locked and a back door left open. There is also nowhere to ask:
+            // chat runs carry `permission_prompt_tool: false`, so a
+            // confirmation step has no channel to confirm on. Say the card is
+            // ready and let them press Merge, where the diff is.
+            //
+            // And retry_task, whose only difference from start_task is
+            // `fresh: true` — which deletes the worktree *and* the branch,
+            // destroying the only copy of an unmerged diff.
         ]
     })
 }
@@ -180,6 +224,14 @@ async fn call_tool(
         "start_task" => {
             let task_id = parse_task_id(&args)?;
             ensure_task_in_project(state, task_id, project_id).await?;
+            // The same vetting the Start button does. Without it the assistant
+            // can queue a Reviewed card onto an engine that cannot ask for
+            // permission, and get a run that refuses every tool call — the
+            // capability gate is meant to refuse at the click, and this was a
+            // way round it.
+            crate::routes::tasks::vet_task(state, task_id)
+                .await
+                .map_err(|(_, message)| message)?;
             let run_id = state
                 .orchestrator
                 .enqueue_task(task_id)
@@ -252,8 +304,211 @@ async fn call_tool(
                 })).collect::<Vec<_>>()
             }))
         }
+        "cancel_task" => {
+            let task_id = parse_task_id(&args)?;
+            ensure_task_in_project(state, task_id, project_id).await?;
+            // The task's run, never a run id from the model: `task_id` is the
+            // only handle `ensure_task_in_project` can check, so a run id
+            // would be an unguardable back door into another project. It also
+            // means the assistant cannot reach its own chat run, which carries
+            // a chat_id and a null task_id.
+            let run_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(task_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            let Some(run_id) = run_id else {
+                // A different fact from "already finished", and the assistant
+                // should not report one as the other.
+                return Err("this task has never been started, so there is nothing to cancel".into());
+            };
+            // The route handler itself, not a copy of it: its guards, its
+            // wording, and anything added to it later apply here without a
+            // second implementation drifting out of agreement.
+            let axum::Json(v) = crate::routes::tasks::cancel_run(
+                axum::extract::State(state.clone()),
+                axum::extract::Path(run_id),
+            )
+            .await
+            .map_err(|(_, message)| message)?;
+            Ok(v)
+        }
+        "get_diff" => {
+            let task_id = parse_task_id(&args)?;
+            ensure_task_in_project(state, task_id, project_id).await?;
+            let row = sqlx::query(
+                "SELECT p.vcs, COALESCE(t.worktree_path, (
+                            SELECT r.worktree_path FROM runs r
+                             WHERE r.task_id = t.id AND r.worktree_path IS NOT NULL
+                             ORDER BY r.created_at DESC LIMIT 1)) AS worktree,
+                        COALESCE(p.default_branch, 'main') AS base
+                   FROM tasks t JOIN projects p ON p.id = t.project_id
+                  WHERE t.id = $1",
+            )
+            .bind(task_id)
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            // Refused with a reason rather than answered with an empty diff,
+            // which to a model reads as "nothing changed".
+            if row.get::<String, _>("vcs") != "git" {
+                return Err("this project has no version control, so its tasks edit the folder directly — there is no diff".into());
+            }
+            let Some(worktree) = row.get::<Option<String>, _>("worktree") else {
+                return Err("this task has not run yet, so there is nothing to diff".into());
+            };
+            let worktree = std::path::PathBuf::from(worktree);
+            let base: String = row.get("base");
+
+            let stats = state
+                .orchestrator
+                .worktrees
+                .diff_stat(&worktree, &base)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            match args.get("path").and_then(Value::as_str) {
+                Some(path) => {
+                    if !stats.iter().any(|f| f.path == path) {
+                        let names: Vec<_> =
+                            stats.iter().take(20).map(|f| f.path.clone()).collect();
+                        return Err(format!(
+                            "no file called {path} changed in this task. These did: {}",
+                            names.join(", ")
+                        ));
+                    }
+                    let full = state
+                        .orchestrator
+                        .worktrees
+                        .diff_file(&worktree, &base, path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let (text, dropped) = clip(&full, MAX_DIFF_CHARS);
+                    Ok(json!({
+                        "path": path,
+                        "diff": text,
+                        "truncated": dropped > 0,
+                    }))
+                }
+                None => Ok(summarize(stats)),
+            }
+        }
+        "get_spend" => {
+            let days = args
+                .get("days")
+                .and_then(Value::as_i64)
+                .unwrap_or(7)
+                .clamp(1, 365) as i32;
+            let totals = aichip_core::spend::for_project(&state.db, project_id, days)
+                .await
+                .map_err(|e| e.to_string())?;
+            let gate = state.orchestrator.queue_gate().await;
+            Ok(json!({
+                "days": days,
+                "project": totals,
+                // Named apart from the project totals on purpose: the cap and
+                // the queue are the whole machine's, not this project's.
+                "queue": match &gate {
+                    aichip_core::runs::orchestrator::QueueGate::Open => json!({ "state": "open" }),
+                    aichip_core::runs::orchestrator::QueueGate::Paused => json!({ "state": "paused" }),
+                    aichip_core::runs::orchestrator::QueueGate::OverBudget { spent_today, cap_usd } =>
+                        json!({ "state": "over_budget", "spent_today_usd": spent_today, "cap_usd": cap_usd }),
+                },
+            }))
+        }
+        "list_skills" => {
+            let skills = aichip_core::skills::list(&state.db, workspace_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                // Names and descriptions only. The bodies are capped at 4000
+                // characters each and are fenced and neutralised at run time
+                // precisely because they are untrusted text — handing them to
+                // the assistant outside that fence would undo the work, and it
+                // has no use for them: `create_task` binds by id and the text
+                // is folded in when the run starts.
+                "skills": skills.iter().filter(|s| s.enabled).map(|s| json!({
+                    "name": s.name,
+                    "description": s.description,
+                })).collect::<Vec<_>>()
+            }))
+        }
+        "move_task" => {
+            let task_id = parse_task_id(&args)?;
+            ensure_task_in_project(state, task_id, project_id).await?;
+            let column = args
+                .get("column")
+                .and_then(Value::as_str)
+                .ok_or("column must be backlog, review or done")?;
+            // "running" is deliberately not offered: it would relabel a card
+            // that has no run, which is worse than the stranded state it looks
+            // like it fixes. Starting work is `start_task`.
+            if !["backlog", "review", "done"].contains(&column) {
+                return Err(format!(
+                    "{column} is not a column you can file a card in — use backlog, review or done, and start_task to start one"
+                ));
+            }
+            let axum::Json(_) = crate::routes::tasks::move_task(
+                axum::extract::State(state.clone()),
+                axum::extract::Path(task_id),
+                axum::Json(crate::routes::tasks::MoveTask::to_column(column)),
+            )
+            .await
+            .map_err(|(_, message)| message)?;
+            // Says "filed", never "landed": a user reading "done" in chat must
+            // not come away thinking their code merged.
+            Ok(json!({ "filed": true, "column": column }))
+        }
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+/// Files listed in one summary, and characters of one file's diff.
+///
+/// A five-thousand-line change must not be able to reach the model in one
+/// call. The failure to avoid is not a truncated answer — it is an assistant
+/// that calls `get_diff` twelve times to rebuild what it was capped out of,
+/// which is why the tool description says not to.
+const MAX_DIFF_FILES: usize = 200;
+const MAX_DIFF_CHARS: usize = 12_000;
+
+/// One line per file, biggest first, saying plainly what did not fit.
+fn summarize(mut stats: Vec<aichip_core::worktrees::manager::FileStat>) -> Value {
+    let files_changed = stats.len();
+    let added: i64 = stats.iter().map(|f| f.added).sum();
+    let removed: i64 = stats.iter().map(|f| f.removed).sum();
+    stats.sort_by_key(|f| -(f.added + f.removed));
+    let more = files_changed.saturating_sub(MAX_DIFF_FILES);
+    stats.truncate(MAX_DIFF_FILES);
+    json!({
+        "files_changed": files_changed,
+        "added": added,
+        "removed": removed,
+        "files": stats,
+        // Named rather than silently dropped, on the same reasoning the
+        // knowledge base uses: a list that stops without saying so reads as a
+        // complete list.
+        "more_files": more,
+    })
+}
+
+/// Cut to a budget on a line boundary, saying how much was left out.
+///
+/// The same shape and marker as `brain`, `skills` and the knowledge base use.
+fn clip(text: &str, budget: usize) -> (String, usize) {
+    if text.chars().count() <= budget {
+        return (text.to_string(), 0);
+    }
+    let kept: String = text.chars().take(budget).collect();
+    let cut = kept.rfind('\n').map(|i| &kept[..i]).unwrap_or(&kept).to_string();
+    let dropped = text.chars().count() - cut.chars().count();
+    (
+        format!("{cut}\n[truncated — {dropped} more characters]"),
+        dropped,
+    )
 }
 
 /// Which agent a new task binds to: what the assistant asked for, or failing
@@ -371,10 +626,10 @@ async fn ensure_task_in_project(
 
 #[cfg(test)]
 mod tests {
-    use super::tools_list;
+    use super::*;
 
     #[test]
-    fn tools_list_exposes_the_five_workspace_tools() {
+    fn tools_list_exposes_every_tool_the_assistant_has() {
         let v = tools_list();
         let names: Vec<&str> = v["tools"]
             .as_array()
@@ -384,7 +639,23 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["create_task", "start_task", "list_tasks", "get_task_status", "list_agents"]
+            [
+                // What it can start.
+                "create_task",
+                "start_task",
+                // What it can see.
+                "list_tasks",
+                "get_task_status",
+                "list_agents",
+                // And what it can do about the result, which is the half that
+                // was missing: it could spend $143 and then had no tool to
+                // stop it, read it, or say what it cost.
+                "cancel_task",
+                "get_diff",
+                "get_spend",
+                "list_skills",
+                "move_task",
+            ]
         );
     }
 
@@ -415,5 +686,101 @@ mod tests {
             .unwrap();
         assert!(described.contains("unknown name is rejected"));
         assert!(described.contains("@mention"));
+    }
+
+    /// The failure this change can introduce, and it is silent.
+    ///
+    /// A tool advertised by `tools/list` but missing from `CHAT_ALLOWED_TOOLS`
+    /// is one the model reaches for and is refused — and chat runs carry
+    /// `permission_prompt_tool: false`, so there is no prompt to answer. The
+    /// call simply fails and the assistant reports that the workspace is
+    /// broken. The two lists live in different crates, which is exactly why
+    /// nothing else would catch it.
+    #[test]
+    fn every_tool_the_assistant_is_offered_is_one_it_is_pre_approved_to_call() {
+        let offered: std::collections::HashSet<String> = tools_list()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| format!("mcp__aichip__{}", t["name"].as_str().unwrap()))
+            .collect();
+        let allowed: std::collections::HashSet<String> =
+            aichip_core::runs::orchestrator::CHAT_ALLOWED_TOOLS
+                .iter()
+                .filter(|t| t.starts_with("mcp__aichip__"))
+                .map(|t| t.to_string())
+                .collect();
+        // Both directions: a grant for a tool that does not exist is usually a
+        // rename done on one side only.
+        assert_eq!(offered, allowed);
+    }
+
+    /// Keeps the omission a decision the codebase holds, rather than a gap the
+    /// next contributor fills in.
+    #[test]
+    fn the_chat_assistant_is_offered_no_way_to_merge() {
+        for t in tools_list()["tools"].as_array().unwrap() {
+            let name = t["name"].as_str().unwrap();
+            assert!(!name.contains("merge"), "{name} lands code from chat");
+            assert!(!name.contains("retry"), "{name} can discard an unmerged diff");
+        }
+    }
+
+    #[test]
+    fn the_descriptions_say_the_parts_that_are_easy_to_get_wrong() {
+        let tools = tools_list();
+        let by_name = |n: &str| -> String {
+            tools["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == n)
+                .unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // A model that does not know the diff is capped will try to rebuild it.
+        assert!(by_name("get_diff").contains("capped"));
+        // And one that thinks "done" merges will tell the user their code landed.
+        assert!(by_name("move_task").contains("does not merge"));
+        // Cancelling must not read as undoing.
+        assert!(by_name("cancel_task").contains("does not undo"));
+    }
+
+    #[test]
+    fn a_summary_names_the_files_it_left_out() {
+        let stats: Vec<_> = (0..MAX_DIFF_FILES + 5)
+            .map(|i| aichip_core::worktrees::manager::FileStat {
+                path: format!("f{i}.rs"),
+                added: i as i64,
+                removed: 0,
+                binary: false,
+            })
+            .collect();
+        let v = summarize(stats);
+        assert_eq!(v["files_changed"], MAX_DIFF_FILES + 5);
+        assert_eq!(v["files"].as_array().unwrap().len(), MAX_DIFF_FILES);
+        assert_eq!(v["more_files"], 5);
+        // Biggest first, so what is dropped is the least interesting.
+        assert_eq!(v["files"][0]["path"], format!("f{}.rs", MAX_DIFF_FILES + 4));
+    }
+
+    #[test]
+    fn a_short_diff_is_not_marked_truncated() {
+        let (text, dropped) = clip("one\ntwo\n", 100);
+        assert_eq!(text, "one\ntwo\n");
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn a_long_diff_says_how_much_it_left_out() {
+        let long = "a line of diff\n".repeat(2000);
+        let (text, dropped) = clip(&long, 200);
+        assert!(dropped > 0);
+        assert!(text.contains("[truncated —"), "{text}");
+        // Cut on a line boundary, so the last line shown is a whole one.
+        let body = text.lines().next().unwrap();
+        assert_eq!(body, "a line of diff");
     }
 }

@@ -13,6 +13,27 @@ export interface Workspace {
   color: string;
 }
 
+export type AttentionEvent =
+  | "permission"
+  | "plan"
+  | "rate_limited"
+  | "over_budget"
+  | "finished";
+
+export interface AttentionSettingsValue {
+  enabled: boolean;
+  command: string;
+  events: AttentionEvent[];
+  hookTimeoutSecs: number;
+  /** 0 means wait indefinitely. */
+  waitSecs: number;
+  maxWaitSecs: number;
+  /** The variables the hook will find set. Never includes the tool input. */
+  envNames: string[];
+  /** Set when the saved command looks like it contains a credential. */
+  warning: string | null;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -1583,6 +1604,30 @@ export const api = {
       json<{ days: number; events: UsageEvent[]; patterns: UsagePattern[] }>(r),
     ),
   // Previews
+  attentionSettings: () =>
+    fetch("/api/settings/attention").then((r) => json<AttentionSettingsValue>(r)),
+  /**
+   * Carries the write header for the same reason the file editor does: the
+   * stored value is a command this machine will run, so a cross-origin page
+   * must not be able to set it. Without CORS the preflight gets no
+   * `Access-Control-Allow-*` and the browser never sends the real request.
+   */
+  setAttentionSettings: (v: {
+    enabled: boolean;
+    command: string;
+    events: AttentionEvent[];
+    waitSecs: number;
+  }) =>
+    fetch("/api/settings/attention", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+      body: JSON.stringify({
+        enabled: v.enabled,
+        command: v.command,
+        events: v.events,
+        wait_secs: v.waitSecs,
+      }),
+    }).then((r) => json<AttentionSettingsValue>(r)),
   previewLimits: () =>
     fetch("/api/previews/limits").then((r) =>
       json<{ maxLive: number; idleMinutes: number; live: number }>(r),

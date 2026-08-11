@@ -13,7 +13,7 @@ use aichip_shared::{
 };
 use std::collections::BTreeMap;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/permissions", get(get_permissions).put(set_permissions))
         .route("/settings/effort", get(get_effort).put(set_effort))
         .route("/settings/permissions/apply-to-agents", axum::routing::post(apply_to_agents))
+        .route("/settings/attention", get(get_attention).put(set_attention))
 }
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
@@ -306,4 +307,81 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
         .map_err(internal)?
         .rows_affected();
     Ok(Json(json!({ "cleared": cleared })))
+}
+
+
+/// The most dangerous write in the app.
+///
+/// The stored value is a shell command this server will execute, so anything
+/// that can reach this endpoint has remote code execution. It carries the same
+/// header gate the file-write path documents: there is no CORS layer, so a
+/// preflight for `x-aichip-write` gets no `Access-Control-Allow-*` and the
+/// browser refuses to send the real request. Belt and braces behind the Origin
+/// check in `lib.rs`.
+const WRITE_HEADER: &str = "x-aichip-write";
+
+async fn get_attention(State(state): State<AppState>) -> Json<Value> {
+    let a = aichip_core::attention::load(&state.db).await;
+    Json(attention_json(&a, None))
+}
+
+#[derive(Deserialize)]
+struct AttentionBody {
+    enabled: Option<bool>,
+    command: Option<String>,
+    events: Option<Vec<String>>,
+    hook_timeout_secs: Option<i64>,
+    wait_secs: Option<i64>,
+}
+
+async fn set_attention(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AttentionBody>,
+) -> Result<Json<Value>, ApiError> {
+    if !headers.contains_key(WRITE_HEADER) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("this endpoint stores a command this machine will run, so it needs the {WRITE_HEADER} header"),
+        ));
+    }
+    let current = aichip_core::attention::load(&state.db).await;
+    let next = aichip_core::attention::Attention {
+        enabled: body.enabled.unwrap_or(current.enabled),
+        command: body.command.unwrap_or(current.command),
+        events: match body.events {
+            Some(list) => list
+                .iter()
+                .filter_map(|e| aichip_core::attention::Event::parse(e))
+                .collect(),
+            None => current.events,
+        },
+        hook_timeout_secs: body.hook_timeout_secs.unwrap_or(current.hook_timeout_secs),
+        wait_secs: body.wait_secs.unwrap_or(current.wait_secs),
+    };
+    // Warned about rather than refused. Someone pasting a webhook URL with a
+    // token in it should be told it is stored in plain text in the database,
+    // not blocked from setting up their own notifications.
+    let warning = aichip_shared::looks_like_secret(&next.command)
+        .map(|f| aichip_shared::secrets::refusal(&f));
+
+    let saved = aichip_core::attention::save(&state.db, next)
+        .await
+        .map_err(internal)?;
+    Ok(Json(attention_json(&saved, warning)))
+}
+
+fn attention_json(a: &aichip_core::attention::Attention, warning: Option<String>) -> Value {
+    json!({
+        "enabled": a.enabled,
+        "command": a.command,
+        "events": a.events.iter().map(|e| e.as_str()).collect::<Vec<_>>(),
+        "hookTimeoutSecs": a.hook_timeout_secs,
+        "waitSecs": a.wait_secs,
+        "maxWaitSecs": aichip_core::attention::MAX_WINDOW_SECS,
+        // The names the hook will find in its environment, so the settings
+        // screen can show them rather than making someone read the source.
+        "envNames": aichip_core::attention::ENV_NAMES,
+        "warning": warning,
+    })
 }

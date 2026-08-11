@@ -509,6 +509,12 @@ function ToolChip({ name, input }: { name: string; input: unknown }) {
     if (name === "mcp__aichip__list_tasks") return "Checking the board";
     if (name === "mcp__aichip__get_task_status") return "Checking task status";
     if (name === "mcp__aichip__list_agents") return "Browsing agents";
+    if (name === "mcp__aichip__cancel_task") return "Stopping the task";
+    if (name === "mcp__aichip__get_diff")
+      return typeof args.path === "string" ? `Reading the diff: ${args.path}` : "Reading the diff";
+    if (name === "mcp__aichip__get_spend") return "Checking what this has cost";
+    if (name === "mcp__aichip__list_skills") return "Browsing skills";
+    if (name === "mcp__aichip__move_task") return `Filing the card in ${args.column ?? "a column"}`;
     if (name === "Read") return `Reading ${args.file_path ?? "a file"}`;
     if (name === "Grep") return "Searching the codebase";
     if (name === "Glob") return "Listing files";

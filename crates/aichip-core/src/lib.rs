@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod attention;
 pub mod brain;
 pub mod bus;
 pub mod db;

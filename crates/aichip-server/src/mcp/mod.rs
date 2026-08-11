@@ -2,7 +2,7 @@
 //! Code's `--permission-prompt-tool mcp__aichip__approve` needs: initialize,
 //! tools/list, and tools/call for a single `approve` tool. When the engine
 //! asks for permission, the call parks in the PermissionBroker until the
-//! user answers in the dashboard (timeout → deny).
+//! user answers in the dashboard.
 
 pub mod chat_tools;
 pub mod org_tools;
@@ -12,6 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use aichip_core::runs::permissions::Decision;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -66,17 +67,16 @@ async fn rpc(
                 .to_string();
             let input = args.get("input").cloned().unwrap_or(json!({}));
 
-            let allowed = state
+            let decision = state
                 .permissions
                 .request(run_id, tool_name, input.clone())
                 .await;
 
             // The permission-prompt-tool contract: content[0].text is a
             // JSON-encoded {behavior, updatedInput|message}.
-            let payload = if allowed {
-                json!({ "behavior": "allow", "updatedInput": input })
-            } else {
-                json!({ "behavior": "deny", "message": "denied by aichip user" })
+            let payload = match &decision {
+                Decision::Allowed => json!({ "behavior": "allow", "updatedInput": input }),
+                other => json!({ "behavior": "deny", "message": refusal(other) }),
             };
             json!({
                 "content": [{ "type": "text", "text": payload.to_string() }]
@@ -97,4 +97,58 @@ async fn rpc(
         StatusCode::OK,
         Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })),
     )
+}
+
+/// What to say when the answer is not "allow".
+///
+/// The wire protocol has only allow and deny, so everything here travels as a
+/// denial — but only one of these is a person refusing. An engine told it was
+/// refused works around the refusal and spends real money doing it, so the
+/// message is where the difference has to survive. `Unanswered` and `RunGone`
+/// both say plainly that the run is over, because the broker has already
+/// stopped it and any further work would be thrown away.
+fn refusal(decision: &Decision) -> &'static str {
+    match decision {
+        // Unreachable: the caller matches Allowed before getting here.
+        Decision::Allowed => "allowed",
+        Decision::Denied => "denied by the aichip user",
+        Decision::Unanswered { .. } => {
+            "nobody answered this request, so aichip stopped the run. \
+             This is not a refusal — no one saw it. Do not work around it; stop here."
+        }
+        Decision::RunGone => "this run was cancelled while the request was outstanding; stop here.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn the_engine_is_never_told_a_person_refused_something_nobody_saw() {
+        let unanswered = refusal(&Decision::Unanswered {
+            waited: Duration::from_secs(86_400),
+        });
+        // The exact sentence this replaced was "denied by aichip user", which
+        // described a decision that had not happened.
+        assert!(!unanswered.contains("denied"), "{unanswered}");
+        assert!(unanswered.contains("not a refusal"), "{unanswered}");
+
+        assert!(refusal(&Decision::Denied).contains("denied"));
+        assert!(refusal(&Decision::RunGone).contains("cancelled"));
+    }
+
+    #[test]
+    fn every_ending_tells_the_engine_something_different() {
+        let all = [
+            refusal(&Decision::Denied),
+            refusal(&Decision::Unanswered {
+                waited: Duration::from_secs(1),
+            }),
+            refusal(&Decision::RunGone),
+        ];
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "two endings read the same");
+    }
 }

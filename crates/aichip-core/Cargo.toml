@@ -18,6 +18,10 @@ chrono = { workspace = true }
 sqlx = { workspace = true }
 rand = { workspace = true }
 futures = "0.3"
+# `dyn RunGate` for the permission broker: async fn in traits is not
+# object-safe, and the test double is the whole reason the trait exists —
+# there is no database-backed test in this workspace.
+async-trait = "0.1"
 croner = "3"
 # Object storage (MinIO / any S3-compatible endpoint). SigV4 is signed by hand
 # rather than pulling an SDK: the request surface is four verbs, and an SDK
@@ -39,3 +43,7 @@ serde_yaml = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
+# Paused-clock tests. The permission window is 24 hours by default and what
+# happens when it closes is exactly the thing worth asserting — not a wait any
+# test suite can afford to actually take.
+tokio = { workspace = true, features = ["test-util"] }

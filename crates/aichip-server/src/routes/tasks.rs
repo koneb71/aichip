@@ -322,7 +322,7 @@ async fn start(
 ///
 /// The same check runs again at dispatch, but doing it here means the user
 /// sees the reason on the click that caused it rather than as a failed run.
-async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
+pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiError> {
     if step_is_live(state, task_id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -502,7 +502,7 @@ async fn pending_permissions(
 /// parked waiting for plan approval, has no process to interrupt — it is
 /// taken off the queue and closed out here instead. This used to answer
 /// `{"canceled": true}` no matter what, including when it had done nothing.
-async fn cancel_run(
+pub(crate) async fn cancel_run(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
@@ -581,8 +581,11 @@ async fn resolve_permission(
 // ---------------------------------------------------------------------------
 // Kanban: card movement, the comment thread, attaching files after creation.
 
-#[derive(Deserialize, Debug)]
-struct MoveTask {
+/// `Default` so `chat_tools` can set one field and leave the rest alone —
+/// the nested options already mean "absent", which is what a partial move
+/// wants, and the field-by-field semantics are documented below.
+#[derive(Deserialize, Debug, Default)]
+pub(crate) struct MoveTask {
     board_column: Option<String>,
     position: Option<f64>,
     /// Who should do this card. Three distinct requests, which is why this is
@@ -617,6 +620,21 @@ struct MoveTask {
     effort: Option<Option<ReasoningEffort>>,
 }
 
+impl MoveTask {
+    /// File a card in a column and change nothing else.
+    ///
+    /// A named constructor rather than public fields: every other field here
+    /// means "leave it alone" only because it is a nested option, and a caller
+    /// building one by hand is one `..Default::default()` away from silently
+    /// unassigning a card.
+    pub(crate) fn to_column(column: &str) -> Self {
+        Self {
+            board_column: Some(column.to_string()),
+            ..Default::default()
+        }
+    }
+}
+
 /// Distinguish "field was present and null" from "field was absent".
 fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
@@ -629,7 +647,7 @@ where
 /// Drag a card. Dropping a backlog card into "running" is the drag-native way
 /// to start it; every other move is bookkeeping. A card whose run is still
 /// active refuses to leave "running" — cancel the run first.
-async fn move_task(
+pub(crate) async fn move_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<MoveTask>,

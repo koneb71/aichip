@@ -43,7 +43,12 @@ export function needsYou(status?: string | null): boolean {
 /** Human-readable label; snake_case reads badly in a chip. */
 export function statusLabel(status?: string | null): string {
   if (!status) return "";
-  return status === "awaiting_approval" ? "needs your approval" : status.replace(/_/g, " ");
+  // Both of these are the same sentence to a person — the run has stopped and
+  // is waiting on them — so neither should read as jargon. "waiting permission"
+  // in particular describes what the machine is doing rather than what it wants.
+  if (status === "awaiting_approval") return "needs your approval";
+  if (status === "waiting_permission") return "needs your answer";
+  return status.replace(/_/g, " ");
 }
 
 export function statusColor(status?: string | null): string {

@@ -672,7 +672,7 @@ impl Orchestrator {
             // if immediately free, so a batch can never deadlock against
             // another run waiting for the same semaphore.
             let extra: Vec<_> = (1..jobs.len())
-                .filter_map(|_| self.semaphore.clone().try_acquire_owned().ok())
+                .filter_map(|_| self.slots.sem().try_acquire_owned().ok())
                 .collect();
             let concurrency = 1 + extra.len();
 
@@ -1098,6 +1098,7 @@ impl Orchestrator {
 
         // Engine-neutral: a team member on any MCP-capable engine gets the
         // org tools, not just Claude.
+        let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         let mcp = aichip_shared::McpWiring {
             aichip_url: self
                 .mcp_base_url
@@ -1145,7 +1146,7 @@ impl Orchestrator {
             permission_prompt_tool: false,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), ctx.run_id.to_string()),
-                ("MCP_TOOL_TIMEOUT".to_string(), "900000".to_string()),
+                ("MCP_TOOL_TIMEOUT".to_string(), tool_timeout_ms.clone()),
             ]),
         };
 

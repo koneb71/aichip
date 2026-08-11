@@ -1,9 +1,11 @@
 pub mod attachments;
+pub mod gate;
 pub mod memory;
 pub mod mentions;
 pub mod orchestrator;
 pub mod org;
 pub mod permissions;
+pub mod slots;
 pub mod task_plan;
 pub mod usage_tally;
 pub mod utility;

@@ -43,6 +43,7 @@ dependencies = [
  "aichip-shared",
  "ammonia",
  "anyhow",
+ "async-trait",
  "chrono",
  "croner",
  "futures",

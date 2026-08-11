@@ -17,6 +17,32 @@ pub struct Worktree {
     pub branch: String,
 }
 
+/// One file's share of a diff.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileStat {
+    pub path: String,
+    pub added: i64,
+    pub removed: i64,
+    pub binary: bool,
+}
+
+/// `added<TAB>removed<TAB>path`, with `-` for both counts on a binary file.
+fn parse_numstat(line: &str) -> Option<FileStat> {
+    let mut parts = line.splitn(3, '\t');
+    let added = parts.next()?;
+    let removed = parts.next()?;
+    let path = parts.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(FileStat {
+        path: path.to_string(),
+        added: added.parse().unwrap_or(0),
+        removed: removed.parse().unwrap_or(0),
+        binary: added == "-" && removed == "-",
+    })
+}
+
 impl WorktreeManager {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
@@ -91,6 +117,40 @@ impl WorktreeManager {
         git(worktree, &["add", "-N", "."]).await?; // make untracked files diffable
         let base = resolve_base(worktree, base_branch).await?;
         git(worktree, &["diff", &base]).await
+    }
+
+    /// One line per changed file, with counts.
+    ///
+    /// `--numstat` rather than parsing a unified diff: it gives the counts
+    /// directly and reports a binary file as `-` for both, so "binary" is read
+    /// from git rather than guessed. Telling a reader a PNG changed by zero
+    /// lines is worse than telling them nothing.
+    ///
+    /// Like `diff`, this runs `git add -N .` so untracked files count — which
+    /// writes the *worktree's* index. Never the user's checkout, and no
+    /// different from what viewing a diff already does.
+    pub async fn diff_stat(
+        &self,
+        worktree: &Path,
+        base_branch: &str,
+    ) -> anyhow::Result<Vec<FileStat>> {
+        git(worktree, &["add", "-N", "."]).await?;
+        let base = resolve_base(worktree, base_branch).await?;
+        let out = git(worktree, &["diff", "--numstat", &base]).await?;
+        Ok(out.lines().filter_map(parse_numstat).collect())
+    }
+
+    /// One file's diff. The path is a separate argument, never interpolated —
+    /// `git` takes an argument vector and builds no shell string.
+    pub async fn diff_file(
+        &self,
+        worktree: &Path,
+        base_branch: &str,
+        path: &str,
+    ) -> anyhow::Result<String> {
+        git(worktree, &["add", "-N", "."]).await?;
+        let base = resolve_base(worktree, base_branch).await?;
+        git(worktree, &["diff", &base, "--", path]).await
     }
 
     /// Squash-merge the worktree branch back onto the base branch in the
@@ -917,6 +977,95 @@ mod tests {
         mgr.create(dir.path(), "main", Uuid::new_v4(), "first-task")
             .await
             .expect("a freshly initialized project must support a worktree");
+    }
+
+    /// A worktree with one edited file, one new file, and one binary.
+    async fn worktree_with_changes() -> (tempfile::TempDir, tempfile::TempDir, Worktree) {
+        let dir = tempfile::tempdir().unwrap();
+        let wt_root = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("kept.txt"), "one\ntwo\nthree\n")
+            .await
+            .unwrap();
+        assert_eq!(ensure_repo(dir.path(), "main").await, Vcs::Git);
+        let mgr = WorktreeManager::new(wt_root.path());
+        let wt = mgr
+            .create(dir.path(), "main", Uuid::new_v4(), "t")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("kept.txt"), "one\nCHANGED\nthree\nfour\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("added.txt"), "brand new\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("logo.png"), [0u8, 159, 146, 150, 0, 1, 2])
+            .await
+            .unwrap();
+        (dir, wt_root, wt)
+    }
+
+    #[tokio::test]
+    async fn diff_stat_counts_lines_per_file() {
+        let (_dir, _root, wt) = worktree_with_changes().await;
+        let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
+        let stats = mgr.diff_stat(&wt.path, "main").await.unwrap();
+
+        let kept = stats.iter().find(|f| f.path == "kept.txt").unwrap();
+        assert_eq!((kept.added, kept.removed), (2, 1));
+        assert!(!kept.binary);
+    }
+
+    #[tokio::test]
+    async fn an_untracked_file_is_counted() {
+        // The reason `diff_stat` runs `git add -N .` — without it a brand new
+        // file is invisible, and a card that only adds files reports nothing
+        // changed.
+        let (_dir, _root, wt) = worktree_with_changes().await;
+        let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
+        let stats = mgr.diff_stat(&wt.path, "main").await.unwrap();
+        let added = stats.iter().find(|f| f.path == "added.txt").unwrap();
+        assert_eq!((added.added, added.removed), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn a_binary_file_is_reported_as_binary_not_as_zero() {
+        // `--numstat` writes `-` for both counts. Reporting 0/0 would tell a
+        // reader the image was untouched.
+        let (_dir, _root, wt) = worktree_with_changes().await;
+        let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
+        let stats = mgr.diff_stat(&wt.path, "main").await.unwrap();
+        let png = stats.iter().find(|f| f.path == "logo.png").unwrap();
+        assert!(png.binary, "a PNG must not read as an unchanged text file");
+    }
+
+    #[tokio::test]
+    async fn diff_file_returns_only_that_file() {
+        let (_dir, _root, wt) = worktree_with_changes().await;
+        let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
+        let one = mgr.diff_file(&wt.path, "main", "kept.txt").await.unwrap();
+        assert!(one.contains("CHANGED"));
+        assert!(!one.contains("added.txt"), "it leaked another file: {one}");
+    }
+
+    #[tokio::test]
+    async fn a_path_that_looks_like_a_flag_is_still_a_path() {
+        // The `--` separator plus an argument vector, never a shell string.
+        let (_dir, _root, wt) = worktree_with_changes().await;
+        let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
+        tokio::fs::write(wt.path.join("--oops.txt"), "x\n").await.unwrap();
+        let out = mgr.diff_file(&wt.path, "main", "--oops.txt").await;
+        assert!(out.is_ok(), "{out:?}");
+    }
+
+    #[test]
+    fn numstat_parses_text_and_binary_lines() {
+        let text = parse_numstat("12\t3\tsrc/main.rs").unwrap();
+        assert_eq!((text.added, text.removed, text.binary), (12, 3, false));
+        let bin = parse_numstat("-\t-\tassets/logo.png").unwrap();
+        assert_eq!((bin.added, bin.removed, bin.binary), (0, 0, true));
+        // A path with a space is one path, not two fields.
+        assert_eq!(parse_numstat("1\t0\tmy notes.md").unwrap().path, "my notes.md");
+        assert!(parse_numstat("garbage").is_none());
     }
 
     #[tokio::test]
