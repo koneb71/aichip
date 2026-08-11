@@ -14,6 +14,9 @@ import { SpendBars } from "../components/spend/SpendBars";
 import { SpendPanel } from "../components/spend/SpendPanel";
 import { UsagePanel } from "../components/usage/UsagePanel";
 import { useRunStream } from "../lib/ws";
+import { Page, PageHead, Stagger } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 /**
  * The operations view.
@@ -58,29 +61,41 @@ export default function ActivityPage() {
   const blocked = (data?.blocked ?? []).filter((b) => !stopped.has(b.runId));
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Activity</h1>
-          <p className="mt-1 text-sm text-ink-dim">
-            Everything running across {active?.name ?? "this workspace"}.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <NotifyToggle />
-          <button
-            onClick={togglePause}
-            disabled={busy || !data}
-            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
-              data?.paused
-                ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                : "border-line bg-panel hover:bg-panel-2"
-            }`}
-          >
-            {data?.paused ? "▶ Resume queue" : "❚❚ Pause queue"}
-          </button>
-        </div>
-      </div>
+    <Page>
+      <PageHead
+        title="Activity"
+        subtitle={`Everything running across ${active?.name ?? "this workspace"}.`}
+        actions={
+          <>
+            <NotifyToggle />
+            <motion.button
+              {...tappable}
+              onClick={togglePause}
+              disabled={busy || !data}
+              className={`ring-focus flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                data?.paused
+                  ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                  : "border-line bg-panel hover:border-ink-dim/40 hover:bg-panel-2"
+              }`}
+            >
+              {data?.paused ? (
+                <>
+                  <Icon name="play" size={13} />
+                  Resume queue
+                </>
+              ) : (
+                <>
+                  <span className="flex gap-[3px]">
+                    <span className="block h-3 w-[3px] rounded-full bg-current" />
+                    <span className="block h-3 w-[3px] rounded-full bg-current" />
+                  </span>
+                  Pause queue
+                </>
+              )}
+            </motion.button>
+          </>
+        }
+      />
 
       <AnimatePresence>
         {data && data.gate.state !== "open" && (
@@ -112,25 +127,45 @@ export default function ActivityPage() {
         )}
       </AnimatePresence>
 
-      <div className="mt-6 grid max-w-3xl grid-cols-[repeat(2,minmax(0,1fr))] gap-4 sm:grid-cols-[repeat(4,minmax(0,1fr))]">
-        <Stat label="Working now" value={String(working.length)} accent="var(--color-tier-medium)" />
-        <Stat label="Waiting on you" value={String(blocked.length)} accent="#d97706" />
-        <Stat label="Queued" value={String(queued.length)} accent="var(--color-ink-dim)" />
+      <Stagger className="mt-6 grid grid-cols-[repeat(2,minmax(0,1fr))] gap-4 sm:grid-cols-[repeat(4,minmax(0,1fr))]">
+        <Stat
+          label="Working now"
+          value={String(working.length)}
+          icon="play"
+          tint="indigo"
+          accent="var(--color-tier-medium)"
+        />
+        <Stat
+          label="Waiting on you"
+          value={String(blocked.length)}
+          icon="bell"
+          tint={blocked.length ? "amber" : "slate"}
+          accent="#d97706"
+        />
+        <Stat
+          label="Queued"
+          value={String(queued.length)}
+          icon="clock"
+          tint="slate"
+          accent="var(--color-ink-dim)"
+        />
         <Stat
           label={
             data?.budgetUsd ? `Spent today of $${data.budgetUsd.toFixed(0)}` : "Spent today"
           }
           value={`$${(data?.spend.today ?? 0).toFixed(2)}`}
+          icon="coin"
+          tint={data?.gate.state === "over_budget" ? "amber" : "mint"}
           accent={
             data?.gate.state === "over_budget"
               ? "#d97706"
               : "var(--color-tier-easy)"
           }
         />
-      </div>
+      </Stagger>
 
       {data?.budgetUsd != null && (
-        <div className="mt-3 max-w-3xl">
+        <div className="mt-3">
           <div className="h-1.5 overflow-hidden rounded-full bg-panel-2">
             <div
               style={{
@@ -251,7 +286,7 @@ export default function ActivityPage() {
       <AnimatePresence>
         {orgRun && <OrgRunView runId={orgRun} onClose={() => setOrgRun(null)} />}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }
 

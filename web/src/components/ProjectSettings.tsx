@@ -59,11 +59,12 @@ export function ProjectSettings({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={busy ? undefined : onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
     >
       <motion.div
-        initial={{ scale: 0.97, y: 8 }}
-        animate={{ scale: 1, y: 0 }}
+        initial={{ scale: 0.97, y: 12, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         onClick={(e) => e.stopPropagation()}
         className="card-shadow max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-panel p-5"
       >

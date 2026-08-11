@@ -5,6 +5,7 @@ import { useTierModel } from "../lib/models";
 import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
 import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
+import { springy } from "../lib/motion";
 
 const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -56,8 +57,10 @@ export function Board({
         return (
           <div
             key={col.key}
-            className={`flex min-h-0 min-w-0 flex-col rounded-xl transition-colors ${
-              dragId && overCol === col.key ? "bg-panel-2/60 ring-1 ring-accent/40" : ""
+            className={`flex min-h-0 min-w-0 flex-col rounded-2xl transition-colors duration-200 ${
+              dragId && overCol === col.key
+                ? "bg-accent/[0.04] ring-2 ring-accent/30"
+                : ""
             }`}
             onDragOver={(e) => {
               e.preventDefault();
@@ -105,7 +108,7 @@ export function Board({
                 </div>
               ))}
               {colTasks.length === 0 && (
-                <div className="mt-4 rounded-xl border border-dashed border-line py-6 text-center text-xs text-ink-dim/70">
+                <div className="mt-4 rounded-2xl border border-dashed border-line py-8 text-center text-xs text-ink-dim/70">
                   {col.key === "backlog" ? "Create a task to get started" : "—"}
                 </div>
               )}
@@ -141,13 +144,23 @@ function TaskCard({
       whileHover={{ y: -2 }}
       whileTap={{ scale: 0.99 }}
       onClick={() => onSelect(task)}
-      className="card-shadow relative rounded-xl border border-line bg-panel p-3 text-left"
+      transition={springy}
+      className="ring-focus card-shadow group relative overflow-hidden rounded-xl border border-line bg-panel p-3 text-left transition-[box-shadow,border-color] hover:card-shadow-md hover:border-ink-dim/25"
       style={
         running
-          ? { boxShadow: `0 0 0 1.5px ${accent}66, 0 1px 8px ${accent}22` }
+          ? { boxShadow: `0 0 0 1.5px ${accent}66, 0 4px 14px -4px ${accent}44` }
           : undefined
       }
     >
+      {running && (
+        <motion.span
+          aria-hidden
+          className="absolute inset-x-0 top-0 h-[2px] origin-left"
+          style={{ background: `linear-gradient(90deg, transparent, ${accent}, transparent)` }}
+          animate={{ x: ["-100%", "100%"] }}
+          transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
+        />
+      )}
       {running && (
         <motion.span
           className="absolute right-3 top-3 h-2 w-2 rounded-full"

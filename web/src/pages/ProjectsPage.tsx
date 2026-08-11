@@ -5,6 +5,9 @@ import { api, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { FolderBrowserModal } from "../components/FolderBrowserModal";
 import { CloneRepoModal } from "../components/CloneRepoModal";
+import { Card, Empty, gradientFor, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 export default function ProjectsPage() {
   const { active } = useWorkspace();
@@ -22,58 +25,72 @@ export default function ProjectsPage() {
   useEffect(refresh, [refresh]);
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight">Projects</h1>
-        <div className="flex items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setParams({ new: "clone" })}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-ink-dim"
-          >
-            Clone from GitHub
-          </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setParams({ new: "1" })}
-            className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
-          >
-            + Load folder
-          </motion.button>
-        </div>
-      </div>
-
-      <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {projects.map((p) => (
-          <Link key={p.id} to={`/projects/${p.id}`}>
-            <motion.div
-              layout
-              whileHover={{ y: -2 }}
-              className="card-shadow rounded-xl border border-line bg-panel p-4"
+    <Page>
+      <PageHead
+        title="Projects"
+        subtitle="Every folder aichip can work in. A card runs in its own git worktree, so nothing an agent does reaches your checkout until you land it."
+        actions={
+          <>
+            <motion.button
+              {...tappable}
+              onClick={() => setParams({ new: "clone" })}
+              className="ring-focus rounded-xl border border-line bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
-              <div className="text-sm font-semibold">{p.name}</div>
-              <div className="mt-1 truncate text-xs text-ink-dim">{p.path}</div>
-              <div className="mt-3 text-[11px] text-ink-dim">
-                {p.vcs === "git" ? (
-                  <>base: {p.defaultBranch}</>
-                ) : (
-                  <span
-                    title={p.vcsNote ?? undefined}
-                    className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
-                  >
-                    no version control — edits in place
-                  </span>
-                )}
+              Clone from GitHub
+            </motion.button>
+            <motion.button
+              {...tappable}
+              onClick={() => setParams({ new: "1" })}
+              className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+            >
+              <Icon name="plus" size={15} strokeWidth={2.5} />
+              Load folder
+            </motion.button>
+          </>
+        }
+      />
+
+      <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {projects.map((p) => (
+          <Item key={p.id}>
+            <Card to={`/projects/${p.id}`} className="h-full overflow-hidden">
+              <div
+                className="sheen relative h-14 w-full overflow-hidden"
+                style={{ background: gradientFor(p.name) }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-t from-black/15 to-transparent" />
               </div>
-            </motion.div>
-          </Link>
+              <div className="p-4">
+                <div className="truncate text-sm font-semibold">{p.name}</div>
+                <div className="mt-1 truncate text-xs text-ink-dim">{p.path}</div>
+                <div className="mt-2.5 text-[11px] text-ink-dim">
+                  {p.vcs === "git" ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-panel-2 px-2 py-0.5">
+                      base: {p.defaultBranch}
+                    </span>
+                  ) : (
+                    <span
+                      title={p.vcsNote ?? undefined}
+                      className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
+                    >
+                      no version control — edits in place
+                    </span>
+                  )}
+                </div>
+              </div>
+            </Card>
+          </Item>
         ))}
         {projects.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
-            No projects yet — load a folder to get started.
+          <div className="col-span-full">
+            <Empty
+              icon={<Icon name="folder" size={28} />}
+              title="No projects yet"
+              hint="Load a folder from this machine, or clone one from GitHub, and aichip will start working in it."
+            />
           </div>
         )}
-      </div>
+      </Stagger>
 
       <AnimatePresence>
         {showClone && active && (
@@ -98,6 +115,6 @@ export default function ProjectsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }

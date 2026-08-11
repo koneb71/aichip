@@ -111,14 +111,14 @@ export function NewTaskModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 sm:p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4 sm:p-6"
       onClick={onClose}
     >
       <motion.div
-        initial={{ y: 24, scale: 0.97 }}
-        animate={{ y: 0, scale: 1 }}
+        initial={{ y: 16, scale: 0.97, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 24, scale: 0.97 }}
-        transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
         // Drop anywhere in the modal, not just on the prompt box.
         {...att.dropProps}

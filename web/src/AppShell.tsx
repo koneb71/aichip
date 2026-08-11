@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { NARROW, useMediaQuery } from "./lib/useMediaQuery";
@@ -29,7 +30,7 @@ export default function AppShell() {
       <div className="grid h-full grid-cols-[240px_minmax(0,1fr)]">
         <Sidebar />
         <main className="min-h-0 min-w-0 overflow-hidden">
-          <Outlet />
+          <RouteFade />
         </main>
       </div>
     );
@@ -52,7 +53,7 @@ export default function AppShell() {
       </header>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <Outlet />
+        <RouteFade />
       </main>
 
       {navOpen && (
@@ -67,5 +68,28 @@ export default function AppShell() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Cross-fade between routes.
+ *
+ * `mode="wait"` so the outgoing page is gone before the incoming one arrives —
+ * overlapping them would mean two scroll containers on screen at once and a
+ * visible height jump as the taller one collapses.
+ *
+ * Keyed on the *top* path segment, not the whole pathname: moving between two
+ * cards inside one project should feel like the page updating, not like
+ * leaving and arriving somewhere new.
+ */
+function RouteFade() {
+  const { pathname } = useLocation();
+  const section = pathname.split("/")[1] ?? "";
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div key={section} className="h-full min-h-0">
+        <Outlet />
+      </motion.div>
+    </AnimatePresence>
   );
 }

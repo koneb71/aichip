@@ -6,6 +6,9 @@ import { appState } from "../lib/apps";
 import { useWorkspace } from "../lib/workspace";
 import { NewAppModal } from "../components/apps/NewAppModal";
 import { RepoApps } from "../components/apps/RepoApps";
+import { Page, PageHead } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 /**
  * The gallery.
@@ -44,11 +47,13 @@ export default function AppsPage() {
   };
 
   return (
-    <div className="p-6">
-      <div className="mb-5 flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Apps</h1>
-        <div className="flex-1" />
-        <label className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-line/40">
+    <Page>
+      <PageHead
+        title="Apps"
+        subtitle="Small internal tools aichip builds and hosts for you, each with its own data and screens."
+        actions={
+          <>
+        <label className="ring-focus cursor-pointer rounded-xl border border-line bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-ink-dim/40 hover:bg-panel-2">
           Import
           <input
             type="file"
@@ -72,13 +77,16 @@ export default function AppsPage() {
           />
         </label>
         <motion.button
-          whileTap={{ scale: 0.96 }}
+          {...tappable}
           onClick={() => setAdding(true)}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
+          className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
         >
+          <Icon name="plus" size={15} strokeWidth={2.5} />
           New app
         </motion.button>
-      </div>
+          </>
+        }
+      />
 
       {error && (
         <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
@@ -90,7 +98,7 @@ export default function AppsPage() {
           return (
             <div
               key={app.id}
-              className="card-shadow flex flex-col rounded-xl bg-panel p-4 transition-opacity"
+              className="card-shadow lift group flex flex-col rounded-2xl border border-line bg-panel p-4"
               style={{ opacity: app.active ? 1 : 0.6 }}
             >
               <div className="flex items-start gap-3">
@@ -153,6 +161,6 @@ export default function AppsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }

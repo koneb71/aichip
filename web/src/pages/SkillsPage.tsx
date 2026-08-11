@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Skill } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
+import { Card, Empty, Item, Page, PageHead, Stagger, TintIcon } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 /**
  * Skills: a named way of doing something, smaller than an agent.
@@ -46,67 +49,76 @@ export default function SkillsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-5 sm:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Skills</h1>
-          <p className="mt-1 max-w-xl text-sm text-ink-dim">
-            A named way of doing something. An agent is <em>who</em> does the work; a skill
-            is <em>how</em> this kind of job is done here — and they compose.
-          </p>
-        </div>
-        <button
-          onClick={add}
-          className="shrink-0 rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
-        >
-          + New skill
-        </button>
-      </div>
-
-      <p className="mt-3 max-w-xl text-[11px] leading-relaxed text-ink-dim">
-        A skill applies only when you name it — <code className="font-mono">@its-name</code> in
-        chat, or picked on a card. It never applies because it looked relevant, which is
-        what stops a stale one steering a request that never mentioned it.
-      </p>
+    <Page>
+      <PageHead
+        title="Skills"
+        subtitle={
+          <>
+            A named way of doing something. An agent is <em>who</em> does the work; a skill is{" "}
+            <em>how</em> this kind of job is done here — and they compose. A skill applies only
+            when you name it: <code className="rounded bg-panel-2 px-1 font-mono text-[11px]">@its-name</code>{" "}
+            in chat, or picked on a card. Never because it looked relevant, which is what stops a
+            stale one steering a request that never mentioned it.
+          </>
+        }
+        actions={
+          <motion.button
+            {...tappable}
+            onClick={add}
+            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+          >
+            <Icon name="plus" size={15} strokeWidth={2.5} />
+            New skill
+          </motion.button>
+        }
+      />
 
       {error && (
-        <div className="mt-3 max-w-xl rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+        <div className="mb-4 max-w-xl rounded-xl bg-red-50 px-3.5 py-2.5 text-xs text-danger">
           {error}
         </div>
       )}
 
-      <div className="mt-6 grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2">
+      <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {skills.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setEditing(s)}
-            className="card-shadow rounded-xl border border-line bg-panel p-4 text-left hover:border-ink-dim"
-          >
-            <div className="flex items-baseline gap-2">
-              <span className="min-w-0 truncate font-mono text-sm font-medium">@{s.name}</span>
-              {!s.enabled && (
-                <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-ink-dim">
-                  off
-                </span>
-              )}
-            </div>
-            <p className="mt-1 line-clamp-2 text-xs text-ink-dim">
-              {s.description || "no description yet"}
-            </p>
-            {s.mustNot.trim() && (
-              <p className="mt-1.5 line-clamp-1 text-[11px] text-amber-700">
-                won't: {s.mustNot}
+          <Item key={s.id}>
+            <Card onClick={() => setEditing(s)} className="h-full p-4">
+              <div className="flex items-center gap-2.5">
+                <TintIcon tint={s.enabled ? "amber" : "slate"} size={34}>
+                  <Icon name="skills" size={16} />
+                </TintIcon>
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <span className="min-w-0 truncate font-mono text-sm font-semibold">
+                    @{s.name}
+                  </span>
+                  {!s.enabled && (
+                    <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-ink-dim">
+                      off
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+                {s.description || "no description yet"}
               </p>
-            )}
-          </button>
+              {s.mustNot.trim() && (
+                <p className="mt-2 line-clamp-1 rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                  won't: {s.mustNot}
+                </p>
+              )}
+            </Card>
+          </Item>
         ))}
         {skills.length === 0 && (
-          <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-ink-dim sm:col-span-2">
-            No skills yet. A good first one is narrow — "how we write a migration", not
-            "how we code".
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Empty
+              icon={<Icon name="skills" size={28} />}
+              title="No skills yet"
+              hint={'A good first one is narrow — "how we write a migration", not "how we code".'}
+            />
           </div>
         )}
-      </div>
+      </Stagger>
 
       <AnimatePresence>
         {editing && (
@@ -124,7 +136,7 @@ export default function SkillsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }
 
@@ -186,14 +198,15 @@ function SkillEditor({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={busy ? undefined : onClose}
-      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/30 p-4"
+      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/25 backdrop-blur-[3px] p-4"
     >
       <motion.div
-        initial={{ scale: 0.97, y: 8 }}
-        animate={{ scale: 1, y: 0 }}
+        initial={{ scale: 0.97, y: 12, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ scale: 0.97, y: 8 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow my-8 w-full max-w-2xl rounded-2xl bg-panel p-5"
+        className="card-shadow-lg my-8 w-full max-w-2xl rounded-2xl border border-line bg-panel p-5"
       >
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-sm font-semibold">Skill</h3>

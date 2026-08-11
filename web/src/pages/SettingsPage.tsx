@@ -4,6 +4,9 @@ import { api, Effort, EffortSettings, EngineModels, ModelSettings, PermissionMod
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
 import { AttentionSettings } from "../components/AttentionSettings";
+import { Page, PageHead } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 /**
  * Machine-wide settings. Today: which model each complexity tier runs.
@@ -105,12 +108,11 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-      <p className="mt-1 max-w-xl text-sm text-ink-dim">
-        Which model runs at each complexity tier. Tasks, agents and workflow steps
-        all pick a tier — this is what those tiers mean.
-      </p>
+    <Page>
+      <PageHead
+        title="Settings"
+        subtitle="Which model runs at each complexity tier. Tasks, agents and workflow steps all pick a tier — this is what those tiers mean."
+      />
 
       <h2 className="mt-7 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Permissions
@@ -346,7 +348,7 @@ export default function SettingsPage() {
           Runs already in flight keep the model they started with.
         </span>
       </div>
-    </div>
+    </Page>
   );
 }
 

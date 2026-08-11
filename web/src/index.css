@@ -17,6 +17,56 @@
   --color-tier-easy-soft: #d1fae5;
   --color-tier-medium-soft: #e0e7ff;
   --color-tier-complex-soft: #fae8ff;
+
+  /* Soft tints for tile icons and section accents.
+   *
+   * One hue per kind of thing, at a lightness that reads as a wash rather than
+   * a colour — the icon inside carries the saturation. Kept as tokens rather
+   * than Tailwind palette classes so a tile and its icon can never drift apart
+   * and so the set is enumerable in one place. */
+  --color-tint-indigo: #eef0ff;
+  --color-tint-violet: #f3ecff;
+  --color-tint-sky: #e8f4ff;
+  --color-tint-mint: #e4f7ef;
+  --color-tint-amber: #fef3e2;
+  --color-tint-rose: #ffecef;
+  --color-tint-slate: #eef0f3;
+
+  --color-ink-indigo: #4f46e5;
+  --color-ink-violet: #8b5cf6;
+  --color-ink-sky: #0ea5e9;
+  --color-ink-mint: #059669;
+  --color-ink-amber: #d97706;
+  --color-ink-rose: #e11d48;
+  --color-ink-slate: #64748b;
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────────
+ *
+ * One easing curve and three durations, so everything on screen agrees about
+ * how fast the world moves. The curve is a gentle overshoot-free ease-out:
+ * things arrive quickly and settle, which reads as responsive rather than
+ * floaty. Anything that needs bounce uses a spring in `lib/motion.ts` instead.
+ */
+:root {
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-base: 240ms;
+  --dur-slow: 420ms;
+}
+
+/* Someone who has asked their system to stop moving things has asked every
+ * app, not just the ones that remembered. Framer Motion is told separately in
+ * `lib/motion.ts`; this covers plain CSS transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 html,
@@ -31,8 +81,111 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Elevation, as three steps rather than one.
+ *
+ * Each is two shadows: a tight one that reads as a contact edge and a wide
+ * soft one that reads as height. A single blur at low opacity just looks like
+ * a grey smudge, which is what the old one-liner did. */
 .card-shadow {
-  box-shadow: 0 1px 2px rgba(16, 17, 20, 0.05);
+  box-shadow:
+    0 1px 2px rgba(16, 17, 20, 0.04),
+    0 1px 3px rgba(16, 17, 20, 0.03);
+}
+.card-shadow-md {
+  box-shadow:
+    0 1px 2px rgba(16, 17, 20, 0.04),
+    0 6px 16px -4px rgba(16, 17, 20, 0.08);
+}
+.card-shadow-lg {
+  box-shadow:
+    0 1px 2px rgba(16, 17, 20, 0.04),
+    0 16px 32px -8px rgba(16, 17, 20, 0.12);
+}
+
+/* A card that lifts on hover.
+ *
+ * Transform and shadow only — never `top` or margin, which would reflow the
+ * grid and make neighbours twitch as the pointer crosses them. */
+.lift {
+  transition:
+    transform var(--dur-base) var(--ease-out-soft),
+    box-shadow var(--dur-base) var(--ease-out-soft),
+    border-color var(--dur-base) var(--ease-out-soft);
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 2px rgba(16, 17, 20, 0.04),
+    0 12px 24px -6px rgba(16, 17, 20, 0.1);
+}
+
+/* The sheen that crosses a gradient thumbnail on hover. Purely decorative, so
+ * it is a pseudo-element nothing measures and nothing can tab to. */
+.sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.35) 48%,
+    transparent 62%
+  );
+  transform: translateX(-120%);
+  transition: transform var(--dur-slow) var(--ease-out-soft);
+  pointer-events: none;
+}
+.group:hover .sheen::after {
+  transform: translateX(120%);
+}
+
+/* Focus that is visible without being a browser default blue box. */
+.ring-focus:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-panel),
+    0 0 0 4px color-mix(in oklab, var(--color-accent) 45%, transparent);
+}
+
+/* A slow drifting mesh, for the hero backdrop. Sized in vmax so it scales with
+ * the viewport rather than pixel-locking on a large monitor. */
+@keyframes aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.08);
+  }
+}
+.aurora {
+  animation: aurora 18s var(--ease-out-soft) infinite;
+}
+
+/* Shimmer for skeletons, so a loading page has a pulse rather than a freeze. */
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-panel-2);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.6),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
 }
 
 /* compact markdown typography for chat bubbles and stream text */

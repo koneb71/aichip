@@ -79,12 +79,13 @@ export function GenerateModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
       onClick={onClose}
     >
       <motion.div
-        initial={{ y: 20, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
+        initial={{ y: 16, scale: 0.97, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 20, scale: 0.98 }}
         onClick={(e) => e.stopPropagation()}
         className="card-shadow w-full max-w-lg rounded-2xl border border-line bg-panel p-6"

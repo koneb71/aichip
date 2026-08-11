@@ -6,6 +6,9 @@ import { EnginePicker, useEngines } from "../lib/engines";
 import { useWorkspace } from "../lib/workspace";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
+import { Page, PageHead } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 const PATTERNS: { key: Team["pattern"]; label: string; blurb: string }[] = [
   {
@@ -49,23 +52,21 @@ export default function TeamsPage() {
   const agentById = (id: string) => agents.find((a) => a.id === id);
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Teams</h1>
-          <p className="mt-0.5 text-sm text-ink-dim">
-            Compose agents into coordination patterns — or build an organization with a
-            manager who plans the work and delegates it.
-          </p>
-        </div>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={() => setEditing("new")}
-          className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
-        >
-          + New team
-        </motion.button>
-      </div>
+    <Page>
+      <PageHead
+        title="Teams"
+        subtitle="Compose agents into coordination patterns — or build an organization with a manager who plans the work and delegates it."
+        actions={
+          <motion.button
+            {...tappable}
+            onClick={() => setEditing("new")}
+            className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+          >
+            <Icon name="plus" size={15} strokeWidth={2.5} />
+            New team
+          </motion.button>
+        }
+      />
 
       <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2">
         {teams.map((t) => (
@@ -218,7 +219,7 @@ export default function TeamsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }
 
@@ -272,14 +273,14 @@ function RunTeamModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 sm:p-6"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4 sm:p-6"
       onClick={onClose}
     >
       <motion.div
-        initial={{ y: 20, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
+        initial={{ y: 16, scale: 0.97, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 20, scale: 0.98 }}
-        transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
         className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-5 sm:p-6"
       >

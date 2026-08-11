@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, GitHubConnect, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
+import { Page, PageHead } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 
 /**
  * MCP servers the user connects.
@@ -242,23 +245,21 @@ export default function ConnectionsPage() {
   useEffect(load, [load]);
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Connections</h1>
-          <p className="mt-1 max-w-xl text-sm text-ink-dim">
-            MCP servers give your agents tools beyond reading, writing, and running
-            commands. Connect one here, then switch it on for the agents that should
-            have it.
-          </p>
-        </div>
-        <button
-          onClick={() => setEditing("new")}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white"
-        >
-          + Connect a server
-        </button>
-      </div>
+    <Page>
+      <PageHead
+        title="Connections"
+        subtitle="MCP servers give your agents tools beyond reading, writing, and running commands. Connect one here, then switch it on for the agents that should have it."
+        actions={
+          <motion.button
+            {...tappable}
+            onClick={() => setEditing("new")}
+            className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+          >
+            <Icon name="plus" size={15} strokeWidth={2.5} />
+            Connect a server
+          </motion.button>
+        }
+      />
 
       <GitHubCard />
 
@@ -307,7 +308,7 @@ export default function ConnectionsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }
 
@@ -474,13 +475,13 @@ function ServerEditor({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
     >
       <motion.div
-        initial={{ y: 20, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
+        initial={{ y: 16, scale: 0.97, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 20, scale: 0.98 }}
-        transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
         className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-6"
       >

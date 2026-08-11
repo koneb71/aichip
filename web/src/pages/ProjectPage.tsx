@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { api, Project, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Board } from "../components/Board";
@@ -17,6 +17,9 @@ import { ProjectSettings } from "../components/ProjectSettings";
 import { BrainPanel } from "../components/BrainPanel";
 import { StoragePanel } from "../components/StoragePanel";
 import { PublishModal } from "../components/PublishModal";
+import { Icon } from "../components/ui/Icon";
+import { gradientFor } from "../components/ui/Surface";
+import { springy, tappable } from "../lib/motion";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
@@ -121,7 +124,12 @@ export default function ProjectPage() {
       {!narrow && <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />}
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel px-4 py-3 lg:px-6">
+        <header className="border-b border-line bg-panel px-4 py-3 lg:px-6">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span
+            className="size-6 shrink-0 rounded-lg"
+            style={{ background: gradientFor(project?.name ?? "Project") }}
+          />
           <div className="truncate text-base font-semibold">{project?.name ?? "Project"}</div>
           {project?.vcs === "none" && (
             <span
@@ -159,42 +167,61 @@ export default function ProjectPage() {
               onClick={() => setSettings(true)}
               title="Project settings"
               aria-label="Project settings"
-              className="shrink-0 rounded-lg px-1.5 py-0.5 text-sm text-ink-dim hover:text-ink"
+              className="ring-focus grid size-7 shrink-0 place-items-center rounded-lg text-ink-dim transition-colors hover:bg-panel-2 hover:text-ink"
             >
-              ⚙
+              <Icon name="settings" size={15} />
             </button>
           )}
-          <div className="flex min-w-0 gap-1 overflow-x-auto rounded-lg bg-panel-2 p-0.5">
+          </div>
+
+          <div className="mt-3 flex flex-nowrap items-center gap-3">
+          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto rounded-xl bg-panel-2 p-1">
             {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`shrink-0 rounded-md px-3 py-1 text-xs transition-colors ${
-                  activeTab === t.key ? "bg-panel font-medium text-ink shadow-sm" : "text-ink-dim"
+                className={`ring-focus relative shrink-0 rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                  activeTab === t.key ? "text-ink" : "text-ink-dim hover:text-ink"
                 }`}
               >
-                {t.label}
+                {/* The white pill slides between tabs rather than blinking, so
+                    the eye follows it to the new section instead of hunting
+                    for where the highlight went. */}
+                {activeTab === t.key && (
+                  <motion.span
+                    layoutId="project-tab"
+                    transition={springy}
+                    className="absolute inset-0 rounded-lg bg-panel shadow-sm"
+                  />
+                )}
+                <span className={`relative ${activeTab === t.key ? "font-semibold" : ""}`}>
+                  {t.label}
+                </span>
               </button>
             ))}
           </div>
           {/* Only when the project actually is a GitHub repository — a button
               that could only refuse is worse than no button. */}
           {activeTab === "board" && project?.githubRepo && (
-            <button
+            <motion.button
+              {...tappable}
               onClick={() => setShowImport(true)}
-              className="shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
+              className="ring-focus shrink-0 rounded-xl border border-line px-3 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
               Import issues
-            </button>
+            </motion.button>
           )}
           {activeTab === "board" && (
-            <button
+            <motion.button
+              {...tappable}
               onClick={() => setShowNew(true)}
-              className="ml-auto shrink-0 rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
             >
-              + New task
-            </button>
+              <Icon name="plus" size={14} strokeWidth={2.5} />
+              New task
+            </motion.button>
           )}
+          </div>
         </header>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

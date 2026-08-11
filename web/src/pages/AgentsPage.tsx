@@ -4,6 +4,9 @@ import { Agent, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { AgentEditorDrawer } from "../components/agents/AgentEditorDrawer";
 import { GenerateWizard } from "../components/agents/GenerateWizard";
+import { Card, Empty, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
+import { Icon } from "../components/ui/Icon";
+import { tappable } from "../lib/motion";
 import { tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 
@@ -22,69 +25,72 @@ export default function AgentsPage() {
   useEffect(refresh, [refresh]);
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Agents</h1>
-          <p className="mt-0.5 text-sm text-ink-dim">
-            Reusable specialists you can bind to tasks — or let the assistant pick from.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setWizard(true)}
-            className="rounded-lg border border-accent px-4 py-1.5 text-sm font-medium text-accent"
-          >
-            ✦ Generate with AI
-          </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setEditing("new")}
-            className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white"
-          >
-            + New agent
-          </motion.button>
-        </div>
-      </div>
+    <Page>
+      <PageHead
+        title="Agents"
+        subtitle="Reusable specialists you can bind to tasks — or let the assistant pick from."
+        actions={
+          <>
+            <motion.button
+              {...tappable}
+              onClick={() => setWizard(true)}
+              className="ring-focus flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.06] px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
+            >
+              <Icon name="sparkle" size={15} />
+              Generate with AI
+            </motion.button>
+            <motion.button
+              {...tappable}
+              onClick={() => setEditing("new")}
+              className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+            >
+              <Icon name="plus" size={15} strokeWidth={2.5} />
+              New agent
+            </motion.button>
+          </>
+        }
+      />
 
-      <div className="mt-6 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {agents.map((a) => (
-          <motion.button
-            key={a.id}
-            layout
-            whileHover={{ y: -2 }}
-            onClick={() => setEditing(a)}
-            className="card-shadow rounded-xl border border-line bg-panel p-4 text-left"
-          >
-            <div className="flex items-center gap-3">
-              <span
-                className="flex h-9 w-9 items-center justify-center rounded-lg text-sm font-bold text-white"
-                style={{ background: a.color }}
-              >
-                {a.name.slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold">{a.name}</div>
+          <Item key={a.id}>
+            <Card onClick={() => setEditing(a)} className="h-full p-4">
+              <div className="flex items-center gap-3">
                 <span
-                  className="rounded-full px-2 py-0.5 text-[11px]"
-                  style={{ background: tierSoft[a.modelTier], color: tierColor[a.modelTier] }}
+                  className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-white transition-transform duration-300 group-hover:scale-105"
+                  style={{
+                    background: a.color,
+                    boxShadow: `0 4px 12px -4px ${a.color}`,
+                  }}
                 >
-                  {tierModel(a.modelTier)}
+                  {a.name.slice(0, 1).toUpperCase()}
                 </span>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{a.name}</div>
+                  <span
+                    className="mt-0.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
+                    style={{ background: tierSoft[a.modelTier], color: tierColor[a.modelTier] }}
+                  >
+                    {tierModel(a.modelTier)}
+                  </span>
+                </div>
               </div>
-            </div>
-            <p className="mt-3 line-clamp-2 text-xs text-ink-dim">
-              {a.description || "No description yet."}
-            </p>
-          </motion.button>
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+                {a.description || "No description yet."}
+              </p>
+            </Card>
+          </Item>
         ))}
         {agents.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
-            No agents yet. Generate a starter set with AI, or create one by hand.
+          <div className="col-span-full">
+            <Empty
+              icon={<Icon name="agents" size={28} />}
+              title="No agents yet"
+              hint="Generate a starter set with AI, or create one by hand. An agent is who does the work; a skill is how."
+            />
           </div>
         )}
-      </div>
+      </Stagger>
 
       <AnimatePresence>
         {editing && active && (
@@ -106,6 +112,6 @@ export default function AgentsPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </Page>
   );
 }
