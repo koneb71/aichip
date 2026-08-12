@@ -23,10 +23,12 @@ use uuid::Uuid;
 const MAX_UPLOAD_BYTES: usize = 26 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 
-/// What a space accepts. Text formats index; PDFs are stored `unsupported`
-/// (no extractor in this codebase yet) but stay readable by the agent's own
-/// Read tool in the folder.
-const ALLOWED_EXT: &[&str] = &["md", "txt", "csv", "json", "log", "pdf"];
+/// What a space accepts. All of it indexes now: text formats verbatim, PDF /
+/// Word / PowerPoint / Excel through `rag::extract`. Legacy .doc/.ppt are
+/// refused at upload — there is no reader for them, and refusing with the
+/// fix beats accepting a file that can only ever sit `unsupported`.
+const ALLOWED_EXT: &[&str] =
+    &["md", "txt", "csv", "json", "log", "pdf", "docx", "pptx", "xlsx", "xlsm", "xls", "ods"];
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -127,9 +129,12 @@ async fn upload(
             return Err((StatusCode::BAD_REQUEST, format!("{name} is over 10 MB")));
         }
         // The same honesty check attachments make: an extension is a claim,
-        // and a renamed binary must not smuggle itself in as .md.
+        // and a renamed binary must not smuggle itself in as .md. The office
+        // formats are ZIP containers; classic .xls is an OLE compound file.
         let ok = match ext.as_str() {
             "pdf" => bytes.starts_with(b"%PDF-"),
+            "docx" | "pptx" | "xlsx" | "xlsm" | "ods" => bytes.starts_with(b"PK\x03\x04"),
+            "xls" => bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]),
             _ => !bytes.contains(&0),
         };
         if !ok {

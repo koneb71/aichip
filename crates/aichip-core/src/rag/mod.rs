@@ -11,6 +11,7 @@
 //! dependency, carrying no user content in either direction.
 
 pub mod chunk;
+pub mod extract;
 pub mod embed;
 pub mod index;
 pub mod retrieve;

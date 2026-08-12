@@ -48,6 +48,14 @@ ammonia = "4"
 # gets approved, so this is one small pure-Rust dependency worth having.
 similar = "2"
 serde_yaml = "0.9"
+pdf-extract = "0.12"
+# Document text extraction for the space index, all local: pdf-extract for
+# PDF, calamine for xlsx/xls, zip+quick-xml to read the XML inside docx/pptx
+# (both are ZIP containers). Extraction only — rendering stays with the CLI's
+# own Read tool.
+calamine = "0.36"
+zip = "8"
+quick-xml = "0.41"
 
 [dev-dependencies]
 tempfile = "3"

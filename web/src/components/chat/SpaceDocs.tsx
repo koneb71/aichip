@@ -141,7 +141,7 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
           ref={fileRef}
           type="file"
           multiple
-          accept=".md,.txt,.csv,.json,.log,.pdf"
+          accept=".md,.txt,.csv,.json,.log,.pdf,.docx,.pptx,.xlsx,.xlsm,.xls,.ods"
           className="hidden"
           onChange={(e) => {
             upload(Array.from(e.target.files ?? []));

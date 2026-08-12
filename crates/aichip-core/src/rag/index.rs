@@ -15,10 +15,11 @@ use uuid::Uuid;
 
 use crate::db::Db;
 
-/// Files bigger than this are `unsupported` for indexing. Generous for prose
-/// — ~500 chunks — while keeping one stray dump from monopolizing the
-/// embedder. The agent's own Read still opens them in-folder.
-pub const MAX_INDEX_BYTES: u64 = 2 * 1024 * 1024;
+/// Files bigger than this are `unsupported` for indexing. Ten megabytes
+/// matches the upload cap and covers real PDFs and decks; the extracted
+/// *text* has its own ceiling in `extract::MAX_EXTRACT_CHARS`. The agent's
+/// own Read still opens oversize files in-folder.
+pub const MAX_INDEX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,17 +100,44 @@ pub async fn reconcile(
             }
         }
 
-        if !looks_like_text(&bytes) {
-            upsert_status(
-                db, project_id, &rel, &hash, bytes.len() as i64, "unsupported",
-                Some("not a text file — the assistant can still Read it in the folder"),
-            )
-            .await?;
-            report.unsupported += 1;
-            continue;
-        }
-
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        // Extraction under spawn_blocking: PDF and office parsing is CPU
+        // work, and a parser panic on a malformed file becomes a JoinError
+        // here — a failed row with a reason — instead of taking the server
+        // down mid-reconcile.
+        let extracted = {
+            let rel2 = rel.clone();
+            let bytes2 = bytes.clone();
+            tokio::task::spawn_blocking(move || super::extract::extract(&rel2, &bytes2)).await
+        };
+        let text = match extracted {
+            Ok(Ok(super::extract::Extracted::Text(t))) => t,
+            Ok(Ok(super::extract::Extracted::Unsupported(reason))) => {
+                upsert_status(
+                    db, project_id, &rel, &hash, bytes.len() as i64, "unsupported", Some(reason),
+                )
+                .await?;
+                report.unsupported += 1;
+                continue;
+            }
+            Ok(Err(e)) => {
+                upsert_status(
+                    db, project_id, &rel, &hash, bytes.len() as i64, "failed",
+                    Some(&e.to_string()),
+                )
+                .await?;
+                report.failed += 1;
+                continue;
+            }
+            Err(join) => {
+                upsert_status(
+                    db, project_id, &rel, &hash, bytes.len() as i64, "failed",
+                    Some(&format!("the extractor crashed on this file: {join}")),
+                )
+                .await?;
+                report.failed += 1;
+                continue;
+            }
+        };
         let chunks = super::chunk::chunk(&text);
         if chunks.is_empty() {
             upsert_status(db, project_id, &rel, &hash, bytes.len() as i64, "unsupported", Some("empty file"))
@@ -244,34 +272,4 @@ async fn walk(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Valid UTF-8 with no NUL and few control characters. A copy of the
-/// heuristic `routes/kb.rs` uses (core cannot depend on the server crate) —
-/// "valid UTF-8 with no NUL is not enough on its own; an ELF header passes
-/// both".
-fn looks_like_text(bytes: &[u8]) -> bool {
-    if bytes.contains(&0) {
-        return false;
-    }
-    let Ok(s) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    let control = s
-        .chars()
-        .filter(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-        .count();
-    control * 100 <= s.chars().count().max(1)
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_detection_accepts_prose_and_rejects_binaries() {
-        assert!(looks_like_text(b"# Handbook\n\nDeploys on Tuesday.\n"));
-        assert!(looks_like_text("日本語のノート".as_bytes()));
-        assert!(!looks_like_text(b"\x7fELF\x02\x01\x01\x00\x00"));
-        assert!(!looks_like_text(b"%PDF-1.7\x00binary"));
-        assert!(!looks_like_text(&[0xff, 0xfe, 0x00, 0x41]));
-    }
-}
