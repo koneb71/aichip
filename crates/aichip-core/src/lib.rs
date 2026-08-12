@@ -11,6 +11,7 @@ pub mod mcp_servers;
 pub mod previews;
 pub mod queue;
 pub mod rag;
+pub mod routines;
 pub mod runs;
 pub mod scheduler;
 pub mod skills;

@@ -1254,6 +1254,59 @@ export interface SpaceDocsStatus {
   counts: Record<string, number>;
 }
 
+/** A prompt that runs on a schedule. */
+export interface Routine {
+  id: string;
+  name: string;
+  /** Where a firing lands: a chat turn, a research report, or a board card. */
+  kind: "chat" | "research" | "task";
+  projectId: string | null;
+  projectName: string | null;
+  prompt: string;
+  cronExpr: string;
+  /** "run_once": a window missed while the machine slept runs on wake. */
+  catchUp: "run_once" | "skip";
+  enabled: boolean;
+  engine: string | null;
+  modelTier: string | null;
+  effort: string | null;
+  /** The chat kind's standing thread, once it has fired. */
+  chatId: string | null;
+  nextAt: string | null;
+  lastFiredAt: string | null;
+  lastError: string | null;
+  lastRunStatus: string | null;
+}
+
+export interface RoutineDraft {
+  name: string;
+  kind: Routine["kind"];
+  projectId?: string | null;
+  prompt: string;
+  cronExpr: string;
+  catchUp?: string;
+  engine?: string | null;
+  modelTier?: string | null;
+  effort?: string | null;
+}
+
+/** One firing — what it produced, or why it didn't. */
+export interface RoutineRun {
+  id: string;
+  firedAt: string;
+  trigger: "schedule" | "manual";
+  error: string | null;
+  runId: string | null;
+  runStatus: string | null;
+  costUsd: number | null;
+  researchId: string | null;
+  researchTitle: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
+  taskProjectId: string | null;
+  chatId: string | null;
+}
+
 /** A deep research: one question, one current report. */
 export interface Research {
   id: string;
@@ -2200,6 +2253,29 @@ export const api = {
   researchSaveToKb: (id: string) =>
     post(`/api/research/${id}/save-to-kb`).then((r) =>
       json<{ articleId: string; created: boolean }>(r),
+    ),
+
+  // routines
+  routines: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/routines`).then((r) =>
+      json<{ routines: Routine[] }>(r),
+    ),
+  routineCreate: (workspaceId: string, body: RoutineDraft) =>
+    post(`/api/workspaces/${workspaceId}/routines`, body).then((r) =>
+      json<{ id: string }>(r),
+    ),
+  routineUpdate: (id: string, body: Partial<RoutineDraft> & { enabled?: boolean }) =>
+    patch(`/api/routines/${id}`, body).then(json),
+  routineDelete: (id: string) =>
+    fetch(`/api/routines/${id}`, { method: "DELETE" }).then(json),
+  routineRunNow: (id: string) => post(`/api/routines/${id}/run`).then(json),
+  routineHistory: (id: string) =>
+    fetch(`/api/routines/${id}/runs`).then((r) => json<{ runs: RoutineRun[] }>(r)),
+  /** Validity + the next three local firings, from the same cron parser that
+   *  will fire the routine — not a JS lookalike. */
+  routinePreview: (cronExpr: string) =>
+    post("/api/routines/preview", { cronExpr }).then((r) =>
+      json<{ valid: boolean; next: string[] }>(r),
     ),
 
   // chat

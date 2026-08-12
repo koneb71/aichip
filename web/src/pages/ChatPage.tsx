@@ -107,13 +107,21 @@ export default function ChatPage() {
     openedFor.current = scope;
     let stale = false;
     setChatId(null);
-    const open =
-      projectId === GENERAL ? api.openGeneralChat(workspaceId) : api.openChat(projectId);
-    open
-      .then((r) => {
-        if (!stale) setChatId(r.id);
-      })
-      .catch(() => {});
+    // A deep link (`?chat=`, e.g. from a routine's history) names the exact
+    // thread; consumed once so later scope switches behave normally.
+    const wanted = params.get("chat");
+    if (wanted) {
+      setParams({ project: projectId }, { replace: true });
+      setChatId(wanted);
+    } else {
+      const open =
+        projectId === GENERAL ? api.openGeneralChat(workspaceId) : api.openChat(projectId);
+      open
+        .then((r) => {
+          if (!stale) setChatId(r.id);
+        })
+        .catch(() => {});
+    }
     refreshChats();
     return () => {
       stale = true;

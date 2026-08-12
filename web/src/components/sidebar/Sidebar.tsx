@@ -23,6 +23,7 @@ const NAV: { to: string; label: string; icon: IconName; end: boolean; group: 1 |
   { to: "/apps", label: "Apps", icon: "apps", end: false, group: 1 },
   { to: "/knowledge", label: "Knowledge", icon: "knowledge", end: false, group: 1 },
   { to: "/research", label: "Research", icon: "research", end: false, group: 1 },
+  { to: "/routines", label: "Routines", icon: "clock", end: false, group: 1 },
   { to: "/agents", label: "Agents", icon: "agents", end: false, group: 2 },
   { to: "/skills", label: "Skills", icon: "skills", end: false, group: 2 },
   { to: "/teams", label: "Teams", icon: "teams", end: false, group: 2 },

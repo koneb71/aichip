@@ -9,6 +9,7 @@ import AppShell from "./AppShell";
 import HomePage from "./pages/HomePage";
 import ChatPage from "./pages/ChatPage";
 import ResearchPage from "./pages/ResearchPage";
+import RoutinesPage from "./pages/RoutinesPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import AgentsPage from "./pages/AgentsPage";
@@ -42,6 +43,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route index element={<HomePage />} />
               <Route path="chat" element={<ChatPage />} />
               <Route path="research" element={<ResearchPage />} />
+              <Route path="routines" element={<RoutinesPage />} />
               <Route path="research/:researchId" element={<ResearchPage />} />
               <Route path="projects" element={<ProjectsPage />} />
               <Route path="projects/:projectId" element={<ProjectPage />} />

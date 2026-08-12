@@ -1,10 +1,14 @@
-//! Cron scheduling for workflows.
+//! Cron scheduling for workflows and routines.
 //!
 //! The scheduler only ever *enqueues* — it never spawns an engine itself —
 //! so concurrency limits, rate-limit backoff, and cancellation all behave
 //! exactly as they do for a manual run.
+//!
+//! Two clocks, deliberately: workflows keep their original UTC evaluation,
+//! while routines are evaluated in the server's local time — a person writing
+//! "0 9 * * *" for a morning brief means their own 9am.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use croner::Cron;
 use sqlx::Row;
 use std::str::FromStr;
@@ -52,12 +56,14 @@ pub enum Decision {
     Wait,
 }
 
-/// Decide what to do with one scheduled workflow. Pure, so the interesting
-/// cases are unit-testable without a database or a clock.
-pub fn decide(
+/// Decide what to do with one scheduled item. Pure, so the interesting
+/// cases are unit-testable without a database or a clock. Generic over the
+/// timezone because workflows evaluate in UTC and routines in local time —
+/// the decision logic is identical, only the clock differs.
+pub fn decide<Tz: TimeZone>(
     cron: &Cron,
-    last_fired: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    last_fired: Option<DateTime<Tz>>,
+    now: DateTime<Tz>,
     catch_up: CatchUp,
     grace: Duration,
 ) -> Decision {
@@ -99,6 +105,11 @@ impl Scheduler {
     }
 
     async fn tick(&self) -> anyhow::Result<()> {
+        self.tick_workflows().await?;
+        self.tick_routines().await
+    }
+
+    async fn tick_workflows(&self) -> anyhow::Result<()> {
         let rows = sqlx::query(
             "SELECT id, name, cron_expr, last_fired_at, catch_up FROM workflows
              WHERE enabled AND cron_expr IS NOT NULL",
@@ -160,6 +171,62 @@ impl Scheduler {
             sqlx::query("UPDATE workflows SET last_fired_at = $1 WHERE id = $2")
                 .bind(now)
                 .bind(workflow_id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn tick_routines(&self) -> anyhow::Result<()> {
+        let rows = sqlx::query(
+            "SELECT id, name, cron_expr, last_fired_at, catch_up FROM routines WHERE enabled",
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        // Local, not UTC: the cron was written by a person about their own
+        // day. The stored bookmark stays UTC and converts for evaluation.
+        let now = Local::now();
+        for row in rows {
+            let routine_id: Uuid = row.get("id");
+            let name: String = row.get("name");
+            let expr: String = row.get("cron_expr");
+            let cron = match Cron::from_str(&expr) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(%routine_id, %expr, error=%e, "invalid routine cron");
+                    continue;
+                }
+            };
+            let last = row
+                .get::<Option<DateTime<Utc>>, _>("last_fired_at")
+                .map(|t| t.with_timezone(&Local));
+            let catch_up = CatchUp::from(row.get::<String, _>("catch_up").as_str());
+            match decide(&cron, last, now, catch_up, GRACE) {
+                Decision::Wait => continue,
+                Decision::Bookmark => {
+                    tracing::debug!(routine = %name, "scheduling from now");
+                }
+                Decision::SkipMissed => {
+                    tracing::info!(routine = %name, "skipping a missed routine window");
+                }
+                Decision::Fire => {
+                    // A failed dispatch is already recorded in the routine's
+                    // own history by `fire` — the bookmark still advances, or
+                    // a broken routine would retry every 30 seconds forever.
+                    if let Err(e) =
+                        crate::routines::fire(&self.db, &self.orchestrator, routine_id, "schedule")
+                            .await
+                    {
+                        tracing::warn!(routine = %name, error=%e, "routine firing failed");
+                    } else {
+                        tracing::info!(routine = %name, "routine fired");
+                    }
+                }
+            }
+            sqlx::query("UPDATE routines SET last_fired_at = $1 WHERE id = $2")
+                .bind(now.with_timezone(&Utc))
+                .bind(routine_id)
                 .execute(&self.db.pool)
                 .await?;
         }
