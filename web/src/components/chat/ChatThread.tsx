@@ -123,6 +123,7 @@ export function ChatThread({
     setMessages([]);
     setActiveRunId(null);
     setError(null);
+    settling.current = null;
   }, [chatId]);
 
   // A conversation remembers what it was last run with, so reopening it picks
@@ -137,16 +138,45 @@ export function ChatThread({
     setEffort(chat.effort);
   }, [chatId, chat]);
 
+  // The gap this papers over is real and server-side: the engine's
+  // run_completed event reaches the browser from inside the stream loop, but
+  // the assistant's reply row is inserted only after the loop returns. A
+  // client that clears the live bubble on the event and trusts the next
+  // fetch shows the reply, then nothing, then the reply again — the flicker
+  // is the reply having no home for a beat. So the turn "settles" instead:
+  // the live bubble stays until the persisted row (assistant or the failure
+  // pill — both carry the run id) is actually in the list, with a bounded
+  // grace for the one ending that never writes a row (a cancel).
+  const settling = useRef<{ runId: string; polls: number } | null>(null);
+  const refreshRef = useRef<() => void>(() => {});
+
   const refresh = useCallback(async () => {
     if (!chatId) return;
     try {
       const r = await api.chatMessages(chatId);
       setMessages(r.messages);
+      const s = settling.current;
+      if (s) {
+        const landed = r.messages.some((m) => m.runId === s.runId);
+        if (!landed && s.polls < 8) {
+          // The row is milliseconds away; check again quickly rather than
+          // waiting out the slow poll, and keep the live bubble meanwhile.
+          s.polls += 1;
+          setTimeout(() => refreshRef.current(), 300);
+          return;
+        }
+        settling.current = null;
+        setActiveRunId(null);
+        return;
+      }
       setActiveRunId(r.activeRunId);
     } catch {
       /* server restarting; retry next tick */
     }
   }, [chatId]);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
@@ -209,10 +239,13 @@ export function ChatThread({
   );
 
   useEffect(() => {
-    if (turnDone) {
-      refresh().then(() => setActiveRunId(null));
+    if (turnDone && activeRunId) {
+      if (settling.current?.runId !== activeRunId) {
+        settling.current = { runId: activeRunId, polls: 0 };
+      }
+      refresh();
     }
-  }, [turnDone, refresh]);
+  }, [turnDone, activeRunId, refresh]);
 
   // Both wrappers exist only on the Chat page. The rail path renders the
   // children bare, so its DOM is exactly what ChatPanel produced before the
