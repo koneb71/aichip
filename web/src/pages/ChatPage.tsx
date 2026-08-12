@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, ChatSummary, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -38,10 +38,11 @@ export default function ChatPage() {
   // Which project: the URL wins (a shared link means *this* project), then
   // the last choice, then the most recent project. The URL is kept in sync so
   // the current view is always linkable.
+  const workspaceId = active?.id ?? null;
   useEffect(() => {
-    if (!active) return;
+    if (!workspaceId) return;
     api
-      .projects(active.id, "chat")
+      .projects(workspaceId, "chat")
       .then((r) => {
         setProjects(r.projects);
         const fromUrl = params.get("project");
@@ -58,7 +59,7 @@ export default function ChatPage() {
     // params deliberately not a dependency: the URL is an input once, then an
     // output — reacting to our own setParams would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [workspaceId]);
 
   const pickProject = (id: string) => {
     setProjectId(id);
@@ -71,9 +72,9 @@ export default function ChatPage() {
   const createSpace = async () => {
     const name = spaceDraft?.trim();
     setSpaceDraft(null);
-    if (!name || !active) return;
+    if (!name || !workspaceId) return;
     try {
-      const p = await api.createSpace(active.id, name);
+      const p = await api.createSpace(workspaceId!, name);
       setProjects((prev) => [p, ...prev]);
       pickProject(p.id);
     } catch (e) {
@@ -86,31 +87,44 @@ export default function ChatPage() {
     if (!projectId) return Promise.resolve();
     const list =
       projectId === GENERAL
-        ? active
-          ? api.generalChats(active.id)
+        ? workspaceId
+          ? api.generalChats(workspaceId)
           : Promise.resolve({ chats: [] })
         : api.chats(projectId);
     return list.then((r) => setChats(r.chats)).catch(() => {});
-  }, [projectId, active]);
+  }, [projectId, workspaceId]);
 
+  // Which scope the open thread belongs to. The guard is what stops a
+  // re-render from blanking a conversation that is already open: this effect
+  // used to depend on the workspace *object*, whose identity changes on any
+  // workspace refresh, and its first line cleared chatId — the chat visibly
+  // vanished for a beat and came back once open() resolved.
+  const openedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId || !workspaceId) return;
+    const scope = `${workspaceId}/${projectId}`;
+    if (openedFor.current === scope) return;
+    openedFor.current = scope;
+    let stale = false;
     setChatId(null);
     const open =
-      projectId === GENERAL
-        ? active
-          ? api.openGeneralChat(active.id)
-          : Promise.reject()
-        : api.openChat(projectId);
-    open.then((r) => setChatId(r.id)).catch(() => {});
+      projectId === GENERAL ? api.openGeneralChat(workspaceId) : api.openChat(projectId);
+    open
+      .then((r) => {
+        if (!stale) setChatId(r.id);
+      })
+      .catch(() => {});
     refreshChats();
-  }, [projectId, active, refreshChats]);
+    return () => {
+      stale = true;
+    };
+  }, [projectId, workspaceId, refreshChats]);
 
   const startNewChat = async () => {
     if (!projectId) return;
     try {
       const r = general
-        ? await api.newGeneralChat(active!.id)
+        ? await api.newGeneralChat(workspaceId!)
         : await api.newChat(projectId);
       setChatId(r.id);
       refreshChats();
@@ -127,7 +141,7 @@ export default function ChatPage() {
       setChats(remaining);
       if (id === chatId) {
         if (remaining[0]) setChatId(remaining[0].id);
-        else if (general) await api.openGeneralChat(active!.id).then((r) => setChatId(r.id));
+        else if (general) await api.openGeneralChat(workspaceId!).then((r) => setChatId(r.id));
         else await api.openChat(projectId).then((r) => setChatId(r.id));
       }
       refreshChats();
@@ -289,7 +303,7 @@ export default function ChatPage() {
       )}
       <ChatThread
         projectId={general ? null : projectId}
-        workspaceId={general ? active?.id : (project?.workspaceId ?? active?.id)}
+        workspaceId={general ? (workspaceId ?? undefined) : (project?.workspaceId ?? workspaceId ?? undefined)}
         chatId={chatId}
         chat={chats.find((c) => c.id === chatId)}
         onSent={refreshChats}

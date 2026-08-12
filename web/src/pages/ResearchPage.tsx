@@ -41,10 +41,11 @@ export default function ResearchPage() {
   const [busy, setBusy] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
 
+  const workspaceId = active?.id ?? null;
   useEffect(() => {
-    if (!active) return;
+    if (!workspaceId) return;
     api
-      .projects(active.id)
+      .projects(workspaceId)
       .then((r) => {
         setProjects(r.projects);
         const fromUrl = params.get("project");
@@ -59,15 +60,15 @@ export default function ResearchPage() {
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [workspaceId]);
 
   const general = projectId === GENERAL;
   const refreshList = useCallback(() => {
     if (!projectId) return Promise.resolve();
     const scope =
       projectId === GENERAL
-        ? active
-          ? { workspaceId: active.id }
+        ? workspaceId
+          ? { workspaceId }
           : null
         : { projectId };
     if (!scope) return Promise.resolve();
@@ -75,7 +76,7 @@ export default function ResearchPage() {
       .researchList(scope)
       .then((r) => setList(r.researches))
       .catch(() => {});
-  }, [projectId, active]);
+  }, [projectId, workspaceId]);
 
   useEffect(() => {
     refreshList();
@@ -93,7 +94,7 @@ export default function ResearchPage() {
     setBusy(true);
     setError(null);
     try {
-      const scope = general ? { workspaceId: active!.id } : { projectId };
+      const scope = general ? { workspaceId: workspaceId! } : { projectId };
       const r = await api.researchCreate(scope, question.trim(), engine ?? undefined);
       setQuestion("");
       refreshList();

@@ -32,7 +32,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     const { workspaces } = await api.workspaces();
-    setWorkspaces(workspaces);
+    // Keep the old array (and therefore `active`'s identity) when nothing
+    // actually changed. Every consumer that keys an effect on `active` sees
+    // a new object otherwise, and pages that reset visible state in those
+    // effects flicker — the chat thread blanking for a beat was this.
+    setWorkspaces((prev) =>
+      JSON.stringify(prev) === JSON.stringify(workspaces) ? prev : workspaces,
+    );
     setActiveId((current) =>
       current && workspaces.some((w) => w.id === current)
         ? current
