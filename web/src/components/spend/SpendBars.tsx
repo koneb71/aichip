@@ -36,8 +36,11 @@ export function SpendBars({
   return (
     <div>
       <div className="flex items-end gap-1.5" style={{ height }}>
+        {/* The group is named because `Card` is itself a `group` — an unnamed
+            `group-hover` here would match a hover anywhere on the card and
+            raise all fourteen tooltips at once. */}
         {days.map((d) => (
-          <div key={d.day} className="group relative flex-1">
+          <div key={d.day} className="group/bar relative flex-1">
             {/* A CSS transition rather than a motion value. A JS-driven
                 animation writes the *current* frame to the element, and
                 rAF is suspended in a background tab — so the bars freeze
@@ -47,10 +50,10 @@ export function SpendBars({
             <div
               style={{ height: d.cost > 0 ? Math.max(3, (d.cost / top) * height) : 2 }}
               className={`w-full rounded-t transition-[height] duration-500 ease-out ${
-                d.cost > 0 ? "bg-accent/70 group-hover:bg-accent" : "bg-line"
+                d.cost > 0 ? "bg-accent/70 group-hover/bar:bg-accent" : "bg-line"
               }`}
             />
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[11px] text-white group-hover:block">
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[11px] text-white group-hover/bar:block">
               {formatDay(d.day)} · ${d.cost.toFixed(2)} · {d.runs} run
               {d.runs === 1 ? "" : "s"}
             </div>
