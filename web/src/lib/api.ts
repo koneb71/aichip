@@ -140,7 +140,7 @@ export interface Project {
    * belongs in the gallery; fetching one by id does not, because an app's
    * files still have to be reachable.
    */
-  kind: "repo" | "app";
+  kind: "repo" | "app" | "space";
 }
 
 export type PermissionMode = "reviewed" | "auto_edit" | "full_auto";
@@ -1304,9 +1304,16 @@ export const api = {
     patch(`/api/workspaces/${id}`, { name }).then(json),
 
   // projects
-  projects: (workspaceId: string) =>
-    fetch(`/api/projects?workspace_id=${workspaceId}`).then((r) =>
-      json<{ projects: Project[] }>(r),
+  /** kind: absent = repos (the original list); "chat" = what a conversation
+   *  can be scoped to (repos + spaces); "space" = document spaces only. */
+  projects: (workspaceId: string, kind?: "chat" | "space") =>
+    fetch(
+      `/api/projects?workspace_id=${workspaceId}${kind ? `&kind=${kind}` : ""}`,
+    ).then((r) => json<{ projects: Project[] }>(r)),
+  /** A space: a managed folder of documents, not a repository. */
+  createSpace: (workspaceId: string, name: string) =>
+    post("/api/projects/space", { workspace_id: workspaceId, name }).then((r) =>
+      json<Project>(r),
     ),
   /** One project, of any kind — the list above shows only repositories. */
   project: (id: string) => fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),

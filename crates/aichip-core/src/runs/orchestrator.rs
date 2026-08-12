@@ -119,6 +119,18 @@ answer questions, and you can reason and write. If the user asks for coding work
 their projects, tell them to switch this chat to that project — the picker is above the \
 conversation list. Keep replies short and conversational; the user sees them in a chat panel.";
 
+/// Tools for a chat scoped to a *space* — a folder of documents, not a repo.
+///
+/// The read tools point at the documents (which is the whole point of a
+/// space: drop files in, ask about them), the web tools cover what the
+/// documents reference. No board tools — see the MCP wiring decision — and
+/// the same denials as every chat, because the run stands in the user's real
+/// folder.
+pub const SPACE_CHAT_ALLOWED_TOOLS: &[&str] = &["Read", "Grep", "Glob", "WebSearch", "WebFetch"];
+
+/// The system prompt for a space chat.
+const SPACE_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is attached to a document space: the folder you are in holds documents the user has collected, and your job is to answer questions about and around them. Read, Grep and Glob work on that folder; WebSearch and WebFetch cover what the documents reference. Ground answers about the documents in what they actually say — quote or name the file — and say plainly when the answer is not in them. There is no repository here and no task board; if the user asks for coding work, tell them to switch this chat to one of their projects. Keep replies short and conversational; the user sees them in a chat panel.";
+
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
 /// Either field may be absent — "the same agent at three effort levels" and
@@ -2321,6 +2333,7 @@ impl Orchestrator {
             // message's id as well as its text, to look up its attachments.
             "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
                     c.effort AS chat_effort, p.path AS project_path, p.id AS project_id,
+                    p.kind AS project_kind,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              LEFT JOIN projects p ON p.id = c.project_id
@@ -2417,16 +2430,21 @@ impl Orchestrator {
 
         // The aichip tools all resolve through the chat's project — a general
         // chat gets none, rather than ten tools that answer every call with
-        // an error about a project it does not have.
-        let mcp = match project_id {
-            Some(_) => McpWiring {
+        // an error about a project it does not have. A *space* gets none
+        // either: the board tools would create cards whose runs edit the
+        // document folder in place, which is not what a folder of documents
+        // is for.
+        let project_kind: Option<String> = row.get("project_kind");
+        let is_repo = project_kind.as_deref() == Some("repo") || project_kind.as_deref() == Some("app");
+        let mcp = match (project_id, is_repo) {
+            (Some(_), true) => McpWiring {
                 aichip_url: self
                     .mcp_base_url
                     .as_ref()
                     .map(|b| format!("{b}/mcp/chat/{chat_id}")),
                 servers: vec![],
             },
-            None => McpWiring::default(),
+            _ => McpWiring::default(),
         };
 
         // Both were hardcoded — Medium, and no effort at all — which is why the
@@ -2458,15 +2476,21 @@ impl Orchestrator {
             .execute(&self.db.pool)
             .await?;
 
-        // Where the assistant stands and what it may reach for. A project
-        // chat works read-only in the real checkout with the board tools; a
-        // general chat stands in a scratch directory with the web instead —
-        // there is no repository to read and no board to file cards on.
+        // Where the assistant stands and what it may reach for. A repo chat
+        // works read-only in the real checkout with the board tools; a space
+        // chat stands in its document folder with the read tools and the web
+        // (documents plus what they reference); a general chat stands in a
+        // scratch directory with the web alone.
         let (cwd, allowed, system_prompt) = match row.get::<Option<String>, _>("project_path") {
-            Some(path) => (
+            Some(path) if is_repo => (
                 PathBuf::from(path),
                 CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 CHAT_SYSTEM_PROMPT,
+            ),
+            Some(path) => (
+                PathBuf::from(path),
+                SPACE_CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                SPACE_CHAT_SYSTEM_PROMPT,
             ),
             None => {
                 let scratch = std::env::var_os("HOME")

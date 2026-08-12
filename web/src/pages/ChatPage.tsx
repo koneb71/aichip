@@ -31,6 +31,8 @@ export default function ChatPage() {
   const [renameDraft, setRenameDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [railOpen, setRailOpen] = useState(false);
+  // The inline "new space" form: null = closed, string = the name being typed.
+  const [spaceDraft, setSpaceDraft] = useState<string | null>(null);
 
   // Which project: the URL wins (a shared link means *this* project), then
   // the last choice, then the most recent project. The URL is kept in sync so
@@ -38,7 +40,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!active) return;
     api
-      .projects(active.id)
+      .projects(active.id, "chat")
       .then((r) => {
         setProjects(r.projects);
         const fromUrl = params.get("project");
@@ -63,6 +65,19 @@ export default function ChatPage() {
     setChats([]);
     localStorage.setItem(PROJECT_KEY, id);
     setParams({ project: id }, { replace: true });
+  };
+
+  const createSpace = async () => {
+    const name = spaceDraft?.trim();
+    setSpaceDraft(null);
+    if (!name || !active) return;
+    try {
+      const p = await api.createSpace(active.id, name);
+      setProjects((prev) => [p, ...prev]);
+      pickProject(p.id);
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const general = projectId === GENERAL;
@@ -142,15 +157,54 @@ export default function ChatPage() {
         value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
         className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
-        title="General is not connected to any project; pick one for repo questions and board work"
+        title="General is not connected to any project. A space is a folder of documents; a project is a repository."
       >
         <option value={GENERAL}>General — no project</option>
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
+        {projects.some((p) => p.kind === "space") && (
+          <optgroup label="Spaces — documents, no repo">
+            {projects
+              .filter((p) => p.kind === "space")
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </optgroup>
+        )}
+        {projects.some((p) => p.kind !== "space") && (
+          <optgroup label="Projects">
+            {projects
+              .filter((p) => p.kind !== "space")
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </optgroup>
+        )}
       </select>
+      {spaceDraft === null ? (
+        <button
+          onClick={() => setSpaceDraft("")}
+          className="rounded-lg border border-dashed border-line px-2 py-1.5 text-sm text-ink-dim hover:border-ink-dim hover:text-ink"
+          title="A space is a folder of documents this chat can read — no repository, no board"
+        >
+          + New space
+        </button>
+      ) : (
+        <input
+          autoFocus
+          value={spaceDraft}
+          onChange={(e) => setSpaceDraft(e.target.value)}
+          onBlur={createSpace}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") createSpace();
+            if (e.key === "Escape") setSpaceDraft(null);
+          }}
+          placeholder="Name the space…"
+          className="rounded-lg border border-accent bg-panel px-2 py-1.5 text-sm outline-none"
+        />
+      )}
       <button
         onClick={startNewChat}
         className="rounded-lg border border-line px-2 py-1.5 text-sm text-ink-dim hover:bg-panel-2 hover:text-ink"

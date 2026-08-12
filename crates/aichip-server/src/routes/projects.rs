@@ -14,6 +14,7 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list).post(create))
+        .route("/projects/space", post(create_space))
         .route("/projects/{id}", get(one).patch(update).delete(unload))
         .route("/projects/{id}/brain", get(get_brain).put(put_brain))
         .route("/projects/{id}/brain/revisions", get(brain_revisions))
@@ -553,18 +554,32 @@ async fn dirty_git_project(state: &AppState, id: Uuid) -> Result<String, ApiErro
 #[derive(Deserialize)]
 pub struct WorkspaceFilter {
     pub workspace_id: Option<Uuid>,
+    /// Which kinds to list. Absent means 'repo' — the original behaviour, and
+    /// what the Projects page, the sidebar and every board flow expect.
+    /// `space` lists document spaces; `chat` lists what a conversation can be
+    /// scoped to (repos and spaces, never apps).
+    pub kind: Option<String>,
 }
 
 async fn list(
     State(state): State<AppState>,
     Query(filter): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    // Apps are projects too — that is what gives them worktrees, diffs and
+    // previews — but they belong in the gallery, not in a list of the
+    // repositories someone works in. Spaces are the third kind: document
+    // folders with no git, listed only where a chat can be pointed at them.
+    let kinds = match filter.kind.as_deref() {
+        None | Some("repo") => "('repo')",
+        Some("space") => "('space')",
+        Some("chat") => "('repo','space')",
+        Some(other) => {
+            return Err((StatusCode::BAD_REQUEST, format!("unknown kind filter {other}")))
+        }
+    };
     let rows = sqlx::query(&format!(
-        // Apps are projects too — that is what gives them worktrees, diffs and
-        // previews — but they belong in the gallery, not in a list of the
-        // repositories someone works in.
         "SELECT {PROJECT_COLUMNS} FROM projects
-         WHERE kind = 'repo' AND ($1::uuid IS NULL OR workspace_id = $1)
+         WHERE kind IN {kinds} AND ($1::uuid IS NULL OR workspace_id = $1)
          ORDER BY created_at DESC"
     ))
     .bind(filter.workspace_id)
@@ -573,6 +588,69 @@ async fn list(
     .map_err(internal)?;
     let projects: Vec<Value> = rows.iter().map(project_json).collect();
     Ok(Json(json!({ "projects": projects })))
+}
+
+#[derive(Deserialize)]
+struct CreateSpace {
+    workspace_id: Uuid,
+    name: String,
+}
+
+/// Create a *space*: a project that is a folder of documents, not a repo.
+///
+/// It gets a managed folder under `~/.aichip/spaces/<slug>` the way apps get
+/// one under `~/.aichip/apps/` — the person did not hand us a path, so the
+/// path is ours to manage. `vcs='none'` is what already means "no worktrees,
+/// no branches, runs happen in place"; `kind='space'` is what keeps it out of
+/// the Projects page, the board flows and app lookups, all of which filter on
+/// kind. What a space is *for*: pointing a chat at a folder of documents —
+/// drop files in, ask questions about them.
+async fn create_space(
+    State(state): State<AppState>,
+    Json(body): Json<CreateSpace>,
+) -> Result<Json<Value>, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "a space needs a name".into()));
+    }
+    let slug = {
+        let s: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        if s.is_empty() { "space".to_string() } else { s.chars().take(40).collect() }
+    };
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no HOME".to_string()))?;
+    // Suffix on collision rather than ON CONFLICT-reuse: two spaces named
+    // "notes" are two spaces, not one folder shared by surprise.
+    let base = home.join(".aichip").join("spaces");
+    let mut dir = base.join(&slug);
+    let mut n = 2;
+    while dir.exists() {
+        dir = base.join(format!("{slug}-{n}"));
+        n += 1;
+    }
+    tokio::fs::create_dir_all(&dir).await.map_err(internal)?;
+
+    let row = sqlx::query(&format!(
+        "INSERT INTO projects (workspace_id, path, name, kind, vcs, vcs_note)
+         VALUES ($1, $2, $3, 'space', 'none', 'a document space — not a repository')
+         RETURNING {PROJECT_COLUMNS}"
+    ))
+    .bind(body.workspace_id)
+    .bind(dir.to_string_lossy().into_owned())
+    .bind(name)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(project_json(&row)))
 }
 
 #[derive(Deserialize)]
