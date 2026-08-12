@@ -86,6 +86,43 @@ pub fn prompt(question: &str, context: &str) -> String {
     )
 }
 
+/// Tools for a *general* research — one with no project behind it.
+///
+/// Just the web: there is no repository to Read or Grep, and granting the
+/// read tools anyway would invite the agent to wander the scratch directory
+/// it happens to be started in.
+pub const WEB_TOOLS: &[&str] = &["WebSearch", "WebFetch"];
+
+/// The general research brief: the same contract as [`prompt`], minus the
+/// repository. Its own function rather than a flag — the two prompts promise
+/// different things ("ground claims in this repo" would be a lie here), and
+/// a boolean that rewrites half the text is two prompts wearing one name.
+pub fn web_prompt(question: &str) -> String {
+    let question = clip(question.trim(), QUESTION_MAX);
+    format!(
+        "Research this question:\n\n\
+         {question}\n\n\
+         ## How to work\n\n\
+         Use WebSearch and WebFetch to find out — search first, then read the \
+         sources that look authoritative rather than settling for snippets. \
+         Prefer primary sources: official documentation, release notes, \
+         standards documents, the code itself where it is public.\n\n\
+         If part of the question cannot be answered with what you can find, \
+         say so in the report rather than writing the version that is usually \
+         true. A visible gap is worth more than a plausible invention.\n\n\
+         ## Citations\n\n\
+         Every claim carries its source as a markdown link, inline where the \
+         claim is made.\n\n\
+         ## Format\n\n\
+         Reply with **Markdown only** — no preamble like \"Here is the \
+         report\", and no code fence wrapped around the whole reply. Open \
+         with a single `# ` heading naming the report, then the report \
+         itself: sections, lists and tables where they genuinely read better \
+         than prose, code blocks for code. End with a short **Sources** \
+         section listing the sources you actually used."
+    )
+}
+
 /// Pull the report out of whatever the agent replied with.
 ///
 /// The markdown analog of `kb::write::extract_html`: models wrap a whole
@@ -227,6 +264,28 @@ mod tests {
         assert!(p.contains('…'));
         // The framing survives the flood.
         assert!(p.contains("## Format"));
+    }
+
+    #[test]
+    fn the_web_prompt_never_mentions_a_repository() {
+        // A general research has no project. A prompt telling the agent to
+        // "investigate the repository first" would send it exploring whatever
+        // scratch directory it was started in.
+        let p = web_prompt("Is pnpm or npm faster in 2026?");
+        assert!(!p.to_lowercase().contains("repository"), "{p}");
+        assert!(!p.contains("Read, Grep and Glob"));
+        // But the contract is the same one: citations, markdown, a title.
+        assert!(p.contains("carries its source as a markdown link"));
+        assert!(p.contains("Markdown only"));
+        assert!(p.contains("Sources"));
+    }
+
+    #[test]
+    fn web_tools_carry_only_the_web() {
+        assert_eq!(WEB_TOOLS, &["WebSearch", "WebFetch"]);
+        for t in WEB_TOOLS {
+            assert!(!DENIED.contains(t));
+        }
     }
 
     #[test]

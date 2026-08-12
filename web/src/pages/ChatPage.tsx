@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { api, ChatSummary, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
@@ -15,6 +15,8 @@ import { ChatThread } from "../components/chat/ChatThread";
  * project picker.
  */
 const PROJECT_KEY = "aichip.chat.project";
+/** The picker value for a chat attached to no project. */
+const GENERAL = "general";
 
 export default function ChatPage() {
   const { active } = useWorkspace();
@@ -41,11 +43,12 @@ export default function ChatPage() {
         setProjects(r.projects);
         const fromUrl = params.get("project");
         const remembered = localStorage.getItem(PROJECT_KEY);
+        // "general" is the default: a conversation does not need a project,
+        // so opening the page fresh should not pretend it does.
         const pick =
-          r.projects.find((p) => p.id === fromUrl)?.id ??
-          r.projects.find((p) => p.id === remembered)?.id ??
-          r.projects[0]?.id ??
-          null;
+          (fromUrl === GENERAL ? GENERAL : r.projects.find((p) => p.id === fromUrl)?.id) ??
+          (remembered === GENERAL ? GENERAL : r.projects.find((p) => p.id === remembered)?.id) ??
+          GENERAL;
         setProjectId(pick);
       })
       .catch(() => {});
@@ -62,25 +65,37 @@ export default function ChatPage() {
     setParams({ project: id }, { replace: true });
   };
 
+  const general = projectId === GENERAL;
   const refreshChats = useCallback(() => {
     if (!projectId) return Promise.resolve();
-    return api
-      .chats(projectId)
-      .then((r) => setChats(r.chats))
-      .catch(() => {});
-  }, [projectId]);
+    const list =
+      projectId === GENERAL
+        ? active
+          ? api.generalChats(active.id)
+          : Promise.resolve({ chats: [] })
+        : api.chats(projectId);
+    return list.then((r) => setChats(r.chats)).catch(() => {});
+  }, [projectId, active]);
 
   useEffect(() => {
     if (!projectId) return;
     setChatId(null);
-    api.openChat(projectId).then((r) => setChatId(r.id)).catch(() => {});
+    const open =
+      projectId === GENERAL
+        ? active
+          ? api.openGeneralChat(active.id)
+          : Promise.reject()
+        : api.openChat(projectId);
+    open.then((r) => setChatId(r.id)).catch(() => {});
     refreshChats();
-  }, [projectId, refreshChats]);
+  }, [projectId, active, refreshChats]);
 
   const startNewChat = async () => {
     if (!projectId) return;
     try {
-      const r = await api.newChat(projectId);
+      const r = general
+        ? await api.newGeneralChat(active!.id)
+        : await api.newChat(projectId);
       setChatId(r.id);
       refreshChats();
     } catch (e) {
@@ -96,6 +111,7 @@ export default function ChatPage() {
       setChats(remaining);
       if (id === chatId) {
         if (remaining[0]) setChatId(remaining[0].id);
+        else if (general) await api.openGeneralChat(active!.id).then((r) => setChatId(r.id));
         else await api.openChat(projectId).then((r) => setChatId(r.id));
       }
       refreshChats();
@@ -120,31 +136,15 @@ export default function ChatPage() {
 
   const project = projects.find((p) => p.id === projectId);
 
-  if (active && projects.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
-        <div>
-          <div className="text-sm font-medium">No projects yet</div>
-          <div className="mt-1 text-sm text-ink-dim">
-            Chat works inside a project —{" "}
-            <Link to="/projects" className="text-accent underline">
-              add one
-            </Link>{" "}
-            first.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const rail = (
     <div className="flex min-h-0 flex-col gap-3 p-3">
       <select
-        value={projectId ?? ""}
+        value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
         className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
-        title="Chats are scoped to a project"
+        title="General is not connected to any project; pick one for repo questions and board work"
       >
+        <option value={GENERAL}>General — no project</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name}
@@ -232,8 +232,8 @@ export default function ChatPage() {
         </button>
       )}
       <ChatThread
-        projectId={projectId}
-        workspaceId={project?.workspaceId ?? active?.id}
+        projectId={general ? null : projectId}
+        workspaceId={general ? active?.id : (project?.workspaceId ?? active?.id)}
         chatId={chatId}
         chat={chats.find((c) => c.id === chatId)}
         onSent={refreshChats}

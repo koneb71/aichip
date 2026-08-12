@@ -27,7 +27,10 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct ListFilter {
-    project_id: Uuid,
+    /// A project's researches, or — with `workspace_id` instead — the
+    /// workspace's *general* ones, which belong to no project.
+    project_id: Option<Uuid>,
+    workspace_id: Option<Uuid>,
 }
 
 /// The latest run per research rides along, because the list view has to say
@@ -41,15 +44,22 @@ async fn list(
     State(state): State<AppState>,
     Query(filter): Query<ListFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let (where_clause, key) = match (filter.project_id, filter.workspace_id) {
+        (Some(p), _) => ("rs.project_id = $1", p),
+        (None, Some(w)) => ("rs.workspace_id = $1 AND rs.project_id IS NULL", w),
+        (None, None) => {
+            return Err((StatusCode::BAD_REQUEST, "name a project or a workspace".into()))
+        }
+    };
     let rows = sqlx::query(&format!(
         "SELECT rs.id, rs.question, rs.title, rs.kb_article_id, rs.created_at,
                 rs.report_md IS NOT NULL AS has_report,
                 r.id AS run_id, r.status AS run_status
          FROM researches rs {LATEST_RUN}
-         WHERE rs.project_id = $1
+         WHERE {where_clause}
          ORDER BY rs.created_at DESC"
     ))
-    .bind(filter.project_id)
+    .bind(key)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -74,7 +84,10 @@ async fn list(
 
 #[derive(Deserialize)]
 struct Create {
-    project_id: Uuid,
+    /// Exactly one of these: a project research reads the repo and the web,
+    /// a workspace ("general") research reads the web alone.
+    project_id: Option<Uuid>,
+    workspace_id: Option<Uuid>,
     question: String,
     engine: Option<String>,
 }
@@ -88,7 +101,12 @@ async fn create(
     }
     let (id, run_id) = state
         .orchestrator
-        .enqueue_research(body.project_id, body.question.trim(), body.engine.as_deref())
+        .enqueue_research(
+            body.project_id,
+            body.workspace_id.filter(|_| body.project_id.is_none()),
+            body.question.trim(),
+            body.engine.as_deref(),
+        )
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(json!({ "id": id, "runId": run_id })))
@@ -116,7 +134,7 @@ async fn one(
 
     Ok(Json(json!({
         "id": row.get::<Uuid, _>("id"),
-        "projectId": row.get::<Uuid, _>("project_id"),
+        "projectId": row.get::<Option<Uuid>, _>("project_id"),
         "question": row.get::<String, _>("question"),
         "title": row.get::<String, _>("title"),
         "reportMd": row.get::<Option<String>, _>("report_md"),
@@ -238,8 +256,8 @@ async fn save_to_kb(
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
         "SELECT rs.question, rs.title, rs.report_md, rs.kb_article_id, rs.project_id,
-                p.workspace_id
-         FROM researches rs JOIN projects p ON p.id = rs.project_id
+                COALESCE(p.workspace_id, rs.workspace_id) AS workspace_id
+         FROM researches rs LEFT JOIN projects p ON p.id = rs.project_id
          WHERE rs.id = $1",
     )
     .bind(id)
@@ -287,7 +305,7 @@ async fn save_to_kb(
          RETURNING id",
     )
     .bind(row.get::<Uuid, _>("workspace_id"))
-    .bind(row.get::<Uuid, _>("project_id"))
+    .bind(row.get::<Option<Uuid>, _>("project_id"))
     .bind(&title)
     .fetch_one(&state.db.pool)
     .await

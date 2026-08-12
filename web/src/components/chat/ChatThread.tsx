@@ -31,7 +31,9 @@ export function ChatThread({
   onSent,
   centered,
 }: {
-  projectId: string;
+  /** Null for a *general* chat — no project, no repo, no board. Attachments
+   *  and the `@` file picker are project machinery and disappear with it. */
+  projectId: string | null;
   /**
    * The workspace this *project* belongs to — not whichever one the sidebar is
    * showing. The server resolves `@mentions` against the project's workspace,
@@ -69,13 +71,16 @@ export function ChatThread({
   const [skills, setSkills] = useState<Skill[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
-  const att = useAttachments(projectId);
+  const general = projectId === null;
+  // Hooks cannot be conditional; the empty id keeps this one inert and the
+  // `general` gates below keep its UI out of the tree.
+  const att = useAttachments(projectId ?? "");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // Caret is tracked separately: it moves on click and arrow keys, not just
   // on change, and the mention token depends on where it is.
   const [caret, setCaret] = useState(0);
   const mention = useMentionPicker({
-    projectId,
+    projectId: projectId ?? "",
     agents,
     skills,
     text: draft,
@@ -259,17 +264,17 @@ export function ChatThread({
         </div>
       )}
 
-      <div className="relative border-t border-line p-3" {...att.dropProps}>
+      <div className="relative border-t border-line p-3" {...(general ? {} : att.dropProps)}>
         {wrap(
           "relative",
           <>
-          {mention.node}
+          {!general && mention.node}
           <div
             className={`flex flex-col gap-1.5 rounded-xl border bg-panel px-3 py-2 focus-within:border-accent ${
               att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
             }`}
           >
-            {(att.items.length > 0 || att.dragging) && (
+            {!general && (att.items.length > 0 || att.dragging) && (
               <AttachmentBar
                 items={att.items}
                 onAdd={att.add}
@@ -279,7 +284,7 @@ export function ChatThread({
               />
             )}
             <div className="flex items-end gap-2">
-              {att.items.length === 0 && !att.dragging && (
+              {!general && att.items.length === 0 && !att.dragging && (
                 <AttachmentBar
                   items={[]}
                   onAdd={att.add}
@@ -300,7 +305,7 @@ export function ChatThread({
                 onKeyDown={(e) => {
                   // The picker gets first refusal: otherwise Enter sends the
                   // message instead of choosing the highlighted file.
-                  if (mention.handleKey(e)) {
+                  if (!general && mention.handleKey(e)) {
                     e.preventDefault();
                     return;
                   }

@@ -91,7 +91,11 @@ async fn activity(
          LEFT JOIN projects p ON p.id = COALESCE(
              r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
          WHERE r.status NOT IN ('completed','failed','canceled')
-           AND ($1::uuid IS NULL OR p.workspace_id = $1)
+           -- A general chat or research has no project; its workspace lives
+           -- on its own row. Without the COALESCE the filter nulls those runs
+           -- out of the page entirely.
+           AND ($1::uuid IS NULL
+                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
          ORDER BY
              CASE r.status WHEN 'awaiting_approval' THEN 0
                            WHEN 'waiting_permission' THEN 1
@@ -182,7 +186,8 @@ async fn activity(
          LEFT JOIN projects p ON p.id = COALESCE(
              r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
          WHERE r.created_at > now() - interval '14 days'
-           AND ($1::uuid IS NULL OR p.workspace_id = $1)
+           AND ($1::uuid IS NULL
+                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
          GROUP BY 1 ORDER BY 1",
     )
     .bind(ws)

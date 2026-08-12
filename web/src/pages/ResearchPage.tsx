@@ -21,6 +21,8 @@ import { isActive } from "../lib/runStatus";
  * report is linkable.
  */
 const PROJECT_KEY = "aichip.research.project";
+/** The picker value for a research attached to no project: web-only. */
+const GENERAL = "general";
 
 export default function ResearchPage() {
   const { active } = useWorkspace();
@@ -47,24 +49,33 @@ export default function ResearchPage() {
         setProjects(r.projects);
         const fromUrl = params.get("project");
         const remembered = localStorage.getItem(PROJECT_KEY);
+        // General is the default: a question does not need a repository, and
+        // a general research answers it from the web alone.
         const pick =
-          r.projects.find((p) => p.id === fromUrl)?.id ??
-          r.projects.find((p) => p.id === remembered)?.id ??
-          r.projects[0]?.id ??
-          null;
+          (fromUrl === GENERAL ? GENERAL : r.projects.find((p) => p.id === fromUrl)?.id) ??
+          (remembered === GENERAL ? GENERAL : r.projects.find((p) => p.id === remembered)?.id) ??
+          GENERAL;
         setProjectId(pick);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  const general = projectId === GENERAL;
   const refreshList = useCallback(() => {
     if (!projectId) return Promise.resolve();
+    const scope =
+      projectId === GENERAL
+        ? active
+          ? { workspaceId: active.id }
+          : null
+        : { projectId };
+    if (!scope) return Promise.resolve();
     return api
-      .researchList(projectId)
+      .researchList(scope)
       .then((r) => setList(r.researches))
       .catch(() => {});
-  }, [projectId]);
+  }, [projectId, active]);
 
   useEffect(() => {
     refreshList();
@@ -82,7 +93,8 @@ export default function ResearchPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.researchCreate(projectId, question.trim(), engine ?? undefined);
+      const scope = general ? { workspaceId: active!.id } : { projectId };
+      const r = await api.researchCreate(scope, question.trim(), engine ?? undefined);
       setQuestion("");
       refreshList();
       navigate(`/research/${r.id}`);
@@ -93,31 +105,15 @@ export default function ResearchPage() {
     }
   };
 
-  if (active && projects.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
-        <div>
-          <div className="text-sm font-medium">No projects yet</div>
-          <div className="mt-1 text-sm text-ink-dim">
-            Research digs into a project —{" "}
-            <Link to="/projects" className="text-accent underline">
-              add one
-            </Link>{" "}
-            first.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const rail = (
     <div className="flex min-h-0 flex-col gap-3 p-3">
       <select
-        value={projectId ?? ""}
+        value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
         className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
-        title="Research is scoped to a project"
+        title="General researches the web alone; pick a project to ground the answer in its repository"
       >
+        <option value={GENERAL}>General — web only</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name}
@@ -162,9 +158,10 @@ export default function ResearchPage() {
       // of — sync the rail to it, or the list beside the report shows some
       // other project's work.
       onProject={(pid) => {
-        if (pid !== projectId) {
-          setProjectId(pid);
-          localStorage.setItem(PROJECT_KEY, pid);
+        const target = pid ?? GENERAL;
+        if (target !== projectId) {
+          setProjectId(target);
+          localStorage.setItem(PROJECT_KEY, target);
         }
       }}
     />
@@ -173,9 +170,9 @@ export default function ResearchPage() {
       <div className="mx-auto w-full max-w-3xl px-5 py-10">
         <h1 className="text-[26px] font-bold leading-tight tracking-tight">Deep research</h1>
         <p className="mt-1.5 text-sm leading-relaxed text-ink-dim">
-          Ask a question about this project. The agent reads the repository
-          first, then the web, and writes a report that cites both — every web
-          claim with its URL, every repo claim with its file.
+          {general
+            ? "Ask anything. The agent searches the web, reads the sources, and writes a report that cites every claim."
+            : "Ask a question about this project. The agent reads the repository first, then the web, and writes a report that cites both — every web claim with its URL, every repo claim with its file."}
         </p>
         {error && (
           <div className="mt-4 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
@@ -265,7 +262,7 @@ function ResearchView({
 }: {
   id: string;
   onChanged: () => void;
-  onProject: (projectId: string) => void;
+  onProject: (projectId: string | null) => void;
 }) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<Detail | null>(null);

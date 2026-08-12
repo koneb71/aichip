@@ -107,6 +107,18 @@ cost — but you cannot merge anything into the user's checkout, and there is no
 When a card looks ready, say so and what it changed, and let them press Merge on the card, \
 where they can read the diff first.";
 
+/// The system prompt for a *general* chat: no project, no board, no repo.
+///
+/// Its own constant rather than the project prompt with caveats — a prompt
+/// that describes ten tools the assistant does not have teaches it to promise
+/// things every reply will then fail to deliver.
+const GENERAL_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is \
+not attached to any project: there is no repository to inspect, no board to create tasks on, \
+and no code you can see. You can search the web (WebSearch) and read pages (WebFetch) to \
+answer questions, and you can reason and write. If the user asks for coding work on one of \
+their projects, tell them to switch this chat to that project — the picker is above the \
+conversation list. Keep replies short and conversational; the user sees them in a chat panel.";
+
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
 /// Either field may be absent — "the same agent at three effort levels" and
@@ -2116,10 +2128,17 @@ impl Orchestrator {
     /// through `enqueue_research_run` instead, which reuses the row.
     pub async fn enqueue_research(
         &self,
-        project_id: Uuid,
+        // A project, or a workspace for a *general* research — one with no
+        // repository behind it, answered from the web alone. Exactly one; the
+        // table CHECKs the same rule.
+        project_id: Option<Uuid>,
+        workspace_id: Option<Uuid>,
         question: &str,
         engine: Option<&str>,
     ) -> anyhow::Result<(Uuid, Uuid)> {
+        if project_id.is_none() && workspace_id.is_none() {
+            anyhow::bail!("a research belongs to a project or to a workspace");
+        }
         let engine = engine
             .map(str::to_string)
             .unwrap_or_else(|| self.default_engine());
@@ -2127,9 +2146,11 @@ impl Orchestrator {
             anyhow::bail!("{engine} isn't installed on this machine");
         }
         let research_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO researches (project_id, question) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO researches (project_id, workspace_id, question)
+             VALUES ($1, $2, $3) RETURNING id",
         )
         .bind(project_id)
+        .bind(workspace_id)
         .bind(question)
         .fetch_one(&self.db.pool)
         .await?;
@@ -2168,12 +2189,14 @@ impl Orchestrator {
     /// worktree, nothing to isolate — with two deliberate differences, both
     /// commented at the site.
     async fn execute_research_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
+        // LEFT JOIN: a *general* research has no project — it is answered
+        // from the web alone, out of a scratch directory.
         let row = sqlx::query(
             "SELECT r.engine, rs.id AS research_id, rs.question,
                     p.path AS project_path, p.id AS project_id
              FROM runs r
              JOIN researches rs ON rs.id = r.research_id
-             JOIN projects p ON p.id = rs.project_id
+             LEFT JOIN projects p ON p.id = rs.project_id
              WHERE r.id = $1",
         )
         .bind(run_id)
@@ -2188,12 +2211,41 @@ impl Orchestrator {
 
         let research_id: Uuid = row.get("research_id");
         let question: String = row.get("question");
-        // Brain, no skill — the same reasoning as KB generation: the Brain is
-        // a hand-written list of exactly the facts an investigation gets
-        // wrong, and nobody named a skill.
-        let standing =
-            crate::runs::context::Standing::brain_only(&self.db, Some(row.get("project_id"))).await;
-        let prompt = crate::runs::research::prompt(&question, &standing.block());
+        let project_id: Option<Uuid> = row.get("project_id");
+        // The two shapes differ in everything the project used to supply:
+        // where to stand, what to read, and which facts come along.
+        //
+        // Brain (project case only), no skill — the same reasoning as KB
+        // generation: the Brain is a hand-written list of exactly the facts
+        // an investigation gets wrong, and nobody named a skill.
+        let (cwd, prompt, tools) = match (project_id, row.get::<Option<String>, _>("project_path"))
+        {
+            (Some(pid), Some(path)) => {
+                let standing =
+                    crate::runs::context::Standing::brain_only(&self.db, Some(pid)).await;
+                (
+                    PathBuf::from(path),
+                    crate::runs::research::prompt(&question, &standing.block()),
+                    crate::runs::research::TOOLS,
+                )
+            }
+            _ => {
+                // A scratch directory, the utility-run precedent — the agent
+                // has to stand somewhere, and it must not be anywhere with
+                // files worth reading.
+                let scratch = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".aichip")
+                    .join("tmp");
+                tokio::fs::create_dir_all(&scratch).await?;
+                (
+                    scratch,
+                    crate::runs::research::web_prompt(&question),
+                    crate::runs::research::WEB_TOOLS,
+                )
+            }
+        };
 
         // Difference one from KB: Complex, with the effort actually resolved.
         // Research is the thinking-heavy kind of run, and hardcoding
@@ -2209,7 +2261,7 @@ impl Orchestrator {
             .await?;
 
         let spec = RunSpec {
-            cwd: PathBuf::from(row.get::<String, _>("project_path")),
+            cwd,
             prompt,
             model_tier: tier,
             model_id,
@@ -2220,7 +2272,7 @@ impl Orchestrator {
             // answers Reviewed by rejecting every call — the same reason chat
             // resolves this per capability. The denials still bind either way.
             permission_mode: chat_permission_mode(engine.as_ref()),
-            allowed_tools: crate::runs::research::TOOLS.iter().map(|t| t.to_string()).collect(),
+            allowed_tools: tools.iter().map(|t| t.to_string()).collect(),
             denied_tools: crate::runs::research::DENIED.iter().map(|t| t.to_string()).collect(),
             append_system_prompt: None,
             mcp: McpWiring::default(),
@@ -2271,7 +2323,7 @@ impl Orchestrator {
                     c.effort AS chat_effort, p.path AS project_path, p.id AS project_id,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
-             JOIN projects p ON p.id = c.project_id
+             LEFT JOIN projects p ON p.id = c.project_id
              LEFT JOIN LATERAL (
                  SELECT id, content FROM chat_messages
                  WHERE chat_id = c.id AND role = 'user'
@@ -2298,6 +2350,11 @@ impl Orchestrator {
         let user_message: String = row
             .get::<Option<String>, _>("user_message")
             .unwrap_or_else(|| "Introduce yourself briefly.".to_string());
+        // NULL for a *general* chat — a conversation with no project behind
+        // it. Everything project-shaped below is gated on this: attachments
+        // and mentions are project machinery, the brain belongs to a project,
+        // and the MCP task tools resolve through one.
+        let project_id: Option<Uuid> = row.get("project_id");
 
         // An attachment-only turn stores empty content, so the prompt may be
         // nothing but the attachment block.
@@ -2349,24 +2406,27 @@ impl Orchestrator {
         // only the name — the body travels with the card the chat creates, so
         // pasting it here would spend it twice and put the method in front of
         // a conversation that has not agreed on the job yet.
-        let user_message = match &session_id {
-            None => {
-                crate::runs::context::Standing::brain_only(
-                    &self.db,
-                    Some(row.get::<Uuid, _>("project_id")),
-                )
-                .await
-                .apply(&user_message)
+        let user_message = match (&session_id, project_id) {
+            (None, Some(pid)) => {
+                crate::runs::context::Standing::brain_only(&self.db, Some(pid))
+                    .await
+                    .apply(&user_message)
             }
-            Some(_) => user_message,
+            _ => user_message,
         };
 
-        let mcp = McpWiring {
-            aichip_url: self
-                .mcp_base_url
-                .as_ref()
-                .map(|b| format!("{b}/mcp/chat/{chat_id}")),
-            servers: vec![],
+        // The aichip tools all resolve through the chat's project — a general
+        // chat gets none, rather than ten tools that answer every call with
+        // an error about a project it does not have.
+        let mcp = match project_id {
+            Some(_) => McpWiring {
+                aichip_url: self
+                    .mcp_base_url
+                    .as_ref()
+                    .map(|b| format!("{b}/mcp/chat/{chat_id}")),
+                servers: vec![],
+            },
+            None => McpWiring::default(),
         };
 
         // Both were hardcoded — Medium, and no effort at all — which is why the
@@ -2398,16 +2458,40 @@ impl Orchestrator {
             .execute(&self.db.pool)
             .await?;
 
+        // Where the assistant stands and what it may reach for. A project
+        // chat works read-only in the real checkout with the board tools; a
+        // general chat stands in a scratch directory with the web instead —
+        // there is no repository to read and no board to file cards on.
+        let (cwd, allowed, system_prompt) = match row.get::<Option<String>, _>("project_path") {
+            Some(path) => (
+                PathBuf::from(path),
+                CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                CHAT_SYSTEM_PROMPT,
+            ),
+            None => {
+                let scratch = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".aichip")
+                    .join("tmp");
+                tokio::fs::create_dir_all(&scratch).await?;
+                (
+                    scratch,
+                    crate::runs::research::WEB_TOOLS.iter().map(|s| s.to_string()).collect(),
+                    GENERAL_CHAT_SYSTEM_PROMPT,
+                )
+            }
+        };
         let spec = RunSpec {
-            cwd: PathBuf::from(row.get::<String, _>("project_path")),
+            cwd,
             prompt: user_message,
             model_tier: tier,
             model_id,
             effort: chat_effort,
             resume_session_id: session_id,
             permission_mode: chat_permission_mode(engine.as_ref()),
-            allowed_tools: CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
-            append_system_prompt: Some(CHAT_SYSTEM_PROMPT.to_string()),
+            allowed_tools: allowed,
+            append_system_prompt: Some(system_prompt.to_string()),
             mcp,
             denied_tools: CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect(),
             run_key: run_id.to_string(),

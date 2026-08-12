@@ -18,6 +18,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects/{id}/chats", get(list_chats).post(open_chat))
         .route("/projects/{id}/chats/new", post(new_chat))
+        // General chats: scoped to a workspace, attached to no project. Same
+        // rows, same turn machinery — the NULL project is what changes what
+        // the assistant stands in and may reach for.
+        .route("/workspaces/{id}/chats", get(list_general).post(open_general))
+        .route("/workspaces/{id}/chats/new", post(new_general))
         .route("/chats/{id}", delete(delete_chat).patch(rename_chat))
         .route("/chats/{id}/messages", get(messages).post(send))
 }
@@ -60,6 +65,78 @@ async fn new_chat(
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query("INSERT INTO chats (project_id) VALUES ($1) RETURNING id")
         .bind(project_id)
+        .fetch_one(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })))
+}
+
+// ── General chats ───────────────────────────────────────────────────────────
+//
+// The same rows and the same turn machinery as a project chat, minus the
+// project: the assistant stands in a scratch directory with the web instead
+// of a checkout with the board tools. The three handlers mirror their
+// project-scoped counterparts exactly — only the WHERE differs.
+
+async fn list_general(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort,
+                (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
+         FROM chats c WHERE c.workspace_id=$1 AND c.project_id IS NULL
+         ORDER BY c.updated_at DESC",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    let chats: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "title": r.get::<String, _>("title"),
+                "modelTier": r.get::<Option<String>, _>("model_tier"),
+                "effort": r.get::<Option<String>, _>("effort"),
+                "messageCount": r.get::<i64, _>("message_count"),
+                "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "chats": chats })))
+}
+
+async fn open_general(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(row) = sqlx::query(
+        "SELECT id FROM chats WHERE workspace_id=$1 AND project_id IS NULL
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind(workspace_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    {
+        return Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })));
+    }
+    let row = sqlx::query("INSERT INTO chats (workspace_id) VALUES ($1) RETURNING id")
+        .bind(workspace_id)
+        .fetch_one(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })))
+}
+
+async fn new_general(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query("INSERT INTO chats (workspace_id) VALUES ($1) RETURNING id")
+        .bind(workspace_id)
         .fetch_one(&state.db.pool)
         .await
         .map_err(internal)?;
@@ -239,18 +316,28 @@ async fn send(
     }
 
     // The claim needs the owning project, and resolving `@agent` needs the
-    // workspace above it — only the chat row knows either.
+    // workspace above it — only the chat row knows either. A general chat has
+    // no project; its workspace is on the row itself.
     let owner = sqlx::query(
-        "SELECT p.id AS project_id, p.workspace_id FROM chats c
-         JOIN projects p ON p.id = c.project_id WHERE c.id=$1",
+        "SELECT c.project_id, COALESCE(p.workspace_id, c.workspace_id) AS workspace_id
+         FROM chats c LEFT JOIN projects p ON p.id = c.project_id WHERE c.id=$1",
     )
     .bind(chat_id)
     .fetch_optional(&state.db.pool)
     .await
     .map_err(internal)?
     .ok_or((StatusCode::NOT_FOUND, "no such chat".to_string()))?;
-    let project_id: Uuid = owner.get("project_id");
+    let project_id: Option<Uuid> = owner.get("project_id");
     let workspace_id: Uuid = owner.get("workspace_id");
+    // Attachments are project machinery: the files live under the project and
+    // the claim binds them there. Refused rather than dropped, so the person
+    // who dragged a screenshot in learns why it did not arrive.
+    if project_id.is_none() && !body.attachment_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "attachments need a project — this is a general chat".into(),
+        ));
+    }
 
     let row = sqlx::query(
         "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
@@ -275,13 +362,15 @@ async fn send(
         .await
         .map_err(internal)?;
 
-    attachments::claim(
-        &state.db,
-        &body.attachment_ids,
-        project_id,
-        attachments::Owner::Message(message_id),
-    )
-    .await?;
+    if let Some(project_id) = project_id {
+        attachments::claim(
+            &state.db,
+            &body.attachment_ids,
+            project_id,
+            attachments::Owner::Message(message_id),
+        )
+        .await?;
+    }
 
     // Name the chat after its opening line, and float it to the top of the
     // list. Only untitled chats are renamed, so a user's own title sticks.

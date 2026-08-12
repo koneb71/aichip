@@ -1244,7 +1244,8 @@ export interface Research {
 /** The detail view's shape — the list rows above, plus the body. */
 export interface ResearchDetail {
   id: string;
-  projectId: string;
+  /** Null for a general (project-less) research. */
+  projectId: string | null;
   question: string;
   title: string;
   reportMd: string | null;
@@ -2099,14 +2100,25 @@ export const api = {
     ),
 
   // deep research
-  researchList: (projectId: string) =>
-    fetch(`/api/research?project_id=${projectId}`).then((r) =>
-      json<{ researches: Research[] }>(r),
-    ),
-  researchCreate: (projectId: string, question: string, engine?: string) =>
-    post("/api/research", { project_id: projectId, question, engine }).then((r) =>
-      json<{ id: string; runId: string }>(r),
-    ),
+  /** scope: {projectId} for a project's researches, {workspaceId} for the
+   *  workspace's general (project-less) ones. */
+  researchList: (scope: { projectId?: string; workspaceId?: string }) =>
+    fetch(
+      scope.projectId
+        ? `/api/research?project_id=${scope.projectId}`
+        : `/api/research?workspace_id=${scope.workspaceId}`,
+    ).then((r) => json<{ researches: Research[] }>(r)),
+  researchCreate: (
+    scope: { projectId?: string; workspaceId?: string },
+    question: string,
+    engine?: string,
+  ) =>
+    post("/api/research", {
+      project_id: scope.projectId,
+      workspace_id: scope.workspaceId,
+      question,
+      engine,
+    }).then((r) => json<{ id: string; runId: string }>(r)),
   researchGet: (id: string) =>
     fetch(`/api/research/${id}`).then((r) => json<ResearchDetail>(r)),
   researchRerun: (id: string, engine?: string) =>
@@ -2125,6 +2137,15 @@ export const api = {
   // chat
   openChat: (projectId: string) =>
     post(`/api/projects/${projectId}/chats`).then((r) => json<{ id: string }>(r)),
+  // General chats: workspace-scoped, attached to no project.
+  openGeneralChat: (workspaceId: string) =>
+    post(`/api/workspaces/${workspaceId}/chats`).then((r) => json<{ id: string }>(r)),
+  generalChats: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/chats`).then((r) =>
+      json<{ chats: ChatSummary[] }>(r),
+    ),
+  newGeneralChat: (workspaceId: string) =>
+    post(`/api/workspaces/${workspaceId}/chats/new`).then((r) => json<{ id: string }>(r)),
   chats: (projectId: string) =>
     fetch(`/api/projects/${projectId}/chats`).then((r) =>
       json<{ chats: ChatSummary[] }>(r),
