@@ -106,6 +106,11 @@ export interface CheckoutState {
   vcs: boolean;
   path?: string;
   branch: string | null;
+  /** Commits against the upstream. Null = no upstream to stand against —
+   *  render as "publish", not as zeroes. */
+  behind?: number | null;
+  ahead?: number | null;
+  hasRemote?: boolean;
   dirty: DirtyFile[];
 }
 
@@ -1461,12 +1466,21 @@ export const api = {
   /** What the merge guard is looking at. Read-only. */
   projectCheckout: (projectId: string) =>
     fetch(`/api/projects/${projectId}/checkout`).then((r) => json<CheckoutState>(r)),
+  pullCheckout: (projectId: string) =>
+    post(`/api/projects/${projectId}/checkout/pull`).then((r) =>
+      json<{ pulled: boolean; detail: string }>(r),
+    ),
+  pushCheckout: (projectId: string) =>
+    post(`/api/projects/${projectId}/checkout/push`).then((r) =>
+      json<{ pushed: boolean; detail: string }>(r),
+    ),
   stashCheckout: (projectId: string) =>
     post(`/api/projects/${projectId}/checkout/stash`, {}).then((r) =>
       json<{ stashed: boolean; undo: string }>(r),
     ),
-  commitCheckout: (projectId: string) =>
-    post(`/api/projects/${projectId}/checkout/commit`, {}).then((r) =>
+  /** No message = the merge-unblock button's old wording ("Work in progress"). */
+  commitCheckout: (projectId: string, message?: string) =>
+    post(`/api/projects/${projectId}/checkout/commit`, message ? { message } : {}).then((r) =>
       json<{ committed: boolean; undo: string }>(r),
     ),
   effortSettings: () =>

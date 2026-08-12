@@ -904,6 +904,47 @@ fn unquote(path: &str) -> String {
 /// files only, matching the guard exactly — sweeping untracked build output
 /// into a stash would be doing something nobody asked for to files that were
 /// never in the way.
+/// Where the checkout stands against its upstream: (behind, ahead).
+///
+/// `None` when there is no upstream to stand against — a repo that has never
+/// been pushed, or a branch with no tracking ref. That is an answer, not an
+/// error: the UI turns it into "publish this branch" rather than a count.
+pub async fn ahead_behind(repo: &Path) -> Option<(u32, u32)> {
+    let out = git(repo, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+        .await
+        .ok()?;
+    let mut parts = out.split_whitespace();
+    let behind = parts.next()?.parse().ok()?;
+    let ahead = parts.next()?.parse().ok()?;
+    Some((behind, ahead))
+}
+
+/// Bring the checkout up to date with its upstream, fast-forward only.
+///
+/// `--ff-only` is the whole safety story: a pull that would merge or rebase
+/// is a decision about *whose history wins*, and a dashboard button must not
+/// make it. Diverged branches fail with git's own message, which says exactly
+/// that.
+pub async fn pull_ff(repo: &Path) -> anyhow::Result<String> {
+    git(repo, &["pull", "--ff-only"]).await
+}
+
+/// Push the current branch.
+///
+/// With an upstream this is a plain `git push`. Without one — a branch never
+/// published — it pushes to `origin` and sets the tracking ref, because "push
+/// this" on an unpublished branch can only mean "publish it". No remote at
+/// all is git's own error, passed through.
+pub async fn push_current(repo: &Path) -> anyhow::Result<String> {
+    if ahead_behind(repo).await.is_some() {
+        return git(repo, &["push"]).await;
+    }
+    let branch = current_branch(repo)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the checkout is not on a branch (detached HEAD?)"))?;
+    git(repo, &["push", "-u", "origin", &branch]).await
+}
+
 pub async fn stash(repo: &Path, message: &str) -> anyhow::Result<()> {
     git(repo, &["stash", "push", "-m", message]).await?;
     Ok(())

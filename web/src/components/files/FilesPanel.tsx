@@ -20,6 +20,8 @@ import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
  */
 const CodeEditor = lazy(() => import("../editor/CodeEditor"));
 
+import { SourceControlBar } from "./SourceControlBar";
+
 /**
  * Browse and edit a project checkout, or a card's worktree.
  *
@@ -50,6 +52,8 @@ export function FilesPanel({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<{ hash: string; content: string } | null>(null);
+  // Bumped on save so the source-control bar re-reads the checkout status.
+  const [scmKey, setScmKey] = useState(0);
 
   // Derived, never stored. Two sources of truth for "is this dirty" is how you
   // get a Save button that lies about whether there is anything to save.
@@ -161,6 +165,8 @@ export function FilesPanel({
       setBaseHash(r.hash);
       // The saved text is now what is on disk, which is what clears `dirty`.
       setFile((f) => (f ? { ...f, content: draft, size: r.size, hash: r.hash } : f));
+      // And what makes the checkout dirty — the source-control bar re-reads.
+      setScmKey((k) => k + 1);
     } catch (e) {
       if (e instanceof FileConflictError) {
         setConflict({
@@ -196,6 +202,11 @@ export function FilesPanel({
             if (mayLeave()) setTree(next);
           }}
         />
+        {/* Only for the checkout: a worktree already has its own lifecycle —
+            review, merge, PR — and offering push there would route around it. */}
+        {tree.kind === "project" && (
+          <SourceControlBar projectId={projectId} refreshKey={scmKey} />
+        )}
         <Breadcrumbs
           dir={dir}
           onNavigate={(p) => {

@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
         .route("/projects/{id}/checkout", get(checkout))
         .route("/projects/{id}/checkout/stash", post(stash_checkout))
         .route("/projects/{id}/checkout/commit", post(commit_checkout))
+        .route("/projects/{id}/checkout/pull", post(pull_checkout))
+        .route("/projects/{id}/checkout/push", post(push_checkout))
 }
 
 const PROJECT_COLUMNS: &str = "id, path, name, default_branch, workspace_id, vcs, vcs_note, \
@@ -466,13 +468,19 @@ async fn checkout(
         // so the honest answer is an empty one.
         return Ok(Json(json!({ "vcs": false, "branch": null, "dirty": [] })));
     }
-    let (branch, dirty) = manager::checkout_status(std::path::Path::new(&path))
-        .await
-        .map_err(internal)?;
+    let repo = std::path::Path::new(&path);
+    let (branch, dirty) = manager::checkout_status(repo).await.map_err(internal)?;
+    // (behind, ahead) against the upstream; null when there is none — the UI
+    // renders that as "publish", not as zeroes.
+    let standing = manager::ahead_behind(repo).await;
+    let has_remote = manager::remote_url(repo, "origin").await.is_some();
     Ok(Json(json!({
         "vcs": true,
         "path": path,
         "branch": branch,
+        "behind": standing.map(|(b, _)| b),
+        "ahead": standing.map(|(_, a)| a),
+        "hasRemote": has_remote,
         "dirty": dirty.iter().map(|f| json!({
             "index": f.index.to_string(),
             "worktree": f.worktree.to_string(),
@@ -504,16 +512,59 @@ async fn stash_checkout(
 async fn commit_checkout(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
+    body: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
     let path = dirty_git_project(&state, id).await?;
     let repo = std::path::Path::new(&path);
-    let wrote = manager::commit_all(repo, "Work in progress")
+    // The editor's commit box sends a message; the older merge-unblock button
+    // sends nothing and keeps its old wording.
+    let message = body
+        .as_ref()
+        .and_then(|Json(b)| b.get("message"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or("Work in progress")
+        .to_string();
+    let wrote = manager::commit_all(repo, &message)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
     Ok(Json(json!({
         "committed": wrote,
         "undo": "git reset --soft HEAD~1",
     })))
+}
+
+/// Fast-forward the checkout from its upstream. A pull that would merge or
+/// rebase is refused by git itself (`--ff-only`), and that message comes back
+/// verbatim — whose history wins is not a button's decision.
+async fn pull_checkout(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let (path, vcs) = git_project(&state, id).await?;
+    if !vcs {
+        return Err((StatusCode::CONFLICT, "this project has no git repository".into()));
+    }
+    let out = manager::pull_ff(std::path::Path::new(&path))
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({ "pulled": true, "detail": out.trim() })))
+}
+
+/// Push the current branch, publishing it if it has never been pushed.
+async fn push_checkout(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let (path, vcs) = git_project(&state, id).await?;
+    if !vcs {
+        return Err((StatusCode::CONFLICT, "this project has no git repository".into()));
+    }
+    let out = manager::push_current(std::path::Path::new(&path))
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({ "pushed": true, "detail": out.trim() })))
 }
 
 /// A project that has a repository, or an explanation of why the request makes
