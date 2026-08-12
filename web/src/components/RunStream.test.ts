@@ -57,8 +57,12 @@ describe("lastActivity", () => {
 
   it("reports terminal states plainly", () => {
     expect(lastActivity([ev({ type: "run_completed" })])).toBe("finished");
+    // The fact, not the reason. This line is "what it is doing", clipped to 60
+    // characters and set in mono; the reason now has its own panel beside the
+    // status word, in full and wrapped. Showing a worse truncation of the same
+    // sentence directly underneath the good one is not a second view of it.
     expect(lastActivity([ev({ type: "run_failed", reason: "worktree missing" })])).toBe(
-      "failed: worktree missing",
+      "failed",
     );
   });
 

@@ -19,6 +19,33 @@ use tokio::process::Command;
 
 use crate::db::Db;
 
+/// Where the dashboard answers, for the link the hook hands you.
+///
+/// A global set once by `serve` rather than a parameter, because the two
+/// callers that build a `Ctx` have no route to it: `DbGate` holds a `Db` and
+/// nothing else, and adding a third constructor argument it otherwise has no
+/// use for would be plumbing for one string. It is immutable after the
+/// listener binds, which is the only situation a `OnceLock` is honest about.
+static DASHBOARD_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Called by `serve` once it knows the address it actually bound.
+pub fn set_dashboard_url(url: impl Into<String>) {
+    let _ = DASHBOARD_URL.set(url.into());
+}
+
+/// A deep link to the thing that needs you.
+///
+/// Pure, so the shape is tested without a server. `ProjectPage` already reads
+/// `?task=`, so the card opens rather than the board.
+pub fn link(base: &str, project: Option<uuid::Uuid>, task: Option<uuid::Uuid>) -> String {
+    let base = base.trim_end_matches('/');
+    match (project, task) {
+        (Some(p), Some(t)) => format!("{base}/projects/{p}?task={t}"),
+        (Some(p), None) => format!("{base}/projects/{p}"),
+        _ => base.to_string(),
+    }
+}
+
 /// Longest a person can be asked to wait, and the ceiling on the setting.
 pub const MAX_WINDOW_SECS: i64 = 7 * 24 * 3600;
 /// How much longer the engine's own tool timeout is given than aichip's
@@ -216,8 +243,11 @@ pub async fn save(db: &Db, next: Attention) -> anyhow::Result<Attention> {
 /// A card's title and its project name, and nothing from the tool call beyond
 /// its name — see [`payload`].
 pub async fn ctx_for_run(db: &Db, run_id: uuid::Uuid, tool: Option<&str>) -> Ctx {
-    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT p.name, t.title
+    let row = sqlx::query_as::<
+        _,
+        (Option<String>, Option<String>, Option<uuid::Uuid>, Option<uuid::Uuid>),
+    >(
+        "SELECT p.name, t.title, p.id, t.id
            FROM runs r
            LEFT JOIN tasks t ON t.id = r.task_id
            LEFT JOIN projects p ON p.id = COALESCE(t.project_id, (
@@ -229,7 +259,7 @@ pub async fn ctx_for_run(db: &Db, run_id: uuid::Uuid, tool: Option<&str>) -> Ctx
     .await
     .ok()
     .flatten();
-    let (project, card) = row.unwrap_or((None, None));
+    let (project, card, project_id, task_id) = row.unwrap_or((None, None, None, None));
     Ctx {
         title: match tool {
             Some(t) => format!("aichip: allow {t}?"),
@@ -244,8 +274,26 @@ pub async fn ctx_for_run(db: &Db, run_id: uuid::Uuid, tool: Option<&str>) -> Ctx
         card,
         tool: tool.map(str::to_string),
         run_id: Some(run_id.to_string()),
-        url: None,
+        // Declared in `ENV_NAMES`, passed to the hook, and shown as a usable
+        // chip in the settings panel — and until this line it was always
+        // empty. A push that tells you something needs you and not where is
+        // the half of the feature that does not work.
+        url: DASHBOARD_URL
+            .get()
+            .map(|base| link(base, project_id, task_id)),
     }
+}
+
+/// What `MCP_TOOL_TIMEOUT` should be, in milliseconds, for a given window.
+///
+/// Pure and public so the orchestrator and the test agree on one function.
+/// The old test re-derived the sum itself, which is why it passed while the
+/// two halves were splitting apart in production.
+pub fn cli_timeout_ms(window: Option<Duration>) -> String {
+    let secs = window
+        .map(|d| d.as_secs() + CLI_GRACE_SECS)
+        .unwrap_or(MAX_WINDOW_SECS as u64);
+    (secs * 1000).to_string()
 }
 
 /// Run the hook for one event. Never fails, never blocks the caller.
@@ -475,6 +523,43 @@ mod tests {
     }
 
     #[test]
+    fn a_link_points_at_the_thing_that_needs_you() {
+        let p = uuid::Uuid::nil();
+        let t = uuid::Uuid::from_u128(1);
+        assert_eq!(
+            link("http://127.0.0.1:4820", Some(p), Some(t)),
+            format!("http://127.0.0.1:4820/projects/{p}?task={t}")
+        );
+        assert_eq!(
+            link("http://127.0.0.1:4820", Some(p), None),
+            format!("http://127.0.0.1:4820/projects/{p}")
+        );
+        // Nothing to point at is the dashboard, not a broken path.
+        assert_eq!(link("http://127.0.0.1:4820", None, None), "http://127.0.0.1:4820");
+        // A trailing slash must not produce `//projects`.
+        assert_eq!(
+            link("http://127.0.0.1:4820/", Some(p), None),
+            format!("http://127.0.0.1:4820/projects/{p}")
+        );
+    }
+
+    #[test]
+    fn the_url_the_settings_panel_advertises_is_not_always_empty() {
+        // It was. `ENV_NAMES` listed it, `payload` passed it, the panel showed
+        // it as a usable chip — and the only production constructor set it to
+        // `None`, so every hook fired with AICHIP_URL="". A push that says
+        // something needs you and cannot say where is half a feature.
+        let env = sample_env(
+            Event::Permission,
+            &Ctx {
+                url: Some(link("http://127.0.0.1:4820", Some(uuid::Uuid::nil()), None)),
+                ..ctx()
+            },
+        );
+        assert!(env["AICHIP_URL"].starts_with("http"), "{}", env["AICHIP_URL"]);
+    }
+
+    #[test]
     fn the_engine_always_waits_longer_than_aichip_does() {
         // If these ever meet, the CLI's timeout wins the race and the engine
         // is told a bare "tool timed out" — which it treats as a transient
@@ -485,7 +570,14 @@ mod tests {
                 ..Default::default()
             };
             let window = cfg.window().unwrap().as_secs();
-            assert!(window + CLI_GRACE_SECS > window);
+            // Through `cli_timeout_ms` itself, not a re-derivation of it. The
+            // old version computed the sum in the test, which is why it stayed
+            // green while the two halves were splitting in production.
+            let engine_ms: u64 = cli_timeout_ms(cfg.window()).parse().unwrap();
+            assert!(
+                engine_ms > window * 1000,
+                "engine {engine_ms}ms must outlast the {window}s window"
+            );
             assert!(CLI_GRACE_SECS >= 60, "the margin must survive a slow answer");
         }
     }

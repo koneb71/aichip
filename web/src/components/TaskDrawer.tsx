@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
-import { isActive, isWorking, statusLabel } from "../lib/runStatus";
+import { isActive, isWorking, statusLabel, stopReason } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "./AttachmentBar";
 import { TaskComments } from "./TaskComments";
@@ -21,6 +21,7 @@ import { PreviewPanel } from "./PreviewPanel";
 import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 import { PullRequestPanel } from "./PullRequestPanel";
+import { RunError } from "./ui/RunError";
 
 export function TaskDrawer({
   onOpenPreviews,
@@ -333,6 +334,15 @@ export function TaskDrawer({
               Auto → {task.tierResolved}: {task.tierReason}
             </div>
           )}
+          {/* The run's own account of how it ended, in full. The header said
+              "failed" and had nowhere to say why; the sentence was written to
+              the database and read by nothing. */}
+          {(() => {
+            const stopped = stopReason(task.runStatus, task.runError);
+            return stopped ? (
+              <RunError reason={stopped.text} tone={stopped.tone} className="mt-2" />
+            ) : null;
+          })()}
           {/* What it is doing, right in the header — visible without opening
               a tab or scrolling a transcript. */}
           <ActivityLine events={events} live={running} className="mt-1" />

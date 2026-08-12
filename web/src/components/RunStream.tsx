@@ -65,7 +65,11 @@ export function lastActivity(events: StreamEvent[], stepId?: string): string | n
       case "run_completed":
         return "finished";
       case "run_failed":
-        return `failed: ${String(e.reason ?? "").slice(0, 60)}`;
+        // Deliberately just the fact. The reason has its own panel now, in
+        // full, next to the status word it explains — and this line is
+        // *what it is doing*, clipped to 60 characters and set in mono. Two
+        // truncations of one sentence, one of them worse, is not two views.
+        return "failed";
       case "rate_limited":
         return "rate limited";
       case "run_started":

@@ -6,6 +6,8 @@ import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
 import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
 import { springy } from "../lib/motion";
+import { isWorking, needsYou, statusLabel, stopReason } from "../lib/runStatus";
+import { RunError } from "./ui/RunError";
 
 const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -131,8 +133,12 @@ function TaskCard({
   const shown = displayTier(task);
   const accent = task.agentColor ?? tierColor[shown];
   const teamRun = !!task.teamName;
-  const running = task.runStatus === "running" || task.runStatus === "starting";
-  const waiting = task.runStatus === "waiting_permission";
+  const running = isWorking(task.runStatus);
+  // `needsYou` covers both parked states. Hand-rolling this covered only the
+  // tool prompt, so a plan waiting for approval — the one that genuinely *is*
+  // an approval — drew no badge and no ring at all.
+  const waiting = needsYou(task.runStatus);
+  const stopped = stopReason(task.runStatus, task.runError);
 
   return (
     <motion.button
@@ -149,7 +155,9 @@ function TaskCard({
       style={
         running
           ? { boxShadow: `0 0 0 1.5px ${accent}66, 0 4px 14px -4px ${accent}44` }
-          : undefined
+          : waiting
+            ? { boxShadow: "0 0 0 1.5px #d9770655" }
+            : undefined
       }
     >
       {running && (
@@ -170,7 +178,14 @@ function TaskCard({
         />
       )}
       {waiting && (
-        <span className="absolute right-3 top-3 text-xs text-amber-600">⏸ approval</span>
+        <span
+          className="absolute right-3 top-3 text-[11px] font-medium text-amber-600"
+          // The parked run's own sentence — "waiting for you to allow Bash" —
+          // one hover away rather than nowhere.
+          title={stopped?.tone === "note" ? stopped.text : undefined}
+        >
+          ⏸ {statusLabel(task.runStatus)}
+        </span>
       )}
       {/* Which epic this belongs to, above its own title — a sub-ticket read on
           its own says what to do but not what it is part of. */}
@@ -204,6 +219,10 @@ function TaskCard({
             />
           </div>
         </div>
+      )}
+
+      {stopped && stopped.tone !== "note" && (
+        <RunError reason={stopped.text} tone={stopped.tone} compact className="mt-2" />
       )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">

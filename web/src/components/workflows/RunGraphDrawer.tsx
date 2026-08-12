@@ -5,6 +5,7 @@ import { parseWorkflow } from "../../lib/workflowGraph";
 import { Markdown } from "../Markdown";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { StatusDot } from "./WorkflowsPanel";
+import { RunError } from "../ui/RunError";
 
 /** Live view of a workflow run: the same graph you authored, lit up with
  *  each step's state. Fan-out attempts (`step#1`, `step#2`) collapse onto
@@ -97,9 +98,7 @@ export function RunGraphDrawer({
       </div>
 
       {run.error && (
-        <div className="mx-5 mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-          {run.error}
-        </div>
+        <RunError reason={run.error} className="mx-5 mt-4" />
       )}
 
       {graph && view === "graph" && (

@@ -29,6 +29,39 @@ pub trait RunGate: Send + Sync + 'static {
     async fn abandon(&self, run_id: Uuid, reason: String);
 }
 
+/// How long the broker should wait, asked fresh each time.
+///
+/// A trait for the same reason `RunGate` is one — the permission tests run
+/// without a database — but also because a cached copy is what broke this.
+/// The broker held a boot-time value while `mcp_tool_timeout_ms` re-read the
+/// setting per dispatch, so changing "wait for me" split the two and let the
+/// CLI's own timeout win the race, which is precisely what `CLI_GRACE_SECS`
+/// exists to prevent. Re-reading makes the agreement structural rather than
+/// something every future writer of the settings row has to remember.
+#[async_trait]
+pub trait Window: Send + Sync + 'static {
+    async fn wait(&self) -> Option<std::time::Duration>;
+}
+
+pub struct DbWindow(pub Db);
+
+#[async_trait]
+impl Window for DbWindow {
+    async fn wait(&self) -> Option<std::time::Duration> {
+        crate::attention::load(&self.0).await.window()
+    }
+}
+
+/// A fixed window, for tests and for anything that genuinely has no database.
+pub struct FixedWindow(pub Option<std::time::Duration>);
+
+#[async_trait]
+impl Window for FixedWindow {
+    async fn wait(&self) -> Option<std::time::Duration> {
+        self.0
+    }
+}
+
 pub struct DbGate {
     db: Db,
     cancel: Box<dyn Fn(Uuid) + Send + Sync>,

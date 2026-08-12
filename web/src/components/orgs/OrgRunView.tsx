@@ -7,6 +7,7 @@ import { Markdown } from "../Markdown";
 import { ActivityLine, RunStream } from "../RunStream";
 import { StreamEvent, useRunStream } from "../../lib/ws";
 import { PlanReview } from "./PlanReview";
+import { RunError } from "../ui/RunError";
 
 /** What a teammate is doing right now, derived from their assignments. */
 type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
@@ -146,9 +147,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
               </div>
             </div>
             {run.error && (
-              <div className="mx-4 mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger sm:mx-5">
-                {run.error}
-              </div>
+              <RunError reason={run.error} className="mx-4 mb-3 sm:mx-5" />
             )}
           </div>
         )}

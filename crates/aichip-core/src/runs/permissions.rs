@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::bus::EventBus;
-use crate::runs::gate::RunGate;
+use crate::runs::gate::{RunGate, Window};
 use crate::runs::slots::Slots;
 
 /// How a permission request ended.
@@ -89,7 +89,7 @@ pub struct PermissionBroker {
     inner: Arc<Mutex<Inner>>,
     gate: Arc<dyn RunGate>,
     slots: Arc<Slots>,
-    timeout: Option<Duration>,
+    window: Arc<dyn Window>,
 }
 
 /// Bookkeeping for one outstanding prompt, undone however the wait ends.
@@ -136,21 +136,24 @@ impl Drop for ParkGuard {
 }
 
 impl PermissionBroker {
-    /// `timeout` of `None` means wait indefinitely. A legitimate choice now
-    /// that waiting is nearly free: the slot is lent back, so the only cost is
-    /// a worktree and an idle CLI.
+    /// The window is asked for per request rather than held, so a change in
+    /// Settings takes effect on the next prompt instead of the next restart —
+    /// and, more importantly, cannot drift from the engine's own timeout, which
+    /// is derived from the same setting on every dispatch. A `None` window
+    /// means wait indefinitely, which is nearly free now that a parked run
+    /// lends its queue slot back.
     pub fn new(
         bus: EventBus,
         gate: Arc<dyn RunGate>,
         slots: Arc<Slots>,
-        timeout: Option<Duration>,
+        window: Arc<dyn Window>,
     ) -> Self {
         Self {
             bus,
             inner: Default::default(),
             gate,
             slots,
-            timeout,
+            window,
         }
     }
 
@@ -218,7 +221,7 @@ impl PermissionBroker {
         });
 
         let started = std::time::Instant::now();
-        let answer = match self.timeout {
+        let answer = match self.window.wait().await {
             Some(limit) => tokio::time::timeout(limit, rx).await.map_err(|_| ()),
             None => Ok(rx.await),
         };
@@ -340,7 +343,12 @@ mod tests {
         slots: Arc<Slots>,
         timeout: Option<Duration>,
     ) -> PermissionBroker {
-        PermissionBroker::new(EventBus::new(), gate, slots, timeout)
+        PermissionBroker::new(
+            EventBus::new(),
+            gate,
+            slots,
+            Arc::new(crate::runs::gate::FixedWindow(timeout)),
+        )
     }
 
     /// `unpark` is spawned, so give the runtime a turn to run it.
@@ -530,6 +538,64 @@ mod tests {
         assert_eq!(reasons.len(), 1);
         assert!(reasons[0].contains("Bash"), "{}", reasons[0]);
         assert!(!reasons[0].contains("refused you"), "{}", reasons[0]);
+    }
+
+    /// A window that answers differently the second time, standing in for
+    /// someone changing "wait for me" in Settings.
+    struct ChangingWindow(Mutex<Vec<Option<Duration>>>);
+
+    #[async_trait]
+    impl crate::runs::gate::Window for ChangingWindow {
+        async fn wait(&self) -> Option<Duration> {
+            let mut q = self.0.lock().unwrap();
+            if q.len() > 1 { q.remove(0) } else { q[0] }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn changing_the_setting_takes_effect_on_the_next_prompt() {
+        // The regression this pins: the broker used to capture its window at
+        // boot while the engine's own MCP_TOOL_TIMEOUT was re-derived from the
+        // setting on every dispatch. Lower the setting and the two split, so
+        // the CLI's timeout fired first and the engine got a bare error it
+        // works around — exactly what CLI_GRACE_SECS exists to prevent.
+        let gate = Arc::new(RecordingGate::default());
+        let b = PermissionBroker::new(
+            EventBus::new(),
+            gate.clone(),
+            Arc::new(Slots::new(0)),
+            Arc::new(ChangingWindow(Mutex::new(vec![
+                Some(Duration::from_secs(3600)),
+                Some(Duration::from_secs(60)),
+            ]))),
+        );
+
+        // First prompt: the old, long window. Still waiting after a minute.
+        let first = {
+            let b = b.clone();
+            tokio::spawn(async move {
+                b.request(Uuid::new_v4(), "Bash".into(), serde_json::json!({})).await
+            })
+        };
+        settle().await;
+        tokio::time::advance(Duration::from_secs(61)).await;
+        settle().await;
+        assert!(!first.is_finished(), "the first prompt kept the window it started with");
+
+        // Second prompt: the new, short one. Closes at 61s.
+        let second = {
+            let b = b.clone();
+            tokio::spawn(async move {
+                b.request(Uuid::new_v4(), "Edit".into(), serde_json::json!({})).await
+            })
+        };
+        settle().await;
+        tokio::time::advance(Duration::from_secs(61)).await;
+        assert!(
+            matches!(second.await.unwrap(), Decision::Unanswered { .. }),
+            "the second prompt must use the setting as it is now"
+        );
+        first.abort();
     }
 
     #[tokio::test]

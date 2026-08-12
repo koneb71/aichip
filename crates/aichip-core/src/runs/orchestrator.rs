@@ -275,12 +275,7 @@ impl Orchestrator {
     /// because it is the only one of the two that knows the difference between
     /// a refusal and an empty room.
     pub(crate) async fn mcp_tool_timeout_ms(&self) -> String {
-        let cfg = crate::attention::load(&self.db).await;
-        let secs = cfg
-            .window()
-            .map(|d| d.as_secs() + crate::attention::CLI_GRACE_SECS)
-            .unwrap_or(crate::attention::MAX_WINDOW_SECS as u64);
-        (secs * 1000).to_string()
+        crate::attention::cli_timeout_ms(crate::attention::load(&self.db).await.window())
     }
 
     /// The queue's concurrency budget, so the permission broker can lend a

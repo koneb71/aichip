@@ -6,6 +6,7 @@ import { annotateDiff } from "../lib/diff";
 import { useTierModel } from "../lib/models";
 import { useEngines } from "../lib/engines";
 import { TIERS } from "./TierPicker";
+import { RunError } from "./ui/RunError";
 
 /**
  * One brief, several attempts, side by side.
@@ -135,9 +136,7 @@ export function BakeoffView({
               </div>
 
               {v.error && (
-                <div className="mx-3 mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-                  {v.error}
-                </div>
+                <RunError reason={v.error} className="mx-3 mb-3" />
               )}
 
               <AnimatePresence>
@@ -333,7 +332,7 @@ function BakeoffSetup({
       </div>
 
       {error && (
-        <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <RunError reason={error} className="mt-3" />
       )}
 
       <div className="mt-4 flex items-center gap-3">

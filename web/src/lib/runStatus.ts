@@ -67,3 +67,49 @@ export function statusColor(status?: string | null): string {
       return "var(--color-tier-medium)";
   }
 }
+
+/** How a run's last recorded sentence should be shown, if at all.
+ *
+ * `runs.error_reason` is not only an error. The permission gate writes
+ * "waiting for you to allow Bash" into it *while the run is healthy and
+ * parked*, and clears it again on unpark; `finish` coalesces rather than
+ * overwrites. So the column is "the last thing said about this run", and
+ * keying a red panel off `error !== null` would paint a live, working card red.
+ *
+ * The pair decides the treatment, in one place, so no component has to
+ * re-derive it:
+ *
+ * - **danger** — it failed, and this is why
+ * - **amber** — it was stopped rather than crashed. The attention timeout lands
+ *   here ("nobody answered the request to allow Bash after 24h"), which is an
+ *   explanation, not a fault
+ * - **note** — it is alive and waiting on you; this is a status line
+ */
+export type StopTone = "danger" | "amber" | "note";
+
+export function stopReason(
+  status?: string | null,
+  error?: string | null,
+): { text: string; tone: StopTone } | null {
+  const text = error?.trim();
+  if (!text) return null;
+  switch (status) {
+    case "failed":
+      return { text, tone: "danger" };
+    case "canceled":
+      return { text, tone: "amber" };
+    case "waiting_permission":
+    case "awaiting_approval":
+      return { text, tone: "note" };
+    // A run that finished can still have something to say — a real one reads
+    // "2 assignments were dropped after failing", which is exactly the kind of
+    // partial success that looks like a clean win on the board. It is quiet
+    // rather than absent: `unpark` clears the column on the way back to
+    // running, so a completed run carrying a stale park note is a bug
+    // elsewhere, not the common case this has to defend against.
+    case "completed":
+      return { text, tone: "note" };
+    default:
+      return null;
+  }
+}

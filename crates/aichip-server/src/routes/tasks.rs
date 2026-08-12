@@ -86,7 +86,8 @@ async fn list(
                 CASE WHEN a.permission_preset IS NOT NULL THEN 'agent'
                      WHEN t.permission_mode IS NOT NULL THEN 'card'
                      ELSE 'default' END AS permission_source,
-                r.id AS run_id, r.status AS run_status, r.cost_usd, r.model,
+                r.id AS run_id, r.status AS run_status, r.error_reason AS run_error,
+                r.cost_usd, r.model,
                 r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
          FROM tasks t
@@ -171,6 +172,11 @@ async fn list(
                     .and(r.get::<Option<Uuid>, _>("run_id")),
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
                 "runStatus": r.get::<Option<String>, _>("run_status"),
+                // The last thing said about this run — which is not always an
+                // error. A parked run carries "waiting for you to allow Bash"
+                // here and `unpark` clears it again, so the client decides the
+                // treatment from the *pair*; see `stopReason` in runStatus.ts.
+                "runError": r.get::<Option<String>, _>("run_error"),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
                 // Enough for the chip. Anything more — how fresh it is, why
                 // the button is refused — is the drawer's own fetch, because

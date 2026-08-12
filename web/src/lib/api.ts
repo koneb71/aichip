@@ -216,6 +216,10 @@ export interface Task {
   orgRunId: string | null;
   runId: string | null;
   runStatus: string | null;
+  /** The last thing said about this card's run. Not always an error — a parked
+   *  run carries what it is waiting for. Pair it with `runStatus` through
+   *  `stopReason` rather than rendering it directly. */
+  runError?: string | null;
   costUsd: number | null;
   model: string | null;
   /** Which CLI this card runs on. */

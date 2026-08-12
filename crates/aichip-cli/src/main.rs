@@ -1,4 +1,4 @@
-use aichip_core::runs::gate::DbGate;
+use aichip_core::runs::gate::{DbGate, DbWindow};
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
@@ -267,7 +267,6 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // Built before the state literal, which moves `db` on its first line.
     // The broker needs a database of its own to park and unpark runs, and the
     // orchestrator's slots so a run waiting on a person stops occupying one.
-    let attention = aichip_core::attention::load(&db).await;
     let permissions = {
         let cancel_orchestrator = orchestrator.clone();
         PermissionBroker::new(
@@ -276,7 +275,9 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
                 cancel_orchestrator.cancel(run_id);
             })),
             orchestrator.slots(),
-            attention.window(),
+            // Asked per prompt, so it can never disagree with the engine
+            // timeout the orchestrator derives from the same setting.
+            Arc::new(DbWindow(db.clone())),
         )
     };
 
@@ -294,6 +295,10 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // The address it is actually on, not an assumed loopback one.
     tracing::info!("aichip dashboard: http://{}:{port}", displayable(bind));
+    // The address it actually bound, not the hardcoded loopback the MCP base
+    // uses — a spawned CLI is on this machine, but the person reading the push
+    // on their phone is not, and a loopback link can never answer them.
+    aichip_core::attention::set_dashboard_url(format!("http://{}:{port}", displayable(bind)));
 
     if !headless {
         let _ = tokio::process::Command::new("open")
