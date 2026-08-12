@@ -7,6 +7,8 @@ import { ModelsProvider } from "./lib/models";
 import { EnginesProvider } from "./lib/engines";
 import AppShell from "./AppShell";
 import HomePage from "./pages/HomePage";
+import ChatPage from "./pages/ChatPage";
+import ResearchPage from "./pages/ResearchPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import AgentsPage from "./pages/AgentsPage";
@@ -38,6 +40,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Routes>
             <Route path="/" element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="chat" element={<ChatPage />} />
+              <Route path="research" element={<ResearchPage />} />
+              <Route path="research/:researchId" element={<ResearchPage />} />
               <Route path="projects" element={<ProjectsPage />} />
               <Route path="projects/:projectId" element={<ProjectPage />} />
               <Route path="activity" element={<ActivityPage />} />

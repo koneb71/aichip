@@ -239,6 +239,9 @@ pub(crate) enum CallerKind {
     CommentReply,
     /// Generating a knowledge-base article.
     KbGeneration,
+    /// Investigating a question about a project: read-only plus the web,
+    /// producing a report.
+    Research,
 }
 
 /// What to do when the engine reports a rate limit.
@@ -287,6 +290,10 @@ impl CallerKind {
             // Nothing is written until the article completes, and the run row
             // still carries the brief.
             Self::KbGeneration => OnRateLimit::Hold,
+            // Same shape: the report is written only on completion, and the
+            // run row carries `research_id`, so a re-dispatch rebuilds the
+            // identical spec.
+            Self::Research => OnRateLimit::Hold,
             // Both post exactly once, on completion, so a second dispatch
             // produces one reply rather than two.
             Self::Chat | Self::CommentReply => OnRateLimit::Hold,
@@ -1353,7 +1360,8 @@ impl Orchestrator {
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
         let row = sqlx::query(
-            "SELECT status, chat_id, workflow_id, team_id, comment_id, kb_brief FROM runs WHERE id=$1",
+            "SELECT status, chat_id, workflow_id, team_id, comment_id, kb_brief, research_id
+             FROM runs WHERE id=$1",
         )
             .bind(run_id)
             .fetch_one(&self.db.pool)
@@ -1382,6 +1390,13 @@ impl Orchestrator {
             (_, Some(workflow_id), _, _) => self.execute_workflow_run(run_id, workflow_id).await,
             (_, _, Some(team_id), _) => self.execute_org_run(run_id, team_id).await,
             (_, _, _, Some(comment_id)) => self.execute_comment_run(run_id, comment_id).await,
+            // Before the kb arm: the two columns are disjoint today, but if
+            // any future path ever stamps KB columns onto a research run, the
+            // more specific kind must win rather than lean on an invariant
+            // nothing enforces.
+            _ if row.get::<Option<Uuid>, _>("research_id").is_some() => {
+                self.execute_research_run(run_id).await
+            }
             _ if row.get::<Option<String>, _>("kb_brief").is_some() => {
                 self.execute_kb_run(run_id).await
             }
@@ -2092,6 +2107,159 @@ impl Orchestrator {
             // person may have written, with no copy and no diff.
             crate::kb::revisions::propose(&self.db, article_id, rev).await?;
         }
+        Ok(())
+    }
+
+    /// Queue a deep-research run for a question about a project.
+    ///
+    /// Returns `(research_id, run_id)`. A re-run of an existing research goes
+    /// through `enqueue_research_run` instead, which reuses the row.
+    pub async fn enqueue_research(
+        &self,
+        project_id: Uuid,
+        question: &str,
+        engine: Option<&str>,
+    ) -> anyhow::Result<(Uuid, Uuid)> {
+        let engine = engine
+            .map(str::to_string)
+            .unwrap_or_else(|| self.default_engine());
+        if self.engine(&engine).is_none() {
+            anyhow::bail!("{engine} isn't installed on this machine");
+        }
+        let research_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO researches (project_id, question) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(project_id)
+        .bind(question)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id = self.enqueue_research_run(research_id, &engine).await?;
+        Ok((research_id, run_id))
+    }
+
+    /// A (re-)run against an existing research. Its own function because
+    /// re-running is a fresh runs row against the same question — the report
+    /// is replaced wholesale on completion, never merged.
+    pub async fn enqueue_research_run(
+        &self,
+        research_id: Uuid,
+        engine: &str,
+    ) -> anyhow::Result<Uuid> {
+        if self.engine(engine).is_none() {
+            anyhow::bail!("{engine} isn't installed on this machine");
+        }
+        let run_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (status, trigger, engine, research_id)
+             VALUES ('queued', 'research', $1, $2) RETURNING id",
+        )
+        .bind(engine)
+        .bind(research_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        // Above task runs (10), below comment replies (15): a person is
+        // sitting on the Research page watching, but the wait is measured in
+        // minutes either way.
+        self.queue(run_id, 12).await?;
+        Ok(run_id)
+    }
+
+    /// Investigate a question: read-only over the project's real checkout,
+    /// plus the CLI's own web search. Same shape as `execute_kb_run` — no
+    /// worktree, nothing to isolate — with two deliberate differences, both
+    /// commented at the site.
+    async fn execute_research_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
+        let row = sqlx::query(
+            "SELECT r.engine, rs.id AS research_id, rs.question,
+                    p.path AS project_path, p.id AS project_id
+             FROM runs r
+             JOIN researches rs ON rs.id = r.research_id
+             JOIN projects p ON p.id = rs.project_id
+             WHERE r.id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        self.set_status(run_id, RunStatus::Starting).await?;
+        let engine_id: String = row.get("engine");
+        let engine = self
+            .engine(&engine_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
+
+        let research_id: Uuid = row.get("research_id");
+        let question: String = row.get("question");
+        // Brain, no skill — the same reasoning as KB generation: the Brain is
+        // a hand-written list of exactly the facts an investigation gets
+        // wrong, and nobody named a skill.
+        let standing =
+            crate::runs::context::Standing::brain_only(&self.db, Some(row.get("project_id"))).await;
+        let prompt = crate::runs::research::prompt(&question, &standing.block());
+
+        // Difference one from KB: Complex, with the effort actually resolved.
+        // Research is the thinking-heavy kind of run, and hardcoding
+        // `effort: None` here would quietly ignore the operator's
+        // Complex-tier effort setting.
+        let tier = ModelTier::Complex;
+        let effort = self.resolve_effort(None, None, &engine_id, tier).await;
+        let model_id = self.model_for(&engine_id, tier);
+        sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
+            .bind(&model_id)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+
+        let spec = RunSpec {
+            cwd: PathBuf::from(row.get::<String, _>("project_path")),
+            prompt,
+            model_tier: tier,
+            model_id,
+            effort,
+            resume_session_id: None,
+            // Difference two: not KB's hardcoded AutoEdit. Research grants
+            // web tools, and an engine that cannot pause to ask (OpenCode)
+            // answers Reviewed by rejecting every call — the same reason chat
+            // resolves this per capability. The denials still bind either way.
+            permission_mode: chat_permission_mode(engine.as_ref()),
+            allowed_tools: crate::runs::research::TOOLS.iter().map(|t| t.to_string()).collect(),
+            denied_tools: crate::runs::research::DENIED.iter().map(|t| t.to_string()).collect(),
+            append_system_prompt: None,
+            mcp: McpWiring::default(),
+            run_key: run_id.to_string(),
+            extra_read_dirs: vec![],
+            permission_prompt_tool: false,
+            extra_env: HashMap::from([("AICHIP_RUN_ID".to_string(), run_id.to_string())]),
+        };
+
+        let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
+        let outcome = self
+            .stream_run(run_id, None, &seq, engine, spec, CallerKind::Research)
+            .await?;
+        if outcome.status != RunStatus::Completed {
+            return Ok(());
+        }
+
+        let report = crate::runs::research::extract_report(&outcome.output);
+        if report.trim().is_empty() {
+            // Unlike KB there is no placeholder to clean up: the researches
+            // row keeps the question, and the page offers a re-run.
+            self.finish(run_id, RunStatus::Failed, Some("the agent produced no report".into()))
+                .await?;
+            return Ok(());
+        }
+        // Scrubbed at write time, not at save-to-KB: the report quotes web
+        // content — third-party text — and later becomes a KB page quoted
+        // into future prompts. The same reason `rewrite_prompt` scrubs the
+        // article it is handed.
+        let report = crate::fence::scrub_foreign(&report, &[]);
+        let title = crate::runs::research::title_from(&report, &question);
+        sqlx::query(
+            "UPDATE researches SET report_md=$1, title=$2, updated_at=now() WHERE id=$3",
+        )
+        .bind(&report)
+        .bind(&title)
+        .bind(research_id)
+        .execute(&self.db.pool)
+        .await?;
         Ok(())
     }
 
@@ -3640,7 +3808,7 @@ mod tests {
     use super::*;
 
     /// Every caller, so a seventh cannot be added without answering.
-    const CALLERS: [CallerKind; 7] = [
+    const CALLERS: [CallerKind; 8] = [
         CallerKind::TaskWork,
         CallerKind::TaskPlanning,
         CallerKind::WorkflowStep,
@@ -3648,6 +3816,7 @@ mod tests {
         CallerKind::Chat,
         CallerKind::CommentReply,
         CallerKind::KbGeneration,
+        CallerKind::Research,
     ];
 
     /// The invariant the leak violated: a run only goes back on the queue if

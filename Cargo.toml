@@ -33,6 +33,7 @@ axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["cors"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate"] }
 rand = "0.9"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 [profile.release]
 lto = "thin"

@@ -32,7 +32,9 @@ export type IconName =
   | "coin"
   | "check"
   | "bell"
-  | "folder";
+  | "folder"
+  | "chat"
+  | "research";
 
 const P: Record<IconName, React.ReactNode> = {
   home: <path d="M3.5 10.5 12 4l8.5 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4v-6h-6v6H5A1.5 1.5 0 0 1 3.5 19z" />,
@@ -43,6 +45,15 @@ const P: Record<IconName, React.ReactNode> = {
     </>
   ),
   activity: <path d="M3.5 12.5h4l2.5-6 4 13 2.5-7h4" />,
+  chat: (
+    <path d="M20.5 11.5a8.5 8.5 0 0 1-12.3 7.6L4 20l1-4.1a8.5 8.5 0 1 1 15.5-4.4z" />
+  ),
+  research: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M15.8 15.8 20.5 20.5M8.5 11h5M11 8.5v5" />
+    </>
+  ),
   agents: (
     <>
       <circle cx="12" cy="8.5" r="3.5" />

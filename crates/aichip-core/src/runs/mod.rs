@@ -6,6 +6,7 @@ pub mod mentions;
 pub mod orchestrator;
 pub mod org;
 pub mod permissions;
+pub mod research;
 pub mod resume;
 pub mod slots;
 pub mod task_plan;

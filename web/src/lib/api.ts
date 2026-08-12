@@ -1228,6 +1228,34 @@ export interface ActionOutcome {
   needsScope: string | null;
 }
 
+
+/** A deep research: one question, one current report. */
+export interface Research {
+  id: string;
+  question: string;
+  title: string;
+  hasReport: boolean;
+  kbArticleId: string | null;
+  runId: string | null;
+  runStatus: string | null;
+  createdAt: string;
+}
+
+/** The detail view's shape — the list rows above, plus the body. */
+export interface ResearchDetail {
+  id: string;
+  projectId: string;
+  question: string;
+  title: string;
+  reportMd: string | null;
+  kbArticleId: string | null;
+  runId: string | null;
+  runStatus: string | null;
+  runError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
@@ -2068,6 +2096,30 @@ export const api = {
   search: (workspaceId: string, q: string) =>
     fetch(`/api/search?workspace_id=${workspaceId}&q=${encodeURIComponent(q)}`).then((r) =>
       json<SearchResults>(r),
+    ),
+
+  // deep research
+  researchList: (projectId: string) =>
+    fetch(`/api/research?project_id=${projectId}`).then((r) =>
+      json<{ researches: Research[] }>(r),
+    ),
+  researchCreate: (projectId: string, question: string, engine?: string) =>
+    post("/api/research", { project_id: projectId, question, engine }).then((r) =>
+      json<{ id: string; runId: string }>(r),
+    ),
+  researchGet: (id: string) =>
+    fetch(`/api/research/${id}`).then((r) => json<ResearchDetail>(r)),
+  researchRerun: (id: string, engine?: string) =>
+    post(`/api/research/${id}/rerun`, engine ? { engine } : undefined).then((r) =>
+      json<{ runId: string }>(r),
+    ),
+  researchCancel: (id: string) => post(`/api/research/${id}/cancel`).then(json),
+  researchDelete: (id: string) =>
+    fetch(`/api/research/${id}`, { method: "DELETE" }).then(json),
+  // Idempotent: the second click returns the article the first one filed.
+  researchSaveToKb: (id: string) =>
+    post(`/api/research/${id}/save-to-kb`).then((r) =>
+      json<{ articleId: string; created: boolean }>(r),
     ),
 
   // chat

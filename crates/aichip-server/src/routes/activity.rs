@@ -79,6 +79,7 @@ async fn activity(
         "SELECT r.id, r.status, r.trigger, r.cost_usd, r.created_at, r.started_at,
                 r.engine, r.model,
                 r.goal, t.title AS task_title, w.name AS workflow_name,
+                rs.question AS research_question,
                 tm.name AS team_name, p.name AS project_name, p.id AS project_id,
                 r.team_id, r.task_id
          FROM runs r
@@ -86,8 +87,9 @@ async fn activity(
          LEFT JOIN workflows w ON w.id = r.workflow_id
          LEFT JOIN teams tm ON tm.id = r.team_id
          LEFT JOIN chats c ON c.id = r.chat_id
+         LEFT JOIN researches rs ON rs.id = r.research_id
          LEFT JOIN projects p ON p.id = COALESCE(
-             r.project_id, t.project_id, w.project_id, c.project_id)
+             r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
          WHERE r.status NOT IN ('completed','failed','canceled')
            AND ($1::uuid IS NULL OR p.workspace_id = $1)
          ORDER BY
@@ -110,6 +112,10 @@ async fn activity(
                 .get::<Option<String>, _>("task_title")
                 .or_else(|| r.get::<Option<String>, _>("workflow_name"))
                 .or_else(|| r.get::<Option<String>, _>("goal"))
+                // A research run's name is its question. Without the join a
+                // research run was not merely untitled here — the workspace
+                // filter nulled it out of the page entirely.
+                .or_else(|| r.get::<Option<String>, _>("research_question"))
                 .unwrap_or_else(|| "Assistant".to_string());
             json!({
                 "id": r.get::<Uuid, _>("id"),
@@ -172,8 +178,9 @@ async fn activity(
          LEFT JOIN tasks t ON t.id = r.task_id
          LEFT JOIN workflows w ON w.id = r.workflow_id
          LEFT JOIN chats c ON c.id = r.chat_id
+         LEFT JOIN researches rs ON rs.id = r.research_id
          LEFT JOIN projects p ON p.id = COALESCE(
-             r.project_id, t.project_id, w.project_id, c.project_id)
+             r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
          WHERE r.created_at > now() - interval '14 days'
            AND ($1::uuid IS NULL OR p.workspace_id = $1)
          GROUP BY 1 ORDER BY 1",
