@@ -187,7 +187,7 @@ export default function PageView() {
             </div>
           )}
 
-          <div className="mt-6 max-w-[68ch]">
+          <div className="mt-6 max-w-[72ch]">
             {page.writing && empty ? (
               <div className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-sm text-ink-dim">
                 An agent is writing this page…
@@ -204,7 +204,12 @@ export default function PageView() {
                 .
               </div>
             ) : (
-              <PageBody html={page.contentHtml!} />
+              // The card the child-page links below already get: the body is
+              // the page's main artefact and reads better as a bounded
+              // document than as text floating on the page background.
+              <div className="card-shadow rounded-2xl border border-line bg-panel px-6 py-6 sm:px-8 sm:py-8">
+                <PageBody html={page.contentHtml!} />
+              </div>
             )}
           </div>
 

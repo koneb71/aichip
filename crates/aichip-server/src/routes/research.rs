@@ -299,7 +299,11 @@ async fn save_to_kb(
 
     // The report was fence-scrubbed at write time; conversion and
     // sanitisation happen here, on the way into the article store.
-    let html = aichip_core::runs::research::to_html(&report);
+    // The article header carries the title; the report's own `# ` heading
+    // would print it twice.
+    let html = aichip_core::runs::research::to_html(
+        aichip_core::runs::research::body_without_title(&report),
+    );
     let prepared = aichip_core::kb::render::prepare(&html);
 
     let run_id: Option<Uuid> = sqlx::query_scalar(

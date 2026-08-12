@@ -182,6 +182,22 @@ pub fn title_from(report_md: &str, question: &str) -> String {
     clip(question.trim(), 120).into_owned()
 }
 
+/// The report without its opening `# ` heading.
+///
+/// The knowledge base shows the article title in its own header, and
+/// `title_from` already lifted the heading into it — leaving the heading in
+/// the body prints the title twice, one line apart.
+pub fn body_without_title(report_md: &str) -> &str {
+    let trimmed = report_md.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("# ") {
+        if let Some(nl) = rest.find('\n') {
+            return rest[nl..].trim_start();
+        }
+        return "";
+    }
+    report_md
+}
+
 /// Markdown → HTML, for filing a report into the knowledge base.
 ///
 /// Tables and strikethrough enabled to match what `remark-gfm` renders on the
@@ -322,6 +338,19 @@ mod tests {
         assert_eq!(title_from("", "  padded question  "), "padded question");
         // A heading buried under prose is a section, not a title.
         assert_eq!(title_from("prose first\n# Later", "q"), "q");
+    }
+
+    #[test]
+    fn the_body_drops_its_own_title_but_keeps_everything_else() {
+        // The KB header shows the title; the body repeating it one line down
+        // is the wart this exists to remove.
+        assert_eq!(
+            body_without_title("# The Title\n\n## Section\n\nBody."),
+            "## Section\n\nBody."
+        );
+        // No heading → untouched; a section heading is not a title.
+        assert_eq!(body_without_title("## Section\n\nBody."), "## Section\n\nBody.");
+        assert_eq!(body_without_title("plain text"), "plain text");
     }
 
     #[test]
