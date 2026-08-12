@@ -1259,8 +1259,9 @@ export interface SpaceDocsStatus {
 export interface Routine {
   id: string;
   name: string;
-  /** Where a firing lands: a chat turn, a research report, or a board card. */
-  kind: "chat" | "research" | "task";
+  /** Where a firing lands: a chat turn, a research report, a board card, or
+   *  a page-watch update in its thread. */
+  kind: "chat" | "research" | "task" | "watch";
   projectId: string | null;
   projectName: string | null;
   prompt: string;
@@ -1273,6 +1274,8 @@ export interface Routine {
   effort: string | null;
   /** The chat kind's standing thread, once it has fired. */
   chatId: string | null;
+  /** The watch kind's target page. */
+  url: string | null;
   nextAt: string | null;
   lastFiredAt: string | null;
   lastError: string | null;
@@ -1284,6 +1287,7 @@ export interface RoutineDraft {
   kind: Routine["kind"];
   projectId?: string | null;
   prompt: string;
+  url?: string | null;
   cronExpr: string;
   catchUp?: string;
   engine?: string | null;

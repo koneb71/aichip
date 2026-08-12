@@ -19,11 +19,13 @@ const KIND_LABEL: Record<Routine["kind"], string> = {
   chat: "Chat",
   research: "Research",
   task: "Task",
+  watch: "Watch",
 };
 const KIND_BLURB: Record<Routine["kind"], string> = {
   chat: "replies collect in one thread",
   research: "a fresh cited report each time",
   task: "a card started on the board",
+  watch: "check a page for changes",
 };
 
 /** The value the scope picker uses for "no project". */
@@ -149,6 +151,7 @@ export default function RoutinesPage() {
                 kind: r.kind,
                 projectId: r.projectId,
                 prompt: r.prompt,
+                url: r.url,
                 cronExpr: r.cronExpr,
                 catchUp: r.catchUp,
                 engine: r.engine,
@@ -235,7 +238,12 @@ function RoutineCard({
             {r.projectName && (
               <span className="truncate text-[11px] text-ink-dim">· {r.projectName}</span>
             )}
-            {!r.projectName && r.kind !== "task" && (
+            {r.kind === "watch" && r.url && (
+              <span className="truncate text-[11px] text-ink-dim" title={r.url}>
+                · {hostOf(r.url)}
+              </span>
+            )}
+            {!r.projectName && r.kind !== "task" && r.kind !== "watch" && (
               <span className="text-[11px] text-ink-dim">· General</span>
             )}
           </div>
@@ -339,7 +347,7 @@ function LastOutcome({ routine: r }: { routine: Routine }) {
 
 /** Where this routine's output lives, one click away. */
 function ResultLink({ routine: r }: { routine: Routine }) {
-  if (r.kind === "chat" && r.chatId) {
+  if ((r.kind === "chat" || r.kind === "watch") && r.chatId) {
     return (
       <Link
         to={`/chat?project=${r.projectId ?? GENERAL}&chat=${r.chatId}`}
@@ -551,23 +559,41 @@ function Editor({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={d.projectId ?? GENERAL}
-            onChange={(e) => set({ projectId: e.target.value === GENERAL ? null : e.target.value })}
-            className={field}
-          >
-            {allowGeneral && <option value={GENERAL}>General — no project</option>}
-            {eligible.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          {d.kind === "task" && !d.projectId && (
-            <span className="text-[11px] text-danger">a task routine needs a project board</span>
-          )}
-        </div>
+        {d.kind === "watch" ? (
+          <input
+            value={d.url ?? ""}
+            onChange={(e) => set({ url: e.target.value })}
+            placeholder="https://the-page-to-watch.example/jobs"
+            className={`${field} w-full font-mono`}
+          />
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={d.projectId ?? GENERAL}
+              onChange={(e) => set({ projectId: e.target.value === GENERAL ? null : e.target.value })}
+              className={field}
+            >
+              {/* Without a "general" option (the task kind) the browser would
+                  display the first project while the state still says null —
+                  a select must never show a choice nobody made. */}
+              {allowGeneral ? (
+                <option value={GENERAL}>General — no project</option>
+              ) : (
+                <option value={GENERAL} disabled>
+                  Pick a project…
+                </option>
+              )}
+              {eligible.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {d.kind === "task" && !d.projectId && (
+              <span className="text-[11px] text-danger">a task routine needs a project board</span>
+            )}
+          </div>
+        )}
 
         <textarea
           value={d.prompt}
@@ -578,7 +604,9 @@ function Editor({
               ? "What should the card ask for? e.g. Update dependencies, run the tests, leave the diff for review."
               : d.kind === "research"
                 ? "The question to investigate each time. e.g. What changed this week in the repos I depend on?"
-                : "The message to send each time. You can @mention agents and skills."
+                : d.kind === "watch"
+                  ? "What to watch for. e.g. new openings, price changes, updated docs — each check reports what changed since the last."
+                  : "The message to send each time. You can @mention agents and skills."
           }
           className={`${field} w-full resize-y`}
         />
@@ -682,7 +710,8 @@ function Editor({
               !d.name.trim() ||
               !d.prompt.trim() ||
               preview?.valid === false ||
-              (d.kind === "task" && !d.projectId)
+              (d.kind === "task" && !d.projectId) ||
+              (d.kind === "watch" && !/^https?:\/\/\S{4,}$/.test((d.url ?? "").trim()))
             }
             className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
           >
@@ -692,4 +721,12 @@ function Editor({
       </div>
     </div>
   );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }

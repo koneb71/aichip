@@ -56,7 +56,7 @@ async fn list(
     let rows = sqlx::query(
         "SELECT rt.id, rt.name, rt.kind, rt.project_id, p.name AS project_name, rt.prompt,
                 rt.cron_expr, rt.catch_up, rt.enabled, rt.engine, rt.model_tier, rt.effort,
-                rt.chat_id, rt.created_at,
+                rt.chat_id, rt.url, rt.created_at,
                 lr.fired_at AS last_fired, lr.error AS last_error, lr.run_status AS last_status
          FROM routines rt
          LEFT JOIN projects p ON p.id = rt.project_id
@@ -91,6 +91,7 @@ async fn list(
                 "modelTier": r.get::<Option<String>, _>("model_tier"),
                 "effort": r.get::<Option<String>, _>("effort"),
                 "chatId": r.get::<Option<Uuid>, _>("chat_id"),
+                "url": r.get::<Option<String>, _>("url"),
                 // Only an enabled routine has a future.
                 "nextAt": if r.get::<bool, _>("enabled") {
                     next_occurrences(&expr, 1).first().map(|t| t.to_rfc3339())
@@ -111,6 +112,8 @@ struct RoutineBody {
     kind: String,
     project_id: Option<Uuid>,
     prompt: String,
+    /// The watch kind's target page.
+    url: Option<String>,
     cron_expr: String,
     #[serde(default)]
     catch_up: Option<String>,
@@ -121,6 +124,14 @@ struct RoutineBody {
 
 /// Everything that can be wrong with a routine is wrong at save time, not at
 /// 9am tomorrow when nobody is watching — so the validation lives here.
+fn url_ok(url: Option<&str>) -> bool {
+    url.map(str::trim).is_some_and(|u| {
+        (u.starts_with("http://") || u.starts_with("https://"))
+            && u.len() > 10
+            && !u.chars().any(char::is_whitespace)
+    })
+}
+
 fn vet(body: &RoutineBody) -> Result<(), ApiError> {
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "give the routine a name".into()));
@@ -128,8 +139,13 @@ fn vet(body: &RoutineBody) -> Result<(), ApiError> {
     if body.prompt.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "the prompt is empty".into()));
     }
-    if !matches!(body.kind.as_str(), "chat" | "research" | "task") {
-        return Err((StatusCode::BAD_REQUEST, "kind must be chat, research or task".into()));
+    if !matches!(body.kind.as_str(), "chat" | "research" | "task" | "watch") {
+        return Err((StatusCode::BAD_REQUEST, "kind must be chat, research, task or watch".into()));
+    }
+    if body.kind == "watch" && !url_ok(body.url.as_deref()) {
+        // Wrong at save time, not at 9am: the URL has to be a page WebFetch
+        // can open.
+        return Err((StatusCode::BAD_REQUEST, "a watch needs a full page address (https://…)".into()));
     }
     if body.kind == "task" && body.project_id.is_none() {
         return Err((StatusCode::BAD_REQUEST, "a task routine needs a project board".into()));
@@ -157,19 +173,22 @@ async fn create(
         }
     }
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO routines (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up, engine, model_tier, effort)
-         VALUES ($1,$2,$3,$4,$5,$6,coalesce($7,'run_once'),$8,$9,$10) RETURNING id",
+        "INSERT INTO routines (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up, engine, model_tier, effort, url)
+         VALUES ($1,$2,$3,$4,$5,$6,coalesce($7,'run_once'),$8,$9,$10,$11) RETURNING id",
     )
     .bind(workspace_id)
     .bind(body.name.trim())
     .bind(&body.kind)
-    .bind(body.project_id)
+    // A watch never carries a project: the general chat is the one with the
+    // web tools, and a page has no repository.
+    .bind(if body.kind == "watch" { None } else { body.project_id })
     .bind(body.prompt.trim())
     .bind(&body.cron_expr)
     .bind(&body.catch_up)
     .bind(&body.engine)
     .bind(&body.model_tier)
     .bind(&body.effort)
+    .bind(body.url.as_deref().map(str::trim))
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -181,6 +200,7 @@ async fn create(
 struct UpdateBody {
     name: Option<String>,
     prompt: Option<String>,
+    url: Option<String>,
     cron_expr: Option<String>,
     catch_up: Option<String>,
     enabled: Option<bool>,
@@ -204,6 +224,9 @@ async fn update(
             return Err((StatusCode::BAD_REQUEST, "catchUp must be run_once or skip".into()));
         }
     }
+    if body.url.is_some() && !url_ok(body.url.as_deref()) {
+        return Err((StatusCode::BAD_REQUEST, "a watch needs a full page address (https://…)".into()));
+    }
     // Re-enabling resets the bookmark: the scheduler measures the next
     // occurrence from now, instead of instantly "catching up" a window that
     // passed while the routine was off.
@@ -216,6 +239,7 @@ async fn update(
             engine = coalesce($6, engine),
             model_tier = coalesce($7, model_tier),
             effort = coalesce($8, effort),
+            url = coalesce($10, url),
             enabled = coalesce($9, enabled),
             last_fired_at = CASE WHEN $9 IS NOT DISTINCT FROM true AND NOT enabled
                                  THEN NULL ELSE last_fired_at END,
@@ -231,6 +255,7 @@ async fn update(
     .bind(&body.model_tier)
     .bind(&body.effort)
     .bind(body.enabled)
+    .bind(body.url.as_deref().map(str::trim))
     .execute(&state.db.pool)
     .await
     .map_err(internal)?
