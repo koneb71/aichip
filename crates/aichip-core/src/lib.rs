@@ -3,6 +3,7 @@ pub mod attention;
 pub mod brain;
 pub mod bus;
 pub mod db;
+pub mod fence;
 pub mod github;
 pub mod kb;
 pub mod leftovers;

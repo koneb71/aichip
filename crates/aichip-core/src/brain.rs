@@ -43,8 +43,7 @@ pub const MAX_CHARS: usize = 4000;
 /// How many past versions are kept. An undo, not an archive.
 const KEEP_REVISIONS: i64 = 20;
 
-const BEGIN: &str = "<<<BEGIN PROJECT BRAIN>>>";
-const END: &str = "<<<END PROJECT BRAIN>>>";
+use crate::fence::{BRAIN_BEGIN as BEGIN, BRAIN_END as END};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,7 +95,8 @@ pub fn augment_prompt(prompt: &str, brain: Option<&Brain>) -> String {
 /// end marker to "END PROJECT BRAIN (literal)" would still read as an end
 /// marker to the only reader that matters.
 fn neutralise(text: &str) -> String {
-    text.replace(END, "[end of quoted context — literal text from the body]")
+    let own = crate::fence::scrub_foreign(text, &[BEGIN, END]);
+    own.replace(END, "[end of quoted context — literal text from the body]")
         .replace(BEGIN, "[begin quoted context — literal text from the body]")
 }
 

@@ -98,8 +98,7 @@ const MAX_PAGE_CHARS: usize = 6000;
 /// "see also" lives rather than the instructions.
 const MAX_TOTAL_CHARS: usize = 16000;
 
-const BEGIN: &str = "<<<BEGIN KB PAGE";
-const END: &str = "<<<END KB PAGE>>>";
+use crate::fence::{KB_BEGIN as BEGIN, KB_END as END};
 
 /// Fold tagged pages into a prompt.
 ///
@@ -159,7 +158,8 @@ pub fn augment_prompt(prompt: &str, articles: &[ArticleRef]) -> String {
 /// mistake `github::issues::neutralise` was written to avoid, caught there and
 /// left here.
 fn neutralise(text: &str) -> String {
-    text.replace(END, "[end of quoted page — literal text from the body]")
+    let own = crate::fence::scrub_foreign(text, &[BEGIN, END]);
+    own.replace(END, "[end of quoted page — literal text from the body]")
         .replace(BEGIN, "[begin quoted page — literal text from the body]")
 }
 

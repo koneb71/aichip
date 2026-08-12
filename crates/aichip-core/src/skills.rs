@@ -33,8 +33,7 @@ use uuid::Uuid;
 /// How much of one skill a run is given.
 pub const MAX_CHARS: usize = 4000;
 
-const BEGIN: &str = "<<<BEGIN SKILL>>>";
-const END: &str = "<<<END SKILL>>>";
+use crate::fence::{SKILL_BEGIN as BEGIN, SKILL_END as END};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +99,8 @@ pub fn augment_prompt(prompt: &str, skill: Option<&Skill>) -> String {
 /// Stop a body from closing its own fence, or opening one. The replacement
 /// contains no marker text — see `brain::neutralise`.
 fn neutralise(text: &str) -> String {
-    text.replace(END, "[end of quoted skill — literal text from the body]")
+    let own = crate::fence::scrub_foreign(text, &[BEGIN, END]);
+    own.replace(END, "[end of quoted skill — literal text from the body]")
         .replace(BEGIN, "[begin quoted skill — literal text from the body]")
 }
 
