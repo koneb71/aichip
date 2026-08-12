@@ -332,8 +332,7 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
     let row = sqlx::query(
         "SELECT COALESCE(a.engine, t.engine) AS engine,
                 COALESCE(a.permission_preset, t.permission_mode) AS mode
-         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
-         LEFT JOIN skills sk ON sk.id = t.skill_id WHERE t.id = $1",
+         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
     )
     .bind(task_id)
     .fetch_optional(&state.db.pool)
@@ -823,7 +822,6 @@ async fn comments(
         "SELECT c.id, c.author, c.agent_id, c.content, c.run_id, c.created_at,
                 c.file_path, c.line, c.hunk,
                 a.name AS agent_name, a.color AS agent_color,
-                t.skill_id, sk.name AS skill_name,
                 r.status AS run_status
          FROM task_comments c
          LEFT JOIN agents a ON a.id = c.agent_id
@@ -852,8 +850,6 @@ async fn comments(
             "author": r.get::<String, _>("author"),
             "agentId": r.get::<Option<Uuid>, _>("agent_id"),
             "agentName": r.get::<Option<String>, _>("agent_name"),
-                "skillId": r.get::<Option<Uuid>, _>("skill_id"),
-                "skillName": r.get::<Option<String>, _>("skill_name"),
             "agentColor": r.get::<Option<String>, _>("agent_color"),
             "content": r.get::<String, _>("content"),
             "runId": r.get::<Option<Uuid>, _>("run_id"),
@@ -1057,8 +1053,6 @@ async fn bakeoff(
             "label": r.get::<String, _>("variant_label"),
             "status": r.get::<String, _>("status"),
             "agentName": r.get::<Option<String>, _>("agent_name"),
-                "skillId": r.get::<Option<Uuid>, _>("skill_id"),
-                "skillName": r.get::<Option<String>, _>("skill_name"),
             "model": r.get::<Option<String>, _>("model"),
             "engine": r.get::<String, _>("engine"),
             "costUsd": r.get::<Option<f64>, _>("cost_usd"),
