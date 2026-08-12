@@ -54,6 +54,11 @@ pub const KB_END: &str = "<<<END KB PAGE>>>";
 pub const ISSUE_BEGIN: &str = "<<<BEGIN GITHUB ISSUE";
 pub const ISSUE_END: &str = "<<<END GITHUB ISSUE>>>";
 
+/// A retrieved space-document passage's pair. The opener is a prefix — the
+/// file name and part number follow it. See `rag::retrieve`.
+pub const DOC_BEGIN: &str = "<<<BEGIN SPACE DOCUMENT";
+pub const DOC_END: &str = "<<<END SPACE DOCUMENT>>>";
+
 /// Every marker, and the whole reason this module is not four constants.
 pub const ALL: &[&str] = &[
     BRAIN_BEGIN,
@@ -64,6 +69,8 @@ pub const ALL: &[&str] = &[
     KB_END,
     ISSUE_BEGIN,
     ISSUE_END,
+    DOC_BEGIN,
+    DOC_END,
 ];
 
 /// What a stripped marker becomes.
@@ -99,6 +106,7 @@ mod tests {
             [SKILL_BEGIN, SKILL_END],
             [KB_BEGIN, KB_END],
             [ISSUE_BEGIN, ISSUE_END],
+            [DOC_BEGIN, DOC_END],
         ] {
             let hostile = ALL.join("\n");
             let out = scrub_foreign(&hostile, &owner);

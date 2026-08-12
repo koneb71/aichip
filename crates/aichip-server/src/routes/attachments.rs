@@ -59,7 +59,7 @@ pub fn router() -> Router<AppState> {
 
 /// Reduce a client-supplied filename to a safe basename, or `None` if nothing
 /// safe survives.
-fn sanitize_filename(raw: &str) -> Option<String> {
+pub(crate) fn sanitize_filename(raw: &str) -> Option<String> {
     if raw.contains('\0') {
         return None;
     }

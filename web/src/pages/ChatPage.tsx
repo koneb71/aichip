@@ -4,6 +4,7 @@ import { api, ChatSummary, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { ChatThread } from "../components/chat/ChatThread";
+import { SpaceDocs } from "../components/chat/SpaceDocs";
 
 /**
  * Chat as a page: the conversation list on the left, one thread full-width.
@@ -271,6 +272,7 @@ export default function ChatPage() {
           </div>
         ))}
       </div>
+      {project?.kind === "space" && <SpaceDocs projectId={project.id} />}
     </div>
   );
 

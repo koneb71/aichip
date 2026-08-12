@@ -18,6 +18,7 @@ pub mod projects;
 pub mod search;
 pub mod settings;
 pub mod skills;
+pub mod spaces;
 pub mod spend;
 pub mod tasks;
 pub mod teams;
@@ -64,6 +65,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(spend::router())
         .merge(kb::router())
         .merge(research::router())
+        .merge(spaces::router())
 }
 
 async fn health() -> Json<Value> {

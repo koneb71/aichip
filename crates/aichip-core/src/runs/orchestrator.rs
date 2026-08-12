@@ -126,10 +126,18 @@ conversation list. Keep replies short and conversational; the user sees them in 
 /// documents reference. No board tools — see the MCP wiring decision — and
 /// the same denials as every chat, because the run stands in the user's real
 /// folder.
-pub const SPACE_CHAT_ALLOWED_TOOLS: &[&str] = &["Read", "Grep", "Glob", "WebSearch", "WebFetch"];
+pub const SPACE_CHAT_ALLOWED_TOOLS: &[&str] = &[
+    "Read",
+    "Grep",
+    "Glob",
+    "WebSearch",
+    "WebFetch",
+    "mcp__aichip__search_documents",
+    "mcp__aichip__list_documents",
+];
 
 /// The system prompt for a space chat.
-const SPACE_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is attached to a document space: the folder you are in holds documents the user has collected, and your job is to answer questions about and around them. Read, Grep and Glob work on that folder; WebSearch and WebFetch cover what the documents reference. Ground answers about the documents in what they actually say — quote or name the file — and say plainly when the answer is not in them. There is no repository here and no task board; if the user asks for coding work, tell them to switch this chat to one of their projects. Keep replies short and conversational; the user sees them in a chat panel.";
+const SPACE_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is attached to a document space: the folder you are in holds documents the user has collected, and your job is to answer questions about and around them. Relevant passages from the documents are attached to each message automatically, with file names — cite them when you draw on them. Use mcp__aichip__search_documents to search again with a different phrasing, mcp__aichip__list_documents to see what is here, and Read to open a whole file; WebSearch and WebFetch cover what the documents reference. Ground answers about the documents in what they actually say — quote or name the file — and say plainly when the answer is not in them. There is no repository here and no task board; if the user asks for coding work, tell them to switch this chat to one of their projects. Keep replies short and conversational; the user sees them in a chat panel.";
 
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
@@ -2363,11 +2371,16 @@ impl Orchestrator {
         let user_message: String = row
             .get::<Option<String>, _>("user_message")
             .unwrap_or_else(|| "Introduce yourself briefly.".to_string());
+        // The retrieval query, captured before any augment: what the person
+        // typed, not the attachment framing or mention instructions that get
+        // wrapped around it below.
+        let raw_user_text = user_message.clone();
         // NULL for a *general* chat — a conversation with no project behind
         // it. Everything project-shaped below is gated on this: attachments
         // and mentions are project machinery, the brain belongs to a project,
         // and the MCP task tools resolve through one.
         let project_id: Option<Uuid> = row.get("project_id");
+        let project_kind: Option<String> = row.get("project_kind");
 
         // An attachment-only turn stores empty content, so the prompt may be
         // nothing but the attachment block.
@@ -2402,6 +2415,34 @@ impl Orchestrator {
             .collect();
         let user_message = mentions::augment_skills_prompt(&user_message, &named_skills);
 
+        // A space chat retrieves before it answers: the top passages from the
+        // documents, semantically matched against what the person just typed.
+        // Per-message context, exactly like attachments — which passages
+        // matter depends on this question, so it runs every turn, resumed
+        // session or not (unlike the brain below, which the session already
+        // carries). Any failure — empty index, embedder still downloading,
+        // offline — leaves the prompt untouched: the chat must work without
+        // it, it just answers from Read/Grep instead.
+        let user_message = match (project_id, project_kind.as_deref()) {
+            (Some(pid), Some("space")) => {
+                match crate::rag::retrieve::top_k(
+                    &self.db,
+                    pid,
+                    &raw_user_text,
+                    crate::rag::retrieve::DEFAULT_K,
+                )
+                .await
+                {
+                    Ok(passages) => crate::rag::retrieve::augment_prompt(&user_message, &passages),
+                    Err(e) => {
+                        tracing::warn!(%run_id, error=%e, "space retrieval skipped");
+                        user_message
+                    }
+                }
+            }
+            _ => user_message,
+        };
+
         // The same standing context a board run gets. A chat that has to be
         // told where the code lives every time is the reason this feature
         // exists — and the chat is where a person asks the questions the brain
@@ -2428,23 +2469,23 @@ impl Orchestrator {
             _ => user_message,
         };
 
-        // The aichip tools all resolve through the chat's project — a general
-        // chat gets none, rather than ten tools that answer every call with
-        // an error about a project it does not have. A *space* gets none
-        // either: the board tools would create cards whose runs edit the
-        // document folder in place, which is not what a folder of documents
-        // is for.
-        let project_kind: Option<String> = row.get("project_kind");
+        // The aichip tools all resolve through the chat's project, so a
+        // general chat gets none — tools that answer every call with an
+        // error about a missing project are worse than an empty toolbox.
+        // Any project-attached chat gets the endpoint; *which* tools it
+        // lists is decided server-side by kind, so a space sees the document
+        // tools and never the board tools (whose cards would edit the
+        // document folder in place).
         let is_repo = project_kind.as_deref() == Some("repo") || project_kind.as_deref() == Some("app");
-        let mcp = match (project_id, is_repo) {
-            (Some(_), true) => McpWiring {
+        let mcp = match project_id {
+            Some(_) => McpWiring {
                 aichip_url: self
                     .mcp_base_url
                     .as_ref()
                     .map(|b| format!("{b}/mcp/chat/{chat_id}")),
                 servers: vec![],
             },
-            _ => McpWiring::default(),
+            None => McpWiring::default(),
         };
 
         // Both were hardcoded — Medium, and no effort at all — which is why the

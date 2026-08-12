@@ -21,6 +21,10 @@ rand = { workspace = true }
 # server-side so the stored article does not depend on which client clicked
 # Save — the web side's react-markdown renders to DOM, not to a string.
 pulldown-cmark = { workspace = true }
+# Local semantic embeddings for space documents. ONNX inference on this
+# machine — never a model API. rustls features to match the workspace; the
+# model itself is fetched once at runtime and cached under ~/.aichip/models.
+fastembed = { workspace = true }
 futures = "0.3"
 # `dyn RunGate` for the permission broker: async fn in traits is not
 # object-safe, and the test double is the whole reason the trait exists —

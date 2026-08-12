@@ -1229,6 +1229,26 @@ export interface ActionOutcome {
 }
 
 
+
+/** A document in a space's folder, with its semantic-index status. */
+export interface SpaceDocument {
+  id: string;
+  relPath: string;
+  /** pending = seen, not embedded yet. indexed = searchable. failed = the
+   *  error says why (retried on the next reindex). unsupported = the agent
+   *  can still Read it in the folder; it just isn't semantically searchable. */
+  status: "pending" | "indexed" | "failed" | "unsupported";
+  error: string | null;
+  bytes: number;
+  indexedAt: string | null;
+}
+
+/** Where the local embedding model stands. Downloading = the one-time fetch. */
+export interface SpaceDocsStatus {
+  embedder: { state: "not_ready" | "downloading" | "ready" | "failed"; detail?: string };
+  counts: Record<string, number>;
+}
+
 /** A deep research: one question, one current report. */
 export interface Research {
   id: string;
@@ -2105,6 +2125,25 @@ export const api = {
     fetch(`/api/search?workspace_id=${workspaceId}&q=${encodeURIComponent(q)}`).then((r) =>
       json<SearchResults>(r),
     ),
+
+  // space documents
+  spaceDocuments: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/documents`).then((r) =>
+      json<{ documents: SpaceDocument[] }>(r),
+    ),
+  uploadSpaceDocuments: (projectId: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    return postForm(`/api/projects/${projectId}/documents`, form).then((r) =>
+      json<{ stored: number; documents: SpaceDocument[] }>(r),
+    );
+  },
+  deleteSpaceDocument: (projectId: string, docId: string) =>
+    fetch(`/api/projects/${projectId}/documents/${docId}`, { method: "DELETE" }).then(json),
+  reindexSpace: (projectId: string) =>
+    post(`/api/projects/${projectId}/documents/reindex`).then(json),
+  spaceDocsStatus: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/documents/status`).then((r) => json<SpaceDocsStatus>(r)),
 
   // deep research
   /** scope: {projectId} for a project's researches, {workspaceId} for the

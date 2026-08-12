@@ -27,7 +27,15 @@ pub async fn rpc(
             "serverInfo": { "name": "aichip", "version": env!("CARGO_PKG_VERSION") }
         }),
         "ping" => json!({}),
-        "tools/list" => tools_list(),
+        // Which list depends on what the chat is scoped to: a space exposes
+        // the document tools, everything else the board tools. A lookup
+        // failure falls back to the board list — the tool call itself will
+        // say what went wrong, with a better message than a silent empty
+        // toolbox.
+        "tools/list" => match chat_project(&state, chat_id).await {
+            Ok((_, _, kind)) => tools_list(&kind),
+            Err(_) => tools_list("repo"),
+        },
         "tools/call" => {
             let name = req
                 .pointer("/params/name")
@@ -60,10 +68,32 @@ pub async fn rpc(
     )
 }
 
-pub fn tools_list() -> Value {
+pub fn tools_list(kind: &str) -> Value {
     let obj = |props: Value, required: Vec<&str>| {
         json!({ "type": "object", "properties": props, "required": required })
     };
+    // A space's toolbox is documents, not the board: relevant passages are
+    // already injected per message, so the tools exist for digging — a
+    // different phrasing, a full listing.
+    if kind == "space" {
+        return json!({
+            "tools": [
+                {
+                    "name": "search_documents",
+                    "description": "Search this space's documents semantically. Returns the best-matching passages with file names and scores. The user's message already carries the top matches — reach for this when you need a different phrasing or another angle, and open a file with Read for more than an excerpt.",
+                    "inputSchema": obj(json!({
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 10 }
+                    }), vec!["query"])
+                },
+                {
+                    "name": "list_documents",
+                    "description": "List the documents in this space with their index status.",
+                    "inputSchema": obj(json!({}), vec![])
+                },
+            ]
+        });
+    }
     json!({
         "tools": [
             {
@@ -133,16 +163,16 @@ pub fn tools_list() -> Value {
     })
 }
 
-async fn chat_project(state: &AppState, chat_id: Uuid) -> Result<(Uuid, Uuid), String> {
+async fn chat_project(state: &AppState, chat_id: Uuid) -> Result<(Uuid, Uuid, String), String> {
     let row = sqlx::query(
-        "SELECT p.id AS project_id, p.workspace_id FROM chats c
+        "SELECT p.id AS project_id, p.workspace_id, p.kind FROM chats c
          JOIN projects p ON p.id = c.project_id WHERE c.id = $1",
     )
     .bind(chat_id)
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| e.to_string())?;
-    Ok((row.get("project_id"), row.get("workspace_id")))
+    Ok((row.get("project_id"), row.get("workspace_id"), row.get("kind")))
 }
 
 async fn call_tool(
@@ -151,7 +181,19 @@ async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
-    let (project_id, workspace_id) = chat_project(state, chat_id).await?;
+    let (project_id, workspace_id, kind) = chat_project(state, chat_id).await?;
+    // The two toolboxes are disjoint on purpose, and the guard runs both
+    // ways: a space chat calling create_task would run a coding agent
+    // in-place inside a documents folder, and a repo chat calling
+    // search_documents would search an index that does not exist.
+    let is_space = kind == "space";
+    let doc_tool = matches!(name, "search_documents" | "list_documents");
+    if is_space && !doc_tool {
+        return Err("this chat is scoped to a document space — the board tools work in project chats".into());
+    }
+    if !is_space && doc_tool {
+        return Err("this chat's project is a repository — the document tools work in spaces".into());
+    }
     match name {
         "create_task" => {
             let title = unescape_html(
@@ -462,6 +504,45 @@ async fn call_tool(
             // not come away thinking their code merged.
             Ok(json!({ "filed": true, "column": column }))
         }
+        "search_documents" => {
+            let query = args.get("query").and_then(Value::as_str).ok_or("query is required")?;
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n.clamp(1, 10) as usize)
+                .unwrap_or(aichip_core::rag::retrieve::DEFAULT_K);
+            let passages = aichip_core::rag::retrieve::top_k(&state.db, project_id, query, limit)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "passages": passages.iter().map(|p| json!({
+                    "path": p.rel_path,
+                    "part": p.chunk_index + 1,
+                    "score": p.score,
+                    "text": p.content,
+                })).collect::<Vec<_>>(),
+                "note": if passages.is_empty() {
+                    "nothing matched — the index may be empty, or try other words"
+                } else { "" },
+            }))
+        }
+        "list_documents" => {
+            let rows = sqlx::query(
+                "SELECT rel_path, status, bytes FROM space_documents
+                 WHERE project_id=$1 ORDER BY rel_path",
+            )
+            .bind(project_id)
+            .fetch_all(&state.db.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "documents": rows.iter().map(|r| json!({
+                    "path": r.get::<String, _>("rel_path"),
+                    "status": r.get::<String, _>("status"),
+                    "bytes": r.get::<i64, _>("bytes"),
+                })).collect::<Vec<_>>(),
+            }))
+        }
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -630,7 +711,7 @@ mod tests {
 
     #[test]
     fn tools_list_exposes_every_tool_the_assistant_has() {
-        let v = tools_list();
+        let v = tools_list("repo");
         let names: Vec<&str> = v["tools"]
             .as_array()
             .unwrap()
@@ -659,6 +740,21 @@ mod tests {
         );
     }
 
+    /// A space's toolbox is disjoint from the board's, both ways — the
+    /// call_tool guard enforces it at runtime, and this pins what each list
+    /// advertises so the two cannot silently bleed together.
+    #[test]
+    fn a_space_advertises_document_tools_and_nothing_else() {
+        let v = tools_list("space");
+        let names: Vec<&str> = v["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["search_documents", "list_documents"]);
+    }
+
     /// The schema is the only place the model learns these two rules, and both
     /// are behaviour `resolve_agent` will actually enforce — a description that
     /// drifts from it is how a model ends up retrying a call that can never
@@ -680,7 +776,7 @@ mod tests {
 
     #[test]
     fn create_task_tells_the_model_what_agent_name_does() {
-        let v = tools_list();
+        let v = tools_list("repo");
         let described = v["tools"][0]["inputSchema"]["properties"]["agent_name"]["description"]
             .as_str()
             .unwrap();
@@ -698,7 +794,7 @@ mod tests {
     /// nothing else would catch it.
     #[test]
     fn every_tool_the_assistant_is_offered_is_one_it_is_pre_approved_to_call() {
-        let offered: std::collections::HashSet<String> = tools_list()["tools"]
+        let offered: std::collections::HashSet<String> = tools_list("repo")["tools"]
             .as_array()
             .unwrap()
             .iter()
@@ -719,7 +815,7 @@ mod tests {
     /// next contributor fills in.
     #[test]
     fn the_chat_assistant_is_offered_no_way_to_merge() {
-        for t in tools_list()["tools"].as_array().unwrap() {
+        for t in tools_list("repo")["tools"].as_array().unwrap() {
             let name = t["name"].as_str().unwrap();
             assert!(!name.contains("merge"), "{name} lands code from chat");
             assert!(!name.contains("retry"), "{name} can discard an unmerged diff");
@@ -728,7 +824,7 @@ mod tests {
 
     #[test]
     fn the_descriptions_say_the_parts_that_are_easy_to_get_wrong() {
-        let tools = tools_list();
+        let tools = tools_list("repo");
         let by_name = |n: &str| -> String {
             tools["tools"]
                 .as_array()
