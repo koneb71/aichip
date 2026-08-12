@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { api, PlanLimit, Project, Task } from "../lib/api";
+import { api, PlanLimit, Project, Routine, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useActivity } from "../lib/activity";
 import { isWorking } from "../lib/runStatus";
@@ -31,12 +31,14 @@ export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [limits, setLimits] = useState<PlanLimit[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
 
   useEffect(() => {
     if (!active) return;
     api.projects(active.id).then((r) => setProjects(r.projects)).catch(() => {});
     api.tasks({ workspaceId: active.id }).then((r) => setTasks(r.tasks)).catch(() => {});
     api.usage().then((r) => setLimits(r.limits)).catch(() => {});
+    api.routines(active.id).then((r) => setRoutines(r.routines)).catch(() => {});
   }, [active]);
 
   const live = activity?.live ?? [];
@@ -208,6 +210,44 @@ export default function HomePage() {
               )}
             </Card>
           </Item>
+
+          {/* Only for people who have routines — Home must not advertise
+              features at someone who came to see their work. */}
+          {routines.length > 0 && (
+            <Item>
+              <Card className="p-5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-dim">
+                    Routines
+                  </h2>
+                  <SoftLink to="/routines">all routines</SoftLink>
+                </div>
+                <ul className="mt-3 space-y-2">
+                  {routines
+                    .filter((r) => r.enabled && r.nextAt)
+                    .sort((a, b) => (a.nextAt! < b.nextAt! ? -1 : 1))
+                    .slice(0, 3)
+                    .map((r) => (
+                      <li key={r.id} className="flex items-baseline gap-2 text-xs">
+                        <Icon name="clock" size={12} className="shrink-0 self-center text-ink-dim" />
+                        <span className="truncate font-medium">{r.name}</span>
+                        {r.lastError && (
+                          <span className="text-danger" title={r.lastError}>
+                            failed
+                          </span>
+                        )}
+                        <span className="ml-auto shrink-0 text-ink-dim">
+                          {nextIn(r.nextAt!)}
+                        </span>
+                      </li>
+                    ))}
+                  {routines.every((r) => !r.enabled) && (
+                    <li className="text-xs text-ink-dim">All paused.</li>
+                  )}
+                </ul>
+              </Card>
+            </Item>
+          )}
         </Stagger>
 
         <div className="mt-10">
@@ -421,4 +461,13 @@ function greeting() {
   if (h < 12) return "Good morning";
   if (h < 18) return "Good afternoon";
   return "Good evening";
+}
+
+/** "in 2 h" / "in 3 days" — the routine card's whole answer. */
+function nextIn(iso: string): string {
+  const mins = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 60000));
+  if (mins < 1) return "about now";
+  if (mins < 60) return `in ${mins} min`;
+  if (mins < 60 * 48) return `in ${Math.round(mins / 60)} h`;
+  return `in ${Math.round(mins / 1440)} days`;
 }

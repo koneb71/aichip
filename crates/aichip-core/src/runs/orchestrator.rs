@@ -3818,6 +3818,10 @@ this workflow manually."
         if let Err(e) = crate::runs::org::epic::mirror_run(&self.db, run_id).await {
             tracing::warn!(%run_id, error=%e, "could not update this run's sub-task cards");
         }
+        // Same reasoning for routines: `finish` is the one door every ending
+        // leaves through, and a routine's whole point is running while nobody
+        // watches. A no-op unless the run was a routine firing.
+        crate::routines::announce_finished(&self.db, run_id, status).await;
         Ok(())
     }
 

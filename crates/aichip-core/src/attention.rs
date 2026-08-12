@@ -33,6 +33,13 @@ pub fn set_dashboard_url(url: impl Into<String>) {
     let _ = DASHBOARD_URL.set(url.into());
 }
 
+/// The bound dashboard address, for callers building their own deep links
+/// (a routine's delivery points at a chat thread or a report, shapes
+/// [`link`] doesn't know).
+pub fn dashboard_url() -> Option<&'static str> {
+    DASHBOARD_URL.get().map(String::as_str)
+}
+
 /// A deep link to the thing that needs you.
 ///
 /// Pure, so the shape is tested without a server. `ProjectPage` already reads
@@ -92,6 +99,7 @@ impl Default for Attention {
                 Event::Plan,
                 Event::RateLimited,
                 Event::OverBudget,
+                Event::Routine,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -121,6 +129,11 @@ pub enum Event {
     /// Off by default: it fires on every card, and a notification that always
     /// fires is one people learn to ignore.
     Finished,
+    /// A routine delivered (or failed). On by default, unlike `Finished`:
+    /// a routine fires on a schedule precisely because you are away, so
+    /// "it ran, here's where the result is" is the half of the feature that
+    /// happens off-screen.
+    Routine,
 }
 
 impl Event {
@@ -131,6 +144,7 @@ impl Event {
             Event::RateLimited => "rate_limited",
             Event::OverBudget => "over_budget",
             Event::Finished => "finished",
+            Event::Routine => "routine",
         }
     }
 
@@ -141,6 +155,7 @@ impl Event {
             "rate_limited" => Event::RateLimited,
             "over_budget" => Event::OverBudget,
             "finished" => Event::Finished,
+            "routine" => Event::Routine,
             _ => return None,
         })
     }
@@ -616,6 +631,13 @@ mod tests {
     }
 
     #[test]
+    fn routine_deliveries_are_on_by_default() {
+        // The opposite default from Finished, on purpose: a routine fires on
+        // a schedule precisely because nobody is watching.
+        assert!(Attention::default().events.contains(&Event::Routine));
+    }
+
+    #[test]
     fn an_event_name_survives_a_round_trip() {
         for e in [
             Event::Permission,
@@ -623,6 +645,7 @@ mod tests {
             Event::RateLimited,
             Event::OverBudget,
             Event::Finished,
+            Event::Routine,
         ] {
             assert_eq!(Event::parse(e.as_str()), Some(e));
         }

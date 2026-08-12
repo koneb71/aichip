@@ -18,7 +18,8 @@ export type AttentionEvent =
   | "plan"
   | "rate_limited"
   | "over_budget"
-  | "finished";
+  | "finished"
+  | "routine";
 
 export interface AttentionSettingsValue {
   enabled: boolean;

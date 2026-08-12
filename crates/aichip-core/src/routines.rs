@@ -215,6 +215,65 @@ async fn fire_chat(
     Ok(Fired { chat_id: Some(chat_id), run_id: Some(run_id), ..Default::default() })
 }
 
+/// Tell the attention hook a routine's run just ended.
+///
+/// Called from `finish`, the one door every run leaves through. A routine
+/// fires on a schedule precisely because nobody is watching, so "it ran,
+/// here's where the result is" happens off-screen by definition — this is
+/// the half of the feature that reaches you. Cancels stay silent: the person
+/// who canceled was present for it.
+pub async fn announce_finished(db: &Db, run_id: Uuid, status: aichip_shared::RunStatus) {
+    use aichip_shared::RunStatus;
+    if !matches!(status, RunStatus::Completed | RunStatus::Failed) {
+        return;
+    }
+    let Ok(Some(r)) = sqlx::query(
+        "SELECT rt.name, rt.kind, rt.project_id, rr.chat_id, rr.research_id, rr.task_id
+         FROM routine_runs rr JOIN routines rt ON rt.id = rr.routine_id
+         WHERE rr.run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&db.pool)
+    .await
+    else {
+        return;
+    };
+    let name: String = r.get("name");
+    let kind: String = r.get("kind");
+    let project_id: Option<Uuid> = r.get("project_id");
+
+    let url = crate::attention::dashboard_url().map(|base| {
+        let base = base.trim_end_matches('/');
+        if let Some(research_id) = r.get::<Option<Uuid>, _>("research_id") {
+            format!("{base}/research/{research_id}")
+        } else if let Some(chat_id) = r.get::<Option<Uuid>, _>("chat_id") {
+            let scope = project_id.map(|p| p.to_string()).unwrap_or_else(|| "general".into());
+            format!("{base}/chat?project={scope}&chat={chat_id}")
+        } else {
+            crate::attention::link(base, project_id, r.get::<Option<Uuid>, _>("task_id"))
+        }
+    });
+    let what = match kind.as_str() {
+        "research" => "report",
+        "task" => "card",
+        _ => "reply",
+    };
+    let ctx = crate::attention::Ctx {
+        title: match status {
+            RunStatus::Completed => format!("aichip: {name} — {what} ready"),
+            _ => format!("aichip: {name} failed"),
+        },
+        body: match status {
+            RunStatus::Completed => format!("the routine ran; its {what} is waiting"),
+            _ => "the routine's run did not finish — its history has the reason".to_string(),
+        },
+        run_id: Some(run_id.to_string()),
+        url,
+        ..Default::default()
+    };
+    crate::attention::fire(db, crate::attention::Event::Routine, ctx).await;
+}
+
 /// Create a card on the project's board and start it.
 async fn fire_task(
     db: &Db,

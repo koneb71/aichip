@@ -15,6 +15,7 @@ const EVENTS: { id: AttentionEvent; label: string; hint: string }[] = [
   { id: "plan", label: "A plan needs review", hint: "a plan-first card, waiting on you" },
   { id: "rate_limited", label: "Rate limited", hint: "it will resume on its own; this just tells you" },
   { id: "over_budget", label: "Daily budget reached", hint: "the queue holds until midnight" },
+  { id: "routine", label: "A routine delivered", hint: "it ran on its schedule; the result is waiting" },
   { id: "finished", label: "A run finished", hint: "off by default — it fires on every card" },
 ];
 
