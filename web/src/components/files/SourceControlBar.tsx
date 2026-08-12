@@ -13,15 +13,18 @@ import { api, CheckoutState } from "../../lib/api";
  *
  * Shown only for the project checkout — a card's worktree already has its own
  * lifecycle (review, merge, PR), and offering push there would route around
- * it.
+ * it. Painted in the Files tab's IDE palette, the only place it appears.
  */
 export function SourceControlBar({
   projectId,
   refreshKey = 0,
+  onState,
 }: {
   projectId: string;
   /** Bumped by the panel when a save lands, so the dirty count stays true. */
   refreshKey?: number;
+  /** The panel's status bar shows the branch too — one fetch, not two. */
+  onState?: (s: CheckoutState) => void;
 }) {
   const [state, setState] = useState<CheckoutState | null>(null);
   const [busy, setBusy] = useState<"commit" | "pull" | "push" | null>(null);
@@ -32,8 +35,12 @@ export function SourceControlBar({
   const refresh = useCallback(() => {
     api
       .projectCheckout(projectId)
-      .then(setState)
+      .then((s) => {
+        setState(s);
+        onState?.(s);
+      })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
@@ -75,38 +82,37 @@ export function SourceControlBar({
   const dirtyCount = state.dirty.length;
   const unpublished = state.ahead == null;
 
+  const btn =
+    "rounded border border-[#3c3c3c] px-2 py-0.5 text-[11px] text-[#cccccc] hover:bg-[#2a2d2e] disabled:opacity-40";
+
   return (
-    <div className="border-b border-line bg-panel px-3 py-1.5 text-xs">
+    <div className="border-b border-[#3c3c3c] px-3 py-1.5 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1 font-mono text-ink-dim" title="Current branch">
+        <span className="flex items-center gap-1 font-mono text-[#cccccc]" title="Current branch">
           ⎇ {state.branch ?? "detached"}
         </span>
         {dirtyCount > 0 && (
           <span
-            className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800"
+            className="rounded-full bg-[#3a3100] px-2 py-0.5 text-[11px] text-[#e2c08d]"
             title={state.dirty.map((d) => d.path).join("\n")}
           >
             {dirtyCount} changed
           </span>
         )}
         {!unpublished && (state.behind ?? 0) > 0 && (
-          <span className="text-[11px] text-ink-dim" title="Commits on the upstream you don't have">
+          <span className="text-[11px] text-[#8c8c8c]" title="Commits on the upstream you don't have">
             ↓{state.behind}
           </span>
         )}
         {!unpublished && (state.ahead ?? 0) > 0 && (
-          <span className="text-[11px] text-ink-dim" title="Your commits the upstream doesn't have">
+          <span className="text-[11px] text-[#8c8c8c]" title="Your commits the upstream doesn't have">
             ↑{state.ahead}
           </span>
         )}
 
         <span className="ml-auto flex items-center gap-1.5">
           {dirtyCount > 0 && !committing && (
-            <button
-              onClick={() => setCommitting(true)}
-              disabled={busy !== null}
-              className="rounded-lg border border-line px-2.5 py-1 hover:border-ink-dim disabled:opacity-50"
-            >
+            <button onClick={() => setCommitting(true)} disabled={busy !== null} className={btn}>
               {busy === "commit" ? "Committing…" : "Commit…"}
             </button>
           )}
@@ -120,7 +126,7 @@ export function SourceControlBar({
                     ? "Commit your changes first — pulling over an edited tree is how work gets tangled"
                     : "Fast-forward from the upstream"
                 }
-                className="rounded-lg border border-line px-2.5 py-1 hover:border-ink-dim disabled:opacity-50"
+                className={btn}
               >
                 {busy === "pull" ? "Pulling…" : "↓ Pull"}
               </button>
@@ -134,7 +140,7 @@ export function SourceControlBar({
                       ? "Nothing to push"
                       : "Push your commits to the upstream"
                 }
-                className="rounded-lg border border-line px-2.5 py-1 hover:border-ink-dim disabled:opacity-50"
+                className={btn}
               >
                 {busy === "push" ? "Pushing…" : unpublished ? "↑ Publish" : "↑ Push"}
               </button>
@@ -154,12 +160,12 @@ export function SourceControlBar({
               if (e.key === "Escape") setCommitting(false);
             }}
             placeholder="Commit message…"
-            className="min-w-0 flex-1 rounded-lg border border-accent bg-panel px-2 py-1 outline-none"
+            className="min-w-0 flex-1 rounded border border-[#0e639c] bg-[#3c3c3c] px-2 py-1 text-[#cccccc] outline-none placeholder:text-[#8c8c8c]"
           />
           <button
             onClick={commit}
             disabled={!message.trim()}
-            className="rounded-lg bg-accent px-2.5 py-1 text-white disabled:opacity-40"
+            className="rounded bg-[#0e639c] px-2.5 py-1 text-white hover:bg-[#1177bb] disabled:opacity-40"
           >
             Commit
           </button>
@@ -170,8 +176,8 @@ export function SourceControlBar({
         <button
           onClick={() => setNotice(null)}
           title="Dismiss"
-          className={`mt-1.5 block w-full rounded-lg px-2 py-1 text-left text-[11px] ${
-            notice.kind === "ok" ? "bg-panel-2 text-ink-dim" : "bg-red-50 text-danger"
+          className={`mt-1.5 block w-full rounded px-2 py-1 text-left text-[11px] ${
+            notice.kind === "ok" ? "bg-[#2a2d2e] text-[#8c8c8c]" : "bg-[#5a1d1d]/40 text-[#f48771]"
           }`}
         >
           {notice.text}
