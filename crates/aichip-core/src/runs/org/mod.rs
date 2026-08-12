@@ -500,11 +500,13 @@ impl Orchestrator {
                 ctx,
                 plan_step,
                 manager,
-                // Fresh context, so it gets the standing block. The manager
-                // plans from it and the plan carries into every prompt it
-                // writes; the repair/replan/triage turns below resume *this*
-                // session and must not be given it a second time.
-                ctx.standing.apply(&plan_prompt(&ctx.goal, &render_roster(workers))),
+                // Fresh context, so it gets the standing block — passed in
+                // rather than appended, because this prompt ends with "reply
+                // with ONLY a JSON object" and `parse_plan` has to read what
+                // comes back. The manager plans from it and the plan carries
+                // into every prompt it writes; the repair/replan/triage turns
+                // below resume *this* session and must not be given it twice.
+                plan_prompt(&ctx.goal, &render_roster(workers), &ctx.standing.block()),
                 None,
                 MANAGER_TOOLS,
                 PermissionMode::Reviewed,

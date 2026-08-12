@@ -2169,17 +2169,29 @@ impl Orchestrator {
         // exists — and the chat is where a person asks the questions the brain
         // is written to answer.
         //
+        // Only on the first turn. A chat *resumes* its session (see
+        // `resume_session_id` below), so every later message is the same
+        // conversation and already has this. Appending each time paid for the
+        // block again per turn and stacked N copies of "read this as
+        // background" into one context, which is precisely how a framing stops
+        // being read as a framing — the failure the fence is there to prevent.
+        //
         // Brain and *not* skill, decided rather than defaulted: chat resolves
         // `@skill` mentions by name a few lines above, and deliberately sends
         // only the name — the body travels with the card the chat creates, so
         // pasting it here would spend it twice and put the method in front of
         // a conversation that has not agreed on the job yet.
-        let user_message = crate::runs::context::Standing::brain_only(
-            &self.db,
-            Some(row.get::<Uuid, _>("project_id")),
-        )
-        .await
-        .apply(&user_message);
+        let user_message = match &session_id {
+            None => {
+                crate::runs::context::Standing::brain_only(
+                    &self.db,
+                    Some(row.get::<Uuid, _>("project_id")),
+                )
+                .await
+                .apply(&user_message)
+            }
+            Some(_) => user_message,
+        };
 
         let mcp = McpWiring {
             aichip_url: self

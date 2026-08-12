@@ -47,7 +47,7 @@ A reader who opens the wrong page should be able to tell within a sentence.";
 pub fn prompt(brief: &str, context: &str) -> String {
     format!(
         "Write documentation for this repository.\n\n\
-         ## What to cover\n\n{brief}\n{context}\n\n\
+         ## What to cover\n\n{brief}{context}\n\n\
          ## How to work\n\n\
          Read the code first. Everything you write has to be true of *this* \
          repository — name real files, real commands, real function names. If \
@@ -70,7 +70,7 @@ pub fn rewrite_prompt(brief: &str, title: &str, current_html: &str, context: &st
     let current_html = crate::fence::scrub_foreign(current_html, &[]);
     format!(
         "Revise an existing knowledge-base article for this repository.\n\n\
-         ## What to change\n\n{brief}\n{context}\n\n\
+         ## What to change\n\n{brief}{context}\n\n\
          ## The article as it stands — \"{title}\"\n\n{current_html}\n\n\
          ## How to work\n\n\
          Read the code before you change anything factual. Keep what is still \
@@ -228,13 +228,44 @@ mod tests {
     }
 
     #[test]
-    fn no_standing_context_leaves_no_trace() {
-        // The empty case has to be clean, because these prompts interpolate it
-        // unconditionally — a stray separator mid-document would be a section
-        // break the article's author never wrote.
-        for p in [prompt("cover the API", ""), rewrite_prompt("x", "T", "<p>y</p>", "")] {
-            assert!(!p.contains("\n\n---\n\n\n"), "an empty context left a gap:\n{p}");
+    fn an_absent_standing_context_leaves_the_prompt_exactly_as_it_was() {
+        // Most projects have no brain, so the empty case is the common one and
+        // has to render identically to a prompt that never had the parameter.
+        //
+        // Asserted on the rendering. The first version of this checked
+        // `!p.contains("\n\n---\n\n\n")` — a pattern that occurs in *neither*
+        // the empty case nor the populated one, because the stray newline it
+        // was hunting landed before the separator rather than after it. It
+        // could not fail. That is worse than no test, because it reads as
+        // coverage; a negative substring assertion is only ever as good as the
+        // guess that produced the substring.
+        for p in [
+            prompt("cover the API", ""),
+            rewrite_prompt("cover the API", "T", "<p>y</p>", ""),
+        ] {
+            assert!(
+                p.contains("cover the API\n\n## "),
+                "an absent context left a blank line behind: {:?}",
+                &p[..160.min(p.len())]
+            );
             assert!(!p.contains("Standing context"));
+        }
+    }
+
+    #[test]
+    fn a_present_standing_context_attaches_without_doubling_the_separator() {
+        // The block arrives already opening with its own "\n\n---\n\n", so the
+        // prompt must not put another blank line in front of it.
+        let ctx = "\n\n---\n\nStanding context: the API lives in api/.";
+        for p in [
+            prompt("cover the API", ctx),
+            rewrite_prompt("cover the API", "T", "<p>y</p>", ctx),
+        ] {
+            assert!(
+                p.contains("cover the API\n\n---\n\nStanding context"),
+                "the separator doubled up: {:?}",
+                &p[..200.min(p.len())]
+            );
         }
     }
 

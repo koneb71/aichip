@@ -373,10 +373,21 @@ pub fn has_blocking(defects: &[Defect]) -> bool {
 
 // ── Prompts ────────────────────────────────────────────────────────────────
 
-pub fn plan_prompt(goal: &str, roster: &str) -> String {
+/// `context` is the project's standing context, already fenced, or empty.
+///
+/// It goes near the top rather than at the end, which is where every other
+/// block in the codebase goes, because this prompt closes with a strict output
+/// contract — "Reply with ONLY a JSON object, no prose and no markdown fences"
+/// — and `parse_plan` has to read what comes back. Four thousand characters
+/// between that instruction and the reply is how you get prose in front of the
+/// JSON, and the cost of that is a whole extra paid repair round.
+///
+/// It sits after the goal and roster so the manager reads what it is being
+/// asked to do first, which is the same ordering every other block keeps.
+pub fn plan_prompt(goal: &str, roster: &str, context: &str) -> String {
     format!(
         "You manage a team working in this repository. Your goal:\n\n{goal}\n\n\
-         Your specialists:\n{roster}\n\n\
+         Your specialists:\n{roster}{context}\n\n\
          Tier tells you how much reasoning each person brings: easy is fast and cheap, best for \
          mechanical or well-specified edits; medium is ordinary engineering work; complex is deep \
          design and tricky reasoning, slowest and most expensive. \"Works like\" is how they \
@@ -678,12 +689,42 @@ mod tests {
     /// A literal guard on the sentence that caused monolithic assignments.
     #[test]
     fn the_prompt_no_longer_rations_assignments_per_specialist() {
-        let prompt = plan_prompt("build a thing", "- Priya (Backend) · tier: medium");
+        let prompt = plan_prompt("build a thing", "- Priya (Backend) · tier: medium", "");
         assert!(!prompt.contains("at most one per specialist"));
         assert!(prompt.contains("A specialist may hold several assignments"));
         assert!(prompt.contains("build a thing"));
         assert!(prompt.contains("Priya"));
         assert!(prompt.contains("done_when"));
+    }
+
+    /// Standing context must never sit between "reply with ONLY a JSON object"
+    /// and the reply.
+    ///
+    /// Every other block in the codebase is appended at the end, and appending
+    /// here is what the first version of this did. It is worse than untidy:
+    /// this prompt's output is *parsed*, so prose in front of the JSON costs a
+    /// whole paid repair round, and `inspect_plan` exists to catch defects in
+    /// a plan rather than the absence of one.
+    #[test]
+    fn standing_context_never_comes_between_the_contract_and_the_reply() {
+        let ctx = "\n\n---\n\nStanding context: the API lives in api/.";
+        let p = plan_prompt("build a thing", "- Priya (Backend) · tier: medium", ctx);
+        let at = p.find("the API lives in api/").expect("the context travels");
+        let contract = p.find("Reply with ONLY a JSON object").expect("contract intact");
+        assert!(at < contract, "context landed after the output contract:\n{p}");
+        // And it comes after the goal and the roster, like every other block:
+        // what is being asked for is read first.
+        assert!(p.find("build a thing").unwrap() < at);
+        assert!(p.find("Priya").unwrap() < at);
+    }
+
+    #[test]
+    fn no_standing_context_leaves_the_plan_prompt_alone() {
+        // Asserted on the rendering rather than by hunting a substring — the
+        // sibling test in kb::write says why that was not good enough.
+        let p = plan_prompt("build a thing", "- Priya", "");
+        assert!(p.contains("- Priya\n\n"), "an absent context left a gap: {p:?}");
+        assert!(!p.contains("- Priya\n\n\n"));
     }
 
     #[test]
