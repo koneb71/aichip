@@ -2155,6 +2155,11 @@ impl Orchestrator {
         workspace_id: Option<Uuid>,
         question: &str,
         engine: Option<&str>,
+        // NULL means the research defaults: Complex, with the operator's
+        // effort for that tier. Stored on the research so a re-run asks the
+        // same way.
+        model_tier: Option<ModelTier>,
+        effort: Option<ReasoningEffort>,
     ) -> anyhow::Result<(Uuid, Uuid)> {
         if project_id.is_none() && workspace_id.is_none() {
             anyhow::bail!("a research belongs to a project or to a workspace");
@@ -2166,12 +2171,14 @@ impl Orchestrator {
             anyhow::bail!("{engine} isn't installed on this machine");
         }
         let research_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO researches (project_id, workspace_id, question)
-             VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO researches (project_id, workspace_id, question, model_tier, effort)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
         )
         .bind(project_id)
         .bind(workspace_id)
         .bind(question)
+        .bind(model_tier.map(|t| TierChoice::from(t).as_str().to_string()))
+        .bind(effort.map(|e| e.as_str().to_string()))
         .fetch_one(&self.db.pool)
         .await?;
         let run_id = self.enqueue_research_run(research_id, &engine).await?;
@@ -2213,6 +2220,7 @@ impl Orchestrator {
         // from the web alone, out of a scratch directory.
         let row = sqlx::query(
             "SELECT r.engine, rs.id AS research_id, rs.question,
+                    rs.model_tier AS research_tier, rs.effort AS research_effort,
                     p.path AS project_path, p.id AS project_id
              FROM runs r
              JOIN researches rs ON rs.id = r.research_id
@@ -2267,12 +2275,24 @@ impl Orchestrator {
             }
         };
 
-        // Difference one from KB: Complex, with the effort actually resolved.
-        // Research is the thinking-heavy kind of run, and hardcoding
-        // `effort: None` here would quietly ignore the operator's
-        // Complex-tier effort setting.
-        let tier = ModelTier::Complex;
-        let effort = self.resolve_effort(None, None, &engine_id, tier).await;
+        // Difference one from KB: the person's choice, with Complex as the
+        // default — research is the thinking-heavy kind of run — and the
+        // effort actually resolved rather than hardcoded, so the operator's
+        // per-tier setting applies when nothing was picked.
+        let tier = row
+            .get::<Option<String>, _>("research_tier")
+            .and_then(|t| TierChoice::parse(&t))
+            .and_then(TierChoice::fixed)
+            .unwrap_or(ModelTier::Complex);
+        let effort = self
+            .resolve_effort(
+                None,
+                row.get::<Option<String>, _>("research_effort")
+                    .and_then(|e| ReasoningEffort::parse(&e)),
+                &engine_id,
+                tier,
+            )
+            .await;
         let model_id = self.model_for(&engine_id, tier);
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)

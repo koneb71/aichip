@@ -36,7 +36,7 @@ struct ListFilter {
 /// The latest run per research rides along, because the list view has to say
 /// "still running" vs "failed" vs "report ready" without N follow-up calls.
 const LATEST_RUN: &str = "LEFT JOIN LATERAL (
-    SELECT id, status, error_reason FROM runs
+    SELECT id, status, error_reason, model, cost_usd FROM runs
      WHERE research_id = rs.id ORDER BY created_at DESC LIMIT 1
 ) r ON TRUE";
 
@@ -90,6 +90,10 @@ struct Create {
     workspace_id: Option<Uuid>,
     question: String,
     engine: Option<String>,
+    /// Typed so an invented tier is a 422, not a row the orchestrator shrugs
+    /// at. Absent means the research defaults: Complex, operator's effort.
+    model_tier: Option<aichip_shared::ModelTier>,
+    effort: Option<aichip_shared::ReasoningEffort>,
 }
 
 async fn create(
@@ -106,6 +110,8 @@ async fn create(
             body.workspace_id.filter(|_| body.project_id.is_none()),
             body.question.trim(),
             body.engine.as_deref(),
+            body.model_tier,
+            body.effort,
         )
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -122,7 +128,9 @@ async fn one(
     let row = sqlx::query(&format!(
         "SELECT rs.id, rs.project_id, rs.question, rs.title, rs.report_md,
                 rs.kb_article_id, rs.created_at, rs.updated_at,
-                r.id AS run_id, r.status AS run_status, r.error_reason AS run_error
+                rs.model_tier, rs.effort,
+                r.id AS run_id, r.status AS run_status, r.error_reason AS run_error,
+                r.model AS run_model, r.cost_usd AS run_cost
          FROM researches rs {LATEST_RUN}
          WHERE rs.id = $1"
     ))
@@ -142,6 +150,12 @@ async fn one(
         "runId": row.get::<Option<Uuid>, _>("run_id"),
         "runStatus": row.get::<Option<String>, _>("run_status"),
         "runError": row.get::<Option<String>, _>("run_error"),
+        "modelTier": row.get::<Option<String>, _>("model_tier"),
+        "effort": row.get::<Option<String>, _>("effort"),
+        // What the latest run actually ran as, and what it cost — the report
+        // header's stats, not settings.
+        "runModel": row.get::<Option<String>, _>("run_model"),
+        "runCostUsd": row.get::<Option<f64>, _>("run_cost"),
         "createdAt": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
         "updatedAt": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
     })))

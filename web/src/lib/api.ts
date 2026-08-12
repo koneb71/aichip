@@ -1273,6 +1273,12 @@ export interface ResearchDetail {
   runId: string | null;
   runStatus: string | null;
   runError: string | null;
+  /** The choice this research was created with. Null = the defaults. */
+  modelTier: string | null;
+  effort: string | null;
+  /** What the latest run actually ran as, and what it cost. */
+  runModel: string | null;
+  runCostUsd: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2157,13 +2163,15 @@ export const api = {
   researchCreate: (
     scope: { projectId?: string; workspaceId?: string },
     question: string,
-    engine?: string,
+    opts?: { engine?: string; modelTier?: Tier; effort?: Effort | null },
   ) =>
     post("/api/research", {
       project_id: scope.projectId,
       workspace_id: scope.workspaceId,
       question,
-      engine,
+      engine: opts?.engine,
+      model_tier: opts?.modelTier,
+      effort: opts?.effort ?? undefined,
     }).then((r) => json<{ id: string; runId: string }>(r)),
   researchGet: (id: string) =>
     fetch(`/api/research/${id}`).then((r) => json<ResearchDetail>(r)),

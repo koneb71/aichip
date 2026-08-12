@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { api, Research, ResearchDetail as Detail, Project } from "../lib/api";
+import { api, Effort, Research, ResearchDetail as Detail, Project, Tier } from "../lib/api";
+import { TierPicker } from "../components/TierPicker";
+import { EffortPicker } from "../components/EffortPicker";
 import { useWorkspace } from "../lib/workspace";
-import { useEngines } from "../lib/engines";
+import { EnginePicker } from "../lib/engines";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
-import { useRunStream } from "../lib/ws";
-import { RunStream } from "../components/RunStream";
+import { useRunStream, StreamEvent } from "../lib/ws";
 import { Markdown } from "../components/Markdown";
 import { isActive } from "../lib/runStatus";
 
@@ -26,7 +27,6 @@ const GENERAL = "general";
 
 export default function ResearchPage() {
   const { active } = useWorkspace();
-  const engines = useEngines() ?? [];
   const narrow = useMediaQuery(NARROW);
   const navigate = useNavigate();
   const { researchId } = useParams();
@@ -37,6 +37,10 @@ export default function ResearchPage() {
   const [list, setList] = useState<Research[]>([]);
   const [question, setQuestion] = useState("");
   const [engine, setEngine] = useState<string | null>(null);
+  // Complex is the research default — the thinking-heavy kind of run — and
+  // shown as such rather than hidden behind a hardcode.
+  const [tier, setTier] = useState<Tier>("complex");
+  const [effort, setEffort] = useState<Effort | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -95,7 +99,11 @@ export default function ResearchPage() {
     setError(null);
     try {
       const scope = general ? { workspaceId: workspaceId! } : { projectId };
-      const r = await api.researchCreate(scope, question.trim(), engine ?? undefined);
+      const r = await api.researchCreate(scope, question.trim(), {
+        engine: engine ?? undefined,
+        modelTier: tier,
+        effort,
+      });
       setQuestion("");
       refreshList();
       navigate(`/research/${r.id}`);
@@ -192,28 +200,18 @@ export default function ResearchPage() {
             placeholder="e.g. What test framework does this repo use, and is it the current recommended one?"
             className="min-w-0 resize-none bg-transparent text-sm outline-none"
           />
-          <div className="flex items-center justify-between">
-            {engines.length > 1 ? (
-              <select
-                value={engine ?? ""}
-                onChange={(e) => setEngine(e.target.value || null)}
-                className="rounded-lg border border-line bg-panel px-2 py-1 text-xs text-ink-dim"
-              >
-                <option value="">Default engine</option>
-                {engines.map((eng) => (
-                  <option key={eng.id} value={eng.id}>
-                    {eng.label || eng.id}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span />
-            )}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Which CLI, which model, how hard it thinks — the same three
+                knobs chat has, because a research is one expensive turn and
+                the person paying for it should choose its weight. */}
+            <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default engine" />
+            <TierPicker value={tier} onChange={setTier} engine={engine ?? undefined} />
+            <EffortPicker value={effort} onChange={setEffort} />
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={start}
               disabled={busy || !question.trim()}
-              className="rounded-lg bg-accent px-4 py-1.5 text-sm text-white disabled:opacity-40"
+              className="ml-auto rounded-lg bg-accent px-4 py-1.5 text-sm text-white disabled:opacity-40"
             >
               {busy ? "Starting…" : "Research"}
             </motion.button>
@@ -416,18 +414,290 @@ function ResearchView({
           </div>
         )}
 
-        {live && (
-          <div className="mt-5 rounded-xl border border-line bg-panel p-3">
-            <div className="mb-2 text-xs font-medium text-ink-dim">Investigating…</div>
-            <RunStream events={events} empty="Waiting for the agent to start…" />
-          </div>
-        )}
+        {live && <LiveInvestigation events={events} startedAt={detail.createdAt} />}
 
-        {!live && detail.reportMd && (
-          <div className="md mt-6">
-            <Markdown>{detail.reportMd}</Markdown>
+        {!live && detail.reportMd && <ReportView detail={detail} />}
+      </div>
+    </div>
+  );
+}
+
+
+// ── The live investigation ──────────────────────────────────────────────────
+
+/** What the agent is doing right now, told from its own tool calls. */
+function phaseOf(events: StreamEvent[]): { label: string; icon: string } {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.type === "assistant_text") return { label: "Writing the report", icon: "✍️" };
+    if (e.type === "tool_call") {
+      const t = String(e.tool_name ?? "");
+      if (t === "WebSearch") return { label: "Searching the web", icon: "🔎" };
+      if (t === "WebFetch") return { label: "Reading sources", icon: "📖" };
+      if (t === "mcp__aichip__search_documents")
+        return { label: "Searching the documents", icon: "🗂" };
+      if (["Read", "Grep", "Glob"].includes(t))
+        return { label: "Reading the repository", icon: "📁" };
+    }
+  }
+  return { label: "Getting started", icon: "🧭" };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url.slice(0, 40);
+  }
+}
+
+/**
+ * The run as an investigation, not a log: a phase line, the searches and
+ * sources as chips (sources are links — the person can read along), running
+ * counters, and the report streaming in as it is written.
+ */
+function LiveInvestigation({
+  events,
+  startedAt,
+}: {
+  events: StreamEvent[];
+  startedAt: string;
+}) {
+  // A ticking clock reads as "alive" in a way a static panel never does.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const elapsed = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  const mm = Math.floor(elapsed / 60);
+  const ss = String(elapsed % 60).padStart(2, "0");
+
+  const tools = events.filter((e) => e.type === "tool_call");
+  const searches = tools.filter((e) => e.tool_name === "WebSearch");
+  const sources = tools.filter((e) => e.tool_name === "WebFetch");
+  const files = tools.filter((e) => ["Read", "Grep", "Glob"].includes(String(e.tool_name)));
+  const liveText = events
+    .filter((e) => e.type === "assistant_text")
+    .map((e) => String(e.text))
+    .join("\n");
+  const phase = phaseOf(events);
+
+  return (
+    <div className="mt-5 flex flex-col gap-3">
+      {/* The phase line: one sentence, a pulse, and the clock. */}
+      <div className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2">
+        <motion.span
+          animate={{ opacity: [0.4, 1, 0.4] }}
+          transition={{ repeat: Infinity, duration: 1.6 }}
+          className="text-base"
+        >
+          {phase.icon}
+        </motion.span>
+        <span className="text-sm font-medium">{phase.label}…</span>
+        <span className="ml-auto font-mono text-xs text-ink-dim">
+          {mm}:{ss}
+        </span>
+      </div>
+
+      {/* Counters, only once there is something to count. */}
+      {tools.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-[11px] text-ink-dim">
+          {searches.length > 0 && (
+            <span className="rounded-full bg-panel-2 px-2 py-0.5">
+              {searches.length} {searches.length === 1 ? "search" : "searches"}
+            </span>
+          )}
+          {sources.length > 0 && (
+            <span className="rounded-full bg-panel-2 px-2 py-0.5">
+              {sources.length} {sources.length === 1 ? "source" : "sources"} read
+            </span>
+          )}
+          {files.length > 0 && (
+            <span className="rounded-full bg-panel-2 px-2 py-0.5">
+              {files.length} repo {files.length === 1 ? "lookup" : "lookups"}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* The trail: searches as quoted chips, sources as clickable domains. */}
+      <div className="flex flex-col gap-1.5">
+        {tools.slice(-12).map((e, i) => {
+          const t = String(e.tool_name ?? "");
+          const args = (e.input ?? {}) as Record<string, unknown>;
+          if (t === "WebSearch")
+            return (
+              <motion.div
+                key={`${e.seq}-${i}`}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs"
+              >
+                🔎 “{String(args.query ?? "")}”
+              </motion.div>
+            );
+          if (t === "WebFetch") {
+            const url = String(args.url ?? "");
+            return (
+              <motion.a
+                key={`${e.seq}-${i}`}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-accent hover:underline"
+              >
+                📖 {hostOf(url)}
+              </motion.a>
+            );
+          }
+          if (["Read", "Grep", "Glob"].includes(t)) {
+            const label =
+              t === "Read"
+                ? String(args.file_path ?? "a file").split("/").pop()
+                : t === "Grep"
+                  ? `grep “${String(args.pattern ?? "")}”`
+                  : "listing files";
+            return (
+              <motion.div
+                key={`${e.seq}-${i}`}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="self-start rounded-full border border-line bg-panel px-3 py-1 font-mono text-[11px] text-ink-dim"
+              >
+                📁 {label}
+              </motion.div>
+            );
+          }
+          return null;
+        })}
+      </div>
+
+      {/* The report, streaming in. */}
+      {liveText && (
+        <div className="rounded-xl border border-line bg-panel p-4">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-ink-dim">
+            Draft
           </div>
+          <div className="md">
+            <Markdown>{liveText}</Markdown>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── The finished report ─────────────────────────────────────────────────────
+
+/** Markdown links, deduped by host — the report's bibliography as chips. */
+function sourcesOf(md: string): { host: string; url: string }[] {
+  const seen = new Map<string, string>();
+  for (const m of md.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) {
+    const host = hostOf(m[1]);
+    if (!seen.has(host)) seen.set(host, m[1]);
+  }
+  return [...seen.entries()].map(([host, url]) => ({ host, url }));
+}
+
+function headingsOf(md: string): string[] {
+  return md
+    .split("\n")
+    .filter((l) => /^##\s+/.test(l))
+    .map((l) => l.replace(/^##\s+/, "").trim())
+    .slice(0, 12);
+}
+
+function ReportView({ detail }: { detail: Detail }) {
+  const md = detail.reportMd ?? "";
+  const sources = sourcesOf(md);
+  const headings = headingsOf(md);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  const jumpTo = (i: number) => {
+    const els = bodyRef.current?.querySelectorAll("h2");
+    els?.[i]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard denied — the button just doesn't confirm */
+    }
+  };
+
+  const words = md.split(/\s+/).length;
+
+  return (
+    <div className="mt-5">
+      {/* What this run was: the stats a person actually asks about. */}
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-dim">
+        {detail.runModel && (
+          <span className="rounded-full bg-panel-2 px-2 py-0.5">{detail.runModel}</span>
         )}
+        {detail.effort && (
+          <span className="rounded-full bg-panel-2 px-2 py-0.5">{detail.effort} thinking</span>
+        )}
+        {detail.runCostUsd != null && (
+          <span className="rounded-full bg-panel-2 px-2 py-0.5">
+            ${detail.runCostUsd.toFixed(2)}
+          </span>
+        )}
+        <span className="rounded-full bg-panel-2 px-2 py-0.5">~{Math.ceil(words / 200)} min read</span>
+        {sources.length > 0 && (
+          <span className="rounded-full bg-panel-2 px-2 py-0.5">
+            {sources.length} {sources.length === 1 ? "source" : "sources"}
+          </span>
+        )}
+        <button
+          onClick={copy}
+          className="ml-auto rounded-full border border-line px-2 py-0.5 hover:border-ink-dim hover:text-ink"
+        >
+          {copied ? "✓ Copied" : "Copy markdown"}
+        </button>
+      </div>
+
+      {/* The bibliography, up front and clickable. */}
+      {sources.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {sources.map((s) => (
+            <a
+              key={s.host}
+              href={s.url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-[11px] text-accent hover:underline"
+            >
+              {s.host}
+            </a>
+          ))}
+        </div>
+      )}
+
+      {/* Sections, as jump pills — a TOC that earns its space only when the
+          report actually has sections. */}
+      {headings.length > 1 && (
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
+          {headings.map((h, i) => (
+            <button
+              key={`${h}-${i}`}
+              onClick={() => jumpTo(i)}
+              className="rounded-lg bg-panel-2 px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div ref={bodyRef} className="md mt-4">
+        <Markdown>{md}</Markdown>
       </div>
     </div>
   );
