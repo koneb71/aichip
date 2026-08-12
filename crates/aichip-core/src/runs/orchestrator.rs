@@ -1697,26 +1697,23 @@ impl Orchestrator {
         // project before is context, and what it does now becomes memory below.
         let project_id: Uuid = run.get("project_id");
 
-        // What the person who owns this project wants every run to know. Last,
-        // so the request and its attachments are read first and this is the
-        // background they sit against — and in the *prompt* rather than the
-        // system prompt, because standing context that outranked the request
-        // is the failure this is fenced against.
-        let prompt = crate::brain::augment_prompt(
-            &prompt,
-            crate::brain::for_run(&self.db, project_id).await.as_ref(),
-        );
-
-        // And the skill this card was created with, if any: how the person
-        // wants this kind of job done. After the brain, because the brain is
-        // background and this is method — and both after the request, which
-        // outranks them.
-        let prompt = crate::skills::augment_prompt(
-            &prompt,
-            crate::skills::for_run(&self.db, run.get::<Option<Uuid>, _>("skill_id"))
-                .await
-                .as_ref(),
-        );
+        // What the person who owns this project wants every run to know, and
+        // the skill this card was created with — background then method. Last,
+        // so the request and its attachments are read first and these are what
+        // they sit against; and in the *prompt* rather than the system prompt,
+        // because standing context that outranked the request is the failure
+        // both are fenced against.
+        //
+        // This was two calls spelled out here and nowhere else, which is how
+        // a $75 team card ran with none of it. `Standing::apply` is those two
+        // calls in that order and is pinned byte-identical to them.
+        let standing = crate::runs::context::Standing::load(
+            &self.db,
+            Some(project_id),
+            run.get::<Option<Uuid>, _>("skill_id"),
+        )
+        .await;
+        let prompt = standing.apply(&prompt);
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
                 .await
@@ -1955,7 +1952,7 @@ impl Orchestrator {
     async fn execute_kb_run(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
         let row = sqlx::query(
             "SELECT r.engine, r.kb_brief, r.kb_article_id, p.path AS project_path,
-                    a.title, a.content_html, a.current_seq
+                    a.title, a.content_html, a.current_seq, p.id AS project_id
              FROM runs r
              JOIN projects p ON p.id = r.kb_project_id
              LEFT JOIN kb_articles a ON a.id = r.kb_article_id
@@ -1978,13 +1975,27 @@ impl Orchestrator {
         // against *this* and can say the page moved on underneath it — rather
         // than silently presenting a stale rewrite as an up-to-date one.
         let base_seq: i32 = row.get::<Option<i32>, _>("current_seq").unwrap_or(0);
+        // Brain, and no skill. The job is "describe this repository
+        // accurately", and the Brain is a hand-written list of exactly the
+        // facts a generated page gets wrong. This is also the one prompt in
+        // the codebase whose *output* becomes input to other prompts —
+        // `kb::for_run` feeds published pages back into task runs as reference
+        // — so a page written without the facts is wrong repeatedly, not once.
+        //
+        // No skill because nobody named one: a generated article was never
+        // asked to be written a particular way, and inferring one is the thing
+        // Skills exist not to do.
+        let standing =
+            crate::runs::context::Standing::brain_only(&self.db, Some(row.get("project_id"))).await;
+        let context = standing.block();
         let prompt = if existing.trim().is_empty() {
-            crate::kb::write::prompt(&brief)
+            crate::kb::write::prompt(&brief, &context)
         } else {
             crate::kb::write::rewrite_prompt(
                 &brief,
                 &row.get::<Option<String>, _>("title").unwrap_or_default(),
                 &existing,
+                &context,
             )
         };
 
@@ -2157,10 +2168,18 @@ impl Orchestrator {
         // told where the code lives every time is the reason this feature
         // exists — and the chat is where a person asks the questions the brain
         // is written to answer.
-        let user_message = crate::brain::augment_prompt(
-            &user_message,
-            crate::brain::for_run(&self.db, row.get::<Uuid, _>("project_id")).await.as_ref(),
-        );
+        //
+        // Brain and *not* skill, decided rather than defaulted: chat resolves
+        // `@skill` mentions by name a few lines above, and deliberately sends
+        // only the name — the body travels with the card the chat creates, so
+        // pasting it here would spend it twice and put the method in front of
+        // a conversation that has not agreed on the job yet.
+        let user_message = crate::runs::context::Standing::brain_only(
+            &self.db,
+            Some(row.get::<Uuid, _>("project_id")),
+        )
+        .await
+        .apply(&user_message);
 
         let mcp = McpWiring {
             aichip_url: self
@@ -2352,10 +2371,17 @@ impl Orchestrator {
         // The project's standing context reaches a reply too: an agent
         // answering "where does this live?" on a card should know the same
         // things as one doing the work.
-        prompt = crate::brain::augment_prompt(
-            &prompt,
-            crate::brain::for_run(&self.db, row.get::<Uuid, _>("project_id")).await.as_ref(),
-        );
+        //
+        // Brain, not skill: a reply answers a question, it does not do the
+        // job, and this run holds only Read, Grep and Glob. A skill describes
+        // how the person wants work done, which is not what is being asked
+        // for here.
+        prompt = crate::runs::context::Standing::brain_only(
+            &self.db,
+            Some(row.get::<Uuid, _>("project_id")),
+        )
+        .await
+        .apply(&prompt);
         prompt.push_str(&format!(
             "\nThe comment mentioning you:\n{}\n\n\
              Reply as a comment on this card: concise, concrete, grounded in this \
@@ -2514,6 +2540,16 @@ impl Orchestrator {
             )
             .await?;
 
+        // Read once for the whole pipeline, not per step. A workflow is one
+        // decision, and a Brain edited while a six-step run is in flight
+        // should not leave the second half of it working from different
+        // facts than the first.
+        let standing = crate::runs::context::Standing::brain_only(
+            &self.db,
+            Some(row.get::<Uuid, _>("project_id")),
+        )
+        .await;
+
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
         let mut outputs = StepOutputs::new();
         // Session ids, tagged with the engine that minted them: a `continue`
@@ -2600,6 +2636,28 @@ this workflow manually."
                         .map(|(_, sid)| sid.clone())
                 } else {
                     None
+                };
+
+                // Standing context, and both halves of *when* are load bearing.
+                //
+                // Only on a step that starts fresh. A `continue` step is the
+                // same conversation as the one it follows and already has it;
+                // appending again pays twice and puts a second "read this as
+                // background" fence in one context, which is how a framing
+                // stops being read as a framing.
+                //
+                // And strictly after `interpolate`, which splices the previous
+                // steps' *model-generated* output into every `{{ … }}` in the
+                // whole string. Augment first and that output can land inside
+                // the brain's fence, where nothing has neutralised it — the
+                // fence is scrubbed against the body as it stood when the
+                // block was built, not against text spliced in afterwards.
+                //
+                // Brain only: `workflow::Step` has no `skill` field, and a
+                // Skill is named, never inferred.
+                let prompt = match resume {
+                    None => standing.apply(&prompt),
+                    Some(_) => prompt,
                 };
 
                 // Refuse a step this engine can't honour, before it runs.

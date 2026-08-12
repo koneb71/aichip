@@ -119,6 +119,18 @@ struct OrgCtx {
     seq: SeqAlloc,
     /// Floor applied to the manager's thinking while planning.
     planning_effort: ReasoningEffort,
+    /// The project's brain and the card's skill, read once for the whole run.
+    ///
+    /// Once, not per assignment: a run is one decision, and a Brain edited
+    /// while an eight-assignment run is in flight should not leave the second
+    /// half of the team working from different facts than the first.
+    ///
+    /// The cost, stated rather than hand-waved: one injection per *fresh*
+    /// context. An eight-assignment run pays ten — the plan, the eight briefs,
+    /// and the review — at roughly a thousand tokens each. The repair, replan
+    /// and triage turns pay nothing, because they resume the manager's own
+    /// session and already have it.
+    standing: crate::runs::context::Standing,
 }
 
 /// Where a dispatch of this run should pick up.
@@ -300,12 +312,18 @@ impl Orchestrator {
         _team_id: Uuid,
     ) -> anyhow::Result<()> {
         let row = sqlx::query(
+            // `ta`, not `t` — `t` is already `teams` here, and a second `t`
+            // is a duplicate-alias error at best. LEFT, because an org run
+            // launched from the team room has no card at all
+            // (`enqueue_org_run` inserts no `task_id`); an inner join would
+            // stop every one of those from starting.
             "SELECT t.name AS team_name, t.definition, t.planning_effort,
                     r.goal, r.engine, r.task_id, r.worktree_path, r.plan_approval,
-                    r.plan_approved_at,
+                    r.plan_approved_at, ta.skill_id,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.workspace_id
              FROM runs r JOIN teams t ON t.id = r.team_id
              JOIN projects p ON p.id = r.project_id
+             LEFT JOIN tasks ta ON ta.id = r.task_id
              WHERE r.id = $1",
         )
         .bind(run_id)
@@ -367,6 +385,15 @@ impl Orchestrator {
             seq: SeqAlloc::starting_at(next_seq(&self.db, run_id).await?),
             planning_effort: ReasoningEffort::parse(&row.get::<String, _>("planning_effort"))
                 .unwrap_or(ReasoningEffort::High),
+            // A team card's skill reaches the teammates too. The picker sat
+            // on the card doing nothing for a team run, which is the same
+            // asymmetry as a button that only works on some cards.
+            standing: crate::runs::context::Standing::load(
+                &self.db,
+                Some(row.get("project_id")),
+                row.get::<Option<Uuid>, _>("skill_id"),
+            )
+            .await,
         };
 
         let manager_session = match phase {
@@ -473,7 +500,11 @@ impl Orchestrator {
                 ctx,
                 plan_step,
                 manager,
-                plan_prompt(&ctx.goal, &render_roster(workers)),
+                // Fresh context, so it gets the standing block. The manager
+                // plans from it and the plan carries into every prompt it
+                // writes; the repair/replan/triage turns below resume *this*
+                // session and must not be given it a second time.
+                ctx.standing.apply(&plan_prompt(&ctx.goal, &render_roster(workers))),
                 None,
                 MANAGER_TOOLS,
                 PermissionMode::Reviewed,
@@ -645,7 +676,14 @@ impl Orchestrator {
                     .find(|m| m.name == assignment.assignee)
                     .unwrap_or(&workers[0])
                     .clone();
-                let prompt = assignment_prompt(
+                // A worker starts fresh every time — new assignment, new
+                // attempt, every member of a parallel batch — and this brief
+                // is the only thing it ever sees. It does not inherit the
+                // manager's session, so without this the teammate holding
+                // Edit, Write and Bash is the one member of the team working
+                // without the facts. That is where the $75 card lost the note
+                // saying which compose file is real.
+                let prompt = ctx.standing.apply(&assignment_prompt(
                     &member.name,
                     &member.title,
                     &ctx.team_name,
@@ -654,7 +692,7 @@ impl Orchestrator {
                     &assignment.brief,
                     &assignment.done_when,
                     &context_for(&assignment, &completed),
-                );
+                ));
                 self.post(ctx.run_id, Some(assignment.step_id), &member.name, None, "status",
                           &format!("Starting: {}", assignment.title)).await?;
                 jobs.push((assignment, member, prompt));
@@ -1063,14 +1101,20 @@ impl Orchestrator {
                 ctx,
                 step,
                 manager,
-                format!(
+                // Fresh, despite being the manager: this passes `None`, not
+                // the planning session, so the verdict is written by someone
+                // who has read the reports and nothing else. It gets the
+                // standing block for the same reason a worker does — without
+                // it the final judgement of the work is made against facts
+                // the person wrote down and nobody passed on.
+                ctx.standing.apply(&format!(
                     "Your team has finished work toward this goal:\n\n{}\n\n\
                      Their reports:\n\n{reports}\n\n\
                      Inspect what actually changed in the repository and give the user a short \
                      verdict: what was accomplished, anything you'd flag, and whether it's ready \
                      to review. Be direct — say so if something looks wrong or incomplete.",
                     ctx.goal
-                ),
+                )),
                 None,
                 MANAGER_TOOLS,
                 PermissionMode::Reviewed,
