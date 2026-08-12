@@ -10,6 +10,7 @@ import { screenPath } from "../lib/apps";
 import { BuildHistory } from "../components/apps/BuildHistory";
 import { ChangeAppModal } from "../components/apps/ChangeAppModal";
 import { DockerfileGate } from "../components/apps/DockerfileGate";
+import { springy } from "../lib/motion";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
@@ -97,7 +98,7 @@ export default function AppPage() {
       <div className="mb-4 flex items-center gap-3">
         <span className="text-xl leading-none">{app.icon}</span>
         <div className="min-w-0">
-          <h1 className="truncate text-lg font-semibold">{app.name}</h1>
+          <h1 className="truncate text-xl font-bold tracking-tight">{app.name}</h1>
           <p className="truncate text-xs text-ink-dim">{app.summary}</p>
         </div>
         <div className="flex-1" />
@@ -113,7 +114,7 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, false)}
           download
           title="The app, with empty tables — what you send someone."
-          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
         >
           Share
         </a>
@@ -121,39 +122,39 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, true)}
           download
           title="The app and everything in it — what you carry to another machine."
-          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
         >
           Export with data
         </a>
         <Link
           to={`/projects/${app.projectId}`}
           title="This app's own folder, in the files editor."
-          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
         >
           Files
         </Link>
         <button
           onClick={() => setPerms((p) => !p)}
-          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
         >
           Permissions
         </button>
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={() => setChanging(true)}
-          className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-white"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
         >
           Change this app
         </motion.button>
         <button
           onClick={() => setEditing(editing === null ? app.manifest : null)}
-          className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
         >
           {editing === null ? "Manifest" : "Close"}
         </button>
         <button
           onClick={uninstall}
-          className="rounded-lg px-2 py-1 text-xs text-danger hover:bg-red-50"
+          className="ring-focus rounded-xl px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-red-50"
         >
           Uninstall
         </button>
@@ -179,7 +180,7 @@ export default function AppPage() {
           </pre>
           <button
             onClick={() => setEditing(app.manifest)}
-            className="mt-3 rounded-lg border border-red-300 px-2 py-1 text-xs text-danger"
+            className="ring-focus mt-3 rounded-xl border border-red-300 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-red-50"
           >
             Fix it
           </button>
@@ -187,7 +188,7 @@ export default function AppPage() {
       )}
 
       {error && (
-        <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-4 rounded-xl bg-red-50 px-3.5 py-2.5 text-xs text-danger">{error}</div>
       )}
 
       {editing !== null ? (
@@ -203,7 +204,7 @@ export default function AppPage() {
               whileTap={{ scale: 0.96 }}
               onClick={saveManifest}
               disabled={busy}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110 disabled:opacity-50"
             >
               Save
             </motion.button>
@@ -216,19 +217,25 @@ export default function AppPage() {
       ) : (
         <>
           {tabs.length > 1 && (
-            <div className="mb-4 flex gap-1 border-b border-line">
+            <div className="mb-4 flex gap-1 rounded-xl bg-panel-2 p-1">
               {tabs.map((t) => (
                 <button
                   key={t.view}
                   onClick={() => setScreen(t.view)}
-                  className={
-                    "-mb-px border-b-2 px-3 py-1.5 text-xs " +
-                    (screen === t.view
-                      ? "border-accent font-medium text-ink"
-                      : "border-transparent text-ink-dim hover:text-ink")
-                  }
+                  className={`ring-focus relative rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                    screen === t.view ? "text-ink" : "text-ink-dim hover:text-ink"
+                  }`}
                 >
-                  {t.label}
+                  {screen === t.view && (
+                    <motion.span
+                      layoutId="app-tab"
+                      transition={springy}
+                      className="absolute inset-0 rounded-lg bg-panel shadow-sm"
+                    />
+                  )}
+                  <span className={`relative ${screen === t.view ? "font-semibold" : ""}`}>
+                    {t.label}
+                  </span>
                 </button>
               ))}
             </div>

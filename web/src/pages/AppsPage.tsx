@@ -6,7 +6,7 @@ import { appState } from "../lib/apps";
 import { useWorkspace } from "../lib/workspace";
 import { NewAppModal } from "../components/apps/NewAppModal";
 import { RepoApps } from "../components/apps/RepoApps";
-import { Page, PageHead } from "../components/ui/Surface";
+import { Empty, Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
 import { tappable } from "../lib/motion";
 
@@ -140,9 +140,12 @@ export default function AppsPage() {
         })}
 
         {apps.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
-            No apps yet. Describe one and aichip will write the manifest, or paste one you
-            already have.
+          <div className="col-span-full">
+            <Empty
+              icon={<Icon name="apps" size={28} />}
+              title="No apps yet"
+              hint="Describe one and aichip will write the manifest, or paste one you already have. An app gets its own tables, screens and worktree."
+            />
           </div>
         )}
       </div>

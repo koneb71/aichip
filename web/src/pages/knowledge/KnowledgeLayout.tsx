@@ -7,6 +7,8 @@ import { useWorkspace } from "../../lib/workspace";
 import { PageTree } from "../../components/kb/PageTree";
 import { GenerateModal } from "../../components/kb/GenerateModal";
 import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
+import { Icon } from "../../components/ui/Icon";
+import { tappable } from "../../lib/motion";
 
 /** What the tree rail shares with whichever page is open beside it. */
 export interface KnowledgeContext {
@@ -122,7 +124,7 @@ export default function KnowledgeLayout() {
       <select
         value={spaceId ?? ""}
         onChange={(e) => setSpaceId(e.target.value || null)}
-        className="rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
+        className="ring-focus rounded-xl border border-line bg-panel px-2.5 py-2 text-sm outline-none transition-colors focus:border-accent"
       >
         {spaces.map((s) => (
           <option key={s.id ?? "general"} value={s.id ?? ""}>
@@ -131,24 +133,31 @@ export default function KnowledgeLayout() {
         ))}
       </select>
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search every page…"
-        className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
-      />
+      {/* The icon sits inside the field rather than beside it, so the rail
+          keeps one column and the input keeps its full width. */}
+      <div className="relative">
+        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-dim">
+          <Icon name="search" size={14} />
+        </span>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search every page…"
+          className="ring-focus w-full rounded-xl border border-line bg-surface py-2 pl-8 pr-2.5 text-xs outline-none transition-colors focus:border-accent focus:bg-panel"
+        />
+      </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {hits ? (
           <div className="flex flex-col">
-            <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-ink-dim">
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-dim">
               {hits.length} result{hits.length === 1 ? "" : "s"} across all spaces
             </div>
             {hits.map((h) => (
               <button
                 key={h.id}
                 onClick={() => navigate(`/knowledge/${h.id}`)}
-                className="truncate rounded-lg px-2 py-1.5 text-left text-sm hover:bg-panel-2"
+                className="ring-focus truncate rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-panel-2"
               >
                 {h.icon || "▦"} {h.title}
               </button>
@@ -161,18 +170,21 @@ export default function KnowledgeLayout() {
 
       <div className="flex flex-col gap-1.5 border-t border-line pt-2">
         <motion.button
-          whileTap={{ scale: 0.97 }}
+          {...tappable}
           onClick={() => createPage(null)}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
+          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
         >
+          <Icon name="plus" size={13} strokeWidth={2.5} />
           New page
         </motion.button>
-        <button
+        <motion.button
+          {...tappable}
           onClick={() => setGenerating(true)}
-          className="rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel-2"
+          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent"
         >
+          <Icon name="sparkle" size={13} />
           Ask an agent to write one
-        </button>
+        </motion.button>
       </div>
     </div>
   );
@@ -196,9 +208,10 @@ export default function KnowledgeLayout() {
         <>
           <button
             onClick={() => setRailOpen((v) => !v)}
-            className="shrink-0 border-b border-line bg-panel px-3 py-2 text-left text-sm"
+            className="flex shrink-0 items-center gap-2 border-b border-line bg-panel px-3 py-2.5 text-left text-sm font-medium"
           >
-            ☰ Pages
+            <Icon name="knowledge" size={15} />
+            Pages
           </button>
           {railOpen && <div className="max-h-64 shrink-0 overflow-hidden">{rail}</div>}
         </>

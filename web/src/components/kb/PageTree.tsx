@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { motion } from "framer-motion";
 import { nest, TreeNode, TreePage, visibleRows } from "../../lib/kbTree";
+import { Icon } from "../ui/Icon";
 
 /**
  * The page tree.
@@ -67,7 +68,10 @@ export function PageTree({
 
   if (pages.length === 0) {
     return (
-      <div className="px-2 py-6 text-center text-xs text-ink-dim">
+      <div className="px-2 py-8 text-center text-xs text-ink-dim">
+        <span className="mb-2 flex justify-center opacity-50">
+          <Icon name="knowledge" size={22} />
+        </span>
         No pages in this space yet.
       </div>
     );
@@ -104,26 +108,29 @@ function Row({
 }) {
   return (
     <div
-      className={`group flex items-center gap-0.5 rounded-lg pr-1 ${
-        active ? "bg-accent/10" : "hover:bg-panel-2"
+      className={`group relative flex items-center gap-0.5 rounded-lg pr-1 transition-colors ${
+        active ? "bg-accent/[0.09]" : "hover:bg-panel-2"
       }`}
       // Indent by depth, clamped: past five levels the extra offset costs more
       // width than it communicates.
       style={{ paddingLeft: 4 + Math.min(node.depth, 5) * 14 }}
     >
+      {active && (
+        <span className="absolute inset-y-1 left-0 w-[2.5px] rounded-full bg-accent" />
+      )}
       <button
         onClick={onToggle}
         aria-label={open ? "Collapse" : "Expand"}
-        className={`w-4 shrink-0 text-[10px] text-ink-dim ${
+        className={`grid w-4 shrink-0 place-items-center text-ink-dim transition-transform duration-200 ${
           node.childCount > 0 ? "" : "invisible"
-        }`}
+        } ${open ? "rotate-90" : ""}`}
       >
-        {open ? "▾" : "▸"}
+        <Icon name="chevronRight" size={11} strokeWidth={2.5} />
       </button>
       <NavLink
         to={`/knowledge/${node.id}`}
-        className={`min-w-0 flex-1 truncate py-1.5 text-sm ${
-          active ? "font-medium text-accent" : ""
+        className={`ring-focus min-w-0 flex-1 truncate rounded py-1.5 text-sm transition-colors ${
+          active ? "font-semibold text-accent" : "hover:text-ink"
         }`}
       >
         <span className="mr-1.5">{node.icon || "▦"}</span>

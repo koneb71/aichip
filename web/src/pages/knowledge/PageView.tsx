@@ -9,6 +9,7 @@ import { MovePicker } from "../../components/kb/MovePicker";
 import { IconPicker } from "../../components/kb/IconPicker";
 import { GenerateModal } from "../../components/kb/GenerateModal";
 import { KnowledgeContext } from "./KnowledgeLayout";
+import { Icon } from "../../components/ui/Icon";
 
 /**
  * A page, at its own address.
@@ -69,11 +70,18 @@ export default function PageView() {
           <nav className="flex flex-wrap items-center gap-1 text-xs text-ink-dim">
             {page.breadcrumb?.map((c, i) => (
               <span key={c.id} className="flex items-center gap-1">
-                {i > 0 && <span className="opacity-50">/</span>}
+                {i > 0 && (
+                  <span className="opacity-40">
+                    <Icon name="chevronRight" size={11} />
+                  </span>
+                )}
                 {c.id === page.id ? (
                   <span className="text-ink">{c.title}</span>
                 ) : (
-                  <Link to={`/knowledge/${c.id}`} className="hover:text-accent">
+                  <Link
+                    to={`/knowledge/${c.id}`}
+                    className="rounded transition-colors hover:text-accent"
+                  >
                     {c.icon} {c.title}
                   </Link>
                 )}
@@ -133,25 +141,25 @@ export default function PageView() {
             <motion.button
               whileTap={{ scale: 0.96 }}
               onClick={() => navigate(`/knowledge/${page.id}/edit`)}
-              className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
             >
               Edit
             </motion.button>
             <button
               onClick={() => setRevising(true)}
-              className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:bg-panel-2"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
               Ask an agent to revise
             </button>
             <Link
               to={`/knowledge/${page.id}/history`}
-              className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:bg-panel-2"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
               History
             </Link>
             <button
               onClick={() => setMoving(true)}
-              className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:bg-panel-2"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
               Move
             </button>
@@ -163,7 +171,7 @@ export default function PageView() {
                 load();
                 reload();
               }}
-              className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:bg-panel-2"
+              className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
             >
               {page.status === "published" ? "Unpublish" : "Publish"}
             </button>
@@ -173,13 +181,13 @@ export default function PageView() {
               body meant asking an agent to fix a typo took the page offline
               for everyone until the run finished. */}
           {page.writing && !empty && (
-            <div className="mt-4 rounded-lg border border-line bg-panel-2 px-3 py-2 text-xs text-ink-dim">
+            <div className="mt-4 rounded-xl border border-line bg-panel-2 px-3.5 py-2.5 text-xs text-ink-dim">
               An agent is drafting a revision. This page is unchanged until you
               accept it.
             </div>
           )}
 
-          <div className="mt-6">
+          <div className="mt-6 max-w-[68ch]">
             {page.writing && empty ? (
               <div className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-sm text-ink-dim">
                 An agent is writing this page…
@@ -205,12 +213,12 @@ export default function PageView() {
               <h2 className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
                 Inside this page
               </h2>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {page.children.map((c) => (
                   <Link
                     key={c.id}
                     to={`/knowledge/${c.id}`}
-                    className="rounded-xl border border-line bg-panel p-3 hover:bg-panel-2"
+                    className="lift ring-focus card-shadow rounded-2xl border border-line bg-panel p-3.5 hover:border-ink-dim/25"
                   >
                     <div className="text-sm font-medium">
                       {c.icon || "▦"} {c.title}
@@ -284,7 +292,7 @@ export default function PageView() {
                   <Link
                     key={b.id}
                     to={`/knowledge/${b.id}`}
-                    className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2"
+                    className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
                   >
                     {b.icon || "▦"} {b.title}
                   </Link>

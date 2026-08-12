@@ -185,7 +185,7 @@ export default function PageEditor() {
                   dirty.current = true;
                   await persist();
                 }}
-                className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white"
+                className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
               >
                 Keep mine
               </button>
