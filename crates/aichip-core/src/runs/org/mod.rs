@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use super::memory;
 use super::orchestrator::{
-    next_seq, slugify, Orchestrator, SeqAlloc, StreamOutcome,
+    next_seq, slugify, CallerKind, Orchestrator, SeqAlloc, StreamOutcome,
 };
 use plan::{
     assignment_prompt, has_blocking, inspect_plan, parse_plan, plan_prompt, repair_prompt,
@@ -157,10 +157,19 @@ impl Orchestrator {
 
     /// Put a run on the queue. Public because approving a parked plan
     /// re-dispatches it from an HTTP route.
+    ///
+    /// A second call is a person saying *now*, and used to be swallowed:
+    /// `DO NOTHING` meant that approving a plan for a run which happened to
+    /// be held behind a rate-limit backoff left it sitting there for the rest
+    /// of the wait, with the button looking like it had done nothing. So the
+    /// conflict raises the priority — `GREATEST`, never lowers it — and clears
+    /// the backoff, because the click is newer information than the hold.
     pub async fn queue(&self, run_id: Uuid, priority: i32) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO queue (run_id, priority) VALUES ($1, $2)
-             ON CONFLICT (run_id) DO NOTHING",
+             ON CONFLICT (run_id) DO UPDATE
+                SET priority = GREATEST(queue.priority, EXCLUDED.priority),
+                    not_before = NULL",
         )
         .bind(run_id)
         .bind(priority)
@@ -1161,7 +1170,7 @@ impl Orchestrator {
         log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
 
         let outcome = self
-            .stream_run(ctx.run_id, Some(step_id), &ctx.seq, ctx.engine.clone(), spec, false)
+            .stream_run(ctx.run_id, Some(step_id), &ctx.seq, ctx.engine.clone(), spec, CallerKind::OrgMember)
             .await?;
 
         sqlx::query(

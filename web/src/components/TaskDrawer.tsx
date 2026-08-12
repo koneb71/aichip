@@ -73,7 +73,7 @@ export function TaskDrawer({
   );
   const att = useAttachments(task.projectId);
   const [attachBusy, setAttachBusy] = useState(false);
-  const [busy, setBusy] = useState<"retry" | "delete" | null>(null);
+  const [busy, setBusy] = useState<"retry" | "resume" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{
     title: string;
@@ -87,13 +87,33 @@ export function TaskDrawer({
   // your approval — those must not look finished.
   const running = isActive(task.runStatus);
 
-  const doRetry = async () => {
+  // `fresh` is the whole difference between the two Retries and was hardcoded
+  // to `true`, so the non-destructive one — implemented server-side since the
+  // route was written — had no way to be asked for.
+  const doRetry = async (fresh: boolean) => {
     setConfirm(null);
     setBusy("retry");
     try {
-      await api.retryTask(task.id, true);
+      await api.retryTask(task.id, fresh);
       onChanged();
     } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const resume = async () => {
+    if (!task.runId) return;
+    setBusy("resume");
+    setError(null);
+    try {
+      await api.resumeRun(task.runId);
+      onChanged();
+    } catch (e) {
+      // A refusal arrives here as a 409 saying which one — the engine can't
+      // resume, or the worktree has been reclaimed. Those two can't be
+      // answered by the board query, so this banner is where they land.
       setError(String(e));
     } finally {
       setBusy(null);
@@ -108,10 +128,10 @@ export function TaskDrawer({
         title: "Retry discards the current diff",
         body: "This card has unmerged work. Retrying starts again from a clean checkout, so that diff is lost.",
         cta: "Retry anyway",
-        go: doRetry,
+        go: () => doRetry(true),
       });
     } else {
-      doRetry();
+      doRetry(true);
     }
   };
 
@@ -579,6 +599,22 @@ export function TaskDrawer({
             )}
           </>
         )}
+        {/* Resume before Retry, because it is the cheaper of the two and the
+            one people want after a run dies forty minutes in. Only shown when
+            there is actually a session to pick up — a card that has never run,
+            or whose run left none, gets Retry alone rather than a button that
+            explains itself only after being clicked. */}
+        {!running && task.runResumable && (
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={resume}
+            disabled={busy !== null}
+            className="rounded-lg border border-tier-medium/50 bg-tier-medium/10 px-3 py-1.5 text-xs font-medium text-tier-medium hover:border-tier-medium disabled:opacity-50"
+            title="Continue the same session, in the same worktree, from where it stopped"
+          >
+            {busy === "resume" ? "Resuming…" : "▸ Resume"}
+          </motion.button>
+        )}
         {!running && (
           <button
             onClick={retry}
@@ -588,6 +624,15 @@ export function TaskDrawer({
           >
             {busy === "retry" ? "Restarting…" : "↻ Retry"}
           </button>
+        )}
+        {/* The two buttons look alike and do opposite things to the work
+            already on disk, so the difference is written down rather than left
+            to the tooltips. */}
+        {!running && task.runResumable && (
+          <span className="text-[11px] leading-tight text-ink-dim">
+            Resume continues where it stopped. Retry starts over from a clean
+            checkout.
+          </span>
         )}
         <button
           onClick={remove}

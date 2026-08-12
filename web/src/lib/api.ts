@@ -220,6 +220,11 @@ export interface Task {
    *  run carries what it is waiting for. Pair it with `runStatus` through
    *  `stopReason` rather than rendering it directly. */
   runError?: string | null;
+  /** The latest run stopped short and left a session its own engine can pick
+   *  up. The two remaining blockers — whether the engine can resume at all,
+   *  and whether the worktree still exists — are decided on the click, and
+   *  come back as a 409 saying which. */
+  runResumable?: boolean;
   costUsd: number | null;
   model: string | null;
   /** Which CLI this card runs on. */
@@ -1478,6 +1483,12 @@ export const api = {
   retryTask: (taskId: string, fresh = true) =>
     post(`/api/tasks/${taskId}/retry`, { fresh }).then((r) =>
       json<{ runId: string; fresh: boolean }>(r),
+    ),
+  /** Continue a run's own session in the worktree it was already working in.
+   *  Refusals come back as a 409 whose message says which one. */
+  resumeRun: (runId: string) =>
+    post(`/api/runs/${runId}/resume`).then((r) =>
+      json<{ runId: string; resumedFrom: string }>(r),
     ),
   // Kanban drag: moving into "running" from backlog starts the task.
   moveTask: (

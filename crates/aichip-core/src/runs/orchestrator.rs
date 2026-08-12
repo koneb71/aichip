@@ -218,6 +218,95 @@ pub(crate) fn resolve_step_permission(asked: PermissionMode, gate_satisfied: boo
     }
 }
 
+/// Which of the six things that stream an engine this dispatch is.
+///
+/// It replaced a bare `finalize: bool`, because the two questions it answers
+/// were being answered independently and one of them was never asked at all.
+/// A caller has to say what it *is*, and the answers follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallerKind {
+    /// A card doing its work.
+    TaskWork,
+    /// A card writing the plan it will be asked to approve.
+    TaskPlanning,
+    /// One step of a workflow.
+    WorkflowStep,
+    /// One teammate's turn inside an organization run.
+    OrgMember,
+    /// A chat turn in the assistant panel.
+    Chat,
+    /// A one-shot reply to a comment.
+    CommentReply,
+    /// Generating a knowledge-base article.
+    KbGeneration,
+}
+
+/// What to do when the engine reports a rate limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnRateLimit {
+    /// Mark the run held and put it back on the queue behind a backoff.
+    Hold,
+    /// Give up and let the caller finish the run. Re-dispatching would charge
+    /// again for work that is already paid for.
+    Fail,
+}
+
+impl CallerKind {
+    /// Does `stream_run` own this run's ending?
+    ///
+    /// False where a *step* ending is not a *run* ending: a plan that
+    /// completed is not a completed run, and marking it terminal would send
+    /// the card to review with nothing done. Workflows and organizations
+    /// decide their own outcome once every step is in.
+    pub(crate) fn finalizes(self) -> bool {
+        !matches!(self, Self::TaskPlanning | Self::WorkflowStep | Self::OrgMember)
+    }
+
+    /// Can this run be handed back to `execute` later, unchanged?
+    ///
+    /// This is the whole question, and it was never asked: `stream_run` wrote
+    /// a queue row for *every* caller, so a workflow step that hit a limit put
+    /// its run back on the queue, the workflow then failed the run, `finish`
+    /// left the row behind, and five minutes later `claim_next` popped a run
+    /// marked `failed` and re-ran the entire pipeline — paying again for every
+    /// step that had already succeeded.
+    ///
+    /// Exhaustive on purpose. A seventh caller is a compile error here rather
+    /// than a silent leak, which is how the first six got one.
+    pub(crate) fn on_rate_limit(self) -> OnRateLimit {
+        match self {
+            // `execute_task_run` reuses the card's worktree and rebuilds its
+            // spec from the row, so a second dispatch continues rather than
+            // duplicates. Everything after `stream_run` is guarded on
+            // `Completed`, so a held run falls straight through it.
+            Self::TaskWork => OnRateLimit::Hold,
+            // Same, plus one early return: `park_for_approval` treats "not
+            // completed" as "no plan to approve" and fails the run, which
+            // would undo the hold a line later.
+            Self::TaskPlanning => OnRateLimit::Hold,
+            // Nothing is written until the article completes, and the run row
+            // still carries the brief.
+            Self::KbGeneration => OnRateLimit::Hold,
+            // Both post exactly once, on completion, so a second dispatch
+            // produces one reply rather than two.
+            Self::Chat | Self::CommentReply => OnRateLimit::Hold,
+            // `create_step_row` and `outputs` are written per dispatch, so a
+            // re-run of a half-finished pipeline is charged for in full and
+            // duplicates its own step rows. Failing honestly beats that; a
+            // workflow that resumes from its `steps` rows is its own feature.
+            Self::WorkflowStep => OnRateLimit::Fail,
+            // The one that reads like it should hold and cannot. A member is
+            // a *step* of an org run: the batch loop is still driving other
+            // assignments in parallel and will finish the run itself, so a
+            // hold written here is overwritten by a terminal status moments
+            // later — leaving exactly the orphan queue row this is meant to
+            // stop. Stopping a batch cleanly mid-flight is a feature, not a
+            // guard, so the assignment fails and says why.
+            Self::OrgMember => OnRateLimit::Fail,
+        }
+    }
+}
+
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
@@ -389,6 +478,68 @@ impl Orchestrator {
         .fetch_one(&self.db.pool)
         .await?;
         let run_id: Uuid = row.get("id");
+        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 10)")
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
+    }
+
+    /// Pick a dead run back up: a new run row carrying the old one's session.
+    ///
+    /// Everything that decides *whether* this is allowed lives in
+    /// `runs::resume` and has already run by the time this is called — the
+    /// route answers the person, this writes the row. See that module for why
+    /// resuming creates a row rather than re-queuing the old one.
+    pub async fn resume_run(&self, prior_run_id: Uuid, session_id: &str) -> anyhow::Result<Uuid> {
+        let prior = sqlx::query(
+            "SELECT r.task_id, r.engine, r.agent_id, r.tier_override, r.variant_label,
+                    r.worktree_path, r.error_reason,
+                    COALESCE(r.prompt_override, t.prompt) AS prompt
+             FROM runs r JOIN tasks t ON t.id = r.task_id
+             WHERE r.id = $1",
+        )
+        .bind(prior_run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let prompt = crate::runs::resume::continuation_prompt(
+            &prior.get::<String, _>("prompt"),
+            prior.get::<Option<String>, _>("error_reason").as_deref(),
+        );
+
+        let row = sqlx::query(
+            // `plan_approval` is deliberately FALSE and not copied. A
+            // plan-first run whose plan was never stored plans again — see
+            // `a_plan_first_run_with_no_stored_plan_plans_again` — so carrying
+            // it forward would hand a session that has been writing code a
+            // planning pass with the mutating tools denied, and it would
+            // produce a second plan instead of finishing the work.
+            //
+            // `comment_id` is likewise omitted rather than copied: with it set
+            // `execute` routes to `execute_comment_run`, which builds its own
+            // prompt and posts another reply. Only a card run gets here at all
+            // (`Refusal::NotATaskRun`), so there is nothing to carry.
+            "INSERT INTO runs (task_id, status, trigger, engine, plan_approval,
+                               agent_id, tier_override, variant_label, worktree_path,
+                               session_id, session_engine, prompt_override, resumed_from)
+             VALUES ($1, 'queued', 'resume', $2, FALSE, $3, $4, $5, $6, $7, $2, $8, $9)
+             RETURNING id",
+        )
+        .bind(prior.get::<Uuid, _>("task_id"))
+        .bind(prior.get::<String, _>("engine"))
+        .bind(prior.get::<Option<Uuid>, _>("agent_id"))
+        .bind(prior.get::<Option<String>, _>("tier_override"))
+        .bind(prior.get::<Option<String>, _>("variant_label"))
+        .bind(prior.get::<Option<String>, _>("worktree_path"))
+        .bind(session_id)
+        .bind(&prompt)
+        .bind(prior_run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let run_id: Uuid = row.get("id");
+        // Same priority a manual start gets: this *is* a manual start, of work
+        // that is further along than a fresh one.
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 10)")
             .bind(run_id)
             .execute(&self.db.pool)
@@ -776,6 +927,31 @@ impl Orchestrator {
         // The steps died with the run. Leaving them at 'running' is what makes
         // a failed team run still animate a teammate as "working…".
         settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
+        // Nothing terminal keeps a place in the queue. This is the sweep for
+        // rows written before `finish` learned to delete them — without it,
+        // every failure this repository has already recorded stays claimable
+        // and gets re-dispatched on the next boot.
+        sqlx::query(
+            "DELETE FROM queue q USING runs r
+              WHERE r.id = q.run_id AND r.status IN ('completed','failed','canceled')",
+        )
+        .execute(&mut *tx)
+        .await?;
+        // And the mirror image: a run that says it is held has to actually be
+        // waiting for something. A crash between `hold_rate_limited`'s two
+        // statements, or a queue row deleted by hand, leaves `rate_limited`
+        // with nothing to bring it back — a run that is neither running nor
+        // finished and never will be. Behind the same backoff it would have
+        // had, so a restart loop cannot become a retry storm.
+        sqlx::query(
+            "INSERT INTO queue (run_id, priority, not_before)
+             SELECT r.id, 5, now() + interval '5 minutes' FROM runs r
+              WHERE r.status = 'rate_limited'
+                AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.run_id = r.id)
+             ON CONFLICT (run_id) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         // And so do the cards those steps stand for — otherwise a restart leaves
         // a column of sub-tickets stuck at "In Progress" with nothing behind
@@ -1177,11 +1353,25 @@ impl Orchestrator {
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
         let row = sqlx::query(
-            "SELECT chat_id, workflow_id, team_id, comment_id, kb_brief FROM runs WHERE id=$1",
+            "SELECT status, chat_id, workflow_id, team_id, comment_id, kb_brief FROM runs WHERE id=$1",
         )
             .bind(run_id)
             .fetch_one(&self.db.pool)
             .await?;
+        // The guard this never had. `execute` reads only the columns that
+        // decide *which kind* of run it is, so a queue row that outlived its
+        // run — cancelled, already finished, or claimed twice — dispatched a
+        // second engine against it and was charged for. Anything not still
+        // waiting to start is dropped on the floor here, which is the correct
+        // response to a row that should not exist.
+        let status: String = row.get("status");
+        match RunStatus::parse(&status) {
+            Some(s) if s.is_dispatchable() => {}
+            _ => {
+                tracing::warn!(%run_id, %status, "dropped a queued run that is no longer waiting");
+                return Ok(());
+            }
+        }
         match (
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
@@ -1609,8 +1799,16 @@ impl Orchestrator {
         // run, and letting `stream_run` mark it terminal would send the card
         // to review with nothing done.
         let outcome = self
-            .stream_run(run_id, None, &seq, engine, spec, !planning)
+            .stream_run(run_id, None, &seq, engine, spec, if planning { CallerKind::TaskPlanning } else { CallerKind::TaskWork })
             .await?;
+
+        // A held run is coming back; it has not ended. `park_for_approval`
+        // reads "not completed" as "no plan to approve" and fails the run,
+        // which would undo the hold `hold_rate_limited` just wrote — status,
+        // queue row and all — one line after writing it.
+        if outcome.status == RunStatus::RateLimited {
+            return Ok(());
+        }
 
         if planning {
             return self.park_for_approval(run_id, &outcome).await;
@@ -1817,7 +2015,7 @@ impl Orchestrator {
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
-        let outcome = self.stream_run(run_id, None, &seq, engine, spec, true).await?;
+        let outcome = self.stream_run(run_id, None, &seq, engine, spec, CallerKind::KbGeneration).await?;
         if outcome.status != RunStatus::Completed {
             return Ok(());
         }
@@ -2021,7 +2219,7 @@ impl Orchestrator {
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
         let outcome = self
-            .stream_run(run_id, None, &seq, engine, spec, true)
+            .stream_run(run_id, None, &seq, engine, spec, CallerKind::Chat)
             .await?;
 
         if outcome.status == RunStatus::Completed {
@@ -2222,7 +2420,7 @@ impl Orchestrator {
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
-        let outcome = self.stream_run(run_id, None, &seq, engine, spec, true).await?;
+        let outcome = self.stream_run(run_id, None, &seq, engine, spec, CallerKind::CommentReply).await?;
 
         if outcome.status == RunStatus::Completed {
             let reply = if outcome.output.trim().is_empty() {
@@ -2508,7 +2706,7 @@ this workflow manually."
                         };
                         async move {
                             let outcome = this
-                                .stream_run(run_id, Some(db_step_id), &seq, engine, spec, false)
+                                .stream_run(run_id, Some(db_step_id), &seq, engine, spec, CallerKind::WorkflowStep)
                                 .await;
                             (db_step_id, step_key, outcome)
                         }
@@ -2895,9 +3093,10 @@ this workflow manually."
     /// Shared streaming loop: spawn the engine, persist+publish every event,
     /// handle cancel / rate-limit / terminal transitions.
     ///
-    /// `step_id` tags events for pipeline steps. `finalize` is false for
-    /// individual workflow steps — the workflow decides the run's final
-    /// status once every step is done.
+    /// `step_id` tags events for pipeline steps. `caller` answers both of the
+    /// questions the ending depends on — who owns the run's final status, and
+    /// whether a rate limit can be waited out or has to be reported — which
+    /// used to be one `bool` answering only the first.
     pub(crate) async fn stream_run(
         self: &Arc<Self>,
         run_id: Uuid,
@@ -2905,8 +3104,9 @@ this workflow manually."
         seq: &SeqAlloc,
         engine: Arc<dyn Engine>,
         spec: RunSpec,
-        finalize: bool,
+        caller: CallerKind,
     ) -> anyhow::Result<StreamOutcome> {
+        let finalize = caller.finalizes();
         let mut proc = engine.start(spec)?;
         self.set_status(run_id, RunStatus::Running).await?;
 
@@ -3016,7 +3216,19 @@ this workflow manually."
                             }
                         }
                         AichipEvent::RateLimited { reset_at, message } => {
-                            self.requeue_rate_limited(run_id, *reset_at).await?;
+                            // Held or failed, never both, and never a queue
+                            // row without the status that explains it — see
+                            // `CallerKind::on_rate_limit`.
+                            outcome = Some(match caller.on_rate_limit() {
+                                OnRateLimit::Hold => {
+                                    self.hold_rate_limited(run_id, *reset_at).await?;
+                                    (RunStatus::RateLimited, Some(message.clone()))
+                                }
+                                OnRateLimit::Fail => (
+                                    RunStatus::Failed,
+                                    Some(format!("{message} (this run can't be held and resumed, so it stopped here)")),
+                                ),
+                            });
                             let ctx = crate::attention::Ctx {
                                 title: "aichip: rate limited".to_string(),
                                 ..crate::attention::ctx_for_run(&self.db, run_id, None).await
@@ -3027,7 +3239,6 @@ this workflow manually."
                                 ctx,
                             )
                             .await;
-                            outcome = Some((RunStatus::RateLimited, Some(message.clone())));
                         }
                         _ => {}
                     }
@@ -3051,12 +3262,12 @@ this workflow manually."
 
         let (status, reason) =
             outcome.unwrap_or((RunStatus::Failed, Some("event stream ended unexpectedly".into())));
-        if finalize {
-            if status != RunStatus::RateLimited {
-                self.finish(run_id, status, reason.clone()).await?;
-            } else {
-                self.set_status(run_id, RunStatus::RateLimited).await?;
-            }
+        // A held run is already `rate_limited` with a queue row behind it, put
+        // there together by `hold_rate_limited`; finishing it here would strand
+        // that row under a terminal status, which is the leak this slice is
+        // about. Every other ending is the caller's to record, if it owns one.
+        if finalize && status != RunStatus::RateLimited {
+            self.finish(run_id, status, reason.clone()).await?;
         }
         let output = if result_text.is_empty() {
             text_parts.join("\n")
@@ -3071,12 +3282,35 @@ this workflow manually."
         })
     }
 
-    async fn requeue_rate_limited(
+    /// Put a rate-limited run back on the queue behind a backoff, and mark it
+    /// held — the two halves written together, in the one place either is
+    /// written.
+    ///
+    /// They used to be separate: the queue row went in here, unconditionally,
+    /// while the status was set by `stream_run` only when it was finalizing.
+    /// Every caller that did not finalize therefore left a queue row under a
+    /// run that never said it was waiting, and `finish` did not clean up after
+    /// it. `claim_next` popped it five minutes later and re-ran the whole
+    /// pipeline, charged in full.
+    ///
+    /// The counter climbs first so the *first* hold reads attempt 0. It lives
+    /// on `runs` because `claim_next` is a `DELETE … RETURNING run_id` — a
+    /// column on `queue` would have to be threaded through five signatures to
+    /// reach this one number — and because a resumed or retried run is a new
+    /// row, so it resets with no reset logic.
+    async fn hold_rate_limited(
         &self,
         run_id: Uuid,
         reset_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
-        let not_before = rate_limit_backoff(0, reset_at);
+        let holds: i32 = sqlx::query_scalar(
+            "UPDATE runs SET status='rate_limited', rate_limit_attempts = rate_limit_attempts + 1
+             WHERE id=$1 RETURNING rate_limit_attempts",
+        )
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let not_before = rate_limit_backoff(crate::queue::attempt_index(holds), reset_at);
         sqlx::query(
             "INSERT INTO queue (run_id, priority, not_before) VALUES ($1, 5, $2)
              ON CONFLICT (run_id) DO UPDATE SET not_before = EXCLUDED.not_before",
@@ -3103,6 +3337,13 @@ this workflow manually."
         status: RunStatus,
         reason: Option<String>,
     ) -> anyhow::Result<()> {
+        // `finish` means ended. `rate_limited` is a *held* run — it is coming
+        // back — and writing it through here would set `finished_at` on a run
+        // that has not finished and delete the queue row that brings it back.
+        // Debug-assert rather than return an error, because the callers that
+        // could get this wrong are inside this file and this is a programming
+        // mistake, not a runtime condition.
+        debug_assert_ne!(status, RunStatus::RateLimited, "a held run has not finished");
         self.forget_cancel(run_id);
         let mut tx = self.db.pool.begin().await?;
         // `COALESCE`, because a cancel carries `reason: None` and the broker
@@ -3115,6 +3356,16 @@ this workflow manually."
         )
             .bind(status.as_str())
             .bind(reason)
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+        // Nothing waiting to be dispatched can outlive the run it belongs to.
+        // A run reaches here from a cancel, a crash in `execute`, a failed
+        // dispatch or a plain ending, and any of those can happen while a
+        // queue row exists — a held run someone cancelled, most obviously.
+        // Left behind, that row is re-claimed later and `execute` runs the
+        // whole thing again on a row that reads `failed`.
+        sqlx::query("DELETE FROM queue WHERE run_id=$1")
             .bind(run_id)
             .execute(&mut *tx)
             .await?;
@@ -3294,7 +3545,7 @@ fn review_fix_prompt(
 }
 
 /// Truncate on a character boundary, marking that something was dropped.
-fn clip_chars(s: &str, max: usize) -> String {
+pub(crate) fn clip_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -3317,6 +3568,61 @@ pub(crate) fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every caller, so a seventh cannot be added without answering.
+    const CALLERS: [CallerKind; 7] = [
+        CallerKind::TaskWork,
+        CallerKind::TaskPlanning,
+        CallerKind::WorkflowStep,
+        CallerKind::OrgMember,
+        CallerKind::Chat,
+        CallerKind::CommentReply,
+        CallerKind::KbGeneration,
+    ];
+
+    /// The invariant the leak violated: a run only goes back on the queue if
+    /// something will pick it up again unchanged.
+    ///
+    /// Holding is the interesting half. The two that are refused are refused
+    /// because re-dispatching them costs money twice — a workflow re-runs
+    /// every step it already paid for, and an org run's batch loop has already
+    /// moved on and will write a terminal status over the hold.
+    #[test]
+    fn only_a_run_that_can_be_re_dispatched_unchanged_is_held() {
+        for caller in CALLERS {
+            let expected = match caller {
+                CallerKind::WorkflowStep | CallerKind::OrgMember => OnRateLimit::Fail,
+                _ => OnRateLimit::Hold,
+            };
+            assert_eq!(caller.on_rate_limit(), expected, "{caller:?}");
+        }
+    }
+
+    /// The half of `CallerKind` that used to be a bare `bool`, pinned so the
+    /// consolidation cannot have changed anyone's ending by accident.
+    #[test]
+    fn only_a_whole_run_finalizes() {
+        for caller in CALLERS {
+            let expected = !matches!(
+                caller,
+                CallerKind::TaskPlanning | CallerKind::WorkflowStep | CallerKind::OrgMember
+            );
+            assert_eq!(caller.finalizes(), expected, "{caller:?}");
+        }
+    }
+
+    /// Why a resumed run must be created with `plan_approval = false`.
+    ///
+    /// Carrying it forward would send the resumed run back into the planning
+    /// half — mutating tools denied, another plan written, nothing done — on a
+    /// session that has already been working. Asserted here rather than
+    /// trusted, because the resume path cannot see this decision.
+    #[test]
+    fn a_plan_first_run_with_no_stored_plan_plans_again() {
+        use crate::runs::task_plan::{decide, Phase, PlanStep};
+        assert_eq!(decide(true, PlanStep::Missing, true), Phase::Plan);
+        assert_eq!(decide(false, PlanStep::Missing, true), Phase::Work { plan: None });
+    }
 
     /// The chat assistant must never be handed a mode its engine cannot honour.
     ///

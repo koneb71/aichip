@@ -1,3 +1,7 @@
+// `json!` expands one recursion level per key, and the board card — the widest
+// object this crate builds — has outgrown the default 128.
+#![recursion_limit = "256"]
+
 pub mod app_bridge;
 pub mod mcp;
 pub mod preview_proxy;

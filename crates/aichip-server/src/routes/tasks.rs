@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}/events", get(run_events))
         .route("/runs/{id}/pending-permissions", get(pending_permissions))
         .route("/runs/{id}/cancel", post(cancel_run))
+        .route("/runs/{id}/resume", post(resume_run))
         .route("/runs/{id}/plan", get(plan).patch(edit_plan))
         .route("/runs/{id}/plan/approve", post(approve_plan))
         .route("/runs/{id}/plan/revise", post(revise_plan))
@@ -87,6 +88,38 @@ async fn list(
                      WHEN t.permission_mode IS NOT NULL THEN 'card'
                      ELSE 'default' END AS permission_source,
                 r.id AS run_id, r.status AS run_status, r.error_reason AS run_error,
+                -- Should this card offer Resume? Everything here is a column
+                -- on the row the LATERAL already fetched, so it costs nothing.
+                --
+                -- Narrower than `resume::decide`, deliberately. `decide` also
+                -- accepts a *completed* run, because continuing one is not
+                -- wrong — but 22 of 23 cards here have one, and a button on
+                -- every card is not an offer, it is noise. What Resume is for
+                -- is a run that stopped short.
+                --
+                -- The team/workflow/comment/KB exclusions mirror
+                -- `Refusal::NotATaskRun`: without them the board offered
+                -- Resume on team cards and the click refused, which is the
+                -- same asymmetry a silent capability downgrade would be.
+                --
+                -- The worktree clause is the reason this is not just a run
+                -- predicate: `drop_worktree` nulls the column, and a session
+                -- resumed into a checkout that no longer exists believes its
+                -- edits are there and reports success over nothing. A project
+                -- without git never had one, which is not the same thing.
+                --
+                -- What is left out is only what SQL cannot answer: whether the
+                -- engine can resume at all (a registry lookup) and whether the
+                -- directory is still on disk (a stat). Neither is affordable
+                -- once per card every 2.5 seconds, so both are answered on the
+                -- click, as a 409 that says which.
+                (r.session_id IS NOT NULL
+                 AND r.session_engine = r.engine
+                 AND r.status IN ('failed', 'canceled')
+                 AND r.team_id IS NULL AND r.workflow_id IS NULL
+                 AND r.comment_id IS NULL AND r.kb_brief IS NULL
+                 AND (p.vcs <> 'git'
+                      OR COALESCE(r.worktree_path, t.worktree_path) IS NOT NULL)) AS run_resumable,
                 r.cost_usd, r.model,
                 r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
@@ -177,6 +210,9 @@ async fn list(
                 // here and `unpark` clears it again, so the client decides the
                 // treatment from the *pair*; see `stopReason` in runStatus.ts.
                 "runError": r.get::<Option<String>, _>("run_error"),
+                // NULL when the card has never run at all — the LATERAL join
+                // produced no row — so this is an Option, not a bool.
+                "runResumable": r.get::<Option<bool>, _>("run_resumable").unwrap_or(false),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
                 // Enough for the chip. Anything more — how fresh it is, why
                 // the button is refused — is the drawer's own fetch, because
@@ -1385,6 +1421,103 @@ async fn retry(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "runId": run_id, "fresh": fresh })))
+}
+
+/// Pick a dead run back up where it stopped.
+///
+/// The counterpart to Retry, and the opposite trade: Retry throws the worktree
+/// away and starts from the base branch, Resume keeps both the worktree and
+/// the engine's own session so the agent can see what it already did.
+///
+/// Every refusal is a 409 carrying `Refusal::message()`, which the drawer
+/// shows in its error banner. Refusing rather than quietly starting over is
+/// the same rule CLAUDE.md states for OpenCode and `Reviewed`: a button that
+/// silently does a different, more expensive thing is worse than one that
+/// says why it can't.
+async fn resume_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query(
+        // `COALESCE(r.worktree_path, t.worktree_path)` mirrors what
+        // `execute_task_run` picks: a bake-off variant has its own checkout,
+        // everything else works in the card's.
+        "SELECT r.status, r.session_id, r.session_engine, r.engine, r.task_id,
+                r.chat_id, r.workflow_id, r.team_id, r.comment_id, r.kb_brief,
+                COALESCE(r.worktree_path, t.worktree_path) AS worktree_path,
+                p.vcs
+         FROM runs r
+         LEFT JOIN tasks t ON t.id = r.task_id
+         LEFT JOIN projects p ON p.id = t.project_id
+         WHERE r.id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such run".to_string()))?;
+
+    let engine_id: String = row.get("engine");
+    let engine = state.orchestrator.engine(&engine_id);
+    let worktree: Option<String> = row.get("worktree_path");
+    // The one part of the decision that has to touch the disk, done here so
+    // `resume::decide` stays pure. `drop_worktree` nulls the column, but a
+    // directory removed by hand leaves it set and pointing at nothing.
+    let cwd = if row.get::<Option<String>, _>("vcs").as_deref() != Some("git") {
+        aichip_core::runs::resume::Cwd::InPlace
+    } else {
+        match worktree.as_deref() {
+            Some(p) if std::path::Path::new(p).is_dir() => {
+                aichip_core::runs::resume::Cwd::Worktree(p)
+            }
+            _ => aichip_core::runs::resume::Cwd::Gone,
+        }
+    };
+
+    let status: String = row.get("status");
+    let session_id: Option<String> = row.get("session_id");
+    let session_engine: Option<String> = row.get("session_engine");
+    let prior = aichip_core::runs::resume::Prior {
+        status: aichip_shared::RunStatus::parse(&status)
+            .ok_or((StatusCode::CONFLICT, format!("this run is {status}")))?,
+        session_id: session_id.as_deref(),
+        session_engine: session_engine.as_deref(),
+        engine: &engine_id,
+        engine_can_resume: engine.map(|e| e.capabilities().resume_sessions).unwrap_or(false),
+        cwd,
+        is_task_run: row.get::<Option<Uuid>, _>("task_id").is_some()
+            && row.get::<Option<Uuid>, _>("chat_id").is_none()
+            && row.get::<Option<Uuid>, _>("workflow_id").is_none()
+            && row.get::<Option<Uuid>, _>("team_id").is_none()
+            && row.get::<Option<Uuid>, _>("comment_id").is_none()
+            && row.get::<Option<String>, _>("kb_brief").is_none(),
+    };
+
+    let session = aichip_core::runs::resume::decide(&prior)
+        .map_err(|r| (StatusCode::CONFLICT, r.message()))?;
+
+    let task_id: Uuid = row.get::<Option<Uuid>, _>("task_id").expect("checked above");
+    // Not `run_is_active`, which asks about the card: this asks whether
+    // anything at all is still working on it, the same guard Retry uses,
+    // because two engines in one worktree is the failure both prevent.
+    if run_is_active(&state, task_id).await? || step_is_live(&state, task_id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card is already running — cancel it before resuming".into(),
+        ));
+    }
+
+    let new_run = state
+        .orchestrator
+        .resume_run(run_id, &session)
+        .await
+        .map_err(internal)?;
+    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+        .bind(task_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "runId": new_run, "resumedFrom": run_id })))
 }
 
 // ── Plan-first cards ────────────────────────────────────────────────────────
