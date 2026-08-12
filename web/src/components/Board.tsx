@@ -9,11 +9,17 @@ import { springy } from "../lib/motion";
 import { isWorking, needsYou, statusLabel, stopReason } from "../lib/runStatus";
 import { RunError } from "./ui/RunError";
 
-const COLUMNS: { key: Task["boardColumn"]; label: string }[] = [
-  { key: "backlog", label: "Backlog" },
-  { key: "running", label: "In Progress" },
-  { key: "review", label: "Review" },
-  { key: "done", label: "Done" },
+const COLUMNS: {
+  key: Task["boardColumn"];
+  label: string;
+  /** The lane's identity dot, and the count chip when the lane has cards. */
+  dot: string;
+  empty: string;
+}[] = [
+  { key: "backlog", label: "Backlog", dot: "bg-ink-dim/40", empty: "Create a task to get started" },
+  { key: "running", label: "In Progress", dot: "bg-accent", empty: "Drag a card here to start it" },
+  { key: "review", label: "Review", dot: "bg-amber-400", empty: "Nothing waiting for review" },
+  { key: "done", label: "Done", dot: "bg-tier-easy", empty: "Nothing done yet" },
 ];
 
 /** Position for a card dropped before `before` (or at the end when null). */
@@ -59,9 +65,9 @@ export function Board({
         return (
           <div
             key={col.key}
-            className={`flex min-h-0 min-w-0 flex-col rounded-2xl transition-colors duration-200 ${
+            className={`flex min-h-0 min-w-0 flex-col rounded-2xl bg-panel-2/45 p-2 transition-colors duration-200 ${
               dragId && overCol === col.key
-                ? "bg-accent/[0.04] ring-2 ring-accent/30"
+                ? "bg-accent/[0.06] ring-2 ring-accent/40"
                 : ""
             }`}
             onDragOver={(e) => {
@@ -76,13 +82,18 @@ export function Board({
               drop(col.key, null);
             }}
           >
-            <div className="flex items-center gap-2 px-1 pb-2">
+            <div className="flex items-center gap-2 px-1.5 pb-2 pt-1">
+              <span className={`size-2 shrink-0 rounded-full ${col.dot}`} aria-hidden />
               <span className="text-sm font-semibold">{col.label}</span>
-              <span className="rounded-full bg-panel-2 px-2 py-0.5 text-xs text-ink-dim">
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs ${
+                  colTasks.length > 0 ? "bg-panel text-ink" : "bg-panel/60 text-ink-dim"
+                }`}
+              >
                 {colTasks.length}
               </span>
               {col.key === "running" && dragId && (
-                <span className="text-[10px] text-accent">drop to start</span>
+                <span className="text-[10px] font-medium text-accent">drop to start</span>
               )}
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-3">
@@ -110,8 +121,8 @@ export function Board({
                 </div>
               ))}
               {colTasks.length === 0 && (
-                <div className="mt-4 rounded-2xl border border-dashed border-line py-8 text-center text-xs text-ink-dim/70">
-                  {col.key === "backlog" ? "Create a task to get started" : "—"}
+                <div className="mt-2 rounded-xl border border-dashed border-line/80 px-3 py-8 text-center text-xs text-ink-dim/70">
+                  {col.empty}
                 </div>
               )}
             </div>
@@ -151,7 +162,11 @@ function TaskCard({
       whileTap={{ scale: 0.99 }}
       onClick={() => onSelect(task)}
       transition={springy}
-      className="ring-focus card-shadow group relative overflow-hidden rounded-xl border border-line bg-panel p-3 text-left transition-[box-shadow,border-color] hover:card-shadow-md hover:border-ink-dim/25"
+      // `w-full min-w-0` is load-bearing: a button sizes to its content, and a
+      // running card's activity line carries an unbreakable worktree path —
+      // without a constrained width the card grows past its column and lies
+      // on top of the next one, and ActivityLine's truncate never engages.
+      className="ring-focus card-shadow group relative block w-full min-w-0 overflow-hidden rounded-xl border border-line bg-panel p-3 text-left transition-[box-shadow,border-color] hover:card-shadow-md hover:border-ink-dim/25"
       style={
         running
           ? { boxShadow: `0 0 0 1.5px ${accent}66, 0 4px 14px -4px ${accent}44` }
@@ -194,7 +209,7 @@ function TaskCard({
           ↳ {task.parentTitle}
         </div>
       )}
-      <div className="pr-5 text-sm font-medium leading-snug">{task.title}</div>
+      <div className="line-clamp-3 pr-5 text-sm font-medium leading-snug">{task.title}</div>
       {running && <CardActivity runId={task.runId} />}
 
       {/* An epic's own progress. Derived from the children's columns, so it
