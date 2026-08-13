@@ -379,6 +379,7 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
+      <StatusMover task={task} running={running} onChanged={onChanged} />
       <Description task={task} running={running} onChanged={onChanged} />
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
@@ -1184,6 +1185,87 @@ function Description({
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Move the card between columns without leaving the drawer — the same PATCH
+ * the board's drag lands on, with the same meanings. "In Progress" is not a
+ * label change: it starts the agent, exactly like dropping the card there,
+ * and the button says so before you click. While a run is live every other
+ * move is refused server-side (cancel first), so the segments say that too
+ * instead of letting a click bounce off a 409.
+ */
+function StatusMover({
+  task,
+  running,
+  onChanged,
+}: {
+  task: Task;
+  running: boolean;
+  onChanged: () => void;
+}) {
+  const [moving, setMoving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const cols: { key: Task["boardColumn"]; label: string; hint: string }[] = [
+    { key: "backlog", label: "Backlog", hint: "File it for later" },
+    { key: "running", label: "In Progress", hint: "Starts the agent on this card" },
+    { key: "review", label: "Review", hint: "Park it for a person to look at" },
+    { key: "done", label: "Done", hint: "Mark it finished" },
+  ];
+
+  const move = async (col: Task["boardColumn"]) => {
+    if (col === task.boardColumn || moving) return;
+    setMoving(col);
+    setError(null);
+    try {
+      await api.moveTask(task.id, { board_column: col });
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setMoving(null);
+    }
+  };
+
+  return (
+    <div className="border-b border-line px-5 py-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        Status
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {cols.map((c) => {
+          const current = task.boardColumn === c.key;
+          const blocked = running && !current;
+          return (
+            <button
+              key={c.key}
+              onClick={() => move(c.key)}
+              disabled={current || blocked || moving !== null}
+              title={
+                current
+                  ? "Where the card is now"
+                  : blocked
+                    ? "The agent is still working — cancel the run first"
+                    : c.hint
+              }
+              className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                current
+                  ? "bg-accent/10 font-semibold text-accent"
+                  : "border border-line text-ink-dim hover:border-ink-dim hover:text-ink disabled:opacity-40"
+              }`}
+            >
+              {moving === c.key ? "Moving…" : c.label}
+            </button>
+          );
+        })}
+      </div>
+      {error && (
+        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+          {error}
+        </div>
       )}
     </div>
   );
