@@ -130,56 +130,68 @@ export default function ProjectPage() {
 
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="border-b border-line bg-panel px-4 py-3 lg:px-6">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span
-            className="size-6 shrink-0 rounded-lg"
-            style={{ background: gradientFor(project?.name ?? "Project") }}
-          />
-          <div className="truncate text-base font-semibold">{project?.name ?? "Project"}</div>
-          {project?.vcs === "none" && (
-            <span
-              title={project.vcsNote ?? undefined}
-              className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700"
-            >
-              edits in place
-            </span>
-          )}
-          {project?.githubRepo && (
-            <a
-              href={`https://github.com/${project.githubRepo}`}
-              target="_blank"
-              rel="noreferrer"
-              title="Open this repository on GitHub"
-              className="truncate rounded-full bg-panel-2 px-2 py-0.5 font-mono text-[11px] text-ink-dim hover:text-ink"
-            >
-              {project.githubRepo}
-            </a>
-          )}
-          {project?.vcs === "git" && (
-            <GitSync projectId={project.id} onOpenFiles={() => setTab("files")} />
-          )}
-          {project && <AutonomyToggle project={project} onChanged={setProject} />}
-          {/* Publishing turns a local-only project into one the whole GitHub
-              arc works on, so it belongs beside the repo chip it fills in. */}
-          {project?.vcs === "git" && !project.githubRepo && (
-            <button
-              onClick={() => setPublishing(true)}
-              title="Create a GitHub repository for this project"
-              className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-dim hover:border-accent hover:text-accent"
-            >
-              publish to GitHub
-            </button>
-          )}
-          {project && (
-            <button
-              onClick={() => setSettings(true)}
-              title="Project settings"
-              aria-label="Project settings"
-              className="ring-focus grid size-7 shrink-0 place-items-center rounded-lg text-ink-dim transition-colors hover:bg-panel-2 hover:text-ink"
-            >
-              <Icon name="settings" size={15} />
-            </button>
-          )}
+          {/* Two jobs, two sides. The left is identity — name on top, quiet
+              facts underneath — and the right is the controls. One wrap-row of
+              nine equal-weight chips read as clutter; a hierarchy reads at a
+              glance. */}
+          <div className="flex items-start gap-3">
+            <motion.span
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={springy}
+              className="mt-0.5 size-8 shrink-0 rounded-xl"
+              style={{ background: gradientFor(project?.name ?? "Project") }}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-base font-semibold leading-tight">
+                {project?.name ?? "Project"}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-dim">
+                {project?.githubRepo && (
+                  <a
+                    href={`https://github.com/${project.githubRepo}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open this repository on GitHub"
+                    className="truncate font-mono hover:text-ink"
+                  >
+                    {project.githubRepo}
+                  </a>
+                )}
+                {project?.vcs === "none" && (
+                  <span title={project.vcsNote ?? undefined} className="text-amber-700">
+                    edits in place
+                  </span>
+                )}
+                {/* Publishing turns a local-only project into one the whole
+                    GitHub arc works on, so it stands where the repo name will. */}
+                {project?.vcs === "git" && !project.githubRepo && (
+                  <button
+                    onClick={() => setPublishing(true)}
+                    title="Create a GitHub repository for this project"
+                    className="hover:text-accent"
+                  >
+                    publish to GitHub
+                  </button>
+                )}
+                {project?.vcs === "git" && (
+                  <GitSync projectId={project.id} onOpenFiles={() => setTab("files")} />
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {project && <AutonomyToggle project={project} onChanged={setProject} />}
+              {project && (
+                <button
+                  onClick={() => setSettings(true)}
+                  title="Project settings"
+                  aria-label="Project settings"
+                  className="ring-focus grid size-7 shrink-0 place-items-center rounded-lg text-ink-dim transition-colors hover:bg-panel-2 hover:text-ink"
+                >
+                  <Icon name="settings" size={15} />
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="mt-3 flex flex-nowrap items-center gap-3">
@@ -233,6 +245,19 @@ export default function ProjectPage() {
         </header>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* mode="wait" so the leaving panel fades before the next enters —
+              two boards cross-fading on top of each other is not a transition,
+              it is a glitch. Kept to 150ms: this must never make the tabs feel
+              slower than they were. */}
+          <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+          >
           {activeTab === "board" && (
             <>
               {moveError && (
@@ -264,6 +289,8 @@ export default function ProjectPage() {
           {activeTab === "chat" && (
             <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />
           )}
+          </motion.div>
+          </AnimatePresence>
         </div>
       </div>
 

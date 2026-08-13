@@ -22,6 +22,7 @@ import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 import { PullRequestPanel } from "./PullRequestPanel";
 import { RunError } from "./ui/RunError";
+import { springy } from "../lib/motion";
 
 export function TaskDrawer({
   onOpenPreviews,
@@ -378,13 +379,31 @@ export function TaskDrawer({
           with no way to reach them — several prompts stacked up is exactly
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
-      <div className="max-h-[55vh] overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.08, duration: 0.2 }}
+        className="max-h-[55vh] overflow-y-auto"
+      >
       <StatusMover task={task} running={running} onChanged={onChanged} />
       <Description task={task} running={running} onChanged={onChanged} />
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
 
-      <div className="border-b border-line px-5 py-3">
+      <Setup
+        // Configure-time fields earn the space only at configure time: a card
+        // that has already run is being read, not set up, so it opens folded
+        // to a one-line summary.
+        defaultOpen={task.boardColumn === "backlog" && !task.runId}
+        summary={[
+          task.teamName ?? task.agentName ?? "unassigned",
+          tierModel(shownTier),
+          task.skillName ?? null,
+          task.effectiveEffort ? `${task.effectiveEffort} thinking` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      >
         <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
           Assigned to
         </div>
@@ -519,13 +538,15 @@ export function TaskDrawer({
           )}
         </div>
 
+        <Permissions task={task} />
+      </Setup>
+
+      <div className="border-b border-line px-5 py-1 empty:hidden">
         <PreviewPanel
           taskId={task.id}
           projectId={task.projectId}
           onOpenPreviews={onOpenPreviews}
         />
-
-        <Permissions task={task} />
       </div>
 
       <div className="flex gap-2 border-b border-line px-5 py-3">
@@ -770,7 +791,7 @@ export function TaskDrawer({
           </motion.div>
         )}
       </AnimatePresence>
-      </div>
+      </motion.div>
 
       <div className="flex gap-1 border-b border-line px-5 py-2">
         {(["comments", "activity"] as const).map((p) => (
@@ -1235,7 +1256,7 @@ function StatusMover({
       <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
         Status
       </div>
-      <div className="flex flex-wrap gap-1">
+      <div className="flex w-fit flex-wrap gap-0.5 rounded-xl bg-panel-2 p-0.5">
         {cols.map((c) => {
           const current = task.boardColumn === c.key;
           const blocked = running && !current;
@@ -1251,13 +1272,22 @@ function StatusMover({
                     ? "The agent is still working — cancel the run first"
                     : c.hint
               }
-              className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+              className={`relative rounded-lg px-2.5 py-1 text-xs transition-colors ${
                 current
-                  ? "bg-accent/10 font-semibold text-accent"
-                  : "border border-line text-ink-dim hover:border-ink-dim hover:text-ink disabled:opacity-40"
+                  ? "font-semibold text-accent"
+                  : "text-ink-dim hover:text-ink disabled:opacity-40"
               }`}
             >
-              {moving === c.key ? "Moving…" : c.label}
+              {/* One pill sliding between segments, like the page tabs — the
+                  eye follows the move instead of hunting for the highlight. */}
+              {current && (
+                <motion.span
+                  layoutId="drawer-status-pill"
+                  transition={springy}
+                  className="absolute inset-0 rounded-lg bg-accent/10 ring-1 ring-accent/30"
+                />
+              )}
+              <span className="relative">{moving === c.key ? "Moving…" : c.label}</span>
             </button>
           );
         })}
@@ -1267,6 +1297,64 @@ function StatusMover({
           {error}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The card's configure-time fields, folded behind one line once configuring
+ * is over. The drawer was a wall: assignee, skill, references, plan-first,
+ * engine, model, effort and permission all stood permanently open above the
+ * transcript, and the thing people open the drawer for — what the agent is
+ * doing — started below the fold. Collapsed, all of that is one summary line
+ * that still answers "who, on what model, how hard".
+ */
+function Setup({
+  summary,
+  defaultOpen,
+  children,
+}: {
+  summary: string;
+  defaultOpen: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-b border-line">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-panel-2/50"
+      >
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          Setup
+        </span>
+        {/* Animated with `animate` on mounted elements rather than
+            AnimatePresence: nothing here unmounts, so a section can never be
+            stranded mid-exit — the worst case under any interruption is a
+            finished state, not a half-open one. */}
+        <motion.span
+          animate={{ opacity: open ? 0 : 1 }}
+          transition={{ duration: 0.15 }}
+          className="min-w-0 truncate text-[11px] text-ink-dim/80"
+        >
+          {summary}
+        </motion.span>
+        <motion.span
+          animate={{ rotate: open ? 90 : 0 }}
+          transition={springy}
+          className="ml-auto shrink-0 text-ink-dim"
+        >
+          ›
+        </motion.span>
+      </button>
+      <motion.div
+        initial={false}
+        animate={{ height: open ? "auto" : 0, opacity: open ? 1 : 0 }}
+        transition={{ duration: 0.22, ease: "easeInOut" }}
+        className="overflow-hidden"
+      >
+        <div className="px-5 pb-3">{children}</div>
+      </motion.div>
     </div>
   );
 }
