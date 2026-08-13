@@ -379,6 +379,7 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
+      <Description text={task.prompt} />
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
 
@@ -1054,6 +1055,46 @@ function DiffView({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What the card asks for — the text that became (or will become) the agent's
+ * brief. First in the drawer's scroll, because "what is this card?" is the
+ * question the drawer opens to answer, and until now the only way to see it
+ * was to be the person who typed it.
+ *
+ * Clamped at eight lines with its own toggle: imported GitHub issues and
+ * epic briefs run long, and the description must not push the transcript
+ * off the screen by default.
+ */
+function Description({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  // Cheap length heuristic rather than measuring: the toggle appearing on a
+  // borderline description is harmless, the reverse hides content.
+  const long = text.length > 420 || text.split("\n").length > 8;
+  if (!text.trim()) return null;
+  return (
+    <div className="border-b border-line px-5 py-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        Description
+      </div>
+      <div
+        className={`whitespace-pre-wrap text-[13px] leading-relaxed ${
+          long && !expanded ? "line-clamp-[8]" : ""
+        }`}
+      >
+        {text}
+      </div>
+      {long && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="mt-1 text-[11px] text-accent hover:underline"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
     </div>
   );
 }

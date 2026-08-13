@@ -161,6 +161,8 @@ export interface PermissionSettings {
 export interface Task {
   id: string;
   title: string;
+  /** What the card asks for — the text that becomes the agent's brief. */
+  prompt: string;
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */

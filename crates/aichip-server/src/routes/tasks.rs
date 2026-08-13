@@ -174,6 +174,9 @@ async fn list(
             json!({
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
+                // The card's own words. Selected since the beginning, emitted
+                // never — the drawer had no way to show what a card asks for.
+                "prompt": r.get::<String, _>("prompt"),
                 "modelTier": r.get::<String, _>("model_tier"),
                 // True when the tier is not settled until the run starts.
                 "tierIsAuto": choice == TierChoice::Auto,
