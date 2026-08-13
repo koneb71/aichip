@@ -39,6 +39,10 @@ pub fn app(state: AppState) -> Router {
         .nest("/api", routes::api_router())
         .nest("/mcp", mcp::mcp_router())
         .route("/ws", axum::routing::get(ws::ws_handler))
+        // At the root, not under /api: the dashboard dials /ws/terminal/…,
+        // and a WebSocket handshake that lands on the SPA fallback gets a 200
+        // page instead of a 101 and dies silently.
+        .merge(routes::terminal::router())
         // The capability bridge exists on app hostnames only, where the proxy
         // layer above answers it and never calls through to here. Saying so
         // explicitly, because the SPA fallback would otherwise serve

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Project, Task } from "../lib/api";
@@ -9,6 +9,9 @@ import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
 import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
 import { FilesPanel } from "../components/files/FilesPanel";
+// Lazy for the same reason Monaco is: xterm only downloads for people who
+// actually open the tab.
+const TerminalPanel = lazy(() => import("../components/terminal/TerminalPanel"));
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { PreviewsPanel } from "../components/previews/PreviewsPanel";
@@ -25,6 +28,7 @@ const TABS = [
   { key: "board", label: "Tasks Board" },
   { key: "workflows", label: "Workflows" },
   { key: "files", label: "Files" },
+  { key: "terminal", label: "Terminal" },
   { key: "previews", label: "Previews" },
   { key: "brain", label: "Brain" },
   { key: "storage", label: "Storage" },
@@ -238,6 +242,17 @@ export default function ProjectPage() {
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
           {activeTab === "files" && (
             <FilesPanel projectId={projectId} tasks={tasks} />
+          )}
+          {activeTab === "terminal" && (
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center bg-[#1e1e1e] text-xs text-[#8c8c8c]">
+                  Loading terminal…
+                </div>
+              }
+            >
+              <TerminalPanel projectId={projectId} />
+            </Suspense>
           )}
           {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
           {activeTab === "brain" && <BrainPanel projectId={projectId} />}

@@ -12,6 +12,7 @@ pub mod previews;
 pub mod pull_requests;
 pub mod research;
 pub mod routines;
+pub mod terminal;
 pub mod usage;
 pub mod mcp_servers;
 pub mod orgs;
