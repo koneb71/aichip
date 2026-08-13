@@ -662,6 +662,10 @@ pub(crate) struct MoveTask {
     /// an explicit null means "go back to inheriting", and a value pins one.
     #[serde(default, deserialize_with = "present")]
     effort: Option<Option<ReasoningEffort>>,
+    /// The card's brief. Absent leaves it alone; an empty string is refused
+    /// rather than stored — a card with nothing to ask for cannot run.
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 impl MoveTask {
@@ -732,6 +736,19 @@ pub(crate) async fn move_task(
     // Changing hands mid-run would leave the running agent finishing work the
     // card no longer says is theirs, and the next run would start from a
     // different agent's memory. Cancel first.
+    // Rewriting the brief mid-run would leave the agent working from words
+    // the card no longer says — the next reader would blame the agent for
+    // ignoring instructions it was never given. Same shape as reassignment.
+    if body.prompt.is_some() && run_active {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card is being worked on — cancel the run before rewriting its description".into(),
+        ));
+    }
+    if body.prompt.as_deref().is_some_and(|p| p.trim().is_empty()) {
+        return Err((StatusCode::BAD_REQUEST, "the description can't be empty".into()));
+    }
+
     let reassigning = body.agent_id.is_some() || body.team_id.is_some();
     if reassigning && run_active {
         return Err((
@@ -781,7 +798,8 @@ pub(crate) async fn move_task(
                           plan_first = coalesce($9, plan_first),
                           model_tier = coalesce($10, model_tier),
                           effort = CASE WHEN $11 THEN $12 ELSE effort END,
-                          skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END
+                          skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END,
+                          prompt = coalesce($15, prompt)
          WHERE id = $1",
     )
     .bind(id)
@@ -798,6 +816,7 @@ pub(crate) async fn move_task(
     .bind(body.effort.flatten().map(|e| e.as_str().to_string()))
     .bind(body.skill_id.is_some())
     .bind(body.skill_id.flatten())
+    .bind(body.prompt.as_deref().map(str::trim))
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;

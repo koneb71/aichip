@@ -1647,6 +1647,8 @@ export const api = {
        * go back to the usual way, an id to pin a skill.
        */
       skill_id?: string | null;
+      /** The card's brief. Omit to leave it; empty is refused server-side. */
+      prompt?: string;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>

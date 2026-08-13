@@ -379,7 +379,7 @@ export function TaskDrawer({
           when you most need to get at them. Capped so it can never crowd out
           the transcript below. */}
       <div className="max-h-[55vh] overflow-y-auto">
-      <Description text={task.prompt} />
+      <Description task={task} running={running} onChanged={onChanged} />
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
 
@@ -1060,40 +1060,130 @@ function DiffView({
 }
 
 /**
- * What the card asks for — the text that became (or will become) the agent's
- * brief. First in the drawer's scroll, because "what is this card?" is the
- * question the drawer opens to answer, and until now the only way to see it
- * was to be the person who typed it.
+ * What the card asks for — the text that becomes the agent's brief — and the
+ * place to change it before the next run. First in the drawer's scroll,
+ * because "what is this card?" is the question the drawer opens to answer.
+ *
+ * Editing is refused while a run is live, the same rule as reassignment:
+ * rewriting the brief mid-run would leave the agent working from words the
+ * card no longer says. The server enforces it; the disabled button just says
+ * so up front.
  *
  * Clamped at eight lines with its own toggle: imported GitHub issues and
  * epic briefs run long, and the description must not push the transcript
  * off the screen by default.
  */
-function Description({ text }: { text: string }) {
+function Description({
+  task,
+  running,
+  onChanged,
+}: {
+  task: Task;
+  running: boolean;
+  onChanged: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const text = task.prompt;
   // Cheap length heuristic rather than measuring: the toggle appearing on a
   // borderline description is harmless, the reverse hides content.
   const long = text.length > 420 || text.split("\n").length > 8;
-  if (!text.trim()) return null;
+
+  const save = async () => {
+    if (draft === null || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.moveTask(task.id, { prompt: draft });
+      setDraft(null);
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!text.trim() && draft === null) return null;
+
   return (
     <div className="border-b border-line px-5 py-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
-        Description
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          Description
+        </span>
+        {draft === null && (
+          <button
+            onClick={() => setDraft(text)}
+            disabled={running}
+            title={
+              running
+                ? "The agent is working from this brief — cancel the run to rewrite it"
+                : "Edit the card's brief; the next run uses the new text"
+            }
+            className="text-[11px] text-ink-dim hover:text-accent disabled:opacity-40 disabled:hover:text-ink-dim"
+          >
+            Edit
+          </button>
+        )}
       </div>
-      <div
-        className={`whitespace-pre-wrap text-[13px] leading-relaxed ${
-          long && !expanded ? "line-clamp-[8]" : ""
-        }`}
-      >
-        {text}
-      </div>
-      {long && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="mt-1 text-[11px] text-accent hover:underline"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
+
+      {draft === null ? (
+        <>
+          <div
+            className={`whitespace-pre-wrap text-[13px] leading-relaxed ${
+              long && !expanded ? "line-clamp-[8]" : ""
+            }`}
+          >
+            {text}
+          </div>
+          {long && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-1 text-[11px] text-accent hover:underline"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={Math.min(14, Math.max(4, draft.split("\n").length + 1))}
+            className="w-full resize-y rounded-lg border border-accent bg-panel px-2.5 py-2 text-[13px] leading-relaxed outline-none"
+          />
+          <div className="mt-1.5 flex items-center gap-2">
+            <button
+              onClick={save}
+              disabled={saving || !draft.trim() || draft === text}
+              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={() => {
+                setDraft(null);
+                setError(null);
+              }}
+              className="rounded-lg border border-line px-2.5 py-1 text-[11px] hover:border-ink-dim"
+            >
+              Cancel
+            </button>
+            {!draft.trim() && (
+              <span className="text-[11px] text-danger">the description can't be empty</span>
+            )}
+          </div>
+          {error && (
+            <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+              {error}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
