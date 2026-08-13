@@ -163,6 +163,9 @@ export interface Task {
   title: string;
   /** What the card asks for — the text that becomes the agent's brief. */
   prompt: string;
+  /** Cards this one waits for. Unresolved until the blocker is done —
+   *  landed — because a dependent run branches from main. */
+  blockedBy: { id: string; title: string; boardColumn: Task["boardColumn"] }[];
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */
@@ -2263,6 +2266,12 @@ export const api = {
     post(`/api/research/${id}/save-to-kb`).then((r) =>
       json<{ articleId: string; created: boolean }>(r),
     ),
+
+  // dependencies
+  addTaskBlocker: (taskId: string, blockedBy: string) =>
+    post(`/api/tasks/${taskId}/blockers`, { blockedBy }).then(json),
+  removeTaskBlocker: (taskId: string, blockerId: string) =>
+    fetch(`/api/tasks/${taskId}/blockers/${blockerId}`, { method: "DELETE" }).then(json),
 
   // routines
   routines: (workspaceId: string) =>

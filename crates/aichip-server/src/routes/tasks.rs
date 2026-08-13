@@ -16,6 +16,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks", get(list).post(create))
         .route("/tasks/{id}", axum::routing::patch(move_task).delete(delete_task))
+        .route("/tasks/{id}/blockers", post(add_blocker))
+        .route("/tasks/{id}/blockers/{blocker_id}", axum::routing::delete(remove_blocker))
         .route("/tasks/{id}/retry", post(retry))
         .route("/tasks/{id}/comments", get(comments).post(post_comment))
         .route("/tasks/{id}/articles", get(task_articles).put(set_task_articles))
@@ -62,6 +64,11 @@ async fn list(
         // deleted, which is exactly when someone is looking back at what an epic
         // turned into.
         "SELECT t.id, t.title, t.prompt, t.model_tier, t.board_column, t.branch, t.position,
+                (SELECT COALESCE(json_agg(json_build_object(
+                         'id', b.id, 'title', b.title, 'boardColumn', b.board_column)
+                         ORDER BY b.title), '[]'::json)
+                   FROM task_deps d JOIN tasks b ON b.id = d.blocked_by
+                  WHERE d.task_id = t.id) AS blocked_by,
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 a.name AS agent_name, a.color AS agent_color,
@@ -177,6 +184,7 @@ async fn list(
                 // The card's own words. Selected since the beginning, emitted
                 // never — the drawer had no way to show what a card asks for.
                 "prompt": r.get::<String, _>("prompt"),
+                "blockedBy": r.get::<serde_json::Value, _>("blocked_by"),
                 "modelTier": r.get::<String, _>("model_tier"),
                 // True when the tier is not settled until the run starts.
                 "tierIsAuto": choice == TierChoice::Auto,
@@ -372,6 +380,26 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
         return Err((
             StatusCode::CONFLICT,
             "a teammate is already working on this sub-task as part of its epic".into(),
+        ));
+    }
+    // The orchestrator refuses this too — it is the last line — but a clean
+    // 409 with the blockers' names beats a 500 wrapping the same sentence.
+    let blockers: Vec<String> = sqlx::query_scalar(
+        "SELECT b.title FROM task_deps d JOIN tasks b ON b.id = d.blocked_by
+         WHERE d.task_id = $1 AND b.board_column <> 'done' ORDER BY b.title",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if !blockers.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "blocked by {} — land {} first",
+                blockers.join(", "),
+                if blockers.len() == 1 { "that card" } else { "those cards" }
+            ),
         ));
     }
     let row = sqlx::query(
@@ -789,6 +817,16 @@ pub(crate) async fn move_task(
         require_same_workspace(&state, id, "skills", skill_id).await?;
     }
 
+    // A move into "running" is a start, and the start must be vetted BEFORE
+    // the column is written. Vet-after-update was tried and left a refused
+    // card stranded in In Progress with no run behind it — the column said
+    // working, the board said nothing was.
+    let starting =
+        body.board_column.as_deref() == Some("running") && current == "backlog" && !run_active;
+    if starting {
+        vet_task(&state, id).await?;
+    }
+
     sqlx::query(
         "UPDATE tasks SET board_column = coalesce($2, board_column),
                           position = coalesce($3, position),
@@ -822,9 +860,10 @@ pub(crate) async fn move_task(
     .map_err(internal)?;
 
     // Dropping into "running" from backlog means "go": start a run unless one
-    // is already active or the task already did its work.
+    // is already active or the task already did its work. The vet already
+    // happened above, before the column changed.
     let mut run_id: Option<Uuid> = None;
-    if body.board_column.as_deref() == Some("running") && current == "backlog" && !run_active {
+    if starting {
         run_id = Some(state.orchestrator.enqueue_task(id).await.map_err(internal)?);
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
@@ -1176,6 +1215,83 @@ async fn attach_to_task(
     )
     .await?;
     Ok(Json(json!({ "attached": body.attachment_ids.len() })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddBlocker {
+    blocked_by: Uuid,
+}
+
+/// Declare that this card cannot start until another card lands.
+///
+/// Everything that can be wrong is wrong now, not at start time: the two
+/// cards must share a board, a card cannot block itself, and the edge must
+/// not close a cycle — two cards each waiting for the other would simply
+/// never run, with nothing anywhere saying why.
+async fn add_blocker(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddBlocker>,
+) -> Result<Json<Value>, ApiError> {
+    if body.blocked_by == id {
+        return Err((StatusCode::BAD_REQUEST, "a card can't block itself".into()));
+    }
+    let same_project: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM tasks a JOIN tasks b ON a.project_id = b.project_id
+          WHERE a.id = $1 AND b.id = $2)",
+    )
+    .bind(id)
+    .bind(body.blocked_by)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if !same_project {
+        return Err((StatusCode::BAD_REQUEST, "both cards must be on the same board".into()));
+    }
+    // Would this edge close a loop? Walk the new blocker's own blockers all
+    // the way up; finding this card there means A→B→…→A.
+    let cycles: bool = sqlx::query_scalar(
+        "WITH RECURSIVE up AS (
+             SELECT blocked_by FROM task_deps WHERE task_id = $2
+             UNION
+             SELECT d.blocked_by FROM task_deps d JOIN up ON d.task_id = up.blocked_by
+         )
+         SELECT EXISTS (SELECT 1 FROM up WHERE blocked_by = $1)",
+    )
+    .bind(id)
+    .bind(body.blocked_by)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if cycles {
+        return Err((
+            StatusCode::CONFLICT,
+            "that would make these cards wait for each other — neither could ever start".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO task_deps (task_id, blocked_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(body.blocked_by)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn remove_blocker(
+    State(state): State<AppState>,
+    Path((id, blocker_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, ApiError> {
+    sqlx::query("DELETE FROM task_deps WHERE task_id = $1 AND blocked_by = $2")
+        .bind(id)
+        .bind(blocker_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[cfg(test)]

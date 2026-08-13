@@ -494,6 +494,26 @@ impl Orchestrator {
             anyhow::bail!("a teammate is already working on this sub-task as part of its epic");
         }
 
+        // Dependencies hold until the blocker's work has LANDED — 'done', not
+        // 'review'. A blocker in review has a diff nobody merged; a dependent
+        // run started then would branch from main without the work it builds
+        // on. Checked here, the one door every start comes through (routes,
+        // drag, retry, the chat MCP's start_task), not only in the UI.
+        let blockers: Vec<String> = sqlx::query_scalar(
+            "SELECT b.title FROM task_deps d JOIN tasks b ON b.id = d.blocked_by
+             WHERE d.task_id = $1 AND b.board_column <> 'done' ORDER BY b.title",
+        )
+        .bind(task_id)
+        .fetch_all(&self.db.pool)
+        .await?;
+        if !blockers.is_empty() {
+            anyhow::bail!(
+                "blocked by {} — land {} first",
+                blockers.join(", "),
+                if blockers.len() == 1 { "that card" } else { "those cards" }
+            );
+        }
+
         let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)

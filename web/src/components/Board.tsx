@@ -6,7 +6,7 @@ import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
 import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
 import { springy } from "../lib/motion";
-import { isWorking, needsYou, statusLabel, stopReason } from "../lib/runStatus";
+import { isWorking, needsYou, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
 import { RunError } from "./ui/RunError";
 
 const COLUMNS: {
@@ -242,6 +242,17 @@ function TaskCard({
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">
         <StepOutcome status={task.stepStatus} />
+        {(() => {
+          const waiting = unresolvedBlockers(task);
+          return waiting.length > 0 ? (
+            <span
+              className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
+              title={`Waiting for: ${waiting.map((b) => b.title).join(", ")}`}
+            >
+              ⛓ blocked{waiting.length > 1 ? ` · ${waiting.length}` : ""}
+            </span>
+          ) : null;
+        })()}
         {!teamRun && (
           <span
             className="rounded-full px-2 py-0.5"

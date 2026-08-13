@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
-import { isActive, isWorking, statusLabel, stopReason } from "../lib/runStatus";
+import { isActive, isWorking, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "./AttachmentBar";
 import { TaskComments } from "./TaskComments";
@@ -386,6 +386,7 @@ export function TaskDrawer({
         className="max-h-[55vh] overflow-y-auto"
       >
       <StatusMover task={task} running={running} onChanged={onChanged} />
+      <Blockers task={task} boardTasks={boardTasks} onChanged={onChanged} onOpenTask={onOpenTask} />
       <Description task={task} running={running} onChanged={onChanged} />
       <EpicPanel task={task} boardTasks={boardTasks} onOpenTask={onOpenTask} />
       {task.runId && <PlanReviewPanel runId={task.runId} onChanged={onChanged} />}
@@ -1230,9 +1231,19 @@ function StatusMover({
 }) {
   const [moving, setMoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const waitingFor = unresolvedBlockers(task);
   const cols: { key: Task["boardColumn"]; label: string; hint: string }[] = [
     { key: "backlog", label: "Backlog", hint: "File it for later" },
-    { key: "running", label: "In Progress", hint: "Starts the agent on this card" },
+    {
+      key: "running",
+      label: "In Progress",
+      hint:
+        waitingFor.length > 0
+          ? `Blocked by ${waitingFor.map((b) => b.title).join(", ")} — land ${
+              waitingFor.length === 1 ? "that card" : "those cards"
+            } first`
+          : "Starts the agent on this card",
+    },
     { key: "review", label: "Review", hint: "Park it for a person to look at" },
     { key: "done", label: "Done", hint: "Mark it finished" },
   ];
@@ -1259,7 +1270,8 @@ function StatusMover({
       <div className="flex w-fit flex-wrap gap-0.5 rounded-xl bg-panel-2 p-0.5">
         {cols.map((c) => {
           const current = task.boardColumn === c.key;
-          const blocked = running && !current;
+          const blocked =
+            (running && !current) || (c.key === "running" && waitingFor.length > 0);
           return (
             <button
               key={c.key}
@@ -1268,7 +1280,7 @@ function StatusMover({
               title={
                 current
                   ? "Where the card is now"
-                  : blocked
+                  : running
                     ? "The agent is still working — cancel the run first"
                     : c.hint
               }
@@ -1355,6 +1367,147 @@ function Setup({
       >
         <div className="px-5 pb-3">{children}</div>
       </motion.div>
+    </div>
+  );
+}
+
+/**
+ * The cards this one waits for. The bar for "resolved" is done — landed —
+ * because a dependent run branches from main, and a blocker parked in review
+ * has a diff that is not there yet. Shown right under Status because it is
+ * the reason In Progress may refuse.
+ */
+function Blockers({
+  task,
+  boardTasks,
+  onChanged,
+  onOpenTask,
+}: {
+  task: Task;
+  boardTasks: Task[];
+  onChanged: () => void;
+  onOpenTask?: (t: Task) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const blockers = task.blockedBy ?? [];
+
+  // Cards this one could still be blocked by: same board, not itself, not
+  // already a blocker. The server also refuses cycles; the picker just does
+  // not pretend to know the graph better than it.
+  const candidates = boardTasks.filter(
+    (t) => t.id !== task.id && !blockers.some((b) => b.id === t.id),
+  );
+
+  const add = async (blockedBy: string) => {
+    setAdding(false);
+    setError(null);
+    try {
+      await api.addTaskBlocker(task.id, blockedBy);
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
+
+  const remove = async (blockerId: string) => {
+    setError(null);
+    try {
+      await api.removeTaskBlocker(task.id, blockerId);
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
+
+  if (blockers.length === 0 && candidates.length === 0) return null;
+
+  return (
+    <div className="border-b border-line px-5 py-3">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          Blocked by
+        </span>
+        {!adding && candidates.length > 0 && (
+          <button
+            onClick={() => setAdding(true)}
+            className="text-[11px] text-ink-dim hover:text-accent"
+          >
+            + Add
+          </button>
+        )}
+      </div>
+
+      {blockers.length === 0 && !adding && (
+        <div className="text-[11px] text-ink-dim/70">
+          Nothing — this card can start any time.
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-1.5">
+        <AnimatePresence initial={false}>
+          {blockers.map((b) => {
+            const landed = b.boardColumn === "done";
+            const full = boardTasks.find((t) => t.id === b.id);
+            return (
+              <motion.span
+                key={b.id}
+                layout
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
+                  landed
+                    ? "bg-tier-easy/10 text-tier-easy"
+                    : "bg-amber-50 text-amber-700"
+                }`}
+                title={landed ? "Landed — no longer blocking" : "Not landed yet — still blocking"}
+              >
+                <span className={`size-1.5 rounded-full ${landed ? "bg-tier-easy" : "bg-amber-400"}`} />
+                {full && onOpenTask ? (
+                  <button onClick={() => onOpenTask(full)} className="hover:underline">
+                    {b.title}
+                  </button>
+                ) : (
+                  b.title
+                )}
+                <button
+                  onClick={() => remove(b.id)}
+                  title="Remove this dependency"
+                  className="opacity-60 hover:opacity-100"
+                >
+                  ×
+                </button>
+              </motion.span>
+            );
+          })}
+        </AnimatePresence>
+      </div>
+
+      {adding && (
+        <select
+          autoFocus
+          defaultValue=""
+          onChange={(e) => e.target.value && add(e.target.value)}
+          onBlur={() => setAdding(false)}
+          className="mt-1.5 w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-xs"
+        >
+          <option value="" disabled>
+            Which card must land first?
+          </option>
+          {candidates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.title}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {error && (
+        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+          {error}
+        </div>
+      )}
     </div>
   );
 }

@@ -113,3 +113,8 @@ export function stopReason(
       return null;
   }
 }
+
+/** Unresolved blockers: the cards this one waits for that have not landed. */
+export function unresolvedBlockers(t: { blockedBy: { title: string; boardColumn: string }[] }) {
+  return (t.blockedBy ?? []).filter((b) => b.boardColumn !== "done");
+}
