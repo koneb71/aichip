@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { api, Project, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Board } from "../components/Board";
+import { GitSync } from "../components/GitSync";
 import { NewTaskModal } from "../components/NewTaskModal";
 import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
@@ -153,6 +154,9 @@ export default function ProjectPage() {
             >
               {project.githubRepo}
             </a>
+          )}
+          {project?.vcs === "git" && (
+            <GitSync projectId={project.id} onOpenFiles={() => setTab("files")} />
           )}
           {project && <AutonomyToggle project={project} onChanged={setProject} />}
           {/* Publishing turns a local-only project into one the whole GitHub
