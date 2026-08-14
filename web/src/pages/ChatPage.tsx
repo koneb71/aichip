@@ -312,6 +312,7 @@ export default function ChatPage() {
       <ChatThread
         projectId={general ? null : projectId}
         workspaceId={general ? (workspaceId ?? undefined) : (project?.workspaceId ?? workspaceId ?? undefined)}
+        projectKind={project?.kind}
         chatId={chatId}
         chat={chats.find((c) => c.id === chatId)}
         onSent={refreshChats}

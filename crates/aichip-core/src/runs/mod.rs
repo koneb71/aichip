@@ -1,4 +1,5 @@
 pub mod attachments;
+pub mod chat_plan;
 pub mod context;
 pub mod gate;
 pub mod memory;

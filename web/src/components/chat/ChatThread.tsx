@@ -28,6 +28,7 @@ import { Markdown } from "../Markdown";
 export function ChatThread({
   projectId,
   workspaceId,
+  projectKind,
   chatId,
   chat,
   onSent,
@@ -43,6 +44,10 @@ export function ChatThread({
    * cannot bind and draw chips for mentions that did not.
    */
   workspaceId?: string;
+  /** "repo" | "app" | "space". Plan mode is only offered where there is
+   *  something to act *on* — a space chat's tools are all read-only, so a
+   *  toggle there would be a control that does nothing. */
+  projectKind?: string;
   chatId: string | null;
   /** The open chat's summary, for seeding tier/effort. */
   chat?: ChatSummary;
@@ -79,6 +84,11 @@ export function ChatThread({
   // carries them back, but not for the ~2.5s until the next poll.
   const [articleIds, setArticleIds] = useState<string[]>([]);
   const [articleChips, setArticleChips] = useState<Array<{ id: string; title: string }>>([]);
+  // Propose rather than act. Sticks to the conversation, like the tier — and
+  // is turned off by approving a plan, because carrying it out is the thing
+  // plan mode is for not doing.
+  const [planMode, setPlanMode] = useState(false);
+  const canPlan = projectId !== null && projectKind !== "space";
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
   const general = projectId === null;
@@ -146,6 +156,7 @@ export function ChatThread({
     seededFor.current = chatId;
     setTier(chat.modelTier ?? "medium");
     setEffort(chat.effort);
+    setPlanMode(chat.planMode ?? false);
   }, [chatId, chat]);
 
   // The gap this papers over is real and server-side: the engine's
@@ -224,6 +235,8 @@ export function ChatThread({
         ts: new Date().toISOString(),
         attachments: sent,
         articles: pageChips,
+        isPlan: false,
+        planOutcome: null,
       },
     ]);
     try {
@@ -233,6 +246,7 @@ export function ChatThread({
         engine: engine ?? undefined,
         modelTier: tier,
         effort,
+        planMode: canPlan ? planMode : undefined,
       });
       setActiveRunId(r.runId);
       // The first message names the chat server-side — the caller's list is
@@ -240,6 +254,22 @@ export function ChatThread({
       onSent?.();
     } catch (e) {
       setError(String(e));
+      refresh();
+    }
+  };
+
+  /** Carry out a plan. Leaves plan mode, so the composer's toggle has to
+   *  follow — the server has already turned it off on the row. */
+  const approve = async (messageId: string, edited?: string) => {
+    if (!chatId || activeRunId) return;
+    setError(null);
+    try {
+      const r = await api.approveChatPlan(chatId, messageId, edited);
+      setPlanMode(false);
+      setActiveRunId(r.runId);
+      refresh();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
       refresh();
     }
   };
@@ -286,7 +316,12 @@ export function ChatThread({
           )}
           <div className="flex flex-col gap-3">
             {messages.map((m) => (
-              <Message key={m.id + m.ts} message={m} agentNames={agentNames} />
+              <Message
+                key={m.id + m.ts}
+                message={m}
+                agentNames={agentNames}
+                onApprove={activeRunId ? undefined : approve}
+              />
             ))}
             {activeRunId && (
               <div className="flex flex-col gap-2">
@@ -402,15 +437,39 @@ export function ChatThread({
             {/* Which CLI, which model, and how hard it thinks. All three stick to
                 the chat rather than the message — choosing "think harder" and
                 having it last one turn would be a strange thing to have chosen. */}
-            <ComposerSettings
-              engine={engine}
-              onEngine={setEngine}
-              tier={tier}
-              onTier={setTier}
-              effort={effort}
-              onEffort={setEffort}
-              disabled={!!activeRunId}
-            />
+            <div className="flex items-center gap-2">
+              <ComposerSettings
+                engine={engine}
+                onEngine={setEngine}
+                tier={tier}
+                onTier={setTier}
+                effort={effort}
+                onEffort={setEffort}
+                disabled={!!activeRunId}
+              />
+              {/* On the row, not inside the settings popover. A collapsed
+                  control is fine for "which model"; plan mode changes whether
+                  anything happens, and a mode you cannot see you are in is
+                  the failure the mode exists to prevent. */}
+              {canPlan && (
+                <button
+                  onClick={() => setPlanMode((v) => !v)}
+                  disabled={!!activeRunId}
+                  title={
+                    planMode
+                      ? "Plan mode is on — the assistant will propose, not act"
+                      : "Plan mode: research and propose, create nothing until you approve"
+                  }
+                  className={`ring-focus rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+                    planMode
+                      ? "bg-accent/10 font-medium text-accent"
+                      : "text-ink-dim hover:bg-line/40 hover:text-ink"
+                  }`}
+                >
+                  ◷ Plan{planMode ? " mode" : ""}
+                </button>
+              )}
+            </div>
           </div>
           </>,
         )}
@@ -422,9 +481,14 @@ export function ChatThread({
 function Message({
   message,
   agentNames,
+  onApprove,
 }: {
   message: ChatMessage;
   agentNames: string[];
+  /** Carry out a plan. Absent while a turn is running — approving into a
+   *  busy chat is refused server-side anyway, and a button that always
+   *  fails is worse than one that is not there. */
+  onApprove?: (messageId: string, edited?: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -472,10 +536,103 @@ function Message({
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="max-w-[85%] self-start rounded-2xl rounded-bl-sm bg-panel-2 px-3 py-2 text-sm"
+      className={`max-w-[85%] self-start rounded-2xl rounded-bl-sm px-3 py-2 text-sm ${
+        message.isPlan ? "border border-accent/30 bg-accent/5" : "bg-panel-2"
+      }`}
     >
+      {message.isPlan && (
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+          ◷ Plan — nothing has happened yet
+        </div>
+      )}
       <Markdown>{message.content}</Markdown>
+      {message.isPlan && <PlanActions message={message} onApprove={onApprove} />}
     </motion.div>
+  );
+}
+
+/**
+ * What you can do about a plan.
+ *
+ * Approve carries it out. "Edit first" opens the plan as text, because the
+ * cheapest correction to a five-step plan is usually to delete step three —
+ * and the alternative, describing the edit in prose and hoping, is how a
+ * second planning turn gets paid for.
+ *
+ * Anything else — "no, do it differently" — is just the next message. That is
+ * the advantage of a plan that lives in a conversation rather than in a parked
+ * run, and it is why there is no Reject button: closing the plan without
+ * saying why would throw away the one thing the assistant needs.
+ */
+function PlanActions({
+  message,
+  onApprove,
+}: {
+  message: ChatMessage;
+  onApprove?: (messageId: string, edited?: string) => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+
+  if (message.planOutcome === "approved") {
+    return (
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+        ✓ Approved — carried out below.
+      </div>
+    );
+  }
+  if (message.planOutcome === "superseded") {
+    return (
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+        Replaced by a later plan.
+      </div>
+    );
+  }
+  if (!onApprove) return null;
+
+  if (editing !== null) {
+    return (
+      <div className="mt-2 border-t border-accent/20 pt-2">
+        <textarea
+          autoFocus
+          value={editing}
+          onChange={(e) => setEditing(e.target.value)}
+          rows={Math.min(16, Math.max(4, editing.split("\n").length))}
+          className="ring-focus w-full resize-y rounded-lg border border-line bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
+        />
+        <div className="mt-1.5 flex gap-1.5">
+          <button
+            onClick={() => onApprove(message.id, editing)}
+            className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
+          >
+            Approve this version
+          </button>
+          <button
+            onClick={() => setEditing(null)}
+            className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex items-center gap-1.5 border-t border-accent/20 pt-1.5">
+      <button
+        onClick={() => onApprove(message.id)}
+        className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
+      >
+        Approve &amp; run
+      </button>
+      <button
+        onClick={() => setEditing(message.content)}
+        className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+      >
+        Edit first
+      </button>
+      <span className="text-[10px] text-ink-dim">or just say what to change</span>
+    </div>
   );
 }
 

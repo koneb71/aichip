@@ -695,6 +695,11 @@ export interface ChatMessage {
   /** Knowledge-base pages this turn was given. Sent back with the message so
    *  that, afterwards, there is a record of what the assistant was handed. */
   articles: Array<{ id: string; title: string }>;
+  /** A reply written in plan mode: a proposal, not something that happened. */
+  isPlan: boolean;
+  /** Null while a plan is still open. "approved" once it has been carried
+   *  out, "superseded" when a later plan replaced it. */
+  planOutcome: string | null;
 }
 
 export interface Attachment {
@@ -738,6 +743,9 @@ export interface ChatSummary {
   /** Null means inherit — the machine default, resolved when the turn runs. */
   modelTier: Tier | null;
   effort: Effort | null;
+  /** Propose rather than act: the acting board tools are switched off and the
+   *  reply is a plan you approve. Turned off again by approving one. */
+  planMode: boolean;
   id: string;
   title: string;
   messageCount: number;
@@ -2444,6 +2452,8 @@ export const api = {
       engine?: string;
       modelTier?: Tier;
       effort?: Effort | null;
+      /** Propose rather than act. Sticks to the chat, like the two above. */
+      planMode?: boolean;
     } = {},
   ) =>
     post(`/api/chats/${chatId}/messages`, {
@@ -2451,9 +2461,17 @@ export const api = {
       engine: opts.engine,
       model_tier: opts.modelTier,
       effort: opts.effort ?? undefined,
+      plan_mode: opts.planMode,
       attachment_ids: opts.attachmentIds ?? [],
       article_ids: opts.articleIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
+  /** Carry out a plan. Leaves plan mode — the next turn is the one that acts.
+   *  `plan` only when the person edited it; the session already holds the
+   *  version the assistant wrote. */
+  approveChatPlan: (chatId: string, messageId: string, plan?: string) =>
+    post(`/api/chats/${chatId}/plan/${messageId}/approve`, { plan }).then((r) =>
+      json<{ messageId: string; runId: string }>(r),
+    ),
 
   // Apps
   apps: (workspaceId?: string) =>

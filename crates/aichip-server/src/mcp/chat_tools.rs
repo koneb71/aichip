@@ -32,10 +32,17 @@ pub async fn rpc(
         // failure falls back to the board list — the tool call itself will
         // say what went wrong, with a better message than a silent empty
         // toolbox.
-        "tools/list" => match chat_project(&state, chat_id).await {
-            Ok((_, _, kind)) => tools_list(&kind),
-            Err(_) => tools_list("repo"),
-        },
+        // Plan mode narrows it further. Advertising a tool the run has denied
+        // is the silent failure this endpoint exists to avoid: chat carries
+        // `permission_prompt_tool: false`, so a refused call produces no
+        // prompt to answer and the assistant reports the workspace as broken.
+        "tools/list" => {
+            let planning = planning(&state, chat_id).await;
+            match chat_project(&state, chat_id).await {
+                Ok((_, _, kind)) => tools_list(&kind, planning),
+                Err(_) => tools_list("repo", planning),
+            }
+        }
         "tools/call" => {
             let name = req
                 .pointer("/params/name")
@@ -68,7 +75,23 @@ pub async fn rpc(
     )
 }
 
-pub fn tools_list(kind: &str) -> Value {
+/// Is this chat planning rather than acting?
+///
+/// Read here rather than passed in, because the engine calls `tools/list`
+/// itself and carries nothing but the chat id. Defaults to "no" on a lookup
+/// failure — the run's own `denied_tools` is the real gate, so the worst a
+/// wrong answer here does is advertise a tool that then refuses.
+async fn planning(state: &AppState, chat_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT plan_mode FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+pub fn tools_list(kind: &str, planning: bool) -> Value {
     let obj = |props: Value, required: Vec<&str>| {
         json!({ "type": "object", "properties": props, "required": required })
     };
@@ -76,6 +99,8 @@ pub fn tools_list(kind: &str) -> Value {
     // already injected per message, so the tools exist for digging — a
     // different phrasing, a full listing.
     if kind == "space" {
+        // A space has no acting tools to take away, so plan mode is inert
+        // here — and the orchestrator refuses to enter it for a space at all.
         return json!({
             "tools": [
                 {
@@ -94,7 +119,7 @@ pub fn tools_list(kind: &str) -> Value {
             ]
         });
     }
-    json!({
+    let board = json!({
         "tools": [
             {
                 "name": "create_task",
@@ -168,7 +193,27 @@ pub fn tools_list(kind: &str) -> Value {
             // `fresh: true` — which deletes the worktree *and* the branch,
             // destroying the only copy of an unmerged diff.
         ]
-    })
+    });
+
+    if !planning {
+        return board;
+    }
+    // Plan mode: everything that reads stays, everything that acts goes. The
+    // filter is over the same list rather than a second hand-written one, so a
+    // tool added above cannot be quietly missing from the planning toolbox.
+    let kept: Vec<Value> = board["tools"]
+        .as_array()
+        .map(|ts| {
+            ts.iter()
+                .filter(|t| {
+                    !aichip_core::runs::chat_plan::ACTING_TOOL_NAMES
+                        .contains(&t["name"].as_str().unwrap_or(""))
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({ "tools": kept })
 }
 
 async fn chat_project(state: &AppState, chat_id: Uuid) -> Result<(Uuid, Uuid, String), String> {
@@ -750,9 +795,70 @@ async fn ensure_task_in_project(
 mod tests {
     use super::*;
 
+    /// Every name `tools_list` advertises, in order.
+    fn advertised(kind: &str, planning: bool) -> Vec<String> {
+        tools_list(kind, planning)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// Plan mode advertises exactly the board list minus the four that change
+    /// something — and, crucially, the *same* four the run denies.
+    ///
+    /// Advertising one the run has denied is the silent failure: chat carries
+    /// `permission_prompt_tool: false`, so the refused call produces no prompt
+    /// to answer and the assistant reports the workspace as broken.
+    #[test]
+    fn planning_advertises_exactly_what_planning_allows() {
+        let acting = aichip_core::runs::chat_plan::ACTING_TOOL_NAMES;
+        let full = advertised("repo", false);
+        let planning = advertised("repo", true);
+
+        assert_eq!(
+            planning,
+            full.iter().filter(|n| !acting.contains(&n.as_str())).cloned().collect::<Vec<_>>()
+        );
+        for name in acting {
+            assert!(!planning.contains(&name.to_string()), "{name} survived plan mode");
+            assert!(full.contains(&name.to_string()), "{name} is not in the board list at all");
+        }
+        // Reading the board is what makes a plan worth anything.
+        for name in ["list_tasks", "get_task_status", "list_agents", "get_diff", "search_code"] {
+            assert!(planning.contains(&name.to_string()), "{name} should survive plan mode");
+        }
+
+        // The invariant that actually matters, and it spans two crates: what
+        // this endpoint advertises in plan mode has to be exactly what the
+        // orchestrator's plan-mode RunSpec allows. Equality, not subset — a
+        // tool allowed but never offered is a grant nothing can use, and a
+        // tool offered but not allowed is the silent refusal above.
+        let allowed: std::collections::HashSet<String> =
+            aichip_core::runs::chat_plan::without_acting(
+                &aichip_core::runs::orchestrator::CHAT_ALLOWED_TOOLS
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .into_iter()
+            .filter(|t| t.starts_with("mcp__aichip__"))
+            .collect();
+        let offered: std::collections::HashSet<String> =
+            planning.iter().map(|n| format!("mcp__aichip__{n}")).collect();
+        assert_eq!(offered, allowed);
+    }
+
+    /// A space has nothing to take away, so plan mode must not change it.
+    #[test]
+    fn planning_does_not_touch_a_space() {
+        assert_eq!(advertised("space", true), advertised("space", false));
+    }
+
     #[test]
     fn tools_list_exposes_every_tool_the_assistant_has() {
-        let v = tools_list("repo");
+        let v = tools_list("repo", false);
         let names: Vec<&str> = v["tools"]
             .as_array()
             .unwrap()
@@ -789,7 +895,7 @@ mod tests {
     /// advertises so the two cannot silently bleed together.
     #[test]
     fn a_space_advertises_document_tools_and_nothing_else() {
-        let v = tools_list("space");
+        let v = tools_list("space", false);
         let names: Vec<&str> = v["tools"]
             .as_array()
             .unwrap()
@@ -820,7 +926,7 @@ mod tests {
 
     #[test]
     fn create_task_tells_the_model_what_agent_name_does() {
-        let v = tools_list("repo");
+        let v = tools_list("repo", false);
         let described = v["tools"][0]["inputSchema"]["properties"]["agent_name"]["description"]
             .as_str()
             .unwrap();
@@ -838,7 +944,7 @@ mod tests {
     /// nothing else would catch it.
     #[test]
     fn every_tool_the_assistant_is_offered_is_one_it_is_pre_approved_to_call() {
-        let offered: std::collections::HashSet<String> = tools_list("repo")["tools"]
+        let offered: std::collections::HashSet<String> = tools_list("repo", false)["tools"]
             .as_array()
             .unwrap()
             .iter()
@@ -859,7 +965,7 @@ mod tests {
     /// next contributor fills in.
     #[test]
     fn the_chat_assistant_is_offered_no_way_to_merge() {
-        for t in tools_list("repo")["tools"].as_array().unwrap() {
+        for t in tools_list("repo", false)["tools"].as_array().unwrap() {
             let name = t["name"].as_str().unwrap();
             assert!(!name.contains("merge"), "{name} lands code from chat");
             assert!(!name.contains("retry"), "{name} can discard an unmerged diff");
@@ -868,7 +974,7 @@ mod tests {
 
     #[test]
     fn the_descriptions_say_the_parts_that_are_easy_to_get_wrong() {
-        let tools = tools_list("repo");
+        let tools = tools_list("repo", false);
         let by_name = |n: &str| -> String {
             tools["tools"]
                 .as_array()

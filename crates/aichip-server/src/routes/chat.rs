@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/workspaces/{id}/chats/new", post(new_general))
         .route("/chats/{id}", delete(delete_chat).patch(rename_chat))
         .route("/chats/{id}/messages", get(messages).post(send))
+        .route("/chats/{id}/plan/{message_id}/approve", post(approve_plan))
 }
 
 async fn list_chats(
@@ -32,7 +33,7 @@ async fn list_chats(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort,
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
          FROM chats c WHERE c.project_id=$1 ORDER BY c.updated_at DESC",
     )
@@ -48,6 +49,7 @@ async fn list_chats(
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<Option<String>, _>("model_tier"),
                 "effort": r.get::<Option<String>, _>("effort"),
+                "planMode": r.get::<bool, _>("plan_mode"),
                 "messageCount": r.get::<i64, _>("message_count"),
                 "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
             })
@@ -83,7 +85,7 @@ async fn list_general(
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort,
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
          FROM chats c WHERE c.workspace_id=$1 AND c.project_id IS NULL
          ORDER BY c.updated_at DESC",
@@ -100,6 +102,7 @@ async fn list_general(
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<Option<String>, _>("model_tier"),
                 "effort": r.get::<Option<String>, _>("effort"),
+                "planMode": r.get::<bool, _>("plan_mode"),
                 "messageCount": r.get::<i64, _>("message_count"),
                 "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
             })
@@ -218,6 +221,7 @@ async fn messages(
         // One aggregate rather than a query per message: the panel polls this
         // every 2.5s, so an N+1 here would be felt.
         "SELECT m.id, m.role, m.content, m.run_id, m.created_at,
+                m.is_plan, m.plan_outcome,
                 att.items AS attachments, pages.items AS articles
          FROM chat_messages m
          LEFT JOIN LATERAL (
@@ -255,12 +259,92 @@ async fn messages(
                 "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 "attachments": r.get::<Value, _>("attachments"),
                 "articles": r.get::<Value, _>("articles"),
+                "isPlan": r.get::<bool, _>("is_plan"),
+                "planOutcome": r.get::<Option<String>, _>("plan_outcome"),
             })
         })
         .collect();
 
     let active = active_run(&state, chat_id).await?;
     Ok(Json(json!({ "messages": messages, "activeRunId": active })))
+}
+
+#[derive(Deserialize)]
+struct ApprovePlan {
+    /// The plan as the person wants it carried out, when they changed it.
+    /// Omitted means "as written" — the session already holds that text, and
+    /// echoing it back would both spend the tokens twice and invite the
+    /// assistant to read its own proposal as a fresh instruction.
+    #[serde(default)]
+    plan: Option<String>,
+}
+
+/// Carry out a plan.
+///
+/// Approving *leaves* plan mode, which is the whole point: the next turn is
+/// the one that acts, so it needs the tools plan mode took away. Turning it
+/// back on afterwards would be a second decision, and the toggle is right
+/// there.
+///
+/// A plain turn rather than a resumed parked run, because a chat turn cannot
+/// park: `active_run` counts every non-terminal run as active and refuses the
+/// next message, so a parked plan would freeze the conversation it belongs to.
+async fn approve_plan(
+    State(state): State<AppState>,
+    Path((chat_id, message_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<ApprovePlan>,
+) -> Result<Json<Value>, ApiError> {
+    if active_run(&state, chat_id).await?.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            "the assistant is still working on the previous message".into(),
+        ));
+    }
+
+    // Only an open plan, and only this chat's. Doing it as one conditional
+    // update rather than a read-then-write is what makes a double click
+    // land once: the second finds no open plan and is refused.
+    let claimed = sqlx::query(
+        "UPDATE chat_messages SET plan_outcome = 'approved'
+          WHERE id = $1 AND chat_id = $2 AND is_plan AND plan_outcome IS NULL",
+    )
+    .bind(message_id)
+    .bind(chat_id)
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if claimed.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "that plan has already been answered".into(),
+        ));
+    }
+
+    sqlx::query("UPDATE chats SET plan_mode = false, updated_at = now() WHERE id = $1")
+        .bind(chat_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+
+    let row = sqlx::query(
+        "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
+    )
+    .bind(chat_id)
+    .bind(aichip_core::runs::chat_plan::approval(
+        body.plan.as_deref().map(str::trim).filter(|p| !p.is_empty()),
+    ))
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    let run_id = state
+        .orchestrator
+        .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
+        .await
+        .map_err(internal)?;
+    Ok(Json(
+        json!({ "messageId": row.get::<Uuid, _>("id"), "runId": run_id }),
+    ))
 }
 
 async fn active_run(state: &AppState, chat_id: Uuid) -> Result<Option<Uuid>, ApiError> {
@@ -288,6 +372,9 @@ struct SendBody {
     /// orchestrator has to shrug at when the turn actually runs.
     model_tier: Option<ModelTier>,
     effort: Option<ReasoningEffort>,
+    /// Propose rather than act. Sticks to the chat like the two above — plan
+    /// mode is a mode you are in, not a property of one sentence.
+    plan_mode: Option<bool>,
     /// Ids from POST /api/projects/{id}/attachments, bound to this message.
     #[serde(default)]
     attachment_ids: Vec<Uuid>,
@@ -313,15 +400,17 @@ async fn send(
     }
     // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
     // client that only sends `content` does not silently reset the choice.
-    if body.model_tier.is_some() || body.effort.is_some() {
+    if body.model_tier.is_some() || body.effort.is_some() || body.plan_mode.is_some() {
         sqlx::query(
             "UPDATE chats SET model_tier = coalesce($2, model_tier),
-                              effort = coalesce($3, effort)
+                              effort = coalesce($3, effort),
+                              plan_mode = coalesce($4, plan_mode)
              WHERE id = $1",
         )
         .bind(chat_id)
         .bind(body.model_tier.and_then(|t| serde_json::to_value(t).ok()).and_then(|v| v.as_str().map(str::to_string)))
         .bind(body.effort.map(|e| e.as_str().to_string()))
+        .bind(body.plan_mode)
         .execute(&state.db.pool)
         .await
         .map_err(internal)?;

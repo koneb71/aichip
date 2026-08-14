@@ -13,6 +13,7 @@ import { ChatThread } from "./ChatThread";
 export function ChatPanel({
   projectId,
   workspaceId,
+  projectKind,
 }: {
   projectId: string;
   /**
@@ -25,6 +26,9 @@ export function ChatPanel({
    * did not.
    */
   workspaceId?: string;
+  /** Passed through so the thread knows whether plan mode means anything
+   *  here — a space's chat tools are all read-only. */
+  projectKind?: string;
 }) {
   const [chatId, setChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -165,6 +169,7 @@ export function ChatPanel({
       <ChatThread
         projectId={projectId}
         workspaceId={workspaceId}
+        projectKind={projectKind}
         chatId={chatId}
         chat={chats.find((c) => c.id === chatId)}
         onSent={refreshChats}

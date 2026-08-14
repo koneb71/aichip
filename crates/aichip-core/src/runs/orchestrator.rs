@@ -2381,8 +2381,8 @@ impl Orchestrator {
             // Lateral join rather than a scalar subquery: the turn needs the
             // message's id as well as its text, to look up its attachments.
             "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
-                    c.effort AS chat_effort, p.path AS project_path, p.id AS project_id,
-                    p.kind AS project_kind,
+                    c.effort AS chat_effort, c.plan_mode, p.path AS project_path,
+                    p.id AS project_id, p.kind AS project_kind,
                     m.id AS user_message_id, m.content AS user_message
              FROM runs r JOIN chats c ON c.id = r.chat_id
              LEFT JOIN projects p ON p.id = c.project_id
@@ -2422,6 +2422,13 @@ impl Orchestrator {
         // and the MCP task tools resolve through one.
         let project_id: Option<Uuid> = row.get("project_id");
         let project_kind: Option<String> = row.get("project_kind");
+        // Plan mode: propose, do not act. Only meaningful where there is
+        // something to act *on* — a space chat and a general chat have no
+        // board tools to take away, so the flag is inert there rather than
+        // producing a plan nobody can approve into anything.
+        let planning: bool = row.get::<bool, _>("plan_mode")
+            && project_id.is_some()
+            && project_kind.as_deref() != Some("space");
 
         // An attachment-only turn stores empty content, so the prompt may be
         // nothing but the attachment block.
@@ -2467,6 +2474,16 @@ impl Orchestrator {
         // reference material rather than as instructions.
         let pages = crate::kb::for_chat(&self.db, chat_id).await.unwrap_or_default();
         let user_message = crate::kb::augment_prompt(&user_message, &pages);
+
+        // Plan mode, appended last of the per-message blocks so it is the
+        // nearest thing to the request it modifies. Per-turn and not
+        // resume-gated: which turn is a planning turn is a fact about this
+        // message, and a resumed session cannot know it.
+        let user_message = if planning {
+            format!("{user_message}{}", crate::runs::chat_plan::instruction())
+        } else {
+            user_message
+        };
 
         // A space chat retrieves before it answers: the top passages from the
         // documents, semantically matched against what the person just typed.
@@ -2608,10 +2625,25 @@ impl Orchestrator {
             effort: chat_effort,
             resume_session_id: session_id,
             permission_mode: chat_permission_mode(engine.as_ref()),
-            allowed_tools: allowed,
+            // Both halves in plan mode. Dropping the four from `allowed` keeps
+            // the assistant from reaching for them; adding them to `denied` is
+            // what actually stops the call, because `allowed_tools` is an
+            // auto-approval list and not a restriction.
+            allowed_tools: if planning {
+                crate::runs::chat_plan::without_acting(&allowed)
+            } else {
+                allowed
+            },
             append_system_prompt: Some(system_prompt.to_string()),
             mcp,
-            denied_tools: CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect(),
+            denied_tools: {
+                let base: Vec<String> = CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();
+                if planning {
+                    crate::runs::chat_plan::with_acting_denied(&base)
+                } else {
+                    base
+                }
+            },
             run_key: run_id.to_string(),
             extra_read_dirs,
             permission_prompt_tool: false,
@@ -2636,9 +2668,21 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
             }
+            // An older open plan stops being open the moment a newer one
+            // lands: two Approve buttons in one thread is an invitation to
+            // carry out the same work twice.
+            if planning {
+                sqlx::query(
+                    "UPDATE chat_messages SET plan_outcome = 'superseded'
+                     WHERE chat_id = $1 AND is_plan AND plan_outcome IS NULL",
+                )
+                .bind(chat_id)
+                .execute(&self.db.pool)
+                .await?;
+            }
             sqlx::query(
-                "INSERT INTO chat_messages (chat_id, role, content, run_id)
-                 VALUES ($1, 'assistant', $2, $3)",
+                "INSERT INTO chat_messages (chat_id, role, content, run_id, is_plan)
+                 VALUES ($1, 'assistant', $2, $3, $4)",
             )
             .bind(chat_id)
             .bind(if outcome.output.is_empty() {
@@ -2647,6 +2691,10 @@ impl Orchestrator {
                 outcome.output.clone()
             })
             .bind(run_id)
+            // Recorded from the run, which knew: "is this a plan?" cannot be
+            // read back out of prose, and the button that carries it out must
+            // not appear under a message that merely contains a list.
+            .bind(planning)
             .execute(&self.db.pool)
             .await?;
         } else if outcome.status == RunStatus::Failed {

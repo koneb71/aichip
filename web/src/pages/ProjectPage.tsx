@@ -130,7 +130,7 @@ export default function ProjectPage() {
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] lg:grid-cols-[380px_minmax(0,1fr)]">
-      {!narrow && <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />}
+      {!narrow && <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} projectKind={project?.kind} />}
 
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="border-b border-line bg-panel px-4 py-3 lg:px-6">
@@ -300,7 +300,7 @@ export default function ProjectPage() {
           {activeTab === "brain" && <BrainPanel projectId={projectId} />}
           {activeTab === "storage" && <StoragePanel projectId={projectId} />}
           {activeTab === "chat" && (
-            <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} />
+            <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} projectKind={project?.kind} />
           )}
           </motion.div>
           </AnimatePresence>
