@@ -1339,6 +1339,17 @@ export interface RepoFileDetail {
   specifiers: string[];
 }
 
+/** A clarifying question the assistant asked, waiting for an answer. */
+export interface OpenQuestion {
+  id: string;
+  questions: Array<{
+    question: string;
+    header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
 /** One semantic hit, collapsed to the best passage per file. */
 export interface RepoSearchHit {
   path: string;
@@ -2437,7 +2448,13 @@ export const api = {
     ),
   chatMessages: (chatId: string) =>
     fetch(`/api/chats/${chatId}/messages`).then((r) =>
-      json<{ messages: ChatMessage[]; activeRunId: string | null }>(r),
+      json<{
+        messages: ChatMessage[];
+        activeRunId: string | null;
+        /** The clarifying question waiting for an answer, if any. Read back
+         *  each poll rather than held client-side, so it survives a refresh. */
+        openQuestion: OpenQuestion | null;
+      }>(r),
     ),
   // Options object rather than trailing positionals: two optional args in a
   // row is exactly how a caller silently passes an engine as attachment ids.
@@ -2470,6 +2487,13 @@ export const api = {
    *  version the assistant wrote. */
   approveChatPlan: (chatId: string, messageId: string, plan?: string) =>
     post(`/api/chats/${chatId}/plan/${messageId}/approve`, { plan }).then((r) =>
+      json<{ messageId: string; runId: string }>(r),
+    ),
+  /** Answer a clarifying question. One call: it records the answer and sends
+   *  the turn, which must not come apart. `answers` is one list of chosen
+   *  labels per question, in the order they were asked. */
+  answerQuestion: (chatId: string, questionId: string, answers: string[][]) =>
+    post(`/api/chats/${chatId}/questions/${questionId}/answer`, { answers }).then((r) =>
       json<{ messageId: string; runId: string }>(r),
     ),
 

@@ -95,6 +95,48 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
     let obj = |props: Value, required: Vec<&str>| {
         json!({ "type": "object", "properties": props, "required": required })
     };
+    // Offered everywhere, including plan mode and a space: a brief can be
+    // ambiguous whatever the chat is scoped to, and asking is the *most*
+    // plan-mode-appropriate thing an assistant can do.
+    let ask = json!({
+        "name": "ask_user",
+        "description": "Ask the user a clarifying question with a small set of options, and stop. \
+                        Reach for this when the request is ambiguous in a way that changes what \
+                        you would actually do — two readings that lead to different cards, an \
+                        unstated choice of approach, a scope you cannot infer. Do not use it for \
+                        something you can settle by reading the code, for permission to proceed, \
+                        or to confirm a decision the user already made. Your turn ends when you \
+                        call this; their answer arrives as the next message and you keep the \
+                        conversation.",
+        "inputSchema": obj(json!({
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "description": "At most four. Ask the one that most changes what you would do.",
+                "items": {
+                    "type": "object",
+                    "required": ["question", "options"],
+                    "properties": {
+                        "question": { "type": "string" },
+                        "header": { "type": "string", "description": "two or three words, to tell several questions apart" },
+                        "options": {
+                            "type": "array", "minItems": 2, "maxItems": 4,
+                            "items": {
+                                "type": "object",
+                                "required": ["label"],
+                                "properties": {
+                                    "label": { "type": "string" },
+                                    "description": { "type": "string", "description": "what picking it means" }
+                                }
+                            }
+                        },
+                        "multiSelect": { "type": "boolean" }
+                    }
+                }
+            }
+        }), vec!["questions"])
+    });
     // A space's toolbox is documents, not the board: relevant passages are
     // already injected per message, so the tools exist for digging — a
     // different phrasing, a full listing.
@@ -116,6 +158,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
                     "description": "List the documents in this space with their index status.",
                     "inputSchema": obj(json!({}), vec![])
                 },
+                ask,
             ]
         });
     }
@@ -192,6 +235,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
             // And retry_task, whose only difference from start_task is
             // `fresh: true` — which deletes the worktree *and* the branch,
             // destroying the only copy of an unmerged diff.
+            ask,
         ]
     });
 
@@ -214,6 +258,61 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
         })
         .unwrap_or_default();
     json!({ "tools": kept })
+}
+
+/// Record a clarifying question and tell the assistant to stop.
+///
+/// The tool returns immediately rather than blocking on an answer, and that is
+/// the design rather than a shortcut. A chat turn holds a concurrency permit
+/// from the same queue as every other run, so a turn parked on a question
+/// would sit on one of a small number of slots for as long as somebody takes
+/// to look — and `routes::chat::active_run` counts it as active, so the very
+/// conversation needed to answer would refuse the next message. The question
+/// is stored, the turn ends, and answering starts the next one; the session
+/// resumes, so the assistant carries on where it left off.
+///
+/// The returned text is written *at the model*: it has just called a tool and
+/// needs to know that the right move now is to stop, not to guess and carry
+/// on with the answer it hoped for.
+async fn ask_user(state: &AppState, chat_id: Uuid, args: Value) -> Result<Value, String> {
+    let questions: Vec<aichip_core::runs::questions::Question> =
+        serde_json::from_value(args.get("questions").cloned().unwrap_or(Value::Null))
+            .map_err(|e| format!("questions must be a list of {{question, options}}: {e}"))?;
+    let questions = aichip_core::runs::questions::validate(questions)?;
+
+    // One open question at a time. Two would give the person two cards to
+    // answer for one turn, and only the last answer could be sent — the other
+    // would sit there looking live forever.
+    sqlx::query(
+        "UPDATE chat_questions SET answered_at = now(),
+                answer = '\"superseded\"'::jsonb
+          WHERE chat_id = $1 AND answered_at IS NULL",
+    )
+    .bind(chat_id)
+    .execute(&state.db.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO chat_questions (chat_id, run_id, questions)
+         SELECT $1, r.id, $2
+           FROM runs r
+          WHERE r.chat_id = $1 AND r.status NOT IN ('completed','failed','canceled')
+          ORDER BY r.created_at DESC LIMIT 1",
+    )
+    .bind(chat_id)
+    .bind(serde_json::to_value(&questions).map_err(|e| e.to_string())?)
+    .execute(&state.db.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(json!({
+        "asked": questions.len(),
+        "next": "The question is now in front of the user. End your turn here — \
+                 do not answer it yourself and do not carry on as though it had \
+                 been answered. Their reply arrives as the next message and you \
+                 will still have this conversation.",
+    }))
 }
 
 async fn chat_project(state: &AppState, chat_id: Uuid) -> Result<(Uuid, Uuid, String), String> {
@@ -240,6 +339,11 @@ async fn call_tool(
     // in-place inside a documents folder, and a repo chat calling
     // search_documents would search an index that does not exist.
     let is_space = kind == "space";
+    // Asking a clarifying question belongs to neither toolbox and to both: a
+    // space chat can be as ambiguously briefed as a repo one.
+    if name == "ask_user" {
+        return ask_user(state, chat_id, args).await;
+    }
     let doc_tool = matches!(name, "search_documents" | "list_documents");
     if is_space && !doc_tool {
         return Err("this chat is scoped to a document space — the board tools work in project chats".into());
@@ -856,6 +960,28 @@ mod tests {
         assert_eq!(advertised("space", true), advertised("space", false));
     }
 
+    /// The same equality the board arm gets, for the space arm.
+    ///
+    /// It was missing, and the gap is not theoretical: a space chat that
+    /// advertises a tool absent from `SPACE_CHAT_ALLOWED_TOOLS` is refused at
+    /// runtime with no prompt to answer, because chat carries
+    /// `permission_prompt_tool: false`. The board side has been pinned since
+    /// the tools existed; the space side had nothing.
+    #[test]
+    fn a_space_is_offered_exactly_what_a_space_is_allowed() {
+        let offered: std::collections::HashSet<String> = advertised("space", false)
+            .iter()
+            .map(|n| format!("mcp__aichip__{n}"))
+            .collect();
+        let allowed: std::collections::HashSet<String> =
+            aichip_core::runs::orchestrator::SPACE_CHAT_ALLOWED_TOOLS
+                .iter()
+                .filter(|t| t.starts_with("mcp__aichip__"))
+                .map(|t| t.to_string())
+                .collect();
+        assert_eq!(offered, allowed);
+    }
+
     #[test]
     fn tools_list_exposes_every_tool_the_assistant_has() {
         let v = tools_list("repo", false);
@@ -886,6 +1012,9 @@ mod tests {
                 // Finding code by meaning, for the question Grep cannot answer
                 // because the asker does not know the word yet.
                 "search_code",
+                // And the one that answers nothing: asking the person, when
+                // the request is ambiguous in a way that changes the work.
+                "ask_user",
             ]
         );
     }
@@ -902,7 +1031,9 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["search_documents", "list_documents"]);
+        // `ask_user` is the one thing both toolboxes share, and deliberately:
+        // a space's brief can be as ambiguous as a repository's.
+        assert_eq!(names, ["search_documents", "list_documents", "ask_user"]);
     }
 
     /// The schema is the only place the model learns these two rules, and both

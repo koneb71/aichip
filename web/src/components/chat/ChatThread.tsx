@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { api, Agent, ChatMessage, ChatSummary, Effort, Skill, Tier } from "../../lib/api";
+import {
+  api,
+  Agent,
+  ChatMessage,
+  ChatSummary,
+  Effort,
+  OpenQuestion,
+  Skill,
+  Tier,
+} from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
 import { useAttachments } from "../../lib/useAttachments";
 import { agentSpans } from "../../lib/mention";
@@ -9,6 +18,7 @@ import { AttachmentBar, AttachmentList } from "../AttachmentBar";
 import { ComposerSettings } from "./ComposerSettings";
 import { useMentionPicker } from "../MentionPicker";
 import { ArticlePicker } from "../kb/ArticlePicker";
+import { QuestionCard } from "./QuestionCard";
 import { Markdown } from "../Markdown";
 
 /**
@@ -88,6 +98,10 @@ export function ChatThread({
   // is turned off by approving a plan, because carrying it out is the thing
   // plan mode is for not doing.
   const [planMode, setPlanMode] = useState(false);
+  // The assistant's clarifying question, if it asked one. Read back from the
+  // server on every poll rather than held here — that is what makes it
+  // survive a refresh, and what makes it disappear the moment it is answered.
+  const [openQuestion, setOpenQuestion] = useState<OpenQuestion | null>(null);
   const canPlan = projectId !== null && projectKind !== "space";
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
@@ -176,6 +190,7 @@ export function ChatThread({
     try {
       const r = await api.chatMessages(chatId);
       setMessages(r.messages);
+      setOpenQuestion(r.openQuestion);
       const s = settling.current;
       if (s) {
         const landed = r.messages.some((m) => m.runId === s.runId);
@@ -258,6 +273,25 @@ export function ChatThread({
     }
   };
 
+  /** Answer the assistant's clarifying question. Clears the card optimistically
+   *  so it cannot be clicked twice while the turn starts — the server refuses a
+   *  second answer anyway, but a button that looks live is a button people
+   *  press. */
+  const answerQuestion = async (answers: string[][]) => {
+    if (!chatId || !openQuestion || activeRunId) return;
+    const id = openQuestion.id;
+    setError(null);
+    setOpenQuestion(null);
+    try {
+      const r = await api.answerQuestion(chatId, id, answers);
+      setActiveRunId(r.runId);
+      refresh();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+      refresh(); // puts the card back if it is genuinely still open
+    }
+  };
+
   /** Carry out a plan. Leaves plan mode, so the composer's toggle has to
    *  follow — the server has already turned it off on the row. */
   const approve = async (messageId: string, edited?: string) => {
@@ -336,6 +370,16 @@ export function ChatThread({
                   <Thinking />
                 )}
               </div>
+            )}
+            {/* Last, under the reply that asked it — the assistant's turn
+                usually ends by saying why it is asking. Hidden while a turn
+                runs, because answering into a busy chat is refused anyway. */}
+            {openQuestion && !activeRunId && (
+              <QuestionCard
+                key={openQuestion.id}
+                open={openQuestion}
+                onAnswer={answerQuestion}
+              />
             )}
           </div>
           </>,

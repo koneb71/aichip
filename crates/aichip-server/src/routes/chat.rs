@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/chats/{id}", delete(delete_chat).patch(rename_chat))
         .route("/chats/{id}/messages", get(messages).post(send))
         .route("/chats/{id}/plan/{message_id}/approve", post(approve_plan))
+        .route("/chats/{id}/questions/{question_id}/answer", post(answer_question))
 }
 
 async fn list_chats(
@@ -266,7 +267,101 @@ async fn messages(
         .collect();
 
     let active = active_run(&state, chat_id).await?;
-    Ok(Json(json!({ "messages": messages, "activeRunId": active })))
+
+    // The open clarifying question, if there is one. Sent beside the messages
+    // rather than attached to one: it belongs to the *conversation's* current
+    // state, and reading it back this way is also what makes it survive a
+    // refresh without any client-side memory.
+    let question = sqlx::query(
+        "SELECT id, questions FROM chat_questions
+          WHERE chat_id = $1 AND answered_at IS NULL
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(chat_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .map(|r| json!({ "id": r.get::<Uuid, _>("id"), "questions": r.get::<Value, _>("questions") }));
+
+    Ok(Json(json!({
+        "messages": messages,
+        "activeRunId": active,
+        "openQuestion": question,
+    })))
+}
+
+#[derive(Deserialize)]
+struct AnswerQuestion {
+    /// One list of chosen labels per question, in the order they were asked.
+    /// Empty for a question left unanswered — the assistant is told to use its
+    /// judgement rather than being handed a blank.
+    #[serde(default)]
+    answers: Vec<Vec<String>>,
+}
+
+/// Answer a clarifying question.
+///
+/// One action rather than "mark answered" plus "send a message": the two must
+/// not come apart. An answer recorded without a turn leaves the assistant
+/// waiting for something that already happened, and a turn sent without the
+/// answer recorded leaves a live button offering to send it again.
+async fn answer_question(
+    State(state): State<AppState>,
+    Path((chat_id, question_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<AnswerQuestion>,
+) -> Result<Json<Value>, ApiError> {
+    if active_run(&state, chat_id).await?.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            "the assistant is still working on the previous message".into(),
+        ));
+    }
+
+    // Conditional, so a double click lands once — the second finds nothing
+    // open. The `RETURNING` is what gives us the questions to phrase against.
+    let row = sqlx::query(
+        "UPDATE chat_questions SET answered_at = now(), answer = $3
+          WHERE id = $1 AND chat_id = $2 AND answered_at IS NULL
+        RETURNING questions",
+    )
+    .bind(question_id)
+    .bind(chat_id)
+    .bind(serde_json::to_value(&body.answers).map_err(internal)?)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((
+        StatusCode::CONFLICT,
+        "that question has already been answered".to_string(),
+    ))?;
+
+    let questions: Vec<aichip_core::runs::questions::Question> =
+        serde_json::from_value(row.get("questions")).map_err(internal)?;
+    let content = aichip_core::runs::questions::answer_message(&questions, &body.answers);
+
+    let message = sqlx::query(
+        "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
+    )
+    .bind(chat_id)
+    .bind(&content)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    sqlx::query("UPDATE chats SET updated_at = now() WHERE id = $1")
+        .bind(chat_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+
+    let run_id = state
+        .orchestrator
+        .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
+        .await
+        .map_err(internal)?;
+    Ok(Json(
+        json!({ "messageId": message.get::<Uuid, _>("id"), "runId": run_id }),
+    ))
 }
 
 #[derive(Deserialize)]

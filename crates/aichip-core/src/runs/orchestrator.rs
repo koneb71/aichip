@@ -52,6 +52,9 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
     "mcp__aichip__list_skills",
     "mcp__aichip__move_task",
     "mcp__aichip__search_code",
+    // Asking instead of guessing. Survives plan mode deliberately — it is the
+    // most plan-appropriate thing an assistant can do.
+    "mcp__aichip__ask_user",
 ];
 
 /// Named explicitly rather than left to the allow-list.
@@ -103,6 +106,11 @@ progress, and mcp__aichip__list_agents to pick a specialized agent for a task. W
 writes @Name in their message they are naming an agent from their library — assign that work to \
 them by passing agent_name, spelled exactly. Keep replies short and conversational; the user \
 sees them in a chat panel. \
+**Before you create a task from an ambiguous request, ask.** If two readings of what the user \
+said would lead to different cards, or to a different scope, call mcp__aichip__ask_user with \
+the readings as options and stop there — a card started on the wrong reading costs a real run \
+and a diff nobody wanted. Do not ask about something you can settle by reading the code, and \
+do not ask for permission to proceed; ask when the answer changes the work. \
 You can also stop a task, summarise what it changed, file it in a column, and say what it has \
 cost — but you cannot merge anything into the user's checkout, and there is no tool for it. \
 When a card looks ready, say so and what it changed, and let them press Merge on the card, \
@@ -135,10 +143,11 @@ pub const SPACE_CHAT_ALLOWED_TOOLS: &[&str] = &[
     "WebFetch",
     "mcp__aichip__search_documents",
     "mcp__aichip__list_documents",
+    "mcp__aichip__ask_user",
 ];
 
 /// The system prompt for a space chat.
-const SPACE_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is attached to a document space: the folder you are in holds documents the user has collected, and your job is to answer questions about and around them. Relevant passages from the documents are attached to each message automatically, with file names — cite them when you draw on them. Use mcp__aichip__search_documents to search again with a different phrasing, mcp__aichip__list_documents to see what is here, and Read to open a whole file; WebSearch and WebFetch cover what the documents reference. Ground answers about the documents in what they actually say — quote or name the file — and say plainly when the answer is not in them. There is no repository here and no task board; if the user asks for coding work, tell them to switch this chat to one of their projects. Keep replies short and conversational; the user sees them in a chat panel.";
+const SPACE_CHAT_SYSTEM_PROMPT: &str = "You are the aichip assistant. This conversation is attached to a document space: the folder you are in holds documents the user has collected, and your job is to answer questions about and around them. Relevant passages from the documents are attached to each message automatically, with file names — cite them when you draw on them. Use mcp__aichip__search_documents to search again with a different phrasing, mcp__aichip__list_documents to see what is here, and Read to open a whole file; WebSearch and WebFetch cover what the documents reference. Ground answers about the documents in what they actually say — quote or name the file — and say plainly when the answer is not in them. There is no repository here and no task board; if the user asks for coding work, tell them to switch this chat to one of their projects. When a question could be read two ways and the readings lead to different answers, call mcp__aichip__ask_user with the readings as options and stop, rather than answering both or picking one. Keep replies short and conversational; the user sees them in a chat panel.";
 
 /// One attempt in a bake-off: an agent, a tier, or both.
 ///
