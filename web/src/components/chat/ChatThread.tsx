@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api, Agent, ChatMessage, ChatSummary, Effort, Skill, Tier } from "../../lib/api";
 import { useRunStream } from "../../lib/ws";
@@ -7,6 +8,7 @@ import { agentSpans } from "../../lib/mention";
 import { AttachmentBar, AttachmentList } from "../AttachmentBar";
 import { ComposerSettings } from "./ComposerSettings";
 import { useMentionPicker } from "../MentionPicker";
+import { ArticlePicker } from "../kb/ArticlePicker";
 import { Markdown } from "../Markdown";
 
 /**
@@ -69,6 +71,14 @@ export function ChatThread({
   // and drawn as the same chip. Only the enabled ones: a switched-off skill
   // binds to nothing on the server, and offering it would promise otherwise.
   const [skills, setSkills] = useState<Skill[]>([]);
+  // Knowledge-base pages to put in front of the assistant for the next turn.
+  // Per-message, like a file attachment and unlike the tier — a runbook is
+  // chosen for a question, and one that stuck to the chat would be pasted
+  // into every later turn of a conversation that has moved on.
+  // Ids for the wire, titles for the optimistic bubble — the persisted message
+  // carries them back, but not for the ~2.5s until the next poll.
+  const [articleIds, setArticleIds] = useState<string[]>([]);
+  const [articleChips, setArticleChips] = useState<Array<{ id: string; title: string }>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
   const general = projectId === null;
@@ -191,15 +201,19 @@ export function ChatThread({
   const send = async () => {
     // An attachment on its own is a legitimate turn, so text is not required.
     if (!chatId || activeRunId || att.busy) return;
-    if (!draft.trim() && att.ids.length === 0) return;
+    if (!draft.trim() && att.ids.length === 0 && articleIds.length === 0) return;
     setError(null);
     const content = draft.trim();
     const attachmentIds = att.ids;
+    const pages = articleIds;
+    const pageChips = articleChips;
     // Carry the chips into the optimistic bubble, or they'd vanish for the
     // ~2.5s until the next poll returns the real message.
     const sent = att.items.filter((i) => i.remote).map((i) => i.remote!);
     setDraft("");
     att.clear();
+    setArticleIds([]);
+    setArticleChips([]);
     setMessages((prev) => [
       ...prev,
       {
@@ -209,11 +223,13 @@ export function ChatThread({
         runId: null,
         ts: new Date().toISOString(),
         attachments: sent,
+        articles: pageChips,
       },
     ]);
     try {
       const r = await api.sendChat(chatId, content, {
         attachmentIds,
+        articleIds: pages,
         engine: engine ?? undefined,
         modelTier: tier,
         effort,
@@ -307,6 +323,22 @@ export function ChatThread({
               att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
             }`}
           >
+            {/* Above the textarea, not beside it: what the assistant will be
+                given to read is part of the question, and a control tucked
+                into the icon row reads as a setting. Workspace-scoped, so it
+                is offered in a general chat too — unlike file attachments,
+                which are project machinery. */}
+            {workspaceId && (
+              <ArticlePicker
+                workspaceId={workspaceId}
+                selected={articleIds}
+                onChange={(ids, chosen) => {
+                  setArticleIds(ids);
+                  setArticleChips(chosen.map((a) => ({ id: a.id, title: a.title })));
+                }}
+                compact
+              />
+            )}
             {!general && (att.items.length > 0 || att.dragging) && (
               <AttachmentBar
                 items={att.items}
@@ -358,7 +390,9 @@ export function ChatThread({
                 whileTap={{ scale: 0.92 }}
                 onClick={send}
                 disabled={
-                  !!activeRunId || att.busy || (!draft.trim() && att.ids.length === 0)
+                  !!activeRunId ||
+                  att.busy ||
+                  (!draft.trim() && att.ids.length === 0 && articleIds.length === 0)
                 }
                 className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
               >
@@ -402,6 +436,23 @@ function Message({
         {/* Above the bubble, not inside it: the bubble is solid accent, and
             bordered file chips read badly on it. */}
         <AttachmentList attachments={message.attachments} />
+        {/* Which pages this turn was given. Kept on the message rather than
+            cleared with the composer: afterwards, this is the only record of
+            what the assistant was actually handed. */}
+        {message.articles?.length > 0 && (
+          <div className="mb-1 flex flex-wrap justify-end gap-1">
+            {message.articles.map((a) => (
+              <Link
+                key={a.id}
+                to={`/knowledge/${a.id}`}
+                title="Knowledge-base page given to the assistant for this message"
+                className="ring-focus max-w-56 truncate rounded-lg border border-accent/40 bg-accent/5 px-2 py-0.5 text-[11px] text-ink-dim hover:text-ink"
+              >
+                ▦ {a.title}
+              </Link>
+            ))}
+          </div>
+        )}
         {message.content && (
           <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
             <WithMentions text={message.content} agentNames={agentNames} />

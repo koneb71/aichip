@@ -692,6 +692,9 @@ export interface ChatMessage {
   runId: string | null;
   ts: string;
   attachments: Attachment[];
+  /** Knowledge-base pages this turn was given. Sent back with the message so
+   *  that, afterwards, there is a record of what the assistant was handed. */
+  articles: Array<{ id: string; title: string }>;
 }
 
 export interface Attachment {
@@ -2435,6 +2438,9 @@ export const api = {
     content: string,
     opts: {
       attachmentIds?: string[];
+      /** Knowledge-base pages for this turn. Workspace-scoped, so a general
+       *  chat can carry them even though it cannot carry a file. */
+      articleIds?: string[];
       engine?: string;
       modelTier?: Tier;
       effort?: Effort | null;
@@ -2446,6 +2452,7 @@ export const api = {
       model_tier: opts.modelTier,
       effort: opts.effort ?? undefined,
       attachment_ids: opts.attachmentIds ?? [],
+      article_ids: opts.articleIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),
 
   // Apps

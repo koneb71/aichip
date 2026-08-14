@@ -217,7 +217,8 @@ async fn messages(
     let rows = sqlx::query(
         // One aggregate rather than a query per message: the panel polls this
         // every 2.5s, so an N+1 here would be felt.
-        "SELECT m.id, m.role, m.content, m.run_id, m.created_at, att.items AS attachments
+        "SELECT m.id, m.role, m.content, m.run_id, m.created_at,
+                att.items AS attachments, pages.items AS articles
          FROM chat_messages m
          LEFT JOIN LATERAL (
              SELECT coalesce(json_agg(json_build_object(
@@ -226,6 +227,17 @@ async fn messages(
              ) ORDER BY a.created_at), '[]'::json) AS items
              FROM attachments a WHERE a.message_id = m.id
          ) att ON TRUE
+         -- Which knowledge-base pages this turn was given. Sent back with the
+         -- message, not just held on the way in: after the turn, the only way
+         -- to know what the assistant was handed is what this says.
+         LEFT JOIN LATERAL (
+             SELECT coalesce(json_agg(json_build_object(
+                 'id', k.id, 'title', k.title
+             ) ORDER BY ma.position), '[]'::json) AS items
+             FROM chat_message_articles ma
+             JOIN kb_articles k ON k.id = ma.article_id
+             WHERE ma.message_id = m.id
+         ) pages ON TRUE
          WHERE m.chat_id=$1 ORDER BY m.created_at ASC",
     )
     .bind(chat_id)
@@ -242,6 +254,7 @@ async fn messages(
                 "runId": r.get::<Option<Uuid>, _>("run_id"),
                 "ts": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 "attachments": r.get::<Value, _>("attachments"),
+                "articles": r.get::<Value, _>("articles"),
             })
         })
         .collect();
@@ -278,6 +291,11 @@ struct SendBody {
     /// Ids from POST /api/projects/{id}/attachments, bound to this message.
     #[serde(default)]
     attachment_ids: Vec<Uuid>,
+    /// Knowledge-base pages to put in front of the assistant for this turn.
+    /// Workspace-scoped rather than project-scoped, so a general chat can
+    /// carry them even though it cannot carry a file.
+    #[serde(default)]
+    article_ids: Vec<Uuid>,
 }
 
 async fn send(
@@ -287,7 +305,10 @@ async fn send(
 ) -> Result<Json<Value>, ApiError> {
     // "Look at this screenshot" with no words is a legitimate turn, so only
     // reject a message that is empty *and* carries nothing.
-    if body.content.trim().is_empty() && body.attachment_ids.is_empty() {
+    if body.content.trim().is_empty()
+        && body.attachment_ids.is_empty()
+        && body.article_ids.is_empty()
+    {
         return Err((StatusCode::BAD_REQUEST, "message is empty".into()));
     }
     // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
@@ -359,6 +380,12 @@ async fn send(
         .await
         .map_err(internal)?;
     mentions::record_skills(&state.db, message_id, &skills)
+        .await
+        .map_err(internal)?;
+    // Scoped to the workspace at write time as well as at read time — a page
+    // from somebody else's workspace is not written down at all, so a later
+    // reader of this table sees what was actually attached.
+    aichip_core::kb::record_for_message(&state.db, message_id, workspace_id, &body.article_ids)
         .await
         .map_err(internal)?;
 

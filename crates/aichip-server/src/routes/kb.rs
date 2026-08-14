@@ -242,8 +242,34 @@ async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
         .first()
         .map(|r| r.get::<i64, _>("total"))
         .unwrap_or(0);
+
+    // Chats that were sent with this page, counted separately rather than
+    // folded in with the cards: a chat is not a card and has no column, but a
+    // page that is quietly being pasted into conversations while its "used by"
+    // list reads empty is exactly the thing this endpoint exists to prevent.
+    let chats = sqlx::query(
+        "SELECT c.id, c.title, count(*) AS turns
+           FROM chat_message_articles ma
+           JOIN chat_messages m ON m.id = ma.message_id
+           JOIN chats c ON c.id = m.chat_id
+          WHERE ma.article_id = $1
+          GROUP BY c.id, c.title
+          ORDER BY max(m.created_at) DESC
+          LIMIT $2",
+    )
+    .bind(id)
+    .bind(USED_BY_LIMIT)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
     Ok(json!({
         "total": total,
+        "chats": chats.iter().map(|r| json!({
+            "id": r.get::<Uuid, _>("id"),
+            "title": r.get::<String, _>("title"),
+            "turns": r.get::<i64, _>("turns"),
+        })).collect::<Vec<_>>(),
         "tasks": rows.iter().map(|r| json!({
             "id": r.get::<Uuid, _>("id"),
             "title": r.get::<String, _>("title"),

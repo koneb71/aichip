@@ -2456,6 +2456,18 @@ impl Orchestrator {
             .collect();
         let user_message = mentions::augment_skills_prompt(&user_message, &named_skills);
 
+        // And which knowledge-base pages the person attached to this turn.
+        //
+        // Per-message like the attachments above, and *not* like the brain
+        // below: a page is chosen for a question. It therefore runs on a
+        // resumed session too, which is correct — the session carries the
+        // earlier turns, but it cannot carry a page that had not been picked
+        // yet. The same fenced, capped block a board run gets, because these
+        // bodies are written by people *and by other agents* and must read as
+        // reference material rather than as instructions.
+        let pages = crate::kb::for_chat(&self.db, chat_id).await.unwrap_or_default();
+        let user_message = crate::kb::augment_prompt(&user_message, &pages);
+
         // A space chat retrieves before it answers: the top passages from the
         // documents, semantically matched against what the person just typed.
         // Per-message context, exactly like attachments — which passages

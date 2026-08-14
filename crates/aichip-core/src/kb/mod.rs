@@ -74,8 +74,76 @@ pub async fn for_run(
     .fetch_all(&db.pool)
     .await?;
 
+    hydrate(db, &rows).await
+}
+
+/// Pages the chat's most recent user message was sent with.
+///
+/// Deliberately the *latest* message and not the latest one that carried a
+/// page, matching `mentions::latest_for_chat`: an attachment belongs to the
+/// question it was attached to, and carrying it forward would paste a runbook
+/// into every later turn of a conversation that has moved on.
+///
+/// Re-scoped to the chat's workspace at read time and not only at write time.
+/// A project can be moved between workspaces, and a row written before the
+/// move would otherwise fold a page the chat no longer has any claim on into
+/// its prompt. `COALESCE` because a general chat has no project and carries
+/// its workspace on its own row — which is also why this works there, unlike
+/// file attachments, which are project machinery.
+pub async fn for_chat(db: &Db, chat_id: Uuid) -> anyhow::Result<Vec<ArticleRef>> {
+    let rows = sqlx::query(
+        "SELECT a.id, a.title, a.content_text, a.status
+           FROM chat_message_articles ma
+           JOIN kb_articles a ON a.id = ma.article_id
+           JOIN chats c ON c.id = $1
+           LEFT JOIN projects p ON p.id = c.project_id
+          WHERE COALESCE(p.workspace_id, c.workspace_id) = a.workspace_id
+            AND ma.message_id = (
+                SELECT id FROM chat_messages
+                WHERE chat_id = $1 AND role = 'user'
+                ORDER BY created_at DESC LIMIT 1
+            )
+          ORDER BY ma.position ASC",
+    )
+    .bind(chat_id)
+    .fetch_all(&db.pool)
+    .await?;
+    hydrate(db, &rows).await
+}
+
+/// Write down which pages a message was sent with.
+///
+/// Filtered against the workspace here as well as at read time, so a client
+/// that names a page from somebody else's workspace gets a row that is never
+/// written rather than one that is written and then quietly ignored — the
+/// difference matters when somebody later reads the table to ask what was
+/// attached.
+pub async fn record_for_message(
+    db: &Db,
+    message_id: Uuid,
+    workspace_id: Uuid,
+    article_ids: &[Uuid],
+) -> anyhow::Result<()> {
+    for (position, article_id) in article_ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO chat_message_articles (message_id, article_id, position)
+             SELECT $1, id, $3 FROM kb_articles WHERE id = $2 AND workspace_id = $4
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(message_id)
+        .bind(article_id)
+        .bind(position as i32)
+        .bind(workspace_id)
+        .execute(&db.pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Rows → `ArticleRef`, breadcrumbs and all.
+async fn hydrate(db: &Db, rows: &[sqlx::postgres::PgRow]) -> anyhow::Result<Vec<ArticleRef>> {
     let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
+    for r in rows {
         let id: Uuid = r.get("id");
         let crumbs = tree::breadcrumb(db, id).await.unwrap_or_default();
         out.push(ArticleRef {

@@ -19,7 +19,11 @@ export function ArticlePicker({
 }: {
   workspaceId: string;
   selected: string[];
-  onChange: (ids: string[]) => void;
+  /** The second argument is what was chosen, not just its ids — a caller that
+   *  has to *show* the choice back (a chat message, say) would otherwise have
+   *  to fetch the same list again to learn a title it already had on screen.
+   *  Callers that only need ids can ignore it. */
+  onChange: (ids: string[], chosen: Article[]) => void;
   /** Inline in a composer rather than as a labelled block. */
   compact?: boolean;
 }) {
@@ -65,8 +69,16 @@ export function ArticlePicker({
   // that can never do anything is just clutter on every card.
   if (articles.length === 0) return null;
 
-  const toggle = (id: string) =>
-    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const toggle = (id: string) => {
+    const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    // Ordered by the selection, not by the article list: the order somebody
+    // attached things in is a statement about what matters most, and the
+    // prompt preserves it.
+    onChange(
+      next,
+      next.map((x) => articles.find((a) => a.id === x)).filter((a): a is Article => !!a),
+    );
+  };
 
   return (
     <div>
