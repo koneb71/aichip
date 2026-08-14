@@ -697,6 +697,8 @@ export interface ChatMessage {
   articles: Array<{ id: string; title: string }>;
   /** A reply written in plan mode: a proposal, not something that happened. */
   isPlan: boolean;
+  /** The person stopped this reply part-way. What is shown is not all of it. */
+  stopped: boolean;
   /** Null while a plan is still open. "approved" once it has been carried
    *  out, "superseded" when a later plan replaced it. */
   planOutcome: string | null;

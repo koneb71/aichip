@@ -1,0 +1,13 @@
+-- A reply the person stopped part-way.
+--
+-- Stopping used to cost everything the assistant had already said: the chat
+-- run writes a message only for `completed` and `failed`, so a cancel left no
+-- row at all and the live bubble simply vanished. Half an answer is often the
+-- half you wanted — you stop *because* you have seen enough — and throwing it
+-- away made Stop a button people avoided.
+--
+-- Marked rather than inferred: a truncated reply and a short one look
+-- identical, and the difference matters when reading back. The assistant's
+-- own session still holds what it was mid-way through saying, so the thread
+-- has to be honest that what is shown is not all of it.
+ALTER TABLE chat_messages ADD COLUMN stopped BOOLEAN NOT NULL DEFAULT FALSE;

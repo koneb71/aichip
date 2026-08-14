@@ -2664,9 +2664,14 @@ impl Orchestrator {
             .stream_run(run_id, None, &seq, engine, spec, CallerKind::Chat)
             .await?;
 
-        if outcome.status == RunStatus::Completed {
-            // Persist the (forked) session id for the next --resume, and the
-            // assistant's reply as a durable chat message.
+        // The session id is kept whatever the ending, and that is the
+        // difference between Stop meaning "that's enough of this answer" and
+        // Stop meaning "throw the conversation away". The engine reports it on
+        // `RunStarted`, long before the turn finishes, so a cancelled turn has
+        // one — and without saving it the next message would open a fresh CLI
+        // session with no memory of anything said so far.
+        let stopped = outcome.status == RunStatus::Canceled;
+        if matches!(outcome.status, RunStatus::Completed | RunStatus::Canceled) {
             if let Some(sid) = &outcome.session_id {
                 sqlx::query(
                     "UPDATE chats SET session_id=$1, session_engine=$2, updated_at=now() WHERE id=$3",
@@ -2677,10 +2682,14 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
             }
+        }
+
+        if outcome.status == RunStatus::Completed || stopped {
             // An older open plan stops being open the moment a newer one
             // lands: two Approve buttons in one thread is an invitation to
-            // carry out the same work twice.
-            if planning {
+            // carry out the same work twice. A stopped turn wrote no plan
+            // worth approving, so it supersedes nothing.
+            if planning && !stopped {
                 sqlx::query(
                     "UPDATE chat_messages SET plan_outcome = 'superseded'
                      WHERE chat_id = $1 AND is_plan AND plan_outcome IS NULL",
@@ -2690,20 +2699,30 @@ impl Orchestrator {
                 .await?;
             }
             sqlx::query(
-                "INSERT INTO chat_messages (chat_id, role, content, run_id, is_plan)
-                 VALUES ($1, 'assistant', $2, $3, $4)",
+                "INSERT INTO chat_messages (chat_id, role, content, run_id, is_plan, stopped)
+                 VALUES ($1, 'assistant', $2, $3, $4, $5)",
             )
             .bind(chat_id)
-            .bind(if outcome.output.is_empty() {
-                "(no reply)".to_string()
-            } else {
+            .bind(if !outcome.output.is_empty() {
                 outcome.output.clone()
+            } else if stopped {
+                // Stopped before it said anything. Still a row: the thread
+                // has to show that a turn happened and ended, and the settle
+                // in the browser waits for a row carrying this run's id.
+                "(stopped before the assistant replied)".to_string()
+            } else {
+                "(no reply)".to_string()
             })
             .bind(run_id)
             // Recorded from the run, which knew: "is this a plan?" cannot be
             // read back out of prose, and the button that carries it out must
             // not appear under a message that merely contains a list.
             .bind(planning)
+            // A stopped reply is not a short one, and a reader cannot tell the
+            // difference from the text. The assistant's session still holds
+            // what it was part-way through saying; the thread has to be honest
+            // that what is shown is not all of it.
+            .bind(stopped)
             .execute(&self.db.pool)
             .await?;
         } else if outcome.status == RunStatus::Failed {

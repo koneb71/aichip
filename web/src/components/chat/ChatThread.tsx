@@ -252,6 +252,7 @@ export function ChatThread({
         articles: pageChips,
         isPlan: false,
         planOutcome: null,
+        stopped: false,
       },
     ]);
     try {
@@ -271,6 +272,34 @@ export function ChatThread({
       setError(String(e));
       refresh();
     }
+  };
+
+  /**
+   * Stop the turn that is running.
+   *
+   * One press, unlike the Activity page's confirm-then-stop. That page guards
+   * runs that have been going for hours and sits next to rows you click to
+   * open; this is a conversation, the turn is seconds old, and the reason to
+   * stop is usually that you have read enough — a confirmation step there
+   * would be in the way of the thing it is protecting.
+   *
+   * Nothing is cleared optimistically. The run's own ending writes the partial
+   * reply, and clearing `activeRunId` here would take the live bubble away
+   * before that row exists — the gap the settle logic was written to close.
+   */
+  const [stopping, setStopping] = useState(false);
+  const stop = async () => {
+    if (!activeRunId || stopping) return;
+    setStopping(true);
+    setError(null);
+    try {
+      await api.cancelRun(activeRunId);
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setStopping(false);
+    }
+    refresh();
   };
 
   /** Answer the assistant's clarifying question. Clears the card optimistically
@@ -465,18 +494,33 @@ export function ChatThread({
                 disabled={!!activeRunId}
                 className="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none disabled:opacity-60"
               />
-              <motion.button
-                whileTap={{ scale: 0.92 }}
-                onClick={send}
-                disabled={
-                  !!activeRunId ||
-                  att.busy ||
-                  (!draft.trim() && att.ids.length === 0 && articleIds.length === 0)
-                }
-                className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
-              >
-                ↑
-              </motion.button>
+              {/* One control, two jobs — the same place your hand already is.
+                  A separate Stop elsewhere on the page would be a second
+                  thing to find at the moment you least want to look. */}
+              {activeRunId ? (
+                <motion.button
+                  whileTap={{ scale: 0.92 }}
+                  onClick={stop}
+                  disabled={stopping}
+                  title="Stop — keeps what it has said so far"
+                  aria-label="Stop the assistant"
+                  className="rounded-lg bg-ink px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                >
+                  ■
+                </motion.button>
+              ) : (
+                <motion.button
+                  whileTap={{ scale: 0.92 }}
+                  onClick={send}
+                  disabled={
+                    att.busy ||
+                    (!draft.trim() && att.ids.length === 0 && articleIds.length === 0)
+                  }
+                  className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                >
+                  ↑
+                </motion.button>
+              )}
             </div>
             {/* Which CLI, which model, and how hard it thinks. All three stick to
                 the chat rather than the message — choosing "think harder" and
@@ -590,6 +634,14 @@ function Message({
         </div>
       )}
       <Markdown>{message.content}</Markdown>
+      {/* A truncated reply and a short one look identical in the text. The
+          assistant's session still holds the rest, so saying so is what makes
+          "carry on" an obvious next message rather than a guess. */}
+      {message.stopped && (
+        <div className="mt-1.5 border-t border-line pt-1 text-[10px] text-ink-dim">
+          ■ You stopped this — the assistant had more to say.
+        </div>
+      )}
       {message.isPlan && <PlanActions message={message} onApprove={onApprove} />}
     </motion.div>
   );

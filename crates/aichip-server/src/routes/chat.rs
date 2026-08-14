@@ -222,7 +222,7 @@ async fn messages(
         // One aggregate rather than a query per message: the panel polls this
         // every 2.5s, so an N+1 here would be felt.
         "SELECT m.id, m.role, m.content, m.run_id, m.created_at,
-                m.is_plan, m.plan_outcome,
+                m.is_plan, m.plan_outcome, m.stopped,
                 att.items AS attachments, pages.items AS articles
          FROM chat_messages m
          LEFT JOIN LATERAL (
@@ -262,6 +262,7 @@ async fn messages(
                 "articles": r.get::<Value, _>("articles"),
                 "isPlan": r.get::<bool, _>("is_plan"),
                 "planOutcome": r.get::<Option<String>, _>("plan_outcome"),
+                "stopped": r.get::<bool, _>("stopped"),
             })
         })
         .collect();
