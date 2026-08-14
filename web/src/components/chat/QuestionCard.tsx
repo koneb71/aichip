@@ -28,7 +28,22 @@ export function QuestionCard({
   // One set of picks per question, by index.
   const [picked, setPicked] = useState<string[][]>(() => open.questions.map(() => []));
 
-  const toggle = (qi: number, label: string, multi: boolean) =>
+  // One question, one choice, no second press — clicking the option *is* the
+  // answer, the way it is in Claude Code. Requiring a Send after a
+  // single-choice click is a step with no decision in it, and a button that
+  // does nothing the click did not already say makes people wonder whether
+  // the click registered.
+  //
+  // The Send button stays for everything else: with several questions, or a
+  // multi-select, there is no moment the UI can know you have finished
+  // choosing.
+  const oneShot = open.questions.length === 1 && !open.questions[0].multiSelect;
+
+  const toggle = (qi: number, label: string, multi: boolean) => {
+    if (oneShot) {
+      onAnswer([[label]]);
+      return;
+    }
     setPicked((prev) =>
       prev.map((set, i) => {
         if (i !== qi) return set;
@@ -36,6 +51,7 @@ export function QuestionCard({
         return set.includes(label) ? set.filter((l) => l !== label) : [...set, label];
       }),
     );
+  };
 
   const answered = picked.filter((p) => p.length > 0).length;
   const all = open.questions.length;
@@ -92,17 +108,21 @@ export function QuestionCard({
       </div>
 
       <div className="mt-2.5 flex items-center gap-2 border-t border-accent/20 pt-2">
-        <button
-          onClick={() => onAnswer(picked)}
-          disabled={busy || answered === 0}
-          className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white disabled:opacity-40"
-        >
-          {all > 1 ? `Send ${answered} of ${all}` : "Send"}
-        </button>
+        {!oneShot && (
+          <button
+            onClick={() => onAnswer(picked)}
+            disabled={busy || answered === 0}
+            className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white disabled:opacity-40"
+          >
+            {all > 1 ? `Send ${answered} of ${all}` : "Send"}
+          </button>
+        )}
         {/* The escape hatch, said out loud. Without it the card reads as the
             only way to reply, and somebody picks the least wrong option. */}
         <span className="text-[10px] text-ink-dim">
-          or answer in your own words below — that works too
+          {oneShot
+            ? "Pick one — or answer in your own words below, that works too"
+            : "or answer in your own words below — that works too"}
         </span>
       </div>
     </motion.div>

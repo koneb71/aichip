@@ -10,6 +10,14 @@ import { Article, api } from "../../lib/api";
  * UI says so, because a picker that looks like tagging invites people to tag
  * everything, and a prompt with six articles in it is worse than one with the
  * right one.
+ *
+ * **Closing it.** The list used to be dismissable only by pressing
+ * "+ knowledge-base article" a second time — a control that reads as *add*,
+ * not as *close*. Every instinct a person actually has (Escape, click
+ * outside, look for an ✕) did nothing, and in the 380px rail the open list
+ * fills the composer, so it read as stuck. All three work now, and picking a
+ * page closes it too: attaching one and getting on with the question is the
+ * common case, and the button is right there to reopen for a second.
  */
 export function ArticlePicker({
   workspaceId,
@@ -37,6 +45,20 @@ export function ArticlePicker({
       .then((r) => setArticles(r.articles))
       .catch(() => {});
   }, [workspaceId]);
+
+  // Escape closes it. Bound on the document rather than the panel, because the
+  // focus is in the search box and a keydown there must still reach this.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const chosen = useMemo(
     () => articles.filter((a) => selected.includes(a.id)),
@@ -108,25 +130,44 @@ export function ArticlePicker({
         ))}
         <button
           onClick={() => setOpen((v) => !v)}
-          className="rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
+          className="ring-focus select-none rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
         >
-          {chosen.length ? "+ article" : "+ knowledge-base article"}
+          {open ? "Done" : chosen.length ? "+ article" : "+ knowledge-base article"}
         </button>
       </div>
 
+      {/* Deliberately no AnimatePresence: its direct child here would be a
+          Fragment (the click-away layer plus the panel), which it cannot
+          track, so the exit never resolves and the panel stays mounted —
+          which is exactly "I can't close this one". The entry animation is
+          worth having; the exit is not worth that. */}
       {open && (
+        <>
+        {/* Click-away, the same layer ComposerSettings uses. Below the panel,
+            above everything else, so one click outside dismisses. */}
+        <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mt-2 rounded-xl border border-line bg-panel p-2"
+          className="relative z-20 mt-2 rounded-xl border border-line bg-panel p-2"
         >
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search the knowledge base…"
-            className="mb-1.5 w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
-          />
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search the knowledge base…"
+              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
+            />
+            <button
+              onClick={() => setOpen(false)}
+              title="Close"
+              aria-label="Close the knowledge-base picker"
+              className="ring-focus shrink-0 rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+            >
+              ✕
+            </button>
+          </div>
           {matches.length === 0 ? (
             <div className="px-2 py-3 text-center text-xs text-ink-dim">
               {query ? "Nothing matches." : "Everything is already attached."}
@@ -139,6 +180,9 @@ export function ArticlePicker({
                   onClick={() => {
                     toggle(a.id);
                     setQuery("");
+                    // Attaching one and getting on with the question is the
+                    // common case; the button reopens for a second.
+                    setOpen(false);
                   }}
                   className="block w-full rounded-lg px-2 py-1.5 text-left hover:bg-panel-2"
                 >
@@ -162,6 +206,7 @@ export function ArticlePicker({
             Attach the one that matters, not everything.
           </p>
         </motion.div>
+        </>
       )}
     </div>
   );
