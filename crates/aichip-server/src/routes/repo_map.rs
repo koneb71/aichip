@@ -23,8 +23,9 @@ use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/projects/{id}/map", get(map))
         .route("/projects/{id}/map/status", get(status))
+        .route("/projects/{id}/map/graph", get(graph))
+        .route("/projects/{id}/map/file", get(file))
         .route("/projects/{id}/map/search", post(search))
         .route("/projects/{id}/map/reindex", post(reindex))
 }
@@ -116,18 +117,30 @@ async fn status(
     })))
 }
 
-/// Everything the index knows, for the map to draw.
+/// The nodes and edges, for the canvas to draw.
 ///
-/// The whole list rather than a page of it: 371 files is well under a hundred
-/// kilobytes, and a map that arrives in pieces cannot be laid out at all.
-async fn map(
+/// A strict read: unlike `status`, this never triggers a reconcile. Two
+/// polling endpoints that each spawn one would put two passes over the same
+/// project in flight on every tick, and they would fight over the same lock.
+///
+/// The whole graph in one response, deliberately: a layout cannot be computed
+/// from a page of it, and this repository's is 194 nodes and 306 edges. If a
+/// project ever outgrows that, the answer is a coarser graph — modules only —
+/// and not a quietly truncated one.
+async fn graph(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     repo_project(&state, project_id).await?;
+
+    // Degrees come from the edge table rather than from counting client-side:
+    // the number a node is sized by has to be the same number the inspector
+    // prints, and deriving it twice is how those drift.
     let rows = sqlx::query(
-        "SELECT d.rel_path, d.bytes, d.status, d.indexed_at,
-                (SELECT count(*) FROM project_chunks c WHERE c.document_id = d.id) AS chunks
+        "SELECT d.id, d.rel_path, d.lang, d.bytes, d.rank, d.status,
+                (SELECT count(*) FROM project_symbols s WHERE s.document_id = d.id) AS symbols,
+                (SELECT count(*) FROM project_edges e WHERE e.to_document = d.id)   AS imported_by,
+                (SELECT count(*) FROM project_edges e WHERE e.from_document = d.id) AS imports
          FROM project_documents d
          WHERE d.project_id = $1
          ORDER BY d.rel_path",
@@ -137,15 +150,142 @@ async fn map(
     .await
     .map_err(internal)?;
 
+    let edges = sqlx::query(
+        "SELECT f.rel_path AS from_path, t.rel_path AS to_path, e.weight
+         FROM project_edges e
+         JOIN project_documents f ON f.id = e.from_document
+         JOIN project_documents t ON t.id = e.to_document
+         WHERE e.project_id = $1
+         ORDER BY f.rel_path, t.rel_path",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // Ordered by path on both queries, so the same repository produces the
+    // same array twice — a layout computed from this must not move because a
+    // database chose a different scan order.
+    let index = sqlx::query(
+        "SELECT head_sha, imports_total, imports_resolved, structure_version
+         FROM project_index WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
     Ok(Json(json!({
-        "files": rows.iter().map(|r| json!({
+        "nodes": rows.iter().map(|r| json!({
             "path": r.get::<String, _>("rel_path"),
+            "lang": r.get::<Option<String>, _>("lang"),
             "bytes": r.get::<i64, _>("bytes"),
+            "rank": r.get::<f32, _>("rank"),
             "status": r.get::<String, _>("status"),
-            "chunks": r.get::<i64, _>("chunks"),
-            "indexedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("indexed_at")
-                .map(|t| t.to_rfc3339()),
+            "symbols": r.get::<i64, _>("symbols"),
+            "importedBy": r.get::<i64, _>("imported_by"),
+            "imports": r.get::<i64, _>("imports"),
         })).collect::<Vec<_>>(),
+        "edges": edges.iter().map(|r| json!({
+            "from": r.get::<String, _>("from_path"),
+            "to": r.get::<String, _>("to_path"),
+            "weight": r.get::<i32, _>("weight"),
+        })).collect::<Vec<_>>(),
+        // The honesty pair. An import that resolves to nothing draws no edge,
+        // and a node with no edges reads as "nothing depends on this". Saying
+        // how many were dropped is what lets a reader weigh an empty
+        // neighbourhood instead of believing it.
+        "importsTotal": index.as_ref().map(|r| r.get::<i32, _>("imports_total")).unwrap_or(0),
+        "importsResolved": index.as_ref().map(|r| r.get::<i32, _>("imports_resolved")).unwrap_or(0),
+        "structureVersion": index.as_ref().map(|r| r.get::<i64, _>("structure_version")).unwrap_or(0),
+        "indexedSha": index.as_ref().and_then(|r| r.get::<Option<String>, _>("head_sha")),
+    })))
+}
+
+#[derive(Deserialize)]
+struct FileQuery {
+    path: String,
+}
+
+/// One file's insides: what it defines, and what it asked for.
+///
+/// Fetched on selection rather than shipped with the graph — this repository's
+/// 890 symbols are worth ~50KB that nobody looks at until they click.
+async fn file(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<FileQuery>,
+) -> Result<Json<Value>, ApiError> {
+    repo_project(&state, project_id).await?;
+    let doc: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM project_documents WHERE project_id = $1 AND rel_path = $2",
+    )
+    .bind(project_id)
+    .bind(&q.path)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    let Some(doc) = doc else {
+        return Err((StatusCode::NOT_FOUND, "that file is not in the index".into()));
+    };
+
+    let symbols = sqlx::query(
+        "SELECT name, kind, line, signature FROM project_symbols
+         WHERE document_id = $1 ORDER BY line",
+    )
+    .bind(doc)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // Both directions. "What would I break" is the importers, and it is the
+    // question a person actually opens a dependency graph to ask.
+    let imports = sqlx::query(
+        "SELECT t.rel_path AS path, e.weight FROM project_edges e
+         JOIN project_documents t ON t.id = e.to_document
+         WHERE e.from_document = $1 ORDER BY t.rel_path",
+    )
+    .bind(doc)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    let importers = sqlx::query(
+        "SELECT f.rel_path AS path, e.weight FROM project_edges e
+         JOIN project_documents f ON f.id = e.from_document
+         WHERE e.to_document = $1 ORDER BY f.rel_path",
+    )
+    .bind(doc)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // Specifiers that resolved to nothing, named rather than hidden: an
+    // external package looks exactly like a broken relative path once the edge
+    // is dropped, and only one of those is a problem.
+    let unresolved: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT specifier FROM project_imports
+         WHERE document_id = $1 ORDER BY specifier",
+    )
+    .bind(doc)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(json!({
+        "path": q.path,
+        "symbols": symbols.iter().map(|r| json!({
+            "name": r.get::<String, _>("name"),
+            "kind": r.get::<String, _>("kind"),
+            "line": r.get::<i32, _>("line"),
+            "signature": r.get::<Option<String>, _>("signature"),
+        })).collect::<Vec<_>>(),
+        "imports": imports.iter().map(|r| json!({
+            "path": r.get::<String, _>("path"), "weight": r.get::<i32, _>("weight"),
+        })).collect::<Vec<_>>(),
+        "importers": importers.iter().map(|r| json!({
+            "path": r.get::<String, _>("path"), "weight": r.get::<i32, _>("weight"),
+        })).collect::<Vec<_>>(),
+        "specifiers": unresolved,
     })))
 }
 

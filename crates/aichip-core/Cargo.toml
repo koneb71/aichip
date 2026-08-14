@@ -56,6 +56,18 @@ pdf-extract = "0.12"
 calamine = "0.36"
 zip = "8"
 quick-xml = "0.41"
+# Real parsers for the code map, rather than regexes over source text. A
+# regex cannot tell a function from the same words inside a string or a
+# comment, and a map that names definitions which do not exist sends an agent
+# to read a line that is not there. The grammars are C, compiled once.
+#
+# The versions look mismatched and are not: every grammar here depends on the
+# `tree-sitter-language` 0.1 ABI shim rather than on the core crate, which is
+# what lets a 0.23 grammar load into a 0.26 parser.
+tree-sitter = "0.26"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
 
 [dev-dependencies]
 tempfile = "3"

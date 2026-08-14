@@ -1263,17 +1263,6 @@ export interface SpaceDocsStatus {
 // ── code map ────────────────────────────────────────────────────────────────
 
 /** One indexed file, as the map sees it. */
-export interface RepoFile {
-  /** Repo-relative, POSIX separators. */
-  path: string;
-  bytes: number;
-  /** indexed = searchable. failed = the error says why, retried next pass. */
-  status: "pending" | "indexed" | "failed" | "unsupported";
-  /** How many passages this file was split into. */
-  chunks: number;
-  indexedAt: string | null;
-}
-
 /** Where the index stands. */
 export interface RepoIndexStatus {
   /** never = nothing read yet. structure = files are being read (seconds).
@@ -1291,6 +1280,52 @@ export interface RepoIndexStatus {
   error: string | null;
   /** There was nothing to read. A state, not an error. */
   note: string | null;
+}
+
+/** A file as a node of the dependency graph. */
+export interface RepoGraphNode {
+  path: string;
+  /** The grammar that read it, or null for a language none here knows. */
+  lang: string | null;
+  bytes: number;
+  /** 0..1 PageRank. Node size and tiebreaks only — it ranks infrastructure. */
+  rank: number;
+  status: string;
+  symbols: number;
+  importedBy: number;
+  imports: number;
+}
+
+/** One file importing another, `weight` specifiers deep. */
+export interface RepoGraphEdge {
+  from: string;
+  to: string;
+  weight: number;
+}
+
+export interface RepoGraph {
+  nodes: RepoGraphNode[];
+  edges: RepoGraphEdge[];
+  /** How many specifiers were found, and how many pointed at a file in this
+   *  project. The rest are packages, and saying so is what lets a reader trust
+   *  an empty neighbourhood instead of reading it as "nothing depends on me". */
+  importsTotal: number;
+  importsResolved: number;
+  /** Bumped only when files or edges actually moved. The canvas refetches on a
+   *  change and ignores the poll otherwise, so it never re-lays out under the
+   *  cursor while embeddings fill in. */
+  structureVersion: number;
+  indexedSha: string | null;
+}
+
+/** One file's insides, fetched when it is selected. */
+export interface RepoFileDetail {
+  path: string;
+  symbols: Array<{ name: string; kind: string; line: number; signature: string | null }>;
+  imports: Array<{ path: string; weight: number }>;
+  importers: Array<{ path: string; weight: number }>;
+  /** Every specifier as written, resolved or not. */
+  specifiers: string[];
 }
 
 /** One semantic hit, collapsed to the best passage per file. */
@@ -2313,12 +2348,17 @@ export const api = {
     ),
 
   // code map
-  repoMap: (projectId: string) =>
-    fetch(`/api/projects/${projectId}/map`).then((r) => json<{ files: RepoFile[] }>(r)),
   /** Also the on-open trigger: reading this is what keeps the index honest
    *  about edits made outside aichip. */
   repoIndexStatus: (projectId: string) =>
     fetch(`/api/projects/${projectId}/map/status`).then((r) => json<RepoIndexStatus>(r)),
+  /** A strict read — unlike the status call, this never triggers a reconcile. */
+  repoGraph: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/map/graph`).then((r) => json<RepoGraph>(r)),
+  repoFile: (projectId: string, path: string) =>
+    fetch(`/api/projects/${projectId}/map/file?path=${encodeURIComponent(path)}`).then((r) =>
+      json<RepoFileDetail>(r),
+    ),
   /** POST because a question is a body — a natural-language query in a URL
    *  ends up in access logs. */
   repoSearch: (projectId: string, q: string, limit = 12) =>

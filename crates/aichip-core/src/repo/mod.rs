@@ -11,4 +11,7 @@
 
 pub mod chunk;
 pub mod enumerate;
+pub mod imports;
 pub mod index;
+pub mod rank;
+pub mod symbols;
