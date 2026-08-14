@@ -41,7 +41,7 @@ fn lock_for(project_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS.lock().unwrap().entry(project_id).or_default().clone()
 }
 
-/// Walk the space's folder and bring `space_documents`/`space_chunks` in
+/// Walk the space's folder and bring `project_documents`/`project_chunks` in
 /// line with it: new and changed files are chunked and embedded, missing
 /// files lose their rows, unchanged files cost a hash.
 pub async fn reconcile(
@@ -57,7 +57,7 @@ pub async fn reconcile(
 
     // What the database believes, keyed by rel_path.
     let known: HashMap<String, (Uuid, String, String)> = sqlx::query(
-        "SELECT id, rel_path, content_hash, status FROM space_documents WHERE project_id=$1",
+        "SELECT id, rel_path, content_hash, status FROM project_documents WHERE project_id=$1",
     )
     .bind(project_id)
     .fetch_all(&db.pool)
@@ -152,7 +152,7 @@ pub async fn reconcile(
                 // one must never be visible together.
                 let mut tx = db.pool.begin().await?;
                 let doc_id: Uuid = sqlx::query_scalar(
-                    "INSERT INTO space_documents (project_id, rel_path, content_hash, bytes,
+                    "INSERT INTO project_documents (project_id, rel_path, content_hash, bytes,
                                                   status, error, indexed_at)
                      VALUES ($1, $2, $3, $4, 'indexed', NULL, now())
                      ON CONFLICT (project_id, rel_path) DO UPDATE SET
@@ -166,13 +166,13 @@ pub async fn reconcile(
                 .bind(bytes.len() as i64)
                 .fetch_one(&mut *tx)
                 .await?;
-                sqlx::query("DELETE FROM space_chunks WHERE document_id=$1")
+                sqlx::query("DELETE FROM project_chunks WHERE document_id=$1")
                     .bind(doc_id)
                     .execute(&mut *tx)
                     .await?;
                 for (i, (content, emb)) in chunks.iter().zip(&embeddings).enumerate() {
                     sqlx::query(
-                        "INSERT INTO space_chunks (document_id, project_id, chunk_index,
+                        "INSERT INTO project_chunks (document_id, project_id, chunk_index,
                                                    content, embedding, embedding_model)
                          VALUES ($1, $2, $3, $4, $5, $6)",
                     )
@@ -204,7 +204,7 @@ pub async fn reconcile(
 
     // Rows whose file is gone. The cascade takes the chunks.
     let removed = sqlx::query(
-        "DELETE FROM space_documents WHERE project_id=$1 AND NOT (rel_path = ANY($2))",
+        "DELETE FROM project_documents WHERE project_id=$1 AND NOT (rel_path = ANY($2))",
     )
     .bind(project_id)
     .bind(&seen)
@@ -226,7 +226,7 @@ async fn upsert_status(
     error: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO space_documents (project_id, rel_path, content_hash, bytes, status, error)
+        "INSERT INTO project_documents (project_id, rel_path, content_hash, bytes, status, error)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (project_id, rel_path) DO UPDATE SET
             content_hash=EXCLUDED.content_hash, bytes=EXCLUDED.bytes,

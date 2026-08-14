@@ -14,6 +14,11 @@ pub struct Passage {
     pub chunk_index: i32,
     pub content: String,
     pub score: f32,
+    /// Where the excerpt starts, for a source file. `None` for the document
+    /// formats that have no lines to count.
+    pub start_line: Option<i32>,
+    /// The function or type the excerpt landed inside, when the chunker knew.
+    pub symbol: Option<String>,
 }
 
 /// How many passages a turn injects.
@@ -45,9 +50,17 @@ pub async fn top_k(
     if query.is_empty() {
         return Ok(vec![]);
     }
+    // Two passes, and the split is load-bearing at repository scale.
+    //
+    // Ranking needs the vector and the file name; it does not need the text.
+    // Fetching `content` here too was affordable for a space's handful of
+    // documents and is not for a repository: aichip is ~3,500 code chunks, so
+    // a single question would drag megabytes of source out of Postgres to
+    // score 384 floats each and throw almost all of it away. The bodies are
+    // fetched below, for the handful that survived.
     let rows = sqlx::query(
-        "SELECT d.rel_path, c.chunk_index, c.content, c.embedding
-         FROM space_chunks c JOIN space_documents d ON d.id = c.document_id
+        "SELECT c.id, d.rel_path, c.embedding
+         FROM project_chunks c JOIN project_documents d ON d.id = c.document_id
          WHERE c.project_id = $1 AND c.embedding_model = $2",
     )
     .bind(project_id)
@@ -64,34 +77,62 @@ pub async fn top_k(
         .next()
         .ok_or_else(|| anyhow::anyhow!("the embedder returned nothing for the query"))?;
 
-    let mut scored: Vec<Passage> = rows
+    let mut scored: Vec<(Uuid, String, f32)> = rows
         .iter()
         .filter_map(|r| {
             let emb = super::embed::from_bytes(r.get::<Vec<u8>, _>("embedding").as_slice()).ok()?;
-            Some(Passage {
-                rel_path: r.get("rel_path"),
-                chunk_index: r.get("chunk_index"),
-                content: r.get("content"),
-                score: super::embed::cosine(&q, &emb),
-            })
+            Some((
+                r.get::<Uuid, _>("id"),
+                r.get::<String, _>("rel_path"),
+                super::embed::cosine(&q, &emb),
+            ))
         })
         .collect();
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut per_doc: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut out = vec![];
-    for p in scored {
-        if p.score < SCORE_FLOOR {
+    let mut wanted: Vec<(Uuid, f32)> = vec![];
+    for (id, rel_path, score) in scored {
+        if score < SCORE_FLOOR {
             break; // sorted, so everything after is below the floor too
         }
-        let seen = per_doc.entry(p.rel_path.clone()).or_insert(0);
+        let seen = per_doc.entry(rel_path).or_insert(0);
         if *seen >= PER_DOC_CAP {
             continue;
         }
         *seen += 1;
-        out.push(p);
-        if out.len() >= k {
+        wanted.push((id, score));
+        if wanted.len() >= k {
             break;
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // The bodies, for the survivors only. Re-sorted into the ranking's order,
+    // because `= ANY` says nothing about the order rows come back in.
+    let ids: Vec<Uuid> = wanted.iter().map(|(id, _)| *id).collect();
+    let bodies = sqlx::query(
+        "SELECT c.id, d.rel_path, c.chunk_index, c.content, c.start_line, c.symbol
+         FROM project_chunks c JOIN project_documents d ON d.id = c.document_id
+         WHERE c.id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(wanted.len());
+    for (id, score) in wanted {
+        if let Some(r) = bodies.iter().find(|r| r.get::<Uuid, _>("id") == id) {
+            out.push(Passage {
+                rel_path: r.get("rel_path"),
+                chunk_index: r.get("chunk_index"),
+                content: r.get("content"),
+                start_line: r.get("start_line"),
+                symbol: r.get("symbol"),
+                score,
+            });
         }
     }
     Ok(out)
@@ -162,7 +203,14 @@ mod tests {
     use super::*;
 
     fn passage(path: &str, idx: i32, content: &str) -> Passage {
-        Passage { rel_path: path.into(), chunk_index: idx, content: content.into(), score: 0.9 }
+        Passage {
+            rel_path: path.into(),
+            chunk_index: idx,
+            content: content.into(),
+            score: 0.9,
+            start_line: None,
+            symbol: None,
+        }
     }
 
     #[test]

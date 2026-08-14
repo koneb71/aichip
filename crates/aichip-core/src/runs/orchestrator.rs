@@ -51,6 +51,7 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
     "mcp__aichip__get_spend",
     "mcp__aichip__list_skills",
     "mcp__aichip__move_task",
+    "mcp__aichip__search_code",
 ];
 
 /// Named explicitly rather than left to the allow-list.

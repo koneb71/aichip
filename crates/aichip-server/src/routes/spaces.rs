@@ -72,7 +72,7 @@ fn doc_json(r: &sqlx::postgres::PgRow) -> Value {
 async fn list_rows(state: &AppState, project_id: Uuid) -> Result<Vec<Value>, ApiError> {
     let rows = sqlx::query(
         "SELECT id, rel_path, status, error, bytes, indexed_at
-         FROM space_documents WHERE project_id=$1 ORDER BY rel_path",
+         FROM project_documents WHERE project_id=$1 ORDER BY rel_path",
     )
     .bind(project_id)
     .fetch_all(&state.db.pool)
@@ -196,7 +196,7 @@ async fn status(
 ) -> Result<Json<Value>, ApiError> {
     space_path(&state, project_id).await?;
     let rows = sqlx::query(
-        "SELECT status, count(*) AS n FROM space_documents WHERE project_id=$1 GROUP BY status",
+        "SELECT status, count(*) AS n FROM project_documents WHERE project_id=$1 GROUP BY status",
     )
     .bind(project_id)
     .fetch_all(&state.db.pool)
@@ -218,7 +218,7 @@ async fn remove(
 ) -> Result<Json<Value>, ApiError> {
     let dir = space_path(&state, project_id).await?;
     let rel: String = sqlx::query_scalar(
-        "SELECT rel_path FROM space_documents WHERE id=$1 AND project_id=$2",
+        "SELECT rel_path FROM project_documents WHERE id=$1 AND project_id=$2",
     )
     .bind(doc_id)
     .bind(project_id)
@@ -236,7 +236,7 @@ async fn remove(
     if target.exists() {
         tokio::fs::remove_file(&target).await.map_err(internal)?;
     }
-    sqlx::query("DELETE FROM space_documents WHERE id=$1")
+    sqlx::query("DELETE FROM project_documents WHERE id=$1")
         .bind(doc_id)
         .execute(&state.db.pool)
         .await

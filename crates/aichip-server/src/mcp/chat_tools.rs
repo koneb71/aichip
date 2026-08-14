@@ -148,6 +148,14 @@ pub fn tools_list(kind: &str) -> Value {
                     "column": { "type": "string", "enum": ["backlog", "review", "done"] }
                 }), vec!["task_id", "column"])
             },
+            {
+                "name": "search_code",
+                "description": "Search this project's code by meaning rather than by exact text. Use it when you do not know what a thing is called: \"where do we decide whether a card can start\" finds the function even though the question never says \"vet\". Returns paths with line numbers and excerpts; open a file with Read for more than an excerpt. Grep is still the better tool when you already know the exact string to look for.",
+                "inputSchema": obj(json!({
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+                }), vec!["query"])
+            },
             // Deliberately absent: merge_task. `squash_merge` runs four git
             // commands in the user's real checkout, which is the same reason
             // Edit/Write/Bash are denied by name for chat runs — a front door
@@ -504,6 +512,41 @@ async fn call_tool(
             // not come away thinking their code merged.
             Ok(json!({ "filed": true, "column": column }))
         }
+        "search_code" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if query.is_empty() {
+                return Err("say what to look for".into());
+            }
+            // Not an error while the embedder is still coming: the assistant
+            // has Grep and Glob, and saying so beats a failure it cannot act
+            // on — the same rule the space retrieval follows.
+            if !matches!(
+                aichip_core::rag::embed::status(),
+                aichip_core::rag::embed::EmbedStatus::Ready
+            ) {
+                return Ok(json!({
+                    "hits": [],
+                    "note": "the code index is not ready yet — use Grep and Glob for now",
+                }));
+            }
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8)
+                .clamp(1, 20) as usize;
+            let hits = aichip_core::rag::retrieve::top_k(&state.db, project_id, query, limit)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "hits": hits.iter().map(|h| json!({
+                    "path": h.rel_path,
+                    "line": h.start_line,
+                    "symbol": h.symbol,
+                    "score": h.score,
+                    "excerpt": h.content.chars().take(600).collect::<String>(),
+                })).collect::<Vec<_>>()
+            }))
+        }
         "search_documents" => {
             let query = args.get("query").and_then(Value::as_str).ok_or("query is required")?;
             let limit = args
@@ -528,7 +571,7 @@ async fn call_tool(
         }
         "list_documents" => {
             let rows = sqlx::query(
-                "SELECT rel_path, status, bytes FROM space_documents
+                "SELECT rel_path, status, bytes FROM project_documents
                  WHERE project_id=$1 ORDER BY rel_path",
             )
             .bind(project_id)
@@ -736,6 +779,9 @@ mod tests {
                 "get_spend",
                 "list_skills",
                 "move_task",
+                // Finding code by meaning, for the question Grep cannot answer
+                // because the asker does not know the word yet.
+                "search_code",
             ]
         );
     }
