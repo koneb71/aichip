@@ -517,35 +517,33 @@ async fn call_tool(
             if query.is_empty() {
                 return Err("say what to look for".into());
             }
-            // Not an error while the embedder is still coming: the assistant
-            // has Grep and Glob, and saying so beats a failure it cannot act
-            // on — the same rule the space retrieval follows.
-            if !matches!(
-                aichip_core::rag::embed::status(),
-                aichip_core::rag::embed::EmbedStatus::Ready
-            ) {
-                return Ok(json!({
-                    "hits": [],
-                    "note": "the code index is not ready yet — use Grep and Glob for now",
-                }));
-            }
             let limit = args
                 .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(8)
                 .clamp(1, 20) as usize;
-            let hits = aichip_core::rag::retrieve::top_k(&state.db, project_id, query, limit)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(json!({
-                "hits": hits.iter().map(|h| json!({
-                    "path": h.rel_path,
-                    "line": h.start_line,
-                    "symbol": h.symbol,
-                    "score": h.score,
-                    "excerpt": h.content.chars().take(600).collect::<String>(),
-                })).collect::<Vec<_>>()
-            }))
+            // Deliberately not gated on `embed::status()`. That status reports
+            // what this process has *asked* the embedder for, and it only turns
+            // Ready once something does — so a pre-check would refuse every
+            // search after a restart, on an index that is complete. Asking is
+            // what makes it ready.
+            match aichip_core::rag::retrieve::top_k(&state.db, project_id, query, limit).await {
+                Ok(hits) => Ok(json!({
+                    "hits": hits.iter().map(|h| json!({
+                        "path": h.rel_path,
+                        "line": h.start_line,
+                        "symbol": h.symbol,
+                        "score": h.score,
+                        "excerpt": h.content.chars().take(600).collect::<String>(),
+                    })).collect::<Vec<_>>()
+                })),
+                // Not an error: the assistant has Grep and Glob, and a tool
+                // failure it cannot act on is worse than being told to use them.
+                Err(e) => Ok(json!({
+                    "hits": [],
+                    "note": format!("meaning search is unavailable ({e}) — use Grep and Glob"),
+                })),
+            }
         }
         "search_documents" => {
             let query = args.get("query").and_then(Value::as_str).ok_or("query is required")?;

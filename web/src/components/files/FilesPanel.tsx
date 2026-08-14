@@ -50,10 +50,15 @@ const isDirty = (b: Buffer | undefined) =>
 export function FilesPanel({
   projectId,
   tasks = [],
+  initialPath,
 }: {
   projectId: string;
   /** For the tree selector: any card with a branch has a worktree to browse. */
   tasks?: Task[];
+  /** Opened on arrival, so the Map tab can hand a file straight to the editor.
+   *  The explorer tree is not expanded to it — `api.file` fetches by path, and
+   *  revealing would mean walking every ancestor for little gain. */
+  initialPath?: string | null;
 }) {
   const narrow = useMediaQuery(NARROW);
   const [tree, setTree] = useState<Tree>({ kind: "project", id: projectId });
@@ -183,6 +188,12 @@ export function FilesPanel({
     },
     [tree, buffers],
   );
+
+  // A path handed in from another tab. Not in the scope effect: that one runs
+  // on tree changes and would reopen this file every time the tree switched.
+  useEffect(() => {
+    if (initialPath) openFile(initialPath);
+  }, [initialPath, openFile]);
 
   const closeTab = (path: string) => {
     const b = buffers.get(path);

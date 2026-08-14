@@ -10,6 +10,7 @@ import { TaskDrawer } from "../components/TaskDrawer";
 import { ChatPanel } from "../components/chat/ChatPanel";
 import { WorkflowsPanel } from "../components/workflows/WorkflowsPanel";
 import { FilesPanel } from "../components/files/FilesPanel";
+import { RepoMapPanel } from "../components/map/RepoMapPanel";
 // Lazy for the same reason Monaco is: xterm only downloads for people who
 // actually open the tab.
 const TerminalPanel = lazy(() => import("../components/terminal/TerminalPanel"));
@@ -29,6 +30,7 @@ const TABS = [
   { key: "board", label: "Tasks Board" },
   { key: "workflows", label: "Workflows" },
   { key: "files", label: "Files" },
+  { key: "map", label: "Map" },
   { key: "terminal", label: "Terminal" },
   { key: "previews", label: "Previews" },
   { key: "brain", label: "Brain" },
@@ -50,6 +52,8 @@ export default function ProjectPage() {
   const [settings, setSettings] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [tab, setTab] = useState<Tab>("board");
+  // Handed to the Files tab when the Map sends a file there.
+  const [filePath, setFilePath] = useState<string | null>(null);
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
   const narrow = useMediaQuery(NARROW);
 
@@ -270,7 +274,16 @@ export default function ProjectPage() {
           )}
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
           {activeTab === "files" && (
-            <FilesPanel projectId={projectId} tasks={tasks} />
+            <FilesPanel projectId={projectId} tasks={tasks} initialPath={filePath} />
+          )}
+          {activeTab === "map" && (
+            <RepoMapPanel
+              projectId={projectId}
+              onOpenFile={(path) => {
+                setFilePath(path);
+                setTab("files");
+              }}
+            />
           )}
           {activeTab === "terminal" && (
             <Suspense

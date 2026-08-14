@@ -1260,6 +1260,51 @@ export interface SpaceDocsStatus {
   counts: Record<string, number>;
 }
 
+// ── code map ────────────────────────────────────────────────────────────────
+
+/** One indexed file, as the map sees it. */
+export interface RepoFile {
+  /** Repo-relative, POSIX separators. */
+  path: string;
+  bytes: number;
+  /** indexed = searchable. failed = the error says why, retried next pass. */
+  status: "pending" | "indexed" | "failed" | "unsupported";
+  /** How many passages this file was split into. */
+  chunks: number;
+  indexedAt: string | null;
+}
+
+/** Where the index stands. */
+export interface RepoIndexStatus {
+  /** never = nothing read yet. structure = files are being read (seconds).
+   *  embedding = the file list is already complete and only meaning search is
+   *  still filling in. ready = both done. */
+  phase: "never" | "structure" | "embedding" | "ready" | "failed";
+  /** The same embedder, and the same one-time download, as a space's. */
+  embedder: { state: "not_ready" | "downloading" | "ready" | "failed"; detail?: string };
+  counts: { files: number; parsed: number; embedded: number };
+  structureVersion: number;
+  /** The commit the index was read at — a card runs in a worktree on another
+   *  branch, so a map that does not say which tree it describes can mislead. */
+  indexedSha: string | null;
+  indexedAt: string | null;
+  error: string | null;
+  /** There was nothing to read. A state, not an error. */
+  note: string | null;
+}
+
+/** One semantic hit, collapsed to the best passage per file. */
+export interface RepoSearchHit {
+  path: string;
+  /** 0..1 cosine, only comparable within one response. */
+  score: number;
+  /** 1-based, the way an editor counts. Null for a format with no lines. */
+  line: number | null;
+  /** The enclosing definition, when the chunker knew one. */
+  symbol: string | null;
+  excerpt: string;
+}
+
 /** A prompt that runs on a schedule. */
 export interface Routine {
   id: string;
@@ -2265,6 +2310,24 @@ export const api = {
   researchSaveToKb: (id: string) =>
     post(`/api/research/${id}/save-to-kb`).then((r) =>
       json<{ articleId: string; created: boolean }>(r),
+    ),
+
+  // code map
+  repoMap: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/map`).then((r) => json<{ files: RepoFile[] }>(r)),
+  /** Also the on-open trigger: reading this is what keeps the index honest
+   *  about edits made outside aichip. */
+  repoIndexStatus: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/map/status`).then((r) => json<RepoIndexStatus>(r)),
+  /** POST because a question is a body — a natural-language query in a URL
+   *  ends up in access logs. */
+  repoSearch: (projectId: string, q: string, limit = 12) =>
+    post(`/api/projects/${projectId}/map/search`, { q, limit }).then((r) =>
+      json<{ hits: RepoSearchHit[]; note?: string }>(r),
+    ),
+  reindexRepoMap: (projectId: string) =>
+    post(`/api/projects/${projectId}/map/reindex`).then((r) =>
+      json<{ indexed: number; unchanged: number; failed: number; removed: number; vectorsDeferred: boolean }>(r),
     ),
 
   // dependencies

@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/projects/{id}/map", get(map))
         .route("/projects/{id}/map/status", get(status))
         .route("/projects/{id}/map/search", post(search))
         .route("/projects/{id}/map/reindex", post(reindex))
@@ -115,6 +116,39 @@ async fn status(
     })))
 }
 
+/// Everything the index knows, for the map to draw.
+///
+/// The whole list rather than a page of it: 371 files is well under a hundred
+/// kilobytes, and a map that arrives in pieces cannot be laid out at all.
+async fn map(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    repo_project(&state, project_id).await?;
+    let rows = sqlx::query(
+        "SELECT d.rel_path, d.bytes, d.status, d.indexed_at,
+                (SELECT count(*) FROM project_chunks c WHERE c.document_id = d.id) AS chunks
+         FROM project_documents d
+         WHERE d.project_id = $1
+         ORDER BY d.rel_path",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(json!({
+        "files": rows.iter().map(|r| json!({
+            "path": r.get::<String, _>("rel_path"),
+            "bytes": r.get::<i64, _>("bytes"),
+            "status": r.get::<String, _>("status"),
+            "chunks": r.get::<i64, _>("chunks"),
+            "indexedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("indexed_at")
+                .map(|t| t.to_rfc3339()),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
 #[derive(Deserialize)]
 struct SearchBody {
     q: String,
@@ -132,33 +166,31 @@ async fn search(
     Json(body): Json<SearchBody>,
 ) -> Result<Json<Value>, ApiError> {
     repo_project(&state, project_id).await?;
-    let ready = matches!(
-        aichip_core::rag::embed::status(),
-        aichip_core::rag::embed::EmbedStatus::Ready
-    );
-    // Not an error: an index that has not embedded yet has nothing to say by
-    // meaning, and the caller has a path search that still works.
-    if !ready {
-        return Ok(Json(json!({ "hits": [], "embedderReady": false })));
-    }
-    let hits = aichip_core::rag::retrieve::top_k(
+    // Never gated on `embed::status()`. It reports what this process has asked
+    // the embedder for, and the embedder only loads when something asks — so a
+    // pre-check refuses every search after a restart, on an index that is
+    // complete and sitting in the database. The first query pays the load.
+    match aichip_core::rag::retrieve::top_k(
         &state.db,
         project_id,
         &body.q,
         body.limit.unwrap_or(12).min(30),
     )
     .await
-    .map_err(internal)?;
-    Ok(Json(json!({
-        "hits": hits.iter().map(|h| json!({
-            "path": h.rel_path,
-            "score": h.score,
-            "line": h.start_line,
-            "symbol": h.symbol,
-            "excerpt": h.content.chars().take(400).collect::<String>(),
-        })).collect::<Vec<_>>(),
-        "embedderReady": true,
-    })))
+    {
+        Ok(hits) => Ok(Json(json!({
+            "hits": hits.iter().map(|h| json!({
+                "path": h.rel_path,
+                "score": h.score,
+                "line": h.start_line,
+                "symbol": h.symbol,
+                "excerpt": h.content.chars().take(400).collect::<String>(),
+            })).collect::<Vec<_>>(),
+        }))),
+        // Named, not swallowed: a failed search that renders as "no results"
+        // reads as "your code does not contain this", which is a lie.
+        Err(e) => Ok(Json(json!({ "hits": [], "note": e.to_string() }))),
+    }
 }
 
 /// Read it all again, now, and say what happened.
