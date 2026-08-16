@@ -1365,6 +1365,69 @@ export interface RepoSearchHit {
 }
 
 /** A prompt that runs on a schedule. */
+/**
+ * The agent assigned to run this project's board on a schedule.
+ *
+ * A manager is a routine of kind `manage` under the covers — one per project —
+ * so it shares the scheduler, the firing history and the notification when it
+ * finishes. It gets its own type because the two things a manager has that no
+ * other routine does are the two that matter here: who it is, and how much it
+ * may spend without asking.
+ */
+export interface Manager {
+  id: string;
+  name: string;
+  agentId: string | null;
+  agentName: string | null;
+  /** What this project's manager should care about. May be empty. */
+  brief: string;
+  cronExpr: string;
+  catchUp: "run_once" | "skip";
+  /** The kill switch. A disabled manager has no `nextAt`. */
+  enabled: boolean;
+  engine: string | null;
+  modelTier: string | null;
+  effort: string | null;
+  /** The standing thread — the manager's memory between passes. */
+  chatId: string | null;
+  /** Cards one pass may start. 0 means review and report only. */
+  maxStarts: number;
+  nextAt: string | null;
+}
+
+export interface ManagerDraft {
+  agentId?: string | null;
+  brief: string;
+  cronExpr: string;
+  catchUp?: string;
+  enabled?: boolean;
+  engine?: string | null;
+  modelTier?: string | null;
+  effort?: string | null;
+  maxStarts?: number;
+}
+
+/** Something the manager did during one pass. */
+export interface ManagerAction {
+  kind: "create" | "start" | "move" | "cancel";
+  taskId: string | null;
+  title: string;
+  detail: string;
+  column: string | null;
+}
+
+/** One firing, and what came of it. */
+export interface ManagerPass {
+  id: string;
+  firedAt: string;
+  trigger: "schedule" | "manual";
+  error: string | null;
+  runId: string | null;
+  runStatus: string | null;
+  costUsd: number | null;
+  actions: ManagerAction[];
+}
+
 export interface Routine {
   id: string;
   name: string;
@@ -1470,6 +1533,13 @@ const post = (url: string, body?: unknown) =>
 const patch = (url: string, body: unknown) =>
   fetch(url, {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+const put = (url: string, body: unknown) =>
+  fetch(url, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -2399,6 +2469,22 @@ export const api = {
     post(`/api/tasks/${taskId}/blockers`, { blockedBy }).then(json),
   removeTaskBlocker: (taskId: string, blockerId: string) =>
     fetch(`/api/tasks/${taskId}/blockers/${blockerId}`, { method: "DELETE" }).then(json),
+
+  // the project's manager
+  manager: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/manager`).then((r) =>
+      json<{ manager: Manager | null }>(r),
+    ),
+  managerSave: (projectId: string, body: ManagerDraft) =>
+    put(`/api/projects/${projectId}/manager`, body).then(json),
+  managerRemove: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/manager`, { method: "DELETE" }).then(json),
+  managerRunNow: (projectId: string) =>
+    post(`/api/projects/${projectId}/manager/run`).then(json),
+  managerPasses: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/manager/passes`).then((r) =>
+      json<{ passes: ManagerPass[] }>(r),
+    ),
 
   // routines
   routines: (workspaceId: string) =>

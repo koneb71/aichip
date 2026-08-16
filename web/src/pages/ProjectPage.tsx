@@ -25,6 +25,7 @@ import { PublishModal } from "../components/PublishModal";
 import { Icon } from "../components/ui/Icon";
 import { gradientFor } from "../components/ui/Surface";
 import { springy, tappable } from "../lib/motion";
+import { ManagerPanel } from "../components/ManagerPanel";
 
 const TABS = [
   { key: "board", label: "Tasks Board" },
@@ -34,6 +35,7 @@ const TABS = [
   { key: "terminal", label: "Terminal" },
   { key: "previews", label: "Previews" },
   { key: "brain", label: "Brain" },
+  { key: "manager", label: "Manager" },
   { key: "storage", label: "Storage" },
   // Docked beside the board on a wide screen; below `lg` there is no room for
   // a 380px column, so the chat becomes a tab like the others.
@@ -298,6 +300,9 @@ export default function ProjectPage() {
           )}
           {activeTab === "previews" && <PreviewsPanel projectId={projectId} />}
           {activeTab === "brain" && <BrainPanel projectId={projectId} />}
+          {activeTab === "manager" && (
+            <ManagerPanel projectId={projectId} workspaceId={project?.workspaceId} />
+          )}
           {activeTab === "storage" && <StoragePanel projectId={projectId} />}
           {activeTab === "chat" && (
             <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} projectKind={project?.kind} />

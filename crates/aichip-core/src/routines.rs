@@ -35,17 +35,40 @@ pub async fn fire(
     routine_id: Uuid,
     trigger: &str,
 ) -> anyhow::Result<()> {
-    let outcome = dispatch(db, orchestrator, routine_id).await;
+    // The history row is written *before* the work, not after it.
+    //
+    // Two reasons, and the second is what forced the change. A firing that
+    // dies mid-dispatch — a panic, a process kill — used to leave no trace at
+    // all, so the routine's history quietly thinned out rather than showing a
+    // failure. And a management pass records what it did against this row
+    // while it is still running, so the row has to exist by the time the run
+    // reaches its first tool call.
+    let pass_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO routine_runs (routine_id, trigger) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(routine_id)
+    .bind(trigger)
+    .fetch_one(&db.pool)
+    .await?;
+
+    let outcome = dispatch(db, orchestrator, routine_id, pass_id).await;
     let (fired, error) = match &outcome {
         Ok(f) => (Some(f), None),
         Err(e) => (None, Some(e.to_string())),
     };
     sqlx::query(
-        "INSERT INTO routine_runs (routine_id, trigger, run_id, research_id, task_id, chat_id, error)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "UPDATE routine_runs
+            SET run_id      = coalesce($2, run_id),
+                research_id = $3,
+                task_id     = $4,
+                chat_id     = coalesce($5, chat_id),
+                error       = $6
+          WHERE id = $1",
     )
-    .bind(routine_id)
-    .bind(trigger)
+    .bind(pass_id)
+    // `coalesce` on the two a manage pass fills in for itself: it wrote them
+    // the moment its turn was queued, and re-writing them here would be
+    // harmless but re-writing a NULL over them would not be.
     .bind(fired.and_then(|f| f.run_id))
     .bind(fired.and_then(|f| f.research_id))
     .bind(fired.and_then(|f| f.task_id))
@@ -56,9 +79,15 @@ pub async fn fire(
     outcome.map(|_| ())
 }
 
-async fn dispatch(db: &Db, orchestrator: &Orchestrator, routine_id: Uuid) -> anyhow::Result<Fired> {
+async fn dispatch(
+    db: &Db,
+    orchestrator: &Orchestrator,
+    routine_id: Uuid,
+    pass_id: Uuid,
+) -> anyhow::Result<Fired> {
     let r = sqlx::query(
-        "SELECT workspace_id, name, kind, project_id, prompt, engine, model_tier, effort, chat_id, url
+        "SELECT workspace_id, name, kind, project_id, prompt, engine, model_tier, effort,
+                chat_id, url, agent_id, max_starts
          FROM routines WHERE id = $1",
     )
     .bind(routine_id)
@@ -102,6 +131,45 @@ async fn dispatch(db: &Db, orchestrator: &Orchestrator, routine_id: Uuid) -> any
                 &engine,
                 tier,
                 effort,
+                None,
+            )
+            .await
+        }
+        // A management pass: a chat firing into the project's standing manager
+        // thread, wearing a composed prompt. The thread is the point — session
+        // resume is what lets this morning's pass say what moved since
+        // yesterday's, which is the difference between a manager and a series
+        // of strangers each meeting the board for the first time.
+        "manage" => {
+            let Some(project_id) = project_id else {
+                anyhow::bail!("a project manager needs a board to manage");
+            };
+            // A repository, not a document space. `chat_tools` refuses every
+            // board tool in a space chat, so a manager pointed at one would
+            // wake up, be told it is scoped to documents by each tool in turn,
+            // and cost a run to discover it can do nothing. Said here, once,
+            // where the firing can report it.
+            let kind: String = sqlx::query_scalar("SELECT kind FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_one(&db.pool)
+                .await?;
+            if kind == "space" {
+                anyhow::bail!("a document space has no board to manage");
+            }
+            let max_starts = crate::manager::clamp_starts(r.get("max_starts"));
+            fire_chat(
+                db,
+                orchestrator,
+                routine_id,
+                workspace_id,
+                Some(project_id),
+                r.get("chat_id"),
+                &r.get::<String, _>("name"),
+                &crate::manager::pass_prompt(&prompt, max_starts),
+                &engine,
+                tier,
+                effort,
+                Some(pass_id),
             )
             .await
         }
@@ -141,6 +209,7 @@ async fn dispatch(db: &Db, orchestrator: &Orchestrator, routine_id: Uuid) -> any
                 &engine,
                 tier,
                 effort,
+                None,
             )
             .await
         }
@@ -166,6 +235,9 @@ async fn fire_chat(
     engine: &str,
     tier: Option<TierChoice>,
     effort: Option<ReasoningEffort>,
+    // Set for a management pass: the `routine_runs` row this firing *is*, so
+    // the turn can be recognised as a pass while it is still running.
+    pass_id: Option<Uuid>,
 ) -> anyhow::Result<Fired> {
     // The thread is created on first fire (and re-created if deleted — the
     // FK nulled our link). Titled after the routine so it is findable.
@@ -223,6 +295,15 @@ async fn fire_chat(
     .await?;
 
     // A routine prompt may name @agents and @skills like any typed turn.
+    //
+    // The manager's own agent is deliberately *not* recorded here, even though
+    // it is the one agent this message is most about. `create_task` falls back
+    // to `mentions::latest_for_chat` when the assistant does not name an
+    // agent, so a manager recorded as a mention would be bound as the coding
+    // agent on every card it filed — a planning persona sent to write the
+    // code. It reaches the pass as a system prompt instead
+    // (joined into the chat run's own query), which is what "who is managing" should
+    // mean, and it can still name a specialist per card with `agent_name`.
     let (agents, skills) = mentions::resolve_all(db, workspace_id, prompt).await?;
     mentions::record(db, message_id, &agents).await?;
     mentions::record_skills(db, message_id, &skills).await?;
@@ -234,6 +315,23 @@ async fn fire_chat(
         .await?;
 
     let run_id = orchestrator.enqueue_chat_turn(chat_id, engine).await?;
+
+    // Link the pass to its run here rather than leaving it to `fire`.
+    //
+    // `manager::pass_for_chat` recognises a management pass by joining
+    // `routine_runs` to the chat's live run, and the queue can hand this run
+    // to a worker the moment it is inserted. Waiting for `fire` to write the
+    // link after `dispatch` returns leaves a window in which the pass is
+    // running but does not look like one — and a pass that does not look like
+    // one is a pass with no cap.
+    if let Some(pass_id) = pass_id {
+        sqlx::query("UPDATE routine_runs SET run_id = $1, chat_id = $2 WHERE id = $3")
+            .bind(run_id)
+            .bind(chat_id)
+            .bind(pass_id)
+            .execute(&db.pool)
+            .await?;
+    }
     Ok(Fired { chat_id: Some(chat_id), run_id: Some(run_id), ..Default::default() })
 }
 
@@ -279,6 +377,10 @@ pub async fn announce_finished(db: &Db, run_id: Uuid, status: aichip_shared::Run
         "research" => "report",
         "task" => "card",
         "watch" => "update",
+        // The one notification a person actually wants in the morning: the
+        // manager ran while they were away, and this is where to read what it
+        // decided.
+        "manage" => "summary",
         _ => "reply",
     };
     let ctx = crate::attention::Ctx {

@@ -4,6 +4,7 @@ import { api, Project, Routine, RoutineDraft, RoutineRun } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { EnginePicker } from "../lib/engines";
 import { Icon } from "../components/ui/Icon";
+import { compile, describeCron, Preset, recognize, relative, WEEKDAYS } from "../lib/cron";
 
 /**
  * Routines: a prompt that runs on a schedule.
@@ -407,79 +408,6 @@ function StatusDot({ status }: { status: string | null }) {
 
 /* ── The editor ─────────────────────────────────────────────────────────── */
 
-type Preset = "hourly" | "daily" | "weekdays" | "weekly" | "monthly" | "custom";
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-/** Compile the builder's fields into five-field cron. */
-function compile(preset: Preset, time: string, weekday: number, monthday: number, custom: string): string {
-  const [h, m] = time.split(":").map((n) => parseInt(n, 10));
-  switch (preset) {
-    case "hourly":
-      return `${isNaN(m) ? 0 : m} * * * *`;
-    case "daily":
-      return `${m} ${h} * * *`;
-    case "weekdays":
-      return `${m} ${h} * * 1-5`;
-    case "weekly":
-      return `${m} ${h} * * ${weekday}`;
-    case "monthly":
-      return `${m} ${h} ${monthday} * *`;
-    case "custom":
-      return custom;
-  }
-}
-
-/** Recognize the shapes the builder writes, so editing round-trips. */
-function recognize(expr: string): { preset: Preset; time: string; weekday: number; monthday: number } {
-  const m = expr.trim().match(/^(\d{1,2}) (\d{1,2}|\*) (\d{1,2}|\*) \* (\*|1-5|\d)$/);
-  const fallback = { preset: "custom" as Preset, time: "09:00", weekday: 1, monthday: 1 };
-  if (!m) return fallback;
-  const [, min, hour, dom, dow] = m;
-  const time =
-    hour === "*" ? "09:00" : `${hour.padStart(2, "0")}:${min.padStart(2, "0")}`;
-  if (hour === "*" && dom === "*" && dow === "*") return { ...fallback, preset: "hourly" };
-  if (dom === "*" && dow === "*") return { ...fallback, preset: "daily", time };
-  if (dom === "*" && dow === "1-5") return { ...fallback, preset: "weekdays", time };
-  if (dom === "*" && /^\d$/.test(dow))
-    return { ...fallback, preset: "weekly", time, weekday: parseInt(dow, 10) };
-  if (dom !== "*" && dow === "*")
-    return { ...fallback, preset: "monthly", time, monthday: parseInt(dom, 10) };
-  return fallback;
-}
-
-/** The schedule in words, for the card. */
-function describeCron(expr: string): string {
-  const r = recognize(expr);
-  switch (r.preset) {
-    case "hourly":
-      return "every hour";
-    case "daily":
-      return `every day at ${r.time}`;
-    case "weekdays":
-      return `weekdays at ${r.time}`;
-    case "weekly":
-      return `${WEEKDAYS[r.weekday]}s at ${r.time}`;
-    case "monthly":
-      return `monthly on day ${r.monthday} at ${r.time}`;
-    case "custom":
-      return expr;
-  }
-}
-
-function relative(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  const abs = Math.abs(ms);
-  const mins = Math.round(abs / 60000);
-  const text =
-    mins < 1
-      ? "under a minute"
-      : mins < 60
-        ? `${mins} min`
-        : mins < 60 * 48
-          ? `${Math.round(mins / 60)} h`
-          : `${Math.round(mins / 1440)} days`;
-  return ms >= 0 ? `in ${text}` : `${text} ago`;
-}
 
 function Editor({
   draft,

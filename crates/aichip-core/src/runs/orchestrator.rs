@@ -2392,9 +2392,17 @@ impl Orchestrator {
             "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
                     c.effort AS chat_effort, c.plan_mode, p.path AS project_path,
                     p.id AS project_id, p.kind AS project_kind,
-                    m.id AS user_message_id, m.content AS user_message
+                    m.id AS user_message_id, m.content AS user_message,
+                    -- The manager's persona, joined here rather than fetched
+                    -- separately: this runs on every chat turn in the
+                    -- application, and a manager thread is a handful of them.
+                    -- NULL for all the rest, which is the common case.
+                    mg.system_prompt AS manager_persona
              FROM runs r JOIN chats c ON c.id = r.chat_id
              LEFT JOIN projects p ON p.id = c.project_id
+             LEFT JOIN (
+                 routines rt JOIN agents mg ON mg.id = rt.agent_id
+             ) ON rt.kind = 'manage' AND rt.chat_id = c.id
              LEFT JOIN LATERAL (
                  SELECT id, content FROM chat_messages
                  WHERE chat_id = c.id AND role = 'user'
@@ -2643,7 +2651,19 @@ impl Orchestrator {
             } else {
                 allowed
             },
-            append_system_prompt: Some(system_prompt.to_string()),
+            // The manager's persona, after the assistant's brief and never
+            // instead of it. An agent assigned to manage a project says how it
+            // wants the job done; it does not get to redefine what the tools
+            // are or that the mutating ones are denied.
+            append_system_prompt: Some(
+                match row
+                    .get::<Option<String>, _>("manager_persona")
+                    .filter(|p| !p.trim().is_empty())
+                {
+                    Some(persona) => format!("{system_prompt}\n\n{persona}"),
+                    None => system_prompt.to_string(),
+                },
+            ),
             mcp,
             denied_tools: {
                 let base: Vec<String> = CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();

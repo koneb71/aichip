@@ -378,10 +378,24 @@ async fn call_tool(
                 .map_err(|e| e.to_string())?;
             let skill_id = (skill.len() == 1).then(|| skill[0].0);
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
+            let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
+            // Checked before the card exists, so a refusal does not leave a
+            // half-made card behind. `None` for the task: this one is about to
+            // be created here, so it cannot have come from outside — only the
+            // cap applies.
+            if start {
+                vet_manager_start(state, pass.as_ref(), None).await?;
+            }
 
+            // Always born in the backlog, and promoted below once it has
+            // actually started. It used to be inserted straight into 'running'
+            // when `start=true`, which was fine only because nothing between
+            // the insert and the enqueue could fail — and vetting, added
+            // below, can. A card sitting in 'running' with no run behind it is
+            // the one state the board cannot explain.
             let row = sqlx::query(
-                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, skill_id, chat_id, board_column)
-                 VALUES ($1,$2,$3,$4,$5,$8,$6, CASE WHEN $7 THEN 'running' ELSE 'backlog' END)
+                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, skill_id, chat_id, board_column, engine)
+                 VALUES ($1,$2,$3,$4,$5,$7,$6,'backlog',$8)
                  RETURNING id",
             )
             .bind(project_id)
@@ -390,22 +404,64 @@ async fn call_tool(
             .bind(tier)
             .bind(agent_id)
             .bind(chat_id)
-            .bind(start)
             .bind(skill_id)
+            // Named rather than left to the column default, which is the
+            // literal string 'claude-code' from migration 0001. On a machine
+            // where the installed engine is something else, every card made
+            // this way was queued onto an engine that is not there and failed
+            // at dispatch. The HTTP create path has always resolved it; this
+            // one inherited a default from before there was more than one
+            // engine.
+            .bind(state.orchestrator.default_engine())
             .fetch_one(&state.db.pool)
             .await
             .map_err(|e| e.to_string())?;
             let task_id: Uuid = row.get("id");
 
             let run_id = if start {
-                Some(
-                    state
-                        .orchestrator
-                        .enqueue_task(task_id)
-                        .await
-                        .map_err(|e| e.to_string())?,
-                )
+                // The same vetting `start_task` and the Start button do. This
+                // path went straight to `enqueue_task`, so `start=true` was a
+                // way round the dependency check *and* the engine/permission
+                // capability gate — a card blocked by two others, or a
+                // Reviewed card on an engine that cannot ask, started anyway.
+                // It mattered least when a person was watching the reply; it
+                // matters most now that a timer can be the caller.
+                crate::routes::tasks::vet_task(state, task_id)
+                    .await
+                    .map_err(|(_, message)| message)?;
+                // Recorded only once the card is definitely going to start —
+                // after the vet, before the enqueue. Recording it earlier
+                // burned a unit of the cap on a card the vet then refused,
+                // and told the morning log it had started. `start_task` has
+                // always had this order; this arm did not.
+                if let Some(pass) = &pass {
+                    aichip_core::manager::record_start(&state.db, pass, task_id, title).await?;
+                }
+                let run_id = state
+                    .orchestrator
+                    .enqueue_task(task_id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+                    .bind(task_id)
+                    .execute(&state.db.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Some(run_id)
             } else {
+                // A card filed in the backlog is the manager doing its job
+                // too, and a summary that showed only what it started would
+                // read as though it had done nothing.
+                if let Some(pass) = &pass {
+                    aichip_core::manager::record_action(
+                        &state.db,
+                        pass,
+                        "create",
+                        Some(task_id),
+                        title,
+                    )
+                    .await;
+                }
                 None
             };
             // The bound agent is echoed back so the assistant reports what
@@ -431,6 +487,16 @@ async fn call_tool(
             crate::routes::tasks::vet_task(state, task_id)
                 .await
                 .map_err(|(_, message)| message)?;
+            let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
+            vet_manager_start(state, pass.as_ref(), Some(task_id)).await?;
+            if let Some(pass) = &pass {
+                let title: String = sqlx::query_scalar("SELECT title FROM tasks WHERE id=$1")
+                    .bind(task_id)
+                    .fetch_one(&state.db.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                aichip_core::manager::record_start(&state.db, pass, task_id, &title).await?;
+            }
             let run_id = state
                 .orchestrator
                 .enqueue_task(task_id)
@@ -532,6 +598,7 @@ async fn call_tool(
             )
             .await
             .map_err(|(_, message)| message)?;
+            record_if_pass(state, chat_id, "cancel", task_id, "").await;
             Ok(v)
         }
         "get_diff" => {
@@ -657,6 +724,7 @@ async fn call_tool(
             )
             .await
             .map_err(|(_, message)| message)?;
+            record_if_pass(state, chat_id, "move", task_id, column).await;
             // Says "filed", never "landed": a user reading "done" in chat must
             // not come away thinking their code merged.
             Ok(json!({ "filed": true, "column": column }))
@@ -876,6 +944,81 @@ fn parse_task_id(args: &Value) -> Result<Uuid, String> {
         .and_then(Value::as_str)
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| "task_id must be a UUID".to_string())
+}
+
+/// Note down an action if this turn is a management pass, and do nothing at
+/// all if it is a person typing.
+///
+/// The uncapped half of the log. Only `start` spends the budget, but a pass
+/// that filed three finished cards and cancelled one that had been stuck for a
+/// day did real work, and a morning summary that showed only what it started
+/// would read as though it had done nothing.
+async fn record_if_pass(state: &AppState, chat_id: Uuid, kind: &str, task_id: Uuid, detail: &str) {
+    if let Some(pass) = aichip_core::manager::pass_for_chat(&state.db, chat_id).await {
+        aichip_core::manager::record_action(&state.db, &pass, kind, Some(task_id), detail).await;
+    }
+}
+
+/// The rails an unattended management pass runs inside.
+///
+/// Returns the pass when this turn is one, having already refused the call if
+/// it may not go ahead. `None` means an ordinary chat — a person is typing,
+/// and none of this applies to them.
+///
+/// The cap is counted from `manager_actions`, never from anything the model
+/// says about its own history, and the caller records the start *before* it
+/// enqueues. A start that the recorder missed would be a start the cap never
+/// saw, and the next pass would spend the same budget again.
+///
+/// The refusals are written at the model: it is mid-tool-call and needs to
+/// know what to do instead, which in both cases is "leave it in the backlog
+/// and say so", not "try a different tool".
+async fn vet_manager_start(
+    state: &AppState,
+    pass: Option<&aichip_core::manager::Pass>,
+    task_id: Option<Uuid>,
+) -> Result<(), String> {
+    let Some(pass) = pass else {
+        return Ok(());
+    };
+    let used = aichip_core::manager::starts_used(&state.db, pass).await;
+    if used >= pass.max_starts {
+        return Err(if pass.max_starts == 0 {
+            "This management pass may not start cards — it is configured to review and \
+             report only. Create the card in the backlog instead and say in your summary \
+             that it is waiting for someone to start it."
+                .to_string()
+        } else {
+            format!(
+                "This management pass has already started its {} allowed card{}. Leave this \
+                 one in the backlog and name it in your summary as the thing you would do \
+                 next — do not try again with another tool.",
+                pass.max_starts,
+                if pass.max_starts == 1 { "" } else { "s" },
+            )
+        });
+    }
+    // A card that came from outside aichip was written by somebody who is not
+    // the owner of this machine. `tasks::create_imported` refuses to start one
+    // for exactly this reason — "the one place a human has to stand is between
+    // them and an agent holding Write and Bash" — and an agent running on a
+    // timer is precisely what would remove that human.
+    if let Some(task_id) = task_id {
+        let source: Option<String> = sqlx::query_scalar("SELECT source FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+        if let Some(source) = source {
+            return Err(format!(
+                "This card was imported from outside aichip ({source}), and a scheduled pass \
+                 cannot start one — a person has to read it first. Say in your summary that \
+                 it looks ready to start, and leave it to them."
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn ensure_task_in_project(
