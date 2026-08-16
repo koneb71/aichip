@@ -140,6 +140,8 @@ mod tests {
             instructions: instructions.to_string(),
             must_not: must_not.to_string(),
             enabled: true,
+            source_repo: None,
+            source_project_id: None,
             updated_at: chrono::Utc::now(),
         }
     }

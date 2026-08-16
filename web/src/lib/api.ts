@@ -45,6 +45,30 @@ export interface Skill {
   mustNot: string;
   enabled: boolean;
   updatedAt: string;
+  /** `owner/repo` when this skill mirrors one installed from a registry, and
+   *  null when somebody wrote it here. The installed folder is what an engine
+   *  actually reads; this row is re-derived from it on every install, so an
+   *  edit made here does not survive the next one. */
+  sourceRepo: string | null;
+  /** Whose checkout holds the files, so the UI can say where to edit them. */
+  sourceProjectId: string | null;
+}
+
+/** What one registry install produced. */
+export interface InstalledSkill {
+  name: string;
+  description: string;
+  source: string;
+  /** Non-markdown files the skill brought with it — the scripts an agent may
+   *  run. Shown because installing a skill is handing one to an agent. */
+  bundled: string[];
+  skillId: string | null;
+  mirrorError: string | null;
+}
+
+export interface SkillInstall {
+  skills: InstalledSkill[];
+  committed: boolean;
 }
 
 export interface ProjectBrain {
@@ -1640,6 +1664,13 @@ export const api = {
     fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
       json<{ unloaded: boolean }>(r),
     ),
+  /** Install Agent Skills from a registry into a project, and mirror them.
+   *  Slow: it fetches a package and then a repository. */
+  skillInstall: (projectId: string, reference: string) =>
+    post(`/api/projects/${projectId}/skills/install`, { reference }).then((r) =>
+      json<SkillInstall>(r),
+    ),
+
   skills: (workspaceId: string) =>
     fetch(`/api/skills?workspace_id=${workspaceId}`).then((r) =>
       json<{ skills: Skill[] }>(r),

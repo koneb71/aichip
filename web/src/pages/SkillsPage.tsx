@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { api, Skill } from "../lib/api";
+import { Project, Skill, SkillInstall, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Card, Empty, Item, Page, PageHead, Stagger, TintIcon } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
@@ -23,6 +23,7 @@ export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   const load = useCallback(() => {
     if (!active) return;
@@ -62,6 +63,14 @@ export default function SkillsPage() {
           </>
         }
         actions={
+          <div className="flex shrink-0 items-center gap-2">
+          <motion.button
+            {...tappable}
+            onClick={() => setInstalling(true)}
+            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent"
+          >
+            Add from a registry
+          </motion.button>
           <motion.button
             {...tappable}
             onClick={add}
@@ -70,6 +79,7 @@ export default function SkillsPage() {
             <Icon name="plus" size={15} strokeWidth={2.5} />
             New skill
           </motion.button>
+          </div>
         }
       />
 
@@ -101,6 +111,11 @@ export default function SkillsPage() {
               <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
                 {s.description || "no description yet"}
               </p>
+              {s.sourceRepo && (
+                <p className="mt-2 truncate font-mono text-[10px] text-ink-dim">
+                  mirrors {s.sourceRepo}
+                </p>
+              )}
               {s.mustNot.trim() && (
                 <p className="mt-2 line-clamp-1 rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
                   won't: {s.mustNot}
@@ -119,6 +134,16 @@ export default function SkillsPage() {
           </div>
         )}
       </Stagger>
+
+      <AnimatePresence>
+        {installing && active && (
+          <InstallFromRegistry
+            workspaceId={active.id}
+            onClose={() => setInstalling(false)}
+            onInstalled={load}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {editing && (
@@ -363,5 +388,176 @@ function Field({
       {children}
       {hint && <p className="mt-1 text-[11px] text-ink-dim/80">{hint}</p>}
     </div>
+  );
+}
+
+/**
+ * Install Agent Skills from a registry into a project.
+ *
+ * Project-shaped even though the library is workspace-shaped, and the form
+ * says why: the files land in one checkout, and that checkout is what an agent
+ * reads. The library row that follows is a mirror, reachable from every
+ * project — which is the bit worth stating, because "install into project X"
+ * and "now @name works everywhere" are surprising together until you know the
+ * folder and the row are two different things.
+ */
+function InstallFromRegistry({
+  workspaceId,
+  onClose,
+  onInstalled,
+}: {
+  workspaceId: string;
+  onClose: () => void;
+  onInstalled: () => void;
+}) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [reference, setReference] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<SkillInstall | null>(null);
+
+  useEffect(() => {
+    api
+      .projects(workspaceId)
+      // A document space has no agents to install a skill for, and the server
+      // refuses one — so it is not offered.
+      .then((r) => {
+        const repos = r.projects.filter((p) => p.kind !== "space");
+        setProjects(repos);
+        setProjectId((id) => id || repos[0]?.id || "");
+      })
+      .catch(() => {});
+  }, [workspaceId]);
+
+  const install = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const out = await api.skillInstall(projectId, reference.trim());
+      setResult(out);
+      onInstalled();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={busy ? undefined : onClose}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-4 backdrop-blur-[3px]"
+    >
+      <motion.div
+        initial={{ scale: 0.97, y: 12, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 220, damping: 26 }}
+        onClick={(e) => e.stopPropagation()}
+        className="card-shadow max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-panel p-5"
+      >
+        <h2 className="text-sm font-semibold">Add skills from a registry</h2>
+        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+          Installs an Agent Skill with <code className="font-mono">npx skills</code>. The files
+          land in the project you pick and are committed, which is what lets a card's worktree
+          see them; each skill is also mirrored into this library so you can{" "}
+          <code className="font-mono">@name</code> it anywhere.
+        </p>
+
+        <label className="mt-4 block">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Install into
+          </span>
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="mt-3 block">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            Repository
+          </span>
+          <input
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="vercel-labs/agent-skills"
+            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+          />
+          <span className="mt-1 block text-[11px] text-ink-dim">
+            owner/repo, or a link from github.com or skills.sh.
+          </span>
+        </label>
+
+        <p className="mt-3 rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
+          A skill is instructions, and sometimes scripts, written by somebody else — and it runs
+          with whatever permissions you give the agent. Read one before you rely on it; what it
+          brought with it is listed below once it lands.
+        </p>
+
+        {error && (
+          <div className="mt-3 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-danger">{error}</div>
+        )}
+
+        {result && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs">
+              Installed {result.skills.length}{" "}
+              {result.skills.length === 1 ? "skill" : "skills"}
+              {result.committed ? " and committed them." : " — but the commit did not happen, so a card's worktree will not see them yet."}
+            </p>
+            {result.skills.map((s) => (
+              <div key={s.name} className="rounded-lg border border-line p-2.5">
+                <div className="font-mono text-xs font-semibold">@{s.name}</div>
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-dim">{s.description}</p>
+                {s.bundled.length > 0 && (
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    ships {s.bundled.length} file{s.bundled.length === 1 ? "" : "s"}:{" "}
+                    <span className="font-mono">{s.bundled.slice(0, 4).join(", ")}</span>
+                    {s.bundled.length > 4 && ` and ${s.bundled.length - 4} more`}
+                  </p>
+                )}
+                {s.mirrorError && (
+                  <p className="mt-1 text-[11px] text-danger">{s.mirrorError}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-2 border-t border-line pt-3">
+          <button
+            onClick={install}
+            disabled={busy || !projectId || !reference.trim()}
+            className="ring-focus rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-40"
+          >
+            {busy ? "Installing…" : result ? "Install another" : "Install"}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-40"
+          >
+            {result ? "Done" : "Cancel"}
+          </button>
+          {busy && (
+            <span className="text-[11px] text-ink-dim">
+              fetching the package, then the repository — this takes a moment
+            </span>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }

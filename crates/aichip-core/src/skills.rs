@@ -53,6 +53,14 @@ pub struct Skill {
     pub must_not: String,
     pub enabled: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// `owner/repo` when this skill is a mirror of one installed from a
+    /// registry, and `None` when somebody wrote it here. The whole test for
+    /// "is this mine to edit" — see `skills::install`, where the file on disk
+    /// is the source of truth and this row is re-derived from it.
+    pub source_repo: Option<String>,
+    /// Which project's checkout holds the files, so the UI can say where to
+    /// go and edit them.
+    pub source_project_id: Option<Uuid>,
 }
 
 fn row_to_skill(r: &sqlx::postgres::PgRow) -> Skill {
@@ -64,10 +72,13 @@ fn row_to_skill(r: &sqlx::postgres::PgRow) -> Skill {
         must_not: r.get("must_not"),
         enabled: r.get("enabled"),
         updated_at: r.get("updated_at"),
+        source_repo: r.get("source_repo"),
+        source_project_id: r.get("source_project_id"),
     }
 }
 
-const COLUMNS: &str = "id, name, description, instructions, must_not, enabled, updated_at";
+const COLUMNS: &str =
+    "id, name, description, instructions, must_not, enabled, updated_at, source_repo, source_project_id";
 
 /// Fold a named skill into a prompt.
 ///
@@ -241,6 +252,8 @@ mod tests {
             instructions: instructions.into(),
             must_not: must_not.into(),
             enabled: true,
+            source_repo: None,
+            source_project_id: None,
             updated_at: chrono::Utc::now(),
         }
     }
