@@ -1,0 +1,84 @@
+# Build and test on every push and pull request.
+#
+# Both suites run without a model and without a network call to any provider:
+# the Rust tests drive the mock engine, which replays recorded stream fixtures,
+# and the web tests are pure vitest over the logic in web/src/lib. Nothing here
+# needs an API key, a subscription, or a database.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Keyed on Cargo.lock: the workspace has a large dependency tree and a
+      # cold build is most of the run time.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      # Advisory, not blocking. There is a standing backlog of lints here
+      # (mostly needless borrows and a few long argument lists) and turning
+      # them into a red build before they are fixed would train everyone to
+      # ignore the colour. Promote this to `-D warnings` once the backlog is
+      # clear; until then it is a list to work from.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+
+      - name: Tests
+        run: cargo test --workspace
+
+  web:
+    name: pnpm test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Types
+        run: pnpm exec tsc -b
+
+      - name: Tests
+        run: pnpm test
+
+      # The dashboard the server serves is web/dist, so a build that fails is
+      # a broken release even when every test passes.
+      - name: Build
+        run: pnpm build
