@@ -85,7 +85,10 @@ impl McpServer {
                 env: pairs(&self.env),
             },
         };
-        aichip_shared::McpServerSpec { name: self.name.clone(), transport }
+        aichip_shared::McpServerSpec {
+            name: self.name.clone(),
+            transport,
+        }
     }
 
     /// What to put in `--allowedTools` to permit this server's tools.
@@ -164,10 +167,7 @@ fn row_to_server(r: &sqlx::postgres::PgRow) -> McpServer {
 /// must not be able to shadow the permission proxy, which is the channel the
 /// user approves tool calls through.
 pub fn merge_into(config: &mut Value, servers: &[McpServer]) {
-    let Some(map) = config
-        .get_mut("mcpServers")
-        .and_then(|m| m.as_object_mut())
-    else {
+    let Some(map) = config.get_mut("mcpServers").and_then(|m| m.as_object_mut()) else {
         return;
     };
     let mut extra = Map::new();
@@ -235,14 +235,24 @@ mod tests {
         // An explicit `"env": {}` is noise in a config a user may well read.
         let entry = server("plain", "stdio").config_entry();
         assert!(entry.get("env").is_none());
-        assert!(server("plain", "http").config_entry().get("headers").is_none());
+        assert!(server("plain", "http")
+            .config_entry()
+            .get("headers")
+            .is_none());
     }
 
     #[test]
     fn auth_env_is_refused() {
-        for key in ["ANTHROPIC_API_KEY", "anthropic_api_key", "CLAUDE_CODE_OAUTH_TOKEN"] {
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "anthropic_api_key",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
             let err = check_env(&json!({ key: "sk-whatever" })).unwrap_err();
-            assert!(err.to_string().contains(key), "{key} should be named in the error");
+            assert!(
+                err.to_string().contains(key),
+                "{key} should be named in the error"
+            );
         }
     }
 
@@ -256,14 +266,20 @@ mod tests {
         // The aichip entry is the permission proxy. Shadowing it would put a
         // user-controlled process in the path of every approval prompt.
         let mut config = json!({ "mcpServers": { "aichip": { "type": "http", "url": "real" } } });
-        merge_into(&mut config, &[server("aichip", "stdio"), server("playwright", "stdio")]);
+        merge_into(
+            &mut config,
+            &[server("aichip", "stdio"), server("playwright", "stdio")],
+        );
         assert_eq!(config["mcpServers"]["aichip"]["url"], "real");
         assert_eq!(config["mcpServers"]["playwright"]["type"], "stdio");
     }
 
     #[test]
     fn the_tool_prefix_matches_the_mcp_naming_scheme() {
-        assert_eq!(server("playwright", "stdio").tool_prefix(), "mcp__playwright");
+        assert_eq!(
+            server("playwright", "stdio").tool_prefix(),
+            "mcp__playwright"
+        );
     }
 
     #[test]

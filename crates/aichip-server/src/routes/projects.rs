@@ -65,12 +65,14 @@ async fn one(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(&state.db.pool)
-        .await
-        .map_err(internal)?
-        .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
+    let row = sqlx::query(&format!(
+        "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))?;
 
     // The point of use for the repository's identity: this is what the project
     // page fetches, so a GitHub project learns its own name the first time
@@ -159,7 +161,9 @@ async fn get_brain(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let brain = aichip_core::brain::load(&state.db, id).await.map_err(internal)?;
+    let brain = aichip_core::brain::load(&state.db, id)
+        .await
+        .map_err(internal)?;
     // An unwritten brain is an empty one, not a 404: the editor opens on it.
     Ok(Json(json!({
         "body": brain.as_ref().map(|b| b.body.clone()).unwrap_or_default(),
@@ -191,8 +195,14 @@ async fn put_brain(
     Json(body): Json<BrainBody>,
 ) -> Result<Json<Value>, ApiError> {
     use aichip_core::brain::SaveError;
-    match aichip_core::brain::save(&state.db, id, &body.body, body.enabled, body.hash.as_deref())
-        .await
+    match aichip_core::brain::save(
+        &state.db,
+        id,
+        &body.body,
+        body.enabled,
+        body.hash.as_deref(),
+    )
+    .await
     {
         Ok(b) => Ok(Json(json!({
             "body": b.body,
@@ -219,7 +229,9 @@ async fn brain_revisions(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let rows = aichip_core::brain::revisions(&state.db, id).await.map_err(internal)?;
+    let rows = aichip_core::brain::revisions(&state.db, id)
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({
         "revisions": rows.iter().map(|(id, body, at)| json!({
             "id": id, "body": body, "savedAt": at,
@@ -257,8 +269,9 @@ async fn storage(
     .await
     .map_err(internal)?;
 
-    let (image_bytes, image_reclaimable) =
-        aichip_core::previews::disk(&state.db).await.unwrap_or((0, 0));
+    let (image_bytes, image_reclaimable) = aichip_core::previews::disk(&state.db)
+        .await
+        .unwrap_or((0, 0));
 
     // Kept, and said so rather than shown as a number with a dead button next
     // to it. Run history is what a reconnecting client replays from, so
@@ -420,15 +433,19 @@ async fn reclaim_worktrees(
     // The rows that named what was just removed would otherwise point at
     // nothing, and the Files tab reads them to build its tree picker.
     for r in &released {
-        sqlx::query("UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE project_id=$1 AND branch=$2")
-            .bind(id)
-            .bind(r["branch"].as_str().unwrap_or_default())
-            .execute(&state.db.pool)
-            .await
-            .map_err(internal)?;
+        sqlx::query(
+            "UPDATE tasks SET worktree_path=NULL, branch=NULL WHERE project_id=$1 AND branch=$2",
+        )
+        .bind(id)
+        .bind(r["branch"].as_str().unwrap_or_default())
+        .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
     }
 
-    Ok(Json(json!({ "released": released, "kept": kept, "bytes": freed })))
+    Ok(Json(
+        json!({ "released": released, "kept": kept, "bytes": freed }),
+    ))
 }
 
 async fn held_for(
@@ -544,7 +561,10 @@ async fn pull_checkout(
 ) -> Result<Json<Value>, ApiError> {
     let (path, vcs) = git_project(&state, id).await?;
     if !vcs {
-        return Err((StatusCode::CONFLICT, "this project has no git repository".into()));
+        return Err((
+            StatusCode::CONFLICT,
+            "this project has no git repository".into(),
+        ));
     }
     let out = manager::pull_ff(std::path::Path::new(&path))
         .await
@@ -559,7 +579,10 @@ async fn push_checkout(
 ) -> Result<Json<Value>, ApiError> {
     let (path, vcs) = git_project(&state, id).await?;
     if !vcs {
-        return Err((StatusCode::CONFLICT, "this project has no git repository".into()));
+        return Err((
+            StatusCode::CONFLICT,
+            "this project has no git repository".into(),
+        ));
     }
     let out = manager::push_current(std::path::Path::new(&path))
         .await
@@ -625,7 +648,10 @@ async fn list(
         Some("space") => "('space')",
         Some("chat") => "('repo','space')",
         Some(other) => {
-            return Err((StatusCode::BAD_REQUEST, format!("unknown kind filter {other}")))
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unknown kind filter {other}"),
+            ))
         }
     };
     let rows = sqlx::query(&format!(
@@ -674,7 +700,11 @@ async fn create_space(
             .filter(|p| !p.is_empty())
             .collect::<Vec<_>>()
             .join("-");
-        if s.is_empty() { "space".to_string() } else { s.chars().take(40).collect() }
+        if s.is_empty() {
+            "space".to_string()
+        } else {
+            s.chars().take(40).collect()
+        }
     };
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -870,7 +900,11 @@ async fn update(
     .bind(body.default_tier.is_some())
     .bind(body.default_tier.flatten().map(|t| t.as_str().to_string()))
     .bind(body.default_effort.is_some())
-    .bind(body.default_effort.flatten().map(|e| e.as_str().to_string()))
+    .bind(
+        body.default_effort
+            .flatten()
+            .map(|e| e.as_str().to_string()),
+    )
     .fetch_optional(&state.db.pool)
     .await
     .map_err(internal)?

@@ -47,14 +47,12 @@ async fn create(
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
     }
-    let row = sqlx::query(
-        "INSERT INTO workspaces (name, color) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(body.name.trim())
-    .bind(body.color.unwrap_or_else(|| "#4f46e5".into()))
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
+    let row = sqlx::query("INSERT INTO workspaces (name, color) VALUES ($1, $2) RETURNING id")
+        .bind(body.name.trim())
+        .bind(body.color.unwrap_or_else(|| "#4f46e5".into()))
+        .fetch_one(&state.db.pool)
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })))
 }
 

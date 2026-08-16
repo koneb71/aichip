@@ -96,21 +96,57 @@ pub enum Severity {
 pub enum Defect {
     Unparseable(String),
     NoTasks,
-    TooManyTasks { count: usize },
-    MissingField { key: String, field: &'static str },
-    DuplicateKey { key: String },
-    UnknownAssignee { key: String, assignee: String },
-    BriefTooShort { key: String, chars: usize },
-    BriefTooLong { key: String, chars: usize },
-    NoDoneWhen { key: String },
-    TooManyDoneWhen { key: String, count: usize },
-    TooManyLarge { count: usize },
-    SelfDependency { key: String },
-    UnknownDependency { key: String, dep: String },
-    CyclicDependency { keys: Vec<String> },
+    TooManyTasks {
+        count: usize,
+    },
+    MissingField {
+        key: String,
+        field: &'static str,
+    },
+    DuplicateKey {
+        key: String,
+    },
+    UnknownAssignee {
+        key: String,
+        assignee: String,
+    },
+    BriefTooShort {
+        key: String,
+        chars: usize,
+    },
+    BriefTooLong {
+        key: String,
+        chars: usize,
+    },
+    NoDoneWhen {
+        key: String,
+    },
+    TooManyDoneWhen {
+        key: String,
+        count: usize,
+    },
+    TooManyLarge {
+        count: usize,
+    },
+    SelfDependency {
+        key: String,
+    },
+    UnknownDependency {
+        key: String,
+        dep: String,
+    },
+    CyclicDependency {
+        keys: Vec<String>,
+    },
     NothingInspected,
-    IdleSpecialist { name: String },
-    OverloadedSpecialist { name: String, count: usize, total: usize },
+    IdleSpecialist {
+        name: String,
+    },
+    OverloadedSpecialist {
+        name: String,
+        count: usize,
+        total: usize,
+    },
 }
 
 impl Defect {
@@ -310,13 +346,12 @@ pub fn inspect_plan(plan: &Plan, roster: &[Member]) -> Vec<Defect> {
             None => defects.push(Defect::IdleSpecialist {
                 name: member.name.clone(),
             }),
-            Some(&count) if total > 1 && count as f64 / total as f64 > OVERLOAD_SHARE => {
-                defects.push(Defect::OverloadedSpecialist {
+            Some(&count) if total > 1 && count as f64 / total as f64 > OVERLOAD_SHARE => defects
+                .push(Defect::OverloadedSpecialist {
                     name: member.name.clone(),
                     count,
                     total,
-                })
-            }
+                }),
             _ => {}
         }
     }
@@ -556,10 +591,9 @@ mod tests {
         let raw = r#"{"inspected":["src/"],"tasks":[{"key":"api","title":"Do api","assignee":"Priya","done_when":["ok"]}]}"#;
         let plan = parse_plan(raw).expect("missing brief must still parse");
         let defects = inspect_plan(&plan, &roster());
-        assert!(defects.iter().any(|d| matches!(
-            d,
-            Defect::MissingField { field: "brief", .. }
-        )));
+        assert!(defects
+            .iter()
+            .any(|d| matches!(d, Defect::MissingField { field: "brief", .. })));
         assert!(!defects.iter().any(|d| matches!(d, Defect::Unparseable(_))));
     }
 
@@ -653,15 +687,22 @@ mod tests {
         plan.tasks[0].depends_on = vec!["ui".into()];
         plan.tasks[1].depends_on = vec!["api".into()];
         let cycle = inspect_plan(&plan, &roster());
-        assert!(cycle.iter().any(|d| matches!(d, Defect::CyclicDependency { .. })));
+        assert!(cycle
+            .iter()
+            .any(|d| matches!(d, Defect::CyclicDependency { .. })));
     }
 
     #[test]
     fn empty_and_oversized_plans_are_caught() {
-        assert_eq!(inspect_plan(&Plan::default(), &roster()), vec![Defect::NoTasks]);
+        assert_eq!(
+            inspect_plan(&Plan::default(), &roster()),
+            vec![Defect::NoTasks]
+        );
 
         let mut plan = good_plan();
-        plan.tasks = (0..MAX_TASKS + 1).map(|i| task(&format!("t{i}"), "Priya")).collect();
+        plan.tasks = (0..MAX_TASKS + 1)
+            .map(|i| task(&format!("t{i}"), "Priya"))
+            .collect();
         assert!(inspect_plan(&plan, &roster())
             .iter()
             .any(|d| matches!(d, Defect::TooManyTasks { .. })));
@@ -682,7 +723,9 @@ mod tests {
         let mut plan = good_plan();
         plan.inspected.clear();
         let defects = inspect_plan(&plan, &roster());
-        assert!(defects.iter().any(|d| matches!(d, Defect::NothingInspected)));
+        assert!(defects
+            .iter()
+            .any(|d| matches!(d, Defect::NothingInspected)));
         assert!(!has_blocking(&defects));
     }
 
@@ -709,9 +752,16 @@ mod tests {
     fn standing_context_never_comes_between_the_contract_and_the_reply() {
         let ctx = "\n\n---\n\nStanding context: the API lives in api/.";
         let p = plan_prompt("build a thing", "- Priya (Backend) · tier: medium", ctx);
-        let at = p.find("the API lives in api/").expect("the context travels");
-        let contract = p.find("Reply with ONLY a JSON object").expect("contract intact");
-        assert!(at < contract, "context landed after the output contract:\n{p}");
+        let at = p
+            .find("the API lives in api/")
+            .expect("the context travels");
+        let contract = p
+            .find("Reply with ONLY a JSON object")
+            .expect("contract intact");
+        assert!(
+            at < contract,
+            "context landed after the output contract:\n{p}"
+        );
         // And it comes after the goal and the roster, like every other block:
         // what is being asked for is read first.
         assert!(p.find("build a thing").unwrap() < at);
@@ -723,7 +773,10 @@ mod tests {
         // Asserted on the rendering rather than by hunting a substring — the
         // sibling test in kb::write says why that was not good enough.
         let p = plan_prompt("build a thing", "- Priya", "");
-        assert!(p.contains("- Priya\n\n"), "an absent context left a gap: {p:?}");
+        assert!(
+            p.contains("- Priya\n\n"),
+            "an absent context left a gap: {p:?}"
+        );
         assert!(!p.contains("- Priya\n\n\n"));
     }
 
@@ -734,7 +787,9 @@ mod tests {
                 key: "build_backend".into(),
                 chars: 3140,
             },
-            Defect::NoDoneWhen { key: "wire_ui".into() },
+            Defect::NoDoneWhen {
+                key: "wire_ui".into(),
+            },
         ]);
         assert!(prompt.contains("build_backend"));
         assert!(prompt.contains("3140"));
@@ -745,8 +800,14 @@ mod tests {
     #[test]
     fn the_assignment_prompt_states_the_acceptance_criteria() {
         let prompt = assignment_prompt(
-            "Priya", "Backend", "Squad", "ship it", "Add API",
-            "make the endpoint", &["tests pass".into()], "",
+            "Priya",
+            "Backend",
+            "Squad",
+            "ship it",
+            "Add API",
+            "make the endpoint",
+            &["tests pass".into()],
+            "",
         );
         assert!(prompt.contains("Done when:\n- tests pass"));
         assert!(prompt.contains("post_message"));

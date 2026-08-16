@@ -198,7 +198,10 @@ pub async fn load(db: &Db) -> Attention {
     let d = Attention::default();
     let Some(v) = stored else { return d };
     Attention {
-        enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(d.enabled),
+        enabled: v
+            .get("enabled")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(d.enabled),
         command: v
             .get("command")
             .and_then(|x| x.as_str())
@@ -260,7 +263,12 @@ pub async fn save(db: &Db, next: Attention) -> anyhow::Result<Attention> {
 pub async fn ctx_for_run(db: &Db, run_id: uuid::Uuid, tool: Option<&str>) -> Ctx {
     let row = sqlx::query_as::<
         _,
-        (Option<String>, Option<String>, Option<uuid::Uuid>, Option<uuid::Uuid>),
+        (
+            Option<String>,
+            Option<String>,
+            Option<uuid::Uuid>,
+            Option<uuid::Uuid>,
+        ),
     >(
         "SELECT p.name, t.title, p.id, t.id
            FROM runs r
@@ -550,7 +558,10 @@ mod tests {
             format!("http://127.0.0.1:4820/projects/{p}")
         );
         // Nothing to point at is the dashboard, not a broken path.
-        assert_eq!(link("http://127.0.0.1:4820", None, None), "http://127.0.0.1:4820");
+        assert_eq!(
+            link("http://127.0.0.1:4820", None, None),
+            "http://127.0.0.1:4820"
+        );
         // A trailing slash must not produce `//projects`.
         assert_eq!(
             link("http://127.0.0.1:4820/", Some(p), None),
@@ -571,7 +582,11 @@ mod tests {
                 ..ctx()
             },
         );
-        assert!(env["AICHIP_URL"].starts_with("http"), "{}", env["AICHIP_URL"]);
+        assert!(
+            env["AICHIP_URL"].starts_with("http"),
+            "{}",
+            env["AICHIP_URL"]
+        );
     }
 
     #[test]
@@ -593,7 +608,10 @@ mod tests {
                 engine_ms > window * 1000,
                 "engine {engine_ms}ms must outlast the {window}s window"
             );
-            assert!(CLI_GRACE_SECS >= 60, "the margin must survive a slow answer");
+            assert!(
+                CLI_GRACE_SECS >= 60,
+                "the margin must survive a slow answer"
+            );
         }
     }
 

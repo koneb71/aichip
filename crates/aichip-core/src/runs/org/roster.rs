@@ -29,7 +29,10 @@ pub struct Member {
 /// Flatten whitespace and clip on a character boundary — a multi-byte name
 /// must not panic the planner.
 pub fn prompt_excerpt(system_prompt: &str, max_chars: usize) -> String {
-    let flat = system_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = system_prompt
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if flat.chars().count() <= max_chars {
         return flat;
     }

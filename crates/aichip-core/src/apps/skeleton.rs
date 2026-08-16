@@ -39,7 +39,10 @@ pub fn files(manifest: &Manifest) -> Vec<(String, String)> {
                 ("views/index.html".to_string(), index_page(manifest)),
             ];
             for entry in &manifest.menu {
-                out.push((format!("views/{}.html", entry.view), screen_page(manifest, entry)));
+                out.push((
+                    format!("views/{}.html", entry.view),
+                    screen_page(manifest, entry),
+                ));
             }
             out
         }
@@ -259,7 +262,10 @@ const CSS: &str = r#"/* Your app's own styles.
 
 /// Minimal escaping for the one place free text lands in markup: labels.
 fn esc(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// The label rule, matching the module renderer's `fieldLabel`:
@@ -304,14 +310,22 @@ fn nav(manifest: &Manifest, current: Option<&str>) -> String {
     };
     out.push_str(&format!(
         "<a href=\"{home}\"{}>{}</a>",
-        if current.is_none() { " class=\"current\"" } else { "" },
+        if current.is_none() {
+            " class=\"current\""
+        } else {
+            ""
+        },
         esc(&manifest.name)
     ));
     for entry in &manifest.menu {
         out.push_str(&format!(
             "<a href=\"{}\"{}>{}</a>",
             href(manifest.runtime, &entry.view),
-            if current == Some(entry.view.as_str()) { " class=\"current\"" } else { "" },
+            if current == Some(entry.view.as_str()) {
+                " class=\"current\""
+            } else {
+                ""
+            },
             esc(&entry.label)
         ));
     }
@@ -430,7 +444,11 @@ fn crud_body(model: &Model) -> String {
             esc(&label_of(&f.name, &f.label)),
             f.name,
             input_type(&f.ty),
-            if f.required && f.default.is_none() { " required" } else { "" },
+            if f.required && f.default.is_none() {
+                " required"
+            } else {
+                ""
+            },
         ));
     }
     form.push_str("  <button>Add</button>\n</form>");
@@ -525,7 +543,11 @@ mod tests {
     }
 
     fn body_of<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
-        &files.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name}")).1
+        &files
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .1
     }
 
     #[test]
@@ -563,7 +585,10 @@ mod tests {
                 assert!(!body.trim().is_empty(), "{runtime:?}'s {name} is empty");
             }
         }
-        assert!(super::files(&parse("name: M\n").unwrap()).is_empty(), "a module has no tree");
+        assert!(
+            super::files(&parse("name: M\n").unwrap()).is_empty(),
+            "a module has no tree"
+        );
     }
 
     #[test]
@@ -602,14 +627,15 @@ mod tests {
     /// exists when both are here.
     #[test]
     fn the_theme_uses_the_dashboards_own_colours() {
-        let css = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../web/src/index.css");
+        let css = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/index.css");
         let Ok(dashboard) = std::fs::read_to_string(&css) else {
             return;
         };
         // Every colour THEME declares must be one the dashboard declares too.
         for line in THEME.lines() {
-            let Some((name, value)) = line.trim().split_once(':') else { continue };
+            let Some((name, value)) = line.trim().split_once(':') else {
+                continue;
+            };
             let value = value.trim().trim_end_matches(';');
             if !name.starts_with("--") || !value.starts_with('#') {
                 continue;
@@ -676,12 +702,18 @@ mod tests {
         // Order matters: the app's own sheet loads last, so it wins.
         let theme = tasks.find("/__aichip/app.css").expect("no theme");
         let own = tasks.find("/assets/app.css").expect("no app stylesheet");
-        assert!(theme < own, "the app could not override a theme that loads after it");
+        assert!(
+            theme < own,
+            "the app could not override a theme that loads after it"
+        );
 
         // And the scaffolded file is an override point, not a copy of the
         // theme — a copy would be frozen at the moment it was written.
         let css = body_of(&files, "assets/app.css");
-        assert!(!css.contains("--surface"), "the theme was copied into the app");
+        assert!(
+            !css.contains("--surface"),
+            "the theme was copied into the app"
+        );
     }
 
     /// Embedded, the dashboard already names the app and the screen; the page
@@ -695,8 +727,13 @@ mod tests {
 
         // Decided in <head>, before the body paints — a class applied on load
         // would show the nav for a frame and then snatch it away.
-        let flag = tasks.find("window !== window.parent").expect("no embed test");
-        assert!(flag < tasks.find("<body").unwrap(), "the nav would flash before hiding");
+        let flag = tasks
+            .find("window !== window.parent")
+            .expect("no embed test");
+        assert!(
+            flag < tasks.find("<body").unwrap(),
+            "the nav would flash before hiding"
+        );
         assert!(tasks.contains("document.documentElement.classList.add(\"embedded\")"));
 
         // Both are present in the markup…

@@ -43,7 +43,8 @@ pub fn chunk(text: &str) -> Vec<String> {
     let mut current = String::new();
     for piece in pieces {
         let sep = if current.is_empty() { 0 } else { 2 };
-        if !current.is_empty() && current.chars().count() + sep + piece.chars().count() > TARGET_CHARS
+        if !current.is_empty()
+            && current.chars().count() + sep + piece.chars().count() > TARGET_CHARS
         {
             chunks.push(current);
             current = String::new();
@@ -61,7 +62,10 @@ pub fn chunk(text: &str) -> Vec<String> {
     // the one before it, trimmed to a word boundary. Done after accumulation
     // so the overlap never counts against the target and cannot cascade.
     if chunks.len() > 1 {
-        let tails: Vec<String> = chunks.iter().map(|c| tail_on_word(c, OVERLAP_CHARS)).collect();
+        let tails: Vec<String> = chunks
+            .iter()
+            .map(|c| tail_on_word(c, OVERLAP_CHARS))
+            .collect();
         for i in (1..chunks.len()).rev() {
             let tail = &tails[i - 1];
             if !tail.is_empty() {
@@ -87,7 +91,9 @@ fn split_oversize<'a>(para: &'a str, out: &mut Vec<&'a str>) {
             // Cut at the last sentence break inside the window, else hard cut
             // here — `i` came from char_indices, so it is a char boundary and
             // multi-byte text cannot be split mid-character.
-            let cut = last_break.filter(|&b| b > start).unwrap_or(i + c.len_utf8());
+            let cut = last_break
+                .filter(|&b| b > start)
+                .unwrap_or(i + c.len_utf8());
             let piece = para[start..cut].trim();
             if !piece.is_empty() {
                 out.push(piece);
@@ -160,7 +166,11 @@ mod tests {
         let chunks = chunk(&text);
         assert!(chunks.len() >= 2);
         // The second chunk opens with the ellipsis-marked tail of the first.
-        assert!(chunks[1].starts_with('…'), "{:?}", &chunks[1][..40.min(chunks[1].len())]);
+        assert!(
+            chunks[1].starts_with('…'),
+            "{:?}",
+            &chunks[1][..40.min(chunks[1].len())]
+        );
     }
 
     #[test]
@@ -195,7 +205,11 @@ mod tests {
         // Cuts land after periods, so chunks (ignoring the overlap prefix)
         // end with a period.
         for c in &chunks[..chunks.len() - 1] {
-            assert!(c.trim_end().ends_with('.'), "{:?}", &c[c.len().saturating_sub(30)..]);
+            assert!(
+                c.trim_end().ends_with('.'),
+                "{:?}",
+                &c[c.len().saturating_sub(30)..]
+            );
         }
     }
 }

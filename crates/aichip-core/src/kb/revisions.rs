@@ -128,7 +128,10 @@ pub async fn save_edit(
     let current = head.seq;
     if let Some(base) = base_version {
         if base != head.version {
-            return Err(Conflict { current_seq: current }.into());
+            return Err(Conflict {
+                current_seq: current,
+            }
+            .into());
         }
     }
 
@@ -164,17 +167,16 @@ pub async fn save_edit(
         None => insert(&mut tx, article_id, current + 1, &rev, "accepted").await?,
     };
 
-    apply(&mut tx, article_id, seq, rev.title, rev.html, rev.text, rev.author).await?;
+    apply(
+        &mut tx, article_id, seq, rev.title, rev.html, rev.text, rev.author,
+    )
+    .await?;
     tx.commit().await?;
     Ok(seq)
 }
 
 /// Record an agent's work as a proposal. Nothing about the live page changes.
-pub async fn propose(
-    db: &Db,
-    article_id: Uuid,
-    rev: NewRevision<'_>,
-) -> anyhow::Result<i32> {
+pub async fn propose(db: &Db, article_id: Uuid, rev: NewRevision<'_>) -> anyhow::Result<i32> {
     let mut tx = db.pool.begin().await?;
     let current = lock_head(&mut tx, article_id).await?.seq;
     // Any earlier pending proposal for this page is superseded rather than
@@ -257,12 +259,14 @@ pub async fn accept(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<i32> 
             // this at the copied revision made the entry that changed the page
             // diff to nothing at all in the history view.
             base_seq: Some(current),
-            run_id: sqlx::query_scalar("SELECT run_id FROM kb_revisions WHERE article_id=$1 AND seq=$2")
-                .bind(article_id)
-                .bind(seq)
-                .fetch_optional(&mut *tx)
-                .await?
-                .flatten(),
+            run_id: sqlx::query_scalar(
+                "SELECT run_id FROM kb_revisions WHERE article_id=$1 AND seq=$2",
+            )
+            .bind(article_id)
+            .bind(seq)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten(),
             note: "accepted after the page had moved on",
         };
         insert(&mut tx, article_id, current + 1, &rev, "accepted").await?
@@ -329,7 +333,16 @@ pub async fn restore(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<i32>
         .bind(seq)
         .execute(&mut *tx)
         .await?;
-    apply(&mut tx, article_id, new_seq, &title, &html, &text, Author::Human).await?;
+    apply(
+        &mut tx,
+        article_id,
+        new_seq,
+        &title,
+        &html,
+        &text,
+        Author::Human,
+    )
+    .await?;
     tx.commit().await?;
     Ok(new_seq)
 }
@@ -359,23 +372,23 @@ pub async fn list(db: &Db, article_id: Uuid) -> anyhow::Result<Vec<Revision>> {
 
 /// One revision's text, for diffing.
 pub async fn text_of(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT content_text FROM kb_revisions WHERE article_id=$1 AND seq=$2",
+    Ok(
+        sqlx::query_scalar("SELECT content_text FROM kb_revisions WHERE article_id=$1 AND seq=$2")
+            .bind(article_id)
+            .bind(seq)
+            .fetch_optional(&db.pool)
+            .await?,
     )
-    .bind(article_id)
-    .bind(seq)
-    .fetch_optional(&db.pool)
-    .await?)
 }
 
 pub async fn html_of(db: &Db, article_id: Uuid, seq: i32) -> anyhow::Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT content_html FROM kb_revisions WHERE article_id=$1 AND seq=$2",
+    Ok(
+        sqlx::query_scalar("SELECT content_html FROM kb_revisions WHERE article_id=$1 AND seq=$2")
+            .bind(article_id)
+            .bind(seq)
+            .fetch_optional(&db.pool)
+            .await?,
     )
-    .bind(article_id)
-    .bind(seq)
-    .fetch_optional(&db.pool)
-    .await?)
 }
 
 fn to_revision(r: &sqlx::postgres::PgRow) -> Revision {
@@ -405,15 +418,13 @@ struct Head {
 /// Every seq is allocated through here. Without the lock two concurrent saves
 /// both read the same `current_seq`, both write `current_seq + 1`, and one
 /// loses to a primary-key violation — or worse, to a silent overwrite.
-async fn lock_head(
-    tx: &mut Transaction<'_, Postgres>,
-    article_id: Uuid,
-) -> anyhow::Result<Head> {
-    let row = sqlx::query("SELECT current_seq, body_version FROM kb_articles WHERE id=$1 FOR UPDATE")
-        .bind(article_id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no such page"))?;
+async fn lock_head(tx: &mut Transaction<'_, Postgres>, article_id: Uuid) -> anyhow::Result<Head> {
+    let row =
+        sqlx::query("SELECT current_seq, body_version FROM kb_articles WHERE id=$1 FOR UPDATE")
+            .bind(article_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no such page"))?;
     Ok(Head {
         seq: row.get("current_seq"),
         version: row.get("body_version"),

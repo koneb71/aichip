@@ -274,7 +274,10 @@ impl WorktreeManager {
 
         // Its absence *is* the condition — there is nowhere to push, which is
         // a thing to tell somebody rather than a failure to log.
-        if git(&worktree.path, &["remote", "get-url", "origin"]).await.is_err() {
+        if git(&worktree.path, &["remote", "get-url", "origin"])
+            .await
+            .is_err()
+        {
             anyhow::bail!(
                 "this project has no `origin` remote, so there is nowhere to push \
                  the branch — add one and try again"
@@ -390,9 +393,12 @@ async fn resolve_base(repo: &Path, preferred: &str) -> anyhow::Result<String> {
 }
 
 async fn branch_exists(repo: &Path, branch: &str) -> bool {
-    git(repo, &["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-        .await
-        .is_ok()
+    git(
+        repo,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .await
+    .is_ok()
 }
 
 /// The commit a repository is on. `None` before the first one.
@@ -645,7 +651,11 @@ fn push_rejection(output: &str) -> Option<String> {
 fn describe_dirty(porcelain: &str) -> String {
     const SHOWN: usize = 10;
     let lines: Vec<&str> = porcelain.lines().filter(|l| !l.trim().is_empty()).collect();
-    let mut out: Vec<String> = lines.iter().take(SHOWN).map(|l| format!("  {}", l.trim())).collect();
+    let mut out: Vec<String> = lines
+        .iter()
+        .take(SHOWN)
+        .map(|l| format!("  {}", l.trim()))
+        .collect();
     if lines.len() > SHOWN {
         out.push(format!("  … and {} more", lines.len() - SHOWN));
     }
@@ -779,7 +789,9 @@ async fn dir_size(path: &Path) -> u64 {
         while let Ok(Some(entry)) = entries.next_entry().await {
             // `symlink_metadata`: following a link out of the worktree would
             // count somebody else's disk, and a loop would never finish.
-            let Ok(meta) = entry.metadata().await else { continue };
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
             if meta.is_dir() {
                 stack.push(entry.path());
             } else if meta.is_file() {
@@ -910,9 +922,12 @@ fn unquote(path: &str) -> String {
 /// been pushed, or a branch with no tracking ref. That is an answer, not an
 /// error: the UI turns it into "publish this branch" rather than a count.
 pub async fn ahead_behind(repo: &Path) -> Option<(u32, u32)> {
-    let out = git(repo, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
-        .await
-        .ok()?;
+    let out = git(
+        repo,
+        &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+    )
+    .await
+    .ok()?;
     let mut parts = out.split_whitespace();
     let behind = parts.next()?.parse().ok()?;
     let ahead = parts.next()?.parse().ok()?;
@@ -951,7 +966,11 @@ pub async fn stash(repo: &Path, message: &str) -> anyhow::Result<()> {
 }
 
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = Command::new("git").current_dir(cwd).args(args).output().await?;
+    let out = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .await?;
     if !out.status.success() {
         // Both streams, because git is inconsistent about which it uses:
         // "nothing to commit, working tree clean" is a *stdout* message on a
@@ -968,7 +987,11 @@ async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
         anyhow::bail!(
             "git {} failed: {}",
             args.join(" "),
-            if detail.is_empty() { "no output".into() } else { detail }
+            if detail.is_empty() {
+                "no output".into()
+            } else {
+                detail
+            }
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -1093,7 +1116,9 @@ mod tests {
         // The `--` separator plus an argument vector, never a shell string.
         let (_dir, _root, wt) = worktree_with_changes().await;
         let mgr = WorktreeManager::new(std::path::Path::new("/unused"));
-        tokio::fs::write(wt.path.join("--oops.txt"), "x\n").await.unwrap();
+        tokio::fs::write(wt.path.join("--oops.txt"), "x\n")
+            .await
+            .unwrap();
         let out = mgr.diff_file(&wt.path, "main", "--oops.txt").await;
         assert!(out.is_ok(), "{out:?}");
     }
@@ -1105,7 +1130,10 @@ mod tests {
         let bin = parse_numstat("-\t-\tassets/logo.png").unwrap();
         assert_eq!((bin.added, bin.removed, bin.binary), (0, 0, true));
         // A path with a space is one path, not two fields.
-        assert_eq!(parse_numstat("1\t0\tmy notes.md").unwrap().path, "my notes.md");
+        assert_eq!(
+            parse_numstat("1\t0\tmy notes.md").unwrap().path,
+            "my notes.md"
+        );
         assert!(parse_numstat("garbage").is_none());
     }
 
@@ -1125,7 +1153,9 @@ mod tests {
             .create(dir.path(), "main", Uuid::new_v4(), "t")
             .await
             .unwrap();
-        let carried = tokio::fs::read_to_string(wt.path.join("notes.md")).await.unwrap();
+        let carried = tokio::fs::read_to_string(wt.path.join("notes.md"))
+            .await
+            .unwrap();
         assert_eq!(carried, "existing work\n");
     }
 
@@ -1144,9 +1174,14 @@ mod tests {
         assert!(commit_all(dir.path(), "Add T").await.unwrap());
 
         let mgr = WorktreeManager::new(wt_root.path());
-        let wt = mgr.create(dir.path(), "main", Uuid::new_v4(), "t").await.unwrap();
+        let wt = mgr
+            .create(dir.path(), "main", Uuid::new_v4(), "t")
+            .await
+            .unwrap();
         assert_eq!(
-            tokio::fs::read_to_string(wt.path.join("aichip.app.yaml")).await.unwrap(),
+            tokio::fs::read_to_string(wt.path.join("aichip.app.yaml"))
+                .await
+                .unwrap(),
             "name: T\n"
         );
     }
@@ -1158,7 +1193,9 @@ mod tests {
         // re-read that follows a landed merge, where git already has the file.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(ensure_repo(dir.path(), "main").await, Vcs::Git);
-        tokio::fs::write(dir.path().join("a.txt"), "one").await.unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "one")
+            .await
+            .unwrap();
         assert!(commit_all(dir.path(), "first").await.unwrap());
         assert!(!commit_all(dir.path(), "again").await.unwrap());
 
@@ -1173,7 +1210,9 @@ mod tests {
         git(dir.path(), &["checkout", "-b", "trunk"]).await.unwrap();
         assert_eq!(ensure_repo(dir.path(), "main").await, Vcs::Git);
         // Still on the branch the user had; init would have reset this.
-        let branch = git(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        let branch = git(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .unwrap();
         assert_eq!(branch.trim(), "trunk");
     }
 
@@ -1272,7 +1311,10 @@ mod tests {
     async fn resolve_base_explains_a_repo_with_nothing_to_branch_from() {
         let repo = tempfile::tempdir().unwrap();
         git(repo.path(), &["init", "-b", "main"]).await.unwrap();
-        let err = resolve_base(repo.path(), "main").await.unwrap_err().to_string();
+        let err = resolve_base(repo.path(), "main")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no commits"), "unhelpful message: {err}");
     }
 
@@ -1290,7 +1332,9 @@ mod tests {
             .unwrap();
         assert!(mgr.manages(&wt.path));
 
-        tokio::fs::write(wt.path.join("hello.txt"), "hi\n").await.unwrap();
+        tokio::fs::write(wt.path.join("hello.txt"), "hi\n")
+            .await
+            .unwrap();
         let diff = mgr.diff(&wt.path, "main").await.unwrap();
         assert!(diff.contains("hello.txt"));
 
@@ -1327,26 +1371,56 @@ mod tests {
         let mgr = WorktreeManager::new(root.path());
 
         // Landed: merged, clean.
-        let landed = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "landed").await.unwrap();
-        tokio::fs::write(landed.path.join("a.txt"), "a\n").await.unwrap();
-        mgr.squash_merge(repo_dir.path(), &landed, "main", "aichip: landed").await.unwrap();
+        let landed = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "landed")
+            .await
+            .unwrap();
+        tokio::fs::write(landed.path.join("a.txt"), "a\n")
+            .await
+            .unwrap();
+        mgr.squash_merge(repo_dir.path(), &landed, "main", "aichip: landed")
+            .await
+            .unwrap();
 
         // Never landed: its work exists nowhere else.
-        let open = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "open").await.unwrap();
-        tokio::fs::write(open.path.join("b.txt"), "b\n").await.unwrap();
+        let open = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "open")
+            .await
+            .unwrap();
+        tokio::fs::write(open.path.join("b.txt"), "b\n")
+            .await
+            .unwrap();
         git(&open.path, &["add", "-A"]).await.unwrap();
         git(&open.path, &["commit", "-m", "wip"]).await.unwrap();
 
         // Merged, but someone has been editing in it since.
-        let touched = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "touched").await.unwrap();
-        tokio::fs::write(touched.path.join("c.txt"), "c\n").await.unwrap();
-        mgr.squash_merge(repo_dir.path(), &touched, "main", "aichip: touched").await.unwrap();
-        tokio::fs::write(touched.path.join("c.txt"), "edited\n").await.unwrap();
+        let touched = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "touched")
+            .await
+            .unwrap();
+        tokio::fs::write(touched.path.join("c.txt"), "c\n")
+            .await
+            .unwrap();
+        mgr.squash_merge(repo_dir.path(), &touched, "main", "aichip: touched")
+            .await
+            .unwrap();
+        tokio::fs::write(touched.path.join("c.txt"), "edited\n")
+            .await
+            .unwrap();
 
         let held = inventory(repo_dir.path(), "main").await.unwrap();
-        assert_eq!(held.len(), 3, "the repo's own checkout is not a worktree: {held:?}");
+        assert_eq!(
+            held.len(),
+            3,
+            "the repo's own checkout is not a worktree: {held:?}"
+        );
 
-        let by = |name: &str| held.iter().find(|h| h.branch.contains(name)).unwrap().clone();
+        let by = |name: &str| {
+            held.iter()
+                .find(|h| h.branch.contains(name))
+                .unwrap()
+                .clone()
+        };
         // The one that matters: a *squash*-merged branch is never an ancestor
         // of the base, so `git branch --merged` calls it unlanded and this
         // whole sweep would decline to reclaim the directories it exists for.
@@ -1354,9 +1428,18 @@ mod tests {
         assert!(by("landed").reclaimable());
         assert_eq!(by("landed").kept_because(), None);
         assert!(!by("open").reclaimable(), "unlanded work must be kept");
-        assert_eq!(by("open").kept_because(), Some("its work is not in the base branch"));
-        assert!(!by("touched").reclaimable(), "a dirty worktree must be kept");
-        assert_eq!(by("touched").kept_because(), Some("it has uncommitted changes in it"));
+        assert_eq!(
+            by("open").kept_because(),
+            Some("its work is not in the base branch")
+        );
+        assert!(
+            !by("touched").reclaimable(),
+            "a dirty worktree must be kept"
+        );
+        assert_eq!(
+            by("touched").kept_because(),
+            Some("it has uncommitted changes in it")
+        );
         assert!(by("landed").bytes > 0, "a size worth showing");
     }
 
@@ -1364,9 +1447,30 @@ mod tests {
     fn porcelain_rows_carry_both_status_columns() {
         let rows = parse_porcelain(" M src/main.rs\nA  src/new.rs\nMM both.rs\n D gone.rs\n");
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0], DirtyFile { index: ' ', worktree: 'M', path: "src/main.rs".into() });
-        assert_eq!(rows[1], DirtyFile { index: 'A', worktree: ' ', path: "src/new.rs".into() });
-        assert_eq!(rows[2], DirtyFile { index: 'M', worktree: 'M', path: "both.rs".into() });
+        assert_eq!(
+            rows[0],
+            DirtyFile {
+                index: ' ',
+                worktree: 'M',
+                path: "src/main.rs".into()
+            }
+        );
+        assert_eq!(
+            rows[1],
+            DirtyFile {
+                index: 'A',
+                worktree: ' ',
+                path: "src/new.rs".into()
+            }
+        );
+        assert_eq!(
+            rows[2],
+            DirtyFile {
+                index: 'M',
+                worktree: 'M',
+                path: "both.rs".into()
+            }
+        );
         assert_eq!(rows[3].path, "gone.rs");
     }
 
@@ -1379,11 +1483,20 @@ mod tests {
 
     #[test]
     fn an_awkward_path_is_unquoted_rather_than_shown_as_escapes() {
-        assert_eq!(parse_porcelain(" M \"with space.rs\"\n")[0].path, "with space.rs");
-        assert_eq!(parse_porcelain(" M \"say \\\"hi\\\".rs\"\n")[0].path, "say \"hi\".rs");
+        assert_eq!(
+            parse_porcelain(" M \"with space.rs\"\n")[0].path,
+            "with space.rs"
+        );
+        assert_eq!(
+            parse_porcelain(" M \"say \\\"hi\\\".rs\"\n")[0].path,
+            "say \"hi\".rs"
+        );
         // Octal escapes are bytes, and a multi-byte character is several of
         // them — decoding one at a time would produce mojibake.
-        assert_eq!(parse_porcelain(" M \"caf\\303\\251.rs\"\n")[0].path, "café.rs");
+        assert_eq!(
+            parse_porcelain(" M \"caf\\303\\251.rs\"\n")[0].path,
+            "café.rs"
+        );
     }
 
     #[test]
@@ -1398,22 +1511,37 @@ mod tests {
         // files the merge does not care about — or misses one that it does.
         let repo_dir = tempfile::tempdir().unwrap();
         init_repo(repo_dir.path()).await;
-        tokio::fs::write(repo_dir.path().join("tracked.txt"), "one").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("tracked.txt"), "one")
+            .await
+            .unwrap();
         git(repo_dir.path(), &["add", "-A"]).await.unwrap();
-        git(repo_dir.path(), &["commit", "-m", "add"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "add"])
+            .await
+            .unwrap();
 
-        tokio::fs::write(repo_dir.path().join("tracked.txt"), "two").await.unwrap();
-        tokio::fs::write(repo_dir.path().join("untracked.txt"), "new").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("tracked.txt"), "two")
+            .await
+            .unwrap();
+        tokio::fs::write(repo_dir.path().join("untracked.txt"), "new")
+            .await
+            .unwrap();
 
         let (branch, dirty) = checkout_status(repo_dir.path()).await.unwrap();
         assert_eq!(branch.as_deref(), Some("main"));
-        assert_eq!(dirty.len(), 1, "untracked files are not in the way: {dirty:?}");
+        assert_eq!(
+            dirty.len(),
+            1,
+            "untracked files are not in the way: {dirty:?}"
+        );
         assert_eq!(dirty[0].path, "tracked.txt");
 
         // And stashing it clears exactly that.
         stash(repo_dir.path(), "aichip: test").await.unwrap();
         assert!(checkout_status(repo_dir.path()).await.unwrap().1.is_empty());
-        assert!(repo_dir.path().join("untracked.txt").exists(), "stash took the wrong files");
+        assert!(
+            repo_dir.path().join("untracked.txt").exists(),
+            "stash took the wrong files"
+        );
     }
 
     /// A merge that lands must not move the person somewhere else.
@@ -1429,17 +1557,29 @@ mod tests {
         init_repo(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+        git(repo_dir.path(), &["checkout", "-b", "wip"])
+            .await
+            .unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n")
+            .await
+            .unwrap();
 
         mgr.squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
             .await
             .unwrap();
 
         assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
-        let log = git(repo_dir.path(), &["log", "main", "--oneline"]).await.unwrap();
-        assert!(log.contains("aichip: card"), "the merge still has to land: {log}");
+        let log = git(repo_dir.path(), &["log", "main", "--oneline"])
+            .await
+            .unwrap();
+        assert!(
+            log.contains("aichip: card"),
+            "the merge still has to land: {log}"
+        );
     }
 
     /// A conflicting merge must not strand the checkout mid-merge.
@@ -1458,20 +1598,35 @@ mod tests {
         init_repo(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        tokio::fs::write(repo_dir.path().join("shared.txt"), "original\n").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("shared.txt"), "original\n")
+            .await
+            .unwrap();
         git(repo_dir.path(), &["add", "-A"]).await.unwrap();
-        git(repo_dir.path(), &["commit", "-m", "shared"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "shared"])
+            .await
+            .unwrap();
 
         // The card edits the line…
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("shared.txt"), "from the agent\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("shared.txt"), "from the agent\n")
+            .await
+            .unwrap();
 
         // …and so does `main`, after the worktree branched. Committed, so the
         // dirty guard passes and the conflict is what fails.
-        tokio::fs::write(repo_dir.path().join("shared.txt"), "from a person\n").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("shared.txt"), "from a person\n")
+            .await
+            .unwrap();
         git(repo_dir.path(), &["add", "-A"]).await.unwrap();
-        git(repo_dir.path(), &["commit", "-m", "mine"]).await.unwrap();
-        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "mine"])
+            .await
+            .unwrap();
+        git(repo_dir.path(), &["checkout", "-b", "wip"])
+            .await
+            .unwrap();
 
         let err = mgr
             .squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
@@ -1483,10 +1638,17 @@ mod tests {
         );
 
         assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
-        let dirty = git(repo_dir.path(), &["status", "--porcelain"]).await.unwrap();
+        let dirty = git(repo_dir.path(), &["status", "--porcelain"])
+            .await
+            .unwrap();
         assert!(dirty.trim().is_empty(), "left behind: {dirty}");
-        let content = tokio::fs::read_to_string(repo_dir.path().join("shared.txt")).await.unwrap();
-        assert!(!content.contains("<<<<"), "conflict markers survived: {content}");
+        let content = tokio::fs::read_to_string(repo_dir.path().join("shared.txt"))
+            .await
+            .unwrap();
+        assert!(
+            !content.contains("<<<<"),
+            "conflict markers survived: {content}"
+        );
     }
 
     /// The merge must not swallow work the person had in progress.
@@ -1505,14 +1667,27 @@ mod tests {
 
         // A tracked file the person is midway through editing, on a branch of
         // their own — the ordinary state of a working checkout.
-        tokio::fs::write(repo_dir.path().join("mine.txt"), "draft\n").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("mine.txt"), "draft\n")
+            .await
+            .unwrap();
         git(repo_dir.path(), &["add", "-A"]).await.unwrap();
-        git(repo_dir.path(), &["commit", "-m", "mine"]).await.unwrap();
-        git(repo_dir.path(), &["checkout", "-b", "wip"]).await.unwrap();
-        tokio::fs::write(repo_dir.path().join("mine.txt"), "half a thought\n").await.unwrap();
+        git(repo_dir.path(), &["commit", "-m", "mine"])
+            .await
+            .unwrap();
+        git(repo_dir.path(), &["checkout", "-b", "wip"])
+            .await
+            .unwrap();
+        tokio::fs::write(repo_dir.path().join("mine.txt"), "half a thought\n")
+            .await
+            .unwrap();
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n")
+            .await
+            .unwrap();
 
         let err = mgr
             .squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
@@ -1520,19 +1695,29 @@ mod tests {
             .expect_err("a dirty checkout must refuse");
         let text = err.to_string();
         assert!(text.contains("uncommitted changes"), "{text}");
-        assert!(text.contains("mine.txt"), "the error must name the files: {text}");
+        assert!(
+            text.contains("mine.txt"),
+            "the error must name the files: {text}"
+        );
 
         // …and nothing happened: their edit is still theirs, still uncommitted,
         // and the card's commit does not exist.
-        let still = tokio::fs::read_to_string(repo_dir.path().join("mine.txt")).await.unwrap();
+        let still = tokio::fs::read_to_string(repo_dir.path().join("mine.txt"))
+            .await
+            .unwrap();
         assert_eq!(still, "half a thought\n");
         assert_eq!(current_branch(repo_dir.path()).await.unwrap(), "wip");
         // `main`, not `--all`: the card's own branch is *supposed* to carry
         // that commit — committing the agent's work in its own worktree is
         // what the guard deliberately runs before refusing. What must not have
         // happened is that commit reaching the base branch.
-        let log = git(repo_dir.path(), &["log", "main", "--oneline"]).await.unwrap();
-        assert!(!log.contains("aichip: card"), "the card landed on main anyway: {log}");
+        let log = git(repo_dir.path(), &["log", "main", "--oneline"])
+            .await
+            .unwrap();
+        assert!(
+            !log.contains("aichip: card"),
+            "the card landed on main anyway: {log}"
+        );
     }
 
     /// The same bug wearing a different hat, and the nastier one.
@@ -1548,11 +1733,18 @@ mod tests {
         init_repo(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n")
+            .await
+            .unwrap();
 
         // Staged, on main, which is where a person often is.
-        tokio::fs::write(repo_dir.path().join("staged.txt"), "mine\n").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("staged.txt"), "mine\n")
+            .await
+            .unwrap();
         git(repo_dir.path(), &["add", "staged.txt"]).await.unwrap();
 
         let err = mgr
@@ -1562,9 +1754,14 @@ mod tests {
         assert!(err.to_string().contains("staged.txt"), "{err}");
 
         let log = git(repo_dir.path(), &["log", "--oneline"]).await.unwrap();
-        assert!(!log.contains("aichip: card"), "their staged work was committed: {log}");
+        assert!(
+            !log.contains("aichip: card"),
+            "their staged work was committed: {log}"
+        );
         // Still staged, still theirs to finish.
-        let staged = git(repo_dir.path(), &["diff", "--cached", "--name-only"]).await.unwrap();
+        let staged = git(repo_dir.path(), &["diff", "--cached", "--name-only"])
+            .await
+            .unwrap();
         assert!(staged.contains("staged.txt"));
     }
 
@@ -1580,10 +1777,17 @@ mod tests {
         init_repo(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        tokio::fs::write(repo_dir.path().join("target.log"), "noise\n").await.unwrap();
+        tokio::fs::write(repo_dir.path().join("target.log"), "noise\n")
+            .await
+            .unwrap();
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n")
+            .await
+            .unwrap();
 
         mgr.squash_merge(repo_dir.path(), &wt, "main", "aichip: card")
             .await
@@ -1598,10 +1802,15 @@ mod tests {
     /// without a network or a GitHub account.
     async fn with_bare_origin(repo: &Path) -> tempfile::TempDir {
         let bare = tempfile::tempdir().unwrap();
-        git(repo, &["init", "--bare", bare.path().to_str().unwrap()]).await.unwrap();
-        git(repo, &["remote", "add", "origin", bare.path().to_str().unwrap()])
+        git(repo, &["init", "--bare", bare.path().to_str().unwrap()])
             .await
             .unwrap();
+        git(
+            repo,
+            &["remote", "add", "origin", bare.path().to_str().unwrap()],
+        )
+        .await
+        .unwrap();
         bare
     }
 
@@ -1613,16 +1822,26 @@ mod tests {
         let bare = with_bare_origin(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
         // Left uncommitted, exactly as a card in review can be.
-        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n").await.unwrap();
+        tokio::fs::write(wt.path.join("theirs.txt"), "agent\n")
+            .await
+            .unwrap();
 
         mgr.push(&wt, "aichip: card", false).await.unwrap();
 
         // The ref is on the remote, and it carries the file.
         let refs = git(bare.path(), &["branch", "--list"]).await.unwrap();
-        assert!(refs.contains(&wt.branch), "branch missing from origin: {refs}");
-        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch]).await.unwrap();
+        assert!(
+            refs.contains(&wt.branch),
+            "branch missing from origin: {refs}"
+        );
+        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch])
+            .await
+            .unwrap();
         assert!(
             files.contains("theirs.txt"),
             "a pull request would have shown less than the diff did: {files}"
@@ -1639,15 +1858,27 @@ mod tests {
         let bare = with_bare_origin(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
-        tokio::fs::write(wt.path.join("a.txt"), "one\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("a.txt"), "one\n")
+            .await
+            .unwrap();
         mgr.push(&wt, "aichip: card", false).await.unwrap();
 
-        tokio::fs::write(wt.path.join("b.txt"), "two\n").await.unwrap();
+        tokio::fs::write(wt.path.join("b.txt"), "two\n")
+            .await
+            .unwrap();
         mgr.push(&wt, "aichip: card", false).await.unwrap();
 
-        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch]).await.unwrap();
-        assert!(files.contains("a.txt") && files.contains("b.txt"), "{files}");
+        let files = git(bare.path(), &["ls-tree", "--name-only", &wt.branch])
+            .await
+            .unwrap();
+        assert!(
+            files.contains("a.txt") && files.contains("b.txt"),
+            "{files}"
+        );
     }
 
     /// A retry from a clean checkout rewrites the branch under the same name,
@@ -1663,15 +1894,28 @@ mod tests {
         let mgr = WorktreeManager::new(root.path());
         let task_id = Uuid::new_v4();
 
-        let wt = mgr.create(repo_dir.path(), "main", task_id, "card").await.unwrap();
-        tokio::fs::write(wt.path.join("first.txt"), "one\n").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", task_id, "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("first.txt"), "one\n")
+            .await
+            .unwrap();
         mgr.push(&wt, "aichip: card", false).await.unwrap();
 
         // Retry-from-clean: same branch name, different history.
         mgr.remove(repo_dir.path(), &wt).await.unwrap();
-        let again = mgr.create(repo_dir.path(), "main", task_id, "card").await.unwrap();
-        assert_eq!(again.branch, wt.branch, "the retry must reuse the name for this to bite");
-        tokio::fs::write(again.path.join("second.txt"), "two\n").await.unwrap();
+        let again = mgr
+            .create(repo_dir.path(), "main", task_id, "card")
+            .await
+            .unwrap();
+        assert_eq!(
+            again.branch, wt.branch,
+            "the retry must reuse the name for this to bite"
+        );
+        tokio::fs::write(again.path.join("second.txt"), "two\n")
+            .await
+            .unwrap();
 
         let err = mgr
             .push(&again, "aichip: card", false)
@@ -1679,15 +1923,25 @@ mod tests {
             .expect_err("a rewritten branch must not be force-pushed silently");
         let text = err.to_string();
         assert!(text.contains("overwrite"), "{text}");
-        assert!(text.contains("review comments"), "the cost has to be stated: {text}");
+        assert!(
+            text.contains("review comments"),
+            "the cost has to be stated: {text}"
+        );
 
         // The remote still holds what a reviewer was looking at.
-        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch]).await.unwrap();
-        assert!(files.contains("first.txt") && !files.contains("second.txt"), "{files}");
+        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch])
+            .await
+            .unwrap();
+        assert!(
+            files.contains("first.txt") && !files.contains("second.txt"),
+            "{files}"
+        );
 
         // And force is the second, explicit answer.
         mgr.push(&again, "aichip: card", true).await.unwrap();
-        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch]).await.unwrap();
+        let files = git(bare.path(), &["ls-tree", "--name-only", &again.branch])
+            .await
+            .unwrap();
         assert!(files.contains("second.txt"), "{files}");
     }
 
@@ -1698,7 +1952,10 @@ mod tests {
         init_repo(repo_dir.path()).await;
         let mgr = WorktreeManager::new(root.path());
 
-        let wt = mgr.create(repo_dir.path(), "main", Uuid::new_v4(), "card").await.unwrap();
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
         let err = mgr.push(&wt, "aichip: card", false).await.unwrap_err();
         assert!(err.to_string().contains("no `origin` remote"), "{err}");
     }
@@ -1713,22 +1970,35 @@ mod tests {
         assert_eq!(remote_url(repo_dir.path(), "origin").await, None);
 
         let bare = tempfile::tempdir().unwrap();
-        git(repo_dir.path(), &["init", "--bare", bare.path().to_str().unwrap()])
-            .await
-            .unwrap();
-        git(repo_dir.path(), &["remote", "add", "origin", bare.path().to_str().unwrap()])
-            .await
-            .unwrap();
+        git(
+            repo_dir.path(),
+            &["init", "--bare", bare.path().to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        git(
+            repo_dir.path(),
+            &["remote", "add", "origin", bare.path().to_str().unwrap()],
+        )
+        .await
+        .unwrap();
 
-        let url = remote_url(repo_dir.path(), "origin").await.expect("origin is set");
-        assert_eq!(url, bare.path().to_str().unwrap(), "trimmed, and no trailing newline");
+        let url = remote_url(repo_dir.path(), "origin")
+            .await
+            .expect("origin is set");
+        assert_eq!(
+            url,
+            bare.path().to_str().unwrap(),
+            "trimmed, and no trailing newline"
+        );
         // A remote that is not there is still None even when another one is.
         assert_eq!(remote_url(repo_dir.path(), "upstream").await, None);
     }
 
     #[test]
     fn only_a_history_disagreement_is_offered_force() {
-        let rejected = "git push failed: ! [rejected]        aichip/x -> aichip/x (non-fast-forward)";
+        let rejected =
+            "git push failed: ! [rejected]        aichip/x -> aichip/x (non-fast-forward)";
         assert!(push_rejection(rejected).is_some());
         assert!(push_rejection("! [rejected] main -> main (fetch first)").is_some());
 
@@ -1745,7 +2015,10 @@ mod tests {
         let described = describe_dirty(short);
         assert!(described.contains("M src/main.rs"));
         assert!(described.contains("A  src/new.rs"));
-        assert!(!described.contains("and"), "nothing was elided: {described}");
+        assert!(
+            !described.contains("and"),
+            "nothing was elided: {described}"
+        );
 
         let many: String = (0..40).map(|i| format!(" M file{i}.rs\n")).collect();
         let described = describe_dirty(&many);
@@ -1771,7 +2044,9 @@ mod tests {
             .create(repo_dir.path(), "main", Uuid::new_v4(), "twice")
             .await
             .unwrap();
-        tokio::fs::write(wt.path.join("once.txt"), "one\n").await.unwrap();
+        tokio::fs::write(wt.path.join("once.txt"), "one\n")
+            .await
+            .unwrap();
 
         mgr.squash_merge(repo_dir.path(), &wt, "main", "add once")
             .await

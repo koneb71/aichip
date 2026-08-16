@@ -226,7 +226,10 @@ async fn file(
     .await
     .map_err(internal)?;
     let Some(doc) = doc else {
-        return Err((StatusCode::NOT_FOUND, "that file is not in the index".into()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            "that file is not in the index".into(),
+        ));
     };
 
     let symbols = sqlx::query(

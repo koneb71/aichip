@@ -157,23 +157,27 @@ async fn proxy(
     // whose live container is the project's base preview. Keeping the app's
     // name off the preview row is what makes it survive a rebuild.
     let row = match kind {
-        apps::host::HostKind::Preview => sqlx::query(
-            "SELECT status, host_port FROM previews WHERE slug = $1
+        apps::host::HostKind::Preview => {
+            sqlx::query(
+                "SELECT status, host_port FROM previews WHERE slug = $1
               ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(slug)
-        .fetch_optional(&state.db.pool)
-        .await,
-        apps::host::HostKind::App => sqlx::query(
-            "SELECT v.status, v.host_port
+            )
+            .bind(slug)
+            .fetch_optional(&state.db.pool)
+            .await
+        }
+        apps::host::HostKind::App => {
+            sqlx::query(
+                "SELECT v.status, v.host_port
                FROM apps a
                JOIN previews v ON v.project_id = a.project_id AND v.task_id IS NULL
               WHERE a.slug = $1
               ORDER BY v.created_at DESC LIMIT 1",
-        )
-        .bind(slug)
-        .fetch_optional(&state.db.pool)
-        .await,
+            )
+            .bind(slug)
+            .fetch_optional(&state.db.pool)
+            .await
+        }
     }
     .map_err(|e| format!("could not look up this address: {e}"))?;
 
@@ -188,7 +192,10 @@ async fn proxy(
         ));
     };
     let status: String = row.get("status");
-    let Some(port) = row.get::<Option<i32>, _>("host_port").filter(|_| status == "running") else {
+    let Some(port) = row
+        .get::<Option<i32>, _>("host_port")
+        .filter(|_| status == "running")
+    else {
         return Ok(plain(
             StatusCode::SERVICE_UNAVAILABLE,
             format!(
@@ -221,9 +228,7 @@ async fn proxy(
         .body(body)
         .send()
         .await
-        .map_err(|e| {
-            format!("This preview's container is not answering on port {port}. ({e})")
-        })?;
+        .map_err(|e| format!("This preview's container is not answering on port {port}. ({e})"))?;
 
     let mut out = Response::builder().status(upstream.status());
     for (name, value) in upstream.headers() {
@@ -271,7 +276,10 @@ async fn proxy(
 fn plain(status: StatusCode, message: impl Into<String>) -> Response<Body> {
     Response::builder()
         .status(status)
-        .header(HeaderName::from_static("content-type"), "text/plain; charset=utf-8")
+        .header(
+            HeaderName::from_static("content-type"),
+            "text/plain; charset=utf-8",
+        )
         .body(Body::from(message.into()))
         .expect("a plain-text response is always well formed")
 }
@@ -305,7 +313,10 @@ mod tests {
         );
         // Spelling it differently must not get past the check.
         assert_eq!(host_only("a=1; domain = .localhost"), "a=1");
-        assert_eq!(host_only("a=1; DOMAIN=.LocalHost; HttpOnly"), "a=1; HttpOnly");
+        assert_eq!(
+            host_only("a=1; DOMAIN=.LocalHost; HttpOnly"),
+            "a=1; HttpOnly"
+        );
     }
 
     #[test]

@@ -78,7 +78,11 @@ pub struct Step {
 
 impl Step {
     pub fn parallelism(&self) -> usize {
-        self.strategy.as_ref().map(|s| s.parallel).unwrap_or(1).max(1)
+        self.strategy
+            .as_ref()
+            .map(|s| s.parallel)
+            .unwrap_or(1)
+            .max(1)
     }
 
     pub fn isolated_worktrees(&self) -> bool {
@@ -247,9 +251,7 @@ impl Workflow {
                 Some(tier) => tiers.model_for(tier).to_string(),
                 None => s,
             },
-            None => tiers
-                .model_for(agent_tier.unwrap_or_default())
-                .to_string(),
+            None => tiers.model_for(agent_tier.unwrap_or_default()).to_string(),
         }
     }
 }
@@ -338,7 +340,7 @@ pub fn from_team(team_name: &str, pattern: &str, members: &[String], goal: &str)
                     None => goal.to_string(),
                 };
                 steps.push(Step {
-                engine: None,
+                    engine: None,
                     id: step_id(i, agent),
                     needs: previous.into_iter().collect(),
                     prompt,
@@ -380,7 +382,9 @@ pub fn interpolate(template: &str, outputs: &StepOutputs) -> String {
     let mut result = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
-        let Some(end_rel) = rest[start..].find("}}") else { break };
+        let Some(end_rel) = rest[start..].find("}}") else {
+            break;
+        };
         let end = start + end_rel;
         result.push_str(&rest[..start]);
         let expr = rest[start + 2..end].trim();
@@ -482,7 +486,9 @@ steps:
     prompt: "y"
 "#;
         assert!(matches!(
-            Workflow::from_yaml(cyclic).unwrap_err().downcast::<WorkflowError>(),
+            Workflow::from_yaml(cyclic)
+                .unwrap_err()
+                .downcast::<WorkflowError>(),
             Ok(WorkflowError::Cycle(_))
         ));
 
@@ -534,12 +540,22 @@ steps:
 
     #[test]
     fn team_patterns_produce_valid_runnable_workflows() {
-        let members = vec!["Planner".to_string(), "Builder".to_string(), "Judge".to_string()];
+        let members = vec![
+            "Planner".to_string(),
+            "Builder".to_string(),
+            "Judge".to_string(),
+        ];
 
         let pipeline = from_team("ship-it", "pipeline", &members, "Add dark mode");
         pipeline.validate().unwrap();
-        assert_eq!(pipeline.layers().unwrap().len(), 3, "pipeline is sequential");
-        assert!(pipeline.steps[1].prompt.contains("{{ steps.s1_planner.output }}"));
+        assert_eq!(
+            pipeline.layers().unwrap().len(),
+            3,
+            "pipeline is sequential"
+        );
+        assert!(pipeline.steps[1]
+            .prompt
+            .contains("{{ steps.s1_planner.output }}"));
         assert_eq!(pipeline.steps[2].agent.as_deref(), Some("Judge"));
 
         let debate = from_team("bake-off", "debate", &members, "Fix the flaky test");
@@ -548,8 +564,12 @@ steps:
         assert_eq!(layers[0].len(), 2, "solvers attempt in parallel");
         assert_eq!(layers[1].len(), 1, "judge waits for all attempts");
         assert!(debate.steps[0].isolated_worktrees());
-        assert!(debate.steps[2].prompt.contains("{{ steps.s1_planner.output }}"));
-        assert!(debate.steps[2].prompt.contains("{{ steps.s2_builder.output }}"));
+        assert!(debate.steps[2]
+            .prompt
+            .contains("{{ steps.s1_planner.output }}"));
+        assert!(debate.steps[2]
+            .prompt
+            .contains("{{ steps.s2_builder.output }}"));
 
         let swarm = from_team("sweep", "swarm", &members, "Update deps");
         swarm.validate().unwrap();

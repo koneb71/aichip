@@ -8,9 +8,7 @@
 //! tries to rewrite finished work, invent a teammate, or add assignments
 //! forever gets refused by `apply_decision`, not by wording.
 
-use super::plan::{
-    inspect_plan, resolve_assignee, Plan, PlannedTask, Severity,
-};
+use super::plan::{inspect_plan, resolve_assignee, Plan, PlannedTask, Severity};
 use super::roster::Member;
 use super::Assignment;
 use serde::Deserialize;
@@ -131,7 +129,12 @@ pub fn apply_decision(
     let mut existing_keys: Vec<String> = pending.iter().map(|a| a.key.clone()).collect();
 
     for task in decision.add.into_iter() {
-        if mutations.iter().filter(|m| matches!(m, Mutation::Add(_))).count() >= room {
+        if mutations
+            .iter()
+            .filter(|m| matches!(m, Mutation::Add(_)))
+            .count()
+            >= room
+        {
             refused.push(format!(
                 "no room to add \"{}\" — this run is at its assignment ceiling",
                 task.key
@@ -359,8 +362,13 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (mutations, refused) =
-            apply_decision(decision, &pending, &[member("Rex")], 2, MAX_ADDED_ASSIGNMENTS);
+        let (mutations, refused) = apply_decision(
+            decision,
+            &pending,
+            &[member("Rex")],
+            2,
+            MAX_ADDED_ASSIGNMENTS,
+        );
         assert!(mutations.is_empty());
         assert_eq!(refused.len(), 2);
         assert!(refused[0].contains("isn't still queued"));
@@ -379,8 +387,13 @@ mod tests {
             add: vec![addable("extra", "Ghost")],
             ..Default::default()
         };
-        let (mutations, refused) =
-            apply_decision(decision, &pending, &[member("Rex")], 1, MAX_ADDED_ASSIGNMENTS);
+        let (mutations, refused) = apply_decision(
+            decision,
+            &pending,
+            &[member("Rex")],
+            1,
+            MAX_ADDED_ASSIGNMENTS,
+        );
 
         // The revision survives, but the bogus assignee is dropped from it.
         match &mutations[0] {
@@ -427,8 +440,13 @@ mod tests {
             add: vec![addable("api", "Rex")],
             ..Default::default()
         };
-        let (mutations, _) =
-            apply_decision(decision, &pending, &[member("Rex")], 1, MAX_ADDED_ASSIGNMENTS);
+        let (mutations, _) = apply_decision(
+            decision,
+            &pending,
+            &[member("Rex")],
+            1,
+            MAX_ADDED_ASSIGNMENTS,
+        );
         match &mutations[0] {
             Mutation::Add(task) => assert_eq!(task.key, "api_2"),
             other => panic!("expected an addition, got {other:?}"),
@@ -444,8 +462,13 @@ mod tests {
             add: vec![bad],
             ..Default::default()
         };
-        let (mutations, refused) =
-            apply_decision(decision, &pending, &[member("Rex")], 1, MAX_ADDED_ASSIGNMENTS);
+        let (mutations, refused) = apply_decision(
+            decision,
+            &pending,
+            &[member("Rex")],
+            1,
+            MAX_ADDED_ASSIGNMENTS,
+        );
         assert!(mutations.is_empty());
         assert!(refused[0].contains("did not add"));
     }
@@ -453,15 +476,24 @@ mod tests {
     #[test]
     fn triage_parses_every_action_and_defaults_to_abort() {
         for (raw, expected) in [
-            (r#"{"action":"retry","brief":"smaller"}"#, TriageAction::Retry),
-            (r#"{"action":"reassign","assignee":"Rex"}"#, TriageAction::Reassign),
+            (
+                r#"{"action":"retry","brief":"smaller"}"#,
+                TriageAction::Retry,
+            ),
+            (
+                r#"{"action":"reassign","assignee":"Rex"}"#,
+                TriageAction::Reassign,
+            ),
             (r#"{"action":"drop"}"#, TriageAction::Drop),
             (r#"{"action":"abort"}"#, TriageAction::Abort),
         ] {
             assert_eq!(Triage::parse(raw).action, expected);
         }
         assert_eq!(Triage::parse("I give up").action, TriageAction::Abort);
-        assert_eq!(Triage::parse(r#"{"action":"nap"}"#).action, TriageAction::Abort);
+        assert_eq!(
+            Triage::parse(r#"{"action":"nap"}"#).action,
+            TriageAction::Abort
+        );
     }
 
     #[test]
@@ -469,7 +501,11 @@ mod tests {
         let pending = vec![assignment("ui", "Rex")];
         let prompt = replan_prompt("Priya", "Add API", &"x".repeat(5000), &pending, 3);
         assert!(prompt.contains('…'), "a long report is clipped");
-        assert!(prompt.len() < 3000, "prompt stayed compact: {}", prompt.len());
+        assert!(
+            prompt.len() < 3000,
+            "prompt stayed compact: {}",
+            prompt.len()
+        );
         assert!(prompt.contains("reply exactly {} and nothing else"));
         assert!(prompt.contains("at most 3 more assignments"));
         // Titles only — never the full briefs of everything still queued.

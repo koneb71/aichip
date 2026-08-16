@@ -424,7 +424,10 @@ mod tests {
     #[test]
     fn the_shared_corpus_agrees_with_this_side() {
         let cases: Vec<Case> = serde_json::from_str(CASES).expect("corpus parses");
-        assert!(cases.len() >= 20, "the corpus is what makes this worth sharing");
+        assert!(
+            cases.len() >= 20,
+            "the corpus is what makes this worth sharing"
+        );
         for case in cases {
             assert_eq!(
                 mentioned(&case.text, &case.agents),
@@ -475,10 +478,7 @@ mod tests {
 
     #[test]
     fn several_mentions_ask_for_one_task_each() {
-        let block = augment_prompt(
-            "do it",
-            &["Frontend".to_string(), "Backend".to_string()],
-        );
+        let block = augment_prompt("do it", &["Frontend".to_string(), "Backend".to_string()]);
         assert!(block.contains("\"Frontend\", \"Backend\""));
         assert!(block.contains("every task"));
     }
@@ -533,7 +533,10 @@ mod tests {
     fn several_skills_read_as_plural() {
         let block = augment_skills_prompt(
             "do it",
-            &["release-checklist".to_string(), "how-we-migrate".to_string()],
+            &[
+                "release-checklist".to_string(),
+                "how-we-migrate".to_string(),
+            ],
         );
         assert!(block.contains("skills \"release-checklist\", \"how-we-migrate\""));
         assert!(block.contains("are attached to them"));

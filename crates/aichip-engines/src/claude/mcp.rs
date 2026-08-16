@@ -96,7 +96,10 @@ mod tests {
             servers: vec![],
         });
         assert_eq!(c["mcpServers"]["aichip"]["type"], "http");
-        assert_eq!(c["mcpServers"]["aichip"]["url"], "http://127.0.0.1:4820/mcp/run/abc");
+        assert_eq!(
+            c["mcpServers"]["aichip"]["url"],
+            "http://127.0.0.1:4820/mcp/run/abc"
+        );
     }
 
     #[test]
@@ -114,7 +117,10 @@ mod tests {
 
     #[test]
     fn empty_env_and_headers_are_omitted_rather_than_written_as_empty_objects() {
-        let c = config(&McpWiring { aichip_url: None, servers: vec![stdio("p")] });
+        let c = config(&McpWiring {
+            aichip_url: None,
+            servers: vec![stdio("p")],
+        });
         assert!(c["mcpServers"]["p"].get("env").is_none());
     }
 

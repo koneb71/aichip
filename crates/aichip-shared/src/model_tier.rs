@@ -189,7 +189,10 @@ impl EngineTierMapping {
             "opencode" => TierMapping(BTreeMap::from([
                 (ModelTier::Easy, "anthropic/claude-haiku-4-5".to_string()),
                 (ModelTier::Medium, "anthropic/claude-sonnet-4-5".to_string()),
-                (ModelTier::Complex, "anthropic/claude-sonnet-4-5".to_string()),
+                (
+                    ModelTier::Complex,
+                    "anthropic/claude-sonnet-4-5".to_string(),
+                ),
             ])),
             // Claude Code and the mock engine both speak Claude model ids.
             _ => TierMapping::default(),
@@ -243,8 +246,7 @@ impl<'de> Deserialize<'de> for EngineTierMapping {
             }
         }
         // Flat: the legacy shape belonged to Claude Code.
-        let flat: TierMapping =
-            serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
+        let flat: TierMapping = serde_json::from_value(raw).map_err(serde::de::Error::custom)?;
         let mut map = BTreeMap::new();
         map.insert("claude-code".to_string(), flat);
         map.insert("opencode".to_string(), Self::defaults_for("opencode"));
@@ -301,8 +303,17 @@ pub fn pick_defaults(available: &[String]) -> Option<TierMapping> {
     // reads as an aichip bug rather than a configuration one. Previews are
     // excluded too — a default that names one rots when it's withdrawn.
     const NOT_FOR_CODING: &[&str] = &[
-        "image", "tts", "embed", "veo", "lyria", "live", "robotics", "translate",
-        "computer-use", "deep-research", "preview",
+        "image",
+        "tts",
+        "embed",
+        "veo",
+        "lyria",
+        "live",
+        "robotics",
+        "translate",
+        "computer-use",
+        "deep-research",
+        "preview",
     ];
 
     let usable = |id: &&String| !NOT_FOR_CODING.iter().any(|b| id.contains(b));
@@ -383,7 +394,10 @@ mod pick_tests {
             "anthropic/claude-haiku-4-5",
         ]);
         let m = pick_defaults(&available).unwrap();
-        assert_eq!(m.model_for(ModelTier::Complex), "anthropic/claude-sonnet-4-5");
+        assert_eq!(
+            m.model_for(ModelTier::Complex),
+            "anthropic/claude-sonnet-4-5"
+        );
         assert_eq!(m.model_for(ModelTier::Easy), "anthropic/claude-haiku-4-5");
     }
 
@@ -407,7 +421,10 @@ mod per_engine_tests {
     #[test]
     fn each_engine_gets_ids_it_can_actually_use() {
         let m = EngineTierMapping::default();
-        assert_eq!(m.model_for("claude-code", ModelTier::Medium), "claude-opus-5");
+        assert_eq!(
+            m.model_for("claude-code", ModelTier::Medium),
+            "claude-opus-5"
+        );
         // Not a Claude id — OpenCode would reject that outright.
         assert!(m.model_for("opencode", ModelTier::Medium).contains('/'));
     }
@@ -415,7 +432,9 @@ mod per_engine_tests {
     #[test]
     fn an_unknown_engine_falls_back_rather_than_returning_nothing() {
         let m = EngineTierMapping::default();
-        assert!(!m.model_for("some-future-engine", ModelTier::Easy).is_empty());
+        assert!(!m
+            .model_for("some-future-engine", ModelTier::Easy)
+            .is_empty());
     }
 
     #[test]
@@ -426,7 +445,10 @@ mod per_engine_tests {
             "easy": "claude-sonnet-5", "medium": "claude-opus-5", "complex": "claude-opus-5"
         });
         let m: EngineTierMapping = serde_json::from_value(flat).unwrap();
-        assert_eq!(m.model_for("claude-code", ModelTier::Easy), "claude-sonnet-5");
+        assert_eq!(
+            m.model_for("claude-code", ModelTier::Easy),
+            "claude-sonnet-5"
+        );
         // And OpenCode still gets something usable rather than a Claude id.
         assert!(m.model_for("opencode", ModelTier::Easy).contains('/'));
     }
@@ -446,7 +468,10 @@ mod per_engine_tests {
     fn opencode_validates_shape_not_membership() {
         // The realistic mistake: a Claude id pasted into the OpenCode field.
         assert!(!is_known_model_for("opencode", "claude-opus-5"));
-        assert!(is_known_model_for("opencode", "anthropic/claude-sonnet-4-5"));
+        assert!(is_known_model_for(
+            "opencode",
+            "anthropic/claude-sonnet-4-5"
+        ));
         // A local model no catalog would ever list.
         assert!(is_known_model_for("opencode", "ollama/qwen3-coder"));
         assert!(!is_known_model_for("opencode", "too/many/slashes"));
@@ -537,6 +562,9 @@ mod per_engine_tests {
         assert_eq!(TierChoice::Easy.fixed(), Some(ModelTier::Easy));
         assert_eq!(TierChoice::Complex.fixed(), Some(ModelTier::Complex));
         // And a real tier converts in without inventing a choice.
-        assert_eq!(TierChoice::from(ModelTier::Medium).fixed(), Some(ModelTier::Medium));
+        assert_eq!(
+            TierChoice::from(ModelTier::Medium).fixed(),
+            Some(ModelTier::Medium)
+        );
     }
 }

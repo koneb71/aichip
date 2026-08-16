@@ -52,7 +52,10 @@ async fn run_org(
     }
     let definition: Value = team.get("definition");
     if definition.get("manager").and_then(Value::as_str).is_none() {
-        return Err((StatusCode::BAD_REQUEST, "pick a manager for this organization".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "pick a manager for this organization".into(),
+        ));
     }
     if definition
         .get("members")
@@ -151,7 +154,12 @@ async fn build_detail(state: &AppState, run_id: Uuid) -> Result<Value, ApiError>
     .bind(run_id)
     .fetch_one(&state.db.pool)
     .await
-    .map_err(|_| (StatusCode::NOT_FOUND, "no such organization run".to_string()))?;
+    .map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            "no such organization run".to_string(),
+        )
+    })?;
 
     let definition: Value = run.get("definition");
     let workspace_id: Uuid = run.get("workspace_id");
@@ -258,14 +266,13 @@ async fn load_agent(
     workspace_id: Uuid,
     agent_id: Uuid,
 ) -> Result<Option<AgentBits>, ApiError> {
-    let row = sqlx::query(
-        "SELECT name, color, description FROM agents WHERE id=$1 AND workspace_id=$2",
-    )
-    .bind(agent_id)
-    .bind(workspace_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?;
+    let row =
+        sqlx::query("SELECT name, color, description FROM agents WHERE id=$1 AND workspace_id=$2")
+            .bind(agent_id)
+            .bind(workspace_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
     Ok(row.map(|r| (r.get("name"), r.get("color"), r.get("description"))))
 }
 
@@ -319,7 +326,14 @@ async fn approve_plan(
         .map_err(internal)?;
     state
         .orchestrator
-        .post(run_id, None, "system", None, "status", "Plan approved — starting work.")
+        .post(
+            run_id,
+            None,
+            "system",
+            None,
+            "status",
+            "Plan approved — starting work.",
+        )
         .await
         .map_err(internal)?;
     // The updated run, not a bare ack: the caller can then render the new state
@@ -371,7 +385,14 @@ async fn reject_plan(
     .map_err(internal)?;
     state
         .orchestrator
-        .post(run_id, None, "system", None, "status", &format!("Run canceled — {reason}"))
+        .post(
+            run_id,
+            None,
+            "system",
+            None,
+            "status",
+            &format!("Run canceled — {reason}"),
+        )
         .await
         .map_err(internal)?;
     Ok(Json(build_detail(&state, run_id).await?))

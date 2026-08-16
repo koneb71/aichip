@@ -215,12 +215,11 @@ pub async fn move_page(
     }
 
     let mut tx = db.pool.begin().await?;
-    let space: (Uuid, Option<Uuid>) = sqlx::query_as(
-        "SELECT workspace_id, project_id FROM kb_articles WHERE id=$1 FOR UPDATE",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let space: (Uuid, Option<Uuid>) =
+        sqlx::query_as("SELECT workspace_id, project_id FROM kb_articles WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
 
     // Siblings under the destination, excluding the page being moved.
     let siblings: Vec<(Uuid, f64)> = sqlx::query_as(
@@ -241,9 +240,15 @@ pub async fn move_page(
 
     let index = match after {
         None => 0,
-        Some(a) => siblings.iter().position(|(sid, _)| *sid == a).map_or(siblings.len(), |i| i + 1),
+        Some(a) => siblings
+            .iter()
+            .position(|(sid, _)| *sid == a)
+            .map_or(siblings.len(), |i| i + 1),
     };
-    let before = index.checked_sub(1).and_then(|i| siblings.get(i)).map(|(_, p)| *p);
+    let before = index
+        .checked_sub(1)
+        .and_then(|i| siblings.get(i))
+        .map(|(_, p)| *p);
     let next = siblings.get(index).map(|(_, p)| *p);
     let position = midpoint(before, next);
 

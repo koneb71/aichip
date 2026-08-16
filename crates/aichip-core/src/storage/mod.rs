@@ -66,7 +66,11 @@ impl Storage {
     /// resolve; path style is the only shape that works everywhere.
     fn object_path(&self, key: &str) -> String {
         let encoded: Vec<String> = key.split('/').map(sigv4::encode_segment).collect();
-        format!("/{}/{}", sigv4::encode_segment(&self.bucket), encoded.join("/"))
+        format!(
+            "/{}/{}",
+            sigv4::encode_segment(&self.bucket),
+            encoded.join("/")
+        )
     }
 
     async fn send(
@@ -130,12 +134,7 @@ impl Storage {
         anyhow::bail!("could not create bucket {}: {status} {body}", self.bucket);
     }
 
-    pub async fn put(
-        &self,
-        key: &str,
-        body: Vec<u8>,
-        content_type: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn put(&self, key: &str, body: Vec<u8>, content_type: &str) -> anyhow::Result<()> {
         if body.len() > MAX_OBJECT_BYTES {
             anyhow::bail!(
                 "that file is {:.1} MB; the limit is {} MB",
@@ -144,10 +143,15 @@ impl Storage {
             );
         }
         let path = self.object_path(key);
-        let res = self.send("PUT", &path, "", body, Some(content_type)).await?;
+        let res = self
+            .send("PUT", &path, "", body, Some(content_type))
+            .await?;
         if !res.status().is_success() {
             let status = res.status();
-            anyhow::bail!("upload failed: {status} {}", res.text().await.unwrap_or_default());
+            anyhow::bail!(
+                "upload failed: {status} {}",
+                res.text().await.unwrap_or_default()
+            );
         }
         Ok(())
     }
@@ -162,7 +166,10 @@ impl Storage {
         }
         if !res.status().is_success() {
             let status = res.status();
-            anyhow::bail!("fetch failed: {status} {}", res.text().await.unwrap_or_default());
+            anyhow::bail!(
+                "fetch failed: {status} {}",
+                res.text().await.unwrap_or_default()
+            );
         }
         Ok(Some(res.bytes().await?.to_vec()))
     }
@@ -176,7 +183,10 @@ impl Storage {
             return Ok(());
         }
         let status = res.status();
-        anyhow::bail!("delete failed: {status} {}", res.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "delete failed: {status} {}",
+            res.text().await.unwrap_or_default()
+        );
     }
 }
 

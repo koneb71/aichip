@@ -106,9 +106,7 @@ pub fn resolve(specifier: &str, from: &str, set: &PathSet) -> Option<String> {
     }
     match super::symbols::Lang::of(from)? {
         super::symbols::Lang::Rust => resolve_rust(spec, from, set),
-        super::symbols::Lang::TypeScript | super::symbols::Lang::Tsx => {
-            resolve_ts(spec, from, set)
-        }
+        super::symbols::Lang::TypeScript | super::symbols::Lang::Tsx => resolve_ts(spec, from, set),
         super::symbols::Lang::Python => resolve_python(spec, from, set),
     }
 }
@@ -162,7 +160,10 @@ fn try_ts_candidate(candidate: &str, set: &PathSet) -> Option<String> {
     }
     // `import "./foo.js"` in TypeScript source means `./foo.ts` — the ESM
     // convention of writing the emitted extension.
-    if let Some(stem) = candidate.strip_suffix(".js").or_else(|| candidate.strip_suffix(".jsx")) {
+    if let Some(stem) = candidate
+        .strip_suffix(".js")
+        .or_else(|| candidate.strip_suffix(".jsx"))
+    {
         for ext in TS_EXTENSIONS {
             let p = format!("{stem}.{ext}");
             if set.has(&p) {
@@ -211,7 +212,11 @@ fn crate_root(from: &str) -> Option<&str> {
 /// `foo.rs` beside its siblings, or `foo/mod.rs`.
 fn rust_module(base: &str, module_path: &str, set: &PathSet) -> Option<String> {
     let rel = module_path.replace("::", "/");
-    let stem = if base.is_empty() { rel } else { format!("{base}/{rel}") };
+    let stem = if base.is_empty() {
+        rel
+    } else {
+        format!("{base}/{rel}")
+    };
     for p in [format!("{stem}.rs"), format!("{stem}/mod.rs")] {
         if set.has(&p) {
             return Some(p);
@@ -261,7 +266,11 @@ fn resolve_rust(spec: &str, from: &str, set: &PathSet) -> Option<String> {
         // Each further `super::` climbs one directory. `mod.rs` is its
         // directory's module, so from a `mod.rs` the first `super` is already
         // the parent.
-        let mut dir = if from.ends_with("/mod.rs") { dir_of(own_dir) } else { own_dir };
+        let mut dir = if from.ends_with("/mod.rs") {
+            dir_of(own_dir)
+        } else {
+            own_dir
+        };
         let mut rest = rest;
         while let Some(more) = rest.strip_prefix("super::") {
             dir = dir_of(dir);
@@ -383,7 +392,10 @@ mod tests {
         );
         // One `..` too few lands somewhere that does not exist, and that is
         // `None` rather than the nearest plausible file.
-        assert_eq!(r("../lib/api", "web/src/components/map/RepoMapPanel.tsx"), None);
+        assert_eq!(
+            r("../lib/api", "web/src/components/map/RepoMapPanel.tsx"),
+            None
+        );
         assert_eq!(
             r("../../lib/ws", "web/src/components/map/RepoMapPanel.tsx"),
             Some("web/src/lib/ws.ts".into())
@@ -408,7 +420,10 @@ mod tests {
 
     #[test]
     fn an_alias_resolves_only_when_exactly_one_file_could_be_meant() {
-        assert_eq!(r("@/lib/api", "web/src/pages/ProjectPage.tsx"), Some("web/src/lib/api.ts".into()));
+        assert_eq!(
+            r("@/lib/api", "web/src/pages/ProjectPage.tsx"),
+            Some("web/src/lib/api.ts".into())
+        );
         // Nothing in the project ends this way.
         assert_eq!(r("@/lib/nope", "web/src/pages/ProjectPage.tsx"), None);
     }
@@ -428,10 +443,19 @@ mod tests {
     #[test]
     fn rust_crate_self_and_super() {
         let from = "crates/aichip-core/src/repo/index.rs";
-        assert_eq!(r("crate::db::Db", from), Some("crates/aichip-core/src/db.rs".into()));
+        assert_eq!(
+            r("crate::db::Db", from),
+            Some("crates/aichip-core/src/db.rs".into())
+        );
         // A directory module resolves to its mod.rs.
-        assert_eq!(r("crate::repo", from), Some("crates/aichip-core/src/repo/mod.rs".into()));
-        assert_eq!(r("super::chunk", from), Some("crates/aichip-core/src/repo/chunk.rs".into()));
+        assert_eq!(
+            r("crate::repo", from),
+            Some("crates/aichip-core/src/repo/mod.rs".into())
+        );
+        assert_eq!(
+            r("super::chunk", from),
+            Some("crates/aichip-core/src/repo/chunk.rs".into())
+        );
         assert_eq!(
             r("crate::rag::embed::embed_batch", from),
             Some("crates/aichip-core/src/rag/embed.rs".into())
@@ -450,7 +474,10 @@ mod tests {
     #[test]
     fn another_workspace_crate_is_found_through_its_directory_name() {
         assert_eq!(
-            r("aichip_shared::env_guard::is_auth_env", "crates/aichip-core/src/repo/index.rs"),
+            r(
+                "aichip_shared::env_guard::is_auth_env",
+                "crates/aichip-core/src/repo/index.rs"
+            ),
             Some("crates/aichip-shared/src/env_guard.rs".into())
         );
     }
@@ -458,7 +485,12 @@ mod tests {
     #[test]
     fn the_standard_library_and_external_crates_are_not_files_here() {
         let from = "crates/aichip-core/src/db.rs";
-        for spec in ["std::collections::HashMap", "tokio::fs", "serde::Serialize", "anyhow::Result"] {
+        for spec in [
+            "std::collections::HashMap",
+            "tokio::fs",
+            "serde::Serialize",
+            "anyhow::Result",
+        ] {
             assert_eq!(r(spec, from), None, "{spec}");
         }
     }
@@ -466,13 +498,19 @@ mod tests {
     #[test]
     fn python_absolute_and_relative_imports() {
         let from = "backend/apps/accounts/views.py";
-        assert_eq!(r(".models", from), Some("backend/apps/accounts/models.py".into()));
+        assert_eq!(
+            r(".models", from),
+            Some("backend/apps/accounts/models.py".into())
+        );
         assert_eq!(
             r("apps.accounts.models", from),
             Some("backend/apps/accounts/models.py".into())
         );
         // A package resolves to its __init__.
-        assert_eq!(r("apps.accounts", from), Some("backend/apps/accounts/__init__.py".into()));
+        assert_eq!(
+            r("apps.accounts", from),
+            Some("backend/apps/accounts/__init__.py".into())
+        );
         assert_eq!(r("django.db", from), None);
         assert_eq!(r("os", from), None);
     }
@@ -495,7 +533,10 @@ mod tests {
     /// The same project, plus what each file defines.
     fn with_symbols() -> PathSet {
         project().with_symbols(HashMap::from([
-            ("AppState".to_string(), vec!["crates/aichip-server/src/lib.rs".to_string()]),
+            (
+                "AppState".to_string(),
+                vec!["crates/aichip-server/src/lib.rs".to_string()],
+            ),
             (
                 "Db".to_string(),
                 vec![
@@ -522,7 +563,11 @@ mod tests {
         // came from looks uncoupled.
         let set = with_symbols();
         assert_eq!(
-            resolve("crate::AppState", "crates/aichip-server/src/routes/repo_map.rs", &set),
+            resolve(
+                "crate::AppState",
+                "crates/aichip-server/src/routes/repo_map.rs",
+                &set
+            ),
             Some("crates/aichip-server/src/lib.rs".into())
         );
         // Scoped to the importing crate: the shared crate also defines `Db`,
@@ -536,7 +581,10 @@ mod tests {
     #[test]
     fn two_definitions_of_a_name_in_one_crate_resolve_to_neither() {
         let set = with_symbols();
-        assert_eq!(resolve("crate::Report", "crates/aichip-core/src/db.rs", &set), None);
+        assert_eq!(
+            resolve("crate::Report", "crates/aichip-core/src/db.rs", &set),
+            None
+        );
     }
 
     #[test]
@@ -545,7 +593,11 @@ mod tests {
         // whatever happens to define `Db`.
         let set = with_symbols();
         assert_eq!(
-            resolve("crate::db::Db", "crates/aichip-core/src/repo/index.rs", &set),
+            resolve(
+                "crate::db::Db",
+                "crates/aichip-core/src/repo/index.rs",
+                &set
+            ),
             Some("crates/aichip-core/src/db.rs".into())
         );
     }
@@ -565,7 +617,9 @@ mod tests {
     #[test]
     fn an_ambiguous_ending_is_refused_rather_than_picked() {
         let set = PathSet::new(
-            &["a/lib/api.ts", "b/lib/api.ts"].map(str::to_string).to_vec(),
+            &["a/lib/api.ts", "b/lib/api.ts"]
+                .map(str::to_string)
+                .to_vec(),
         );
         assert_eq!(resolve("@/lib/api", "a/main.ts", &set), None);
     }

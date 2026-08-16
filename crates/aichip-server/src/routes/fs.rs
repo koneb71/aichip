@@ -47,7 +47,10 @@ async fn list(Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
     let home = browse_root();
     let requested = q.path.map(PathBuf::from).unwrap_or_else(|| home.clone());
     let Some(path) = sandboxed(&home, &requested) else {
-        return Err((StatusCode::FORBIDDEN, "that path is outside the folder aichip is allowed to browse".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "that path is outside the folder aichip is allowed to browse".into(),
+        ));
     };
 
     let mut dirs: Vec<Value> = vec![];
@@ -57,7 +60,9 @@ async fn list(Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
         if name.starts_with('.') || name == "node_modules" || name == "target" {
             continue;
         }
-        let Ok(file_type) = entry.file_type().await else { continue };
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
         if !file_type.is_dir() {
             continue;
         }
@@ -156,7 +161,10 @@ struct GitInitBody {
 async fn git_init(Json(body): Json<GitInitBody>) -> Result<Json<Value>, ApiError> {
     let home = browse_root();
     let Some(path) = sandboxed(&home, Path::new(&body.path)) else {
-        return Err((StatusCode::FORBIDDEN, "that path is outside the folder aichip is allowed to browse".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "that path is outside the folder aichip is allowed to browse".into(),
+        ));
     };
     if path.join(".git").exists() {
         return Err((StatusCode::BAD_REQUEST, "already a git repository".into()));

@@ -243,7 +243,10 @@ fn name_of(node: Node, source: &str) -> Option<String> {
         // An `impl` block binds no name; the type it is for is what a reader
         // is looking for in a symbol list.
         .or_else(|| node.child_by_field_name("type"))?;
-    source.get(named.byte_range()).map(str::to_string).filter(|s| !s.is_empty())
+    source
+        .get(named.byte_range())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 fn symbol_of(lang: Lang, node: Node, source: &str) -> Option<Symbol> {
@@ -260,10 +263,13 @@ fn symbol_of(lang: Lang, node: Node, source: &str) -> Option<Symbol> {
         // the point, and `impl` is where a Rust file keeps them.
         (Lang::Rust, "impl_item") => "impl",
 
-        (Lang::TypeScript | Lang::Tsx, "function_declaration" | "generator_function_declaration") => {
-            "function"
+        (
+            Lang::TypeScript | Lang::Tsx,
+            "function_declaration" | "generator_function_declaration",
+        ) => "function",
+        (Lang::TypeScript | Lang::Tsx, "class_declaration" | "abstract_class_declaration") => {
+            "class"
         }
-        (Lang::TypeScript | Lang::Tsx, "class_declaration" | "abstract_class_declaration") => "class",
         (Lang::TypeScript | Lang::Tsx, "interface_declaration") => "interface",
         (Lang::TypeScript | Lang::Tsx, "type_alias_declaration") => "type",
         (Lang::TypeScript | Lang::Tsx, "enum_declaration") => "enum",
@@ -293,22 +299,34 @@ fn import_of(lang: Lang, node: Node, source: &str) -> Option<Import> {
         (Lang::TypeScript | Lang::Tsx, "import_statement" | "export_statement") => {
             let src = node.child_by_field_name("source")?;
             let text = source.get(src.byte_range())?;
-            Some(Import { specifier: unquote(text)?, line })
+            Some(Import {
+                specifier: unquote(text)?,
+                line,
+            })
         }
         (Lang::Rust, "use_declaration") => {
             let arg = node.child_by_field_name("argument")?;
             // Only the path's stem: `use crate::db::Db` and
             // `use crate::db::{Db, Pool}` are the same dependency, and the
             // resolver works in modules, not items.
-            Some(Import { specifier: source.get(arg.byte_range())?.to_string(), line })
+            Some(Import {
+                specifier: source.get(arg.byte_range())?.to_string(),
+                line,
+            })
         }
         (Lang::Python, "import_from_statement") => {
             let m = node.child_by_field_name("module_name")?;
-            Some(Import { specifier: source.get(m.byte_range())?.to_string(), line })
+            Some(Import {
+                specifier: source.get(m.byte_range())?.to_string(),
+                line,
+            })
         }
         (Lang::Python, "import_statement") => {
             let m = node.child_by_field_name("name")?;
-            Some(Import { specifier: source.get(m.byte_range())?.to_string(), line })
+            Some(Import {
+                specifier: source.get(m.byte_range())?.to_string(),
+                line,
+            })
         }
         // `lazy(() => import("./TerminalPanel"))`. A code-splitting boundary is
         // exactly where somebody looking at a dependency graph expects to see
@@ -320,7 +338,10 @@ fn import_of(lang: Lang, node: Node, source: &str) -> Option<Import> {
                 return None;
             }
             let arg = node.child_by_field_name("arguments")?.named_child(0)?;
-            Some(Import { specifier: unquote(source.get(arg.byte_range())?)?, line })
+            Some(Import {
+                specifier: unquote(source.get(arg.byte_range())?)?,
+                line,
+            })
         }
         _ => None,
     }
@@ -374,7 +395,10 @@ impl Report {
         // of the file.
         assert!(!names(&p).contains(&"helper"));
         assert_eq!(
-            p.imports.iter().map(|i| i.specifier.as_str()).collect::<Vec<_>>(),
+            p.imports
+                .iter()
+                .map(|i| i.specifier.as_str())
+                .collect::<Vec<_>>(),
             vec!["crate::db::Db", "std::collections::HashMap"]
         );
     }
@@ -398,10 +422,16 @@ export class Store {
 }
 ";
         let p = parse(Lang::TypeScript, src);
-        assert_eq!(names(&p), vec!["RepoFile", "chunkOf", "Store", "load", "save"]);
+        assert_eq!(
+            names(&p),
+            vec!["RepoFile", "chunkOf", "Store", "load", "save"]
+        );
         // Both quote styles, both unquoted.
         assert_eq!(
-            p.imports.iter().map(|i| i.specifier.as_str()).collect::<Vec<_>>(),
+            p.imports
+                .iter()
+                .map(|i| i.specifier.as_str())
+                .collect::<Vec<_>>(),
             vec!["../lib/api", "./types"]
         );
         // An arrow function bound to a local is not a definition of the file.
@@ -412,7 +442,10 @@ export class Store {
     fn a_generic_function_survives_the_typescript_grammar() {
         // The reason .ts and .tsx get different grammars: TSX reads `<T>` as
         // the start of a JSX element and loses the declaration.
-        let p = parse(Lang::TypeScript, "export function pick<T>(xs: T[]): T { return xs[0]; }");
+        let p = parse(
+            Lang::TypeScript,
+            "export function pick<T>(xs: T[]): T { return xs[0]; }",
+        );
         assert_eq!(names(&p), vec!["pick"]);
     }
 
@@ -448,7 +481,10 @@ def standalone():
         assert_eq!(names(&p), vec!["Account", "save", "standalone"]);
         assert!(!names(&p).contains(&"inner"));
         assert_eq!(
-            p.imports.iter().map(|i| i.specifier.as_str()).collect::<Vec<_>>(),
+            p.imports
+                .iter()
+                .map(|i| i.specifier.as_str())
+                .collect::<Vec<_>>(),
             vec!["os", "django.db"]
         );
     }
@@ -496,16 +532,26 @@ pub fn real() {}
         let long = format!("pub fn café_{}() {{}}", "x".repeat(400));
         let p = parse(Lang::Rust, &long);
         let sig = p.symbols[0].signature.as_ref().unwrap();
-        assert!(sig.chars().count() <= 161, "capped: {}", sig.chars().count());
+        assert!(
+            sig.chars().count() <= 161,
+            "capped: {}",
+            sig.chars().count()
+        );
         assert!(sig.ends_with('…'));
         assert!(sig.contains("café"));
     }
 
     #[test]
     fn a_dynamic_specifier_is_dropped_rather_than_guessed() {
-        let p = parse(Lang::TypeScript, "import x from `./${name}`;\nimport y from \"./real\";");
+        let p = parse(
+            Lang::TypeScript,
+            "import x from `./${name}`;\nimport y from \"./real\";",
+        );
         assert_eq!(
-            p.imports.iter().map(|i| i.specifier.as_str()).collect::<Vec<_>>(),
+            p.imports
+                .iter()
+                .map(|i| i.specifier.as_str())
+                .collect::<Vec<_>>(),
             vec!["./real"]
         );
     }

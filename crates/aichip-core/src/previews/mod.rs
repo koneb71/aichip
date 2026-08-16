@@ -130,7 +130,11 @@ pub async fn limits(db: &Db) -> Limits {
     Limits {
         // Clamped rather than trusted: a zero here would make the Build button
         // permanently refuse, and there is no way back from that in the UI.
-        max_live: v.get("max_live").and_then(|x| x.as_i64()).unwrap_or(d.max_live).clamp(1, 20),
+        max_live: v
+            .get("max_live")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(d.max_live)
+            .clamp(1, 20),
         idle_minutes: v
             .get("idle_minutes")
             .and_then(|x| x.as_i64())
@@ -220,7 +224,11 @@ enum How {
 /// machine, so it waits until someone has read it. Approval attaches to the
 /// text's hash, exactly as it does for a preview recipe, so the rewrite on the
 /// next build does not inherit the reading someone gave this one.
-async fn how_app(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<Option<(How, recipe::Port)>> {
+async fn how_app(
+    db: &Db,
+    source: &Path,
+    project_id: Uuid,
+) -> anyhow::Result<Option<(How, recipe::Port)>> {
     use crate::apps::runtime::{self, Build};
 
     let row = sqlx::query(
@@ -241,7 +249,9 @@ async fn how_app(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<Opt
         );
     }
 
-    let committed = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok();
+    let committed = tokio::fs::read_to_string(source.join("Dockerfile"))
+        .await
+        .ok();
     let text = match runtime::drift(runtime, committed.as_deref()) {
         Build::None => return Ok(None),
         Build::Owned(ours) => ours.to_string(),
@@ -292,7 +302,10 @@ async fn how(db: &Db, source: &Path, project_id: Uuid) -> anyhow::Result<(How, r
         return Ok((How::Stack(plan, dir), port));
     }
 
-    if let Some(own) = tokio::fs::read_to_string(source.join("Dockerfile")).await.ok() {
+    if let Some(own) = tokio::fs::read_to_string(source.join("Dockerfile"))
+        .await
+        .ok()
+    {
         let port = recipe::plan(Some(&own)).map_err(|e| anyhow::anyhow!(e.message()))?;
         return Ok((How::Single(None), port));
     }
@@ -764,12 +777,10 @@ pub fn output_log_path(id: Uuid) -> PathBuf {
 /// then refused to serve — which is the case the tail on the card cannot show,
 /// because by then the build succeeded.
 pub async fn logs(db: &Db, preview_id: Uuid) -> anyhow::Result<(String, String)> {
-    let row = sqlx::query(
-        "SELECT container_id, compose_file, status FROM previews WHERE id = $1",
-    )
-    .bind(preview_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let row = sqlx::query("SELECT container_id, compose_file, status FROM previews WHERE id = $1")
+        .bind(preview_id)
+        .fetch_optional(&db.pool)
+        .await?;
     let Some(row) = row else {
         anyhow::bail!("no such preview");
     };
@@ -801,7 +812,9 @@ pub async fn logs(db: &Db, preview_id: Uuid) -> anyhow::Result<(String, String)>
 /// The rewritten file a preview project name implies.
 fn compose_path_for_name(project: &str) -> PathBuf {
     let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join(".aichip").join("previews").join(format!("{project}.yaml"))
+    home.join(".aichip")
+        .join("previews")
+        .join(format!("{project}.yaml"))
 }
 
 /// Where a preview's rewritten compose file lives.
@@ -917,7 +930,10 @@ pub async fn sweep_idle(db: &Db) -> anyhow::Result<u64> {
         docker::remove(&recipe::container_name(&id)).await;
     }
     if !rows.is_empty() {
-        tracing::info!(count = rows.len(), "idle previews stopped; images kept for a fast wake");
+        tracing::info!(
+            count = rows.len(),
+            "idle previews stopped; images kept for a fast wake"
+        );
     }
     Ok(rows.len() as u64)
 }
@@ -994,15 +1010,13 @@ async fn build_and_run(
         // half way is still a stack: without this the row does not know it, so
         // its logs fall through to the single-container path and `stop` cannot
         // reach it through compose — leaving containers nothing can clean up.
-        sqlx::query(
-            "UPDATE previews SET compose_file=$2, compose_dir=$3 WHERE id=$1",
-        )
-        .bind(id)
-        .bind(rendered.to_string_lossy().to_string())
-        .bind(project_dir.to_string_lossy().to_string())
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE previews SET compose_file=$2, compose_dir=$3 WHERE id=$1")
+            .bind(id)
+            .bind(rendered.to_string_lossy().to_string())
+            .bind(project_dir.to_string_lossy().to_string())
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let project = recipe::container_name(&id);
         if let Err(e) =
@@ -1025,9 +1039,20 @@ async fn build_and_run(
             // there until the next restart swept them.
             docker::compose_down(&rendered, project_dir, &project).await;
 
-            let tail: String = said.lines().rev().take(6).collect::<Vec<_>>()
-                .into_iter().rev().collect::<Vec<_>>().join("\n");
-            return Err(if tail.is_empty() { e } else { format!("{e}\n\n{tail}") });
+            let tail: String = said
+                .lines()
+                .rev()
+                .take(6)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(if tail.is_empty() {
+                e
+            } else {
+                format!("{e}\n\n{tail}")
+            });
         }
 
         sqlx::query(
@@ -1086,13 +1111,12 @@ async fn build_and_run(
 }
 
 async fn fail(pool: &sqlx::PgPool, id: Uuid, why: &str) {
-    if let Err(e) = sqlx::query(
-        "UPDATE previews SET status='failed', error=$2, stopped_at=now() WHERE id=$1",
-    )
-    .bind(id)
-    .bind(why)
-    .execute(pool)
-    .await
+    if let Err(e) =
+        sqlx::query("UPDATE previews SET status='failed', error=$2, stopped_at=now() WHERE id=$1")
+            .bind(id)
+            .bind(why)
+            .execute(pool)
+            .await
     {
         // Losing this write means a row stuck at "building" forever, which the
         // boot sweep will clear — but it is worth knowing it happened.
@@ -1339,12 +1363,11 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
     // Safe only because the names are aichip's own. Before they were
     // namespaced, this sweep would have been deleting images called whatever
     // the user's compose file called them.
-    let wakeable: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM previews WHERE status IN ('building','running','idle')",
-    )
-    .fetch_all(&db.pool)
-    .await
-    .unwrap_or_default();
+    let wakeable: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM previews WHERE status IN ('building','running','idle')")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_or_default();
     let keep: std::collections::HashSet<String> =
         wakeable.iter().map(recipe::container_name).collect();
     let mut images = 0usize;
@@ -1364,7 +1387,12 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
     }
 
     if settled > 0 || swept > 0 || images > 0 {
-        tracing::info!(settled, swept, images, "previews reconciled with docker at boot");
+        tracing::info!(
+            settled,
+            swept,
+            images,
+            "previews reconciled with docker at boot"
+        );
     }
     Ok((settled, swept))
 }

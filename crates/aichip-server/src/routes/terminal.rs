@@ -54,28 +54,33 @@ async fn open(
     Path(project_id): Path<Uuid>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let path: Option<String> =
-        sqlx::query("SELECT path FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.get("path"));
+    let path: Option<String> = sqlx::query("SELECT path FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.get("path"));
     ws.on_upgrade(move |socket| session(socket, path))
 }
 
 /// The user's shell, the way their terminal would start it.
 fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(windows) { "cmd.exe".into() } else { "/bin/sh".into() }
+        if cfg!(windows) {
+            "cmd.exe".into()
+        } else {
+            "/bin/sh".into()
+        }
     })
 }
 
 async fn session(mut socket: WebSocket, path: Option<String>) {
     let Some(path) = path.filter(|p| std::path::Path::new(p).is_dir()) else {
         let _ = socket
-            .send(Message::Text("this project's folder is not on disk\r\n".into()))
+            .send(Message::Text(
+                "this project's folder is not on disk\r\n".into(),
+            ))
             .await;
         return;
     };
@@ -89,7 +94,9 @@ async fn session(mut socket: WebSocket, path: Option<String>) {
         Ok(p) => p,
         Err(e) => {
             let _ = socket
-                .send(Message::Text(format!("could not open a pty: {e}\r\n").into()))
+                .send(Message::Text(
+                    format!("could not open a pty: {e}\r\n").into(),
+                ))
                 .await;
             return;
         }
@@ -113,7 +120,9 @@ async fn session(mut socket: WebSocket, path: Option<String>) {
         Ok(c) => c,
         Err(e) => {
             let _ = socket
-                .send(Message::Text(format!("could not start {}: {e}\r\n", shell()).into()))
+                .send(Message::Text(
+                    format!("could not start {}: {e}\r\n", shell()).into(),
+                ))
                 .await;
             return;
         }

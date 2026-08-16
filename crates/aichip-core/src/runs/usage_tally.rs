@@ -75,10 +75,8 @@ impl UsageTally {
         self.live.output_tokens += u.output_tokens;
         self.live.input_tokens = self.live.input_tokens.max(u.input_tokens);
         self.live.cache_read_tokens = self.live.cache_read_tokens.max(u.cache_read_tokens);
-        self.live.cache_creation_tokens = self
-            .live
-            .cache_creation_tokens
-            .max(u.cache_creation_tokens);
+        self.live.cache_creation_tokens =
+            self.live.cache_creation_tokens.max(u.cache_creation_tokens);
     }
 
     /// The change since the last flush, marking it as written.
@@ -172,7 +170,10 @@ mod tests {
             t.observe(&usage(input, 10, 0, 0));
         }
         let d = t.take_delta();
-        assert_eq!(d.input, 260, "cumulative input must take the max, not the sum");
+        assert_eq!(
+            d.input, 260,
+            "cumulative input must take the max, not the sum"
+        );
         assert_eq!(d.output, 40, "per-message output must sum");
     }
 
@@ -185,10 +186,19 @@ mod tests {
 
         // Asked *before* the flush, which is when the caller needs it — it has
         // to know whether to mark the row as an estimate as it writes.
-        assert!(t.is_provisional(), "no final message means the figures are an estimate");
+        assert!(
+            t.is_provisional(),
+            "no final message means the figures are an estimate"
+        );
         let d = t.take_delta();
-        assert_eq!((d.input, d.output, d.cache_read, d.cache_creation), (500, 40, 300, 100));
-        assert!(t.is_provisional(), "and the answer must not change once written");
+        assert_eq!(
+            (d.input, d.output, d.cache_read, d.cache_creation),
+            (500, 40, 300, 100)
+        );
+        assert!(
+            t.is_provisional(),
+            "and the answer must not change once written"
+        );
     }
 
     #[test]

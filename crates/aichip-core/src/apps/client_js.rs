@@ -17,14 +17,7 @@
 /// same API. Two descriptions of one interface drift, and the symptom is an
 /// app calling a method that does not exist.
 pub const METHODS: [&str; 8] = [
-    "me",
-    "schema",
-    "list",
-    "get",
-    "create",
-    "update",
-    "remove",
-    "api",
+    "me", "schema", "list", "get", "create", "update", "remove", "api",
 ];
 
 pub const CLIENT_JS: &str = r#"// aichip app client. Served by aichip; do not vendor a copy.

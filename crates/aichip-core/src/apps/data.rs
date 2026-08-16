@@ -83,10 +83,7 @@ fn writable(
             return bad(format!("\"{key}\" is set by aichip and cannot be written"));
         }
         let Some(field) = model.field(key) else {
-            return bad(format!(
-                "\"{key}\" is not a field of \"{}\"",
-                model.name
-            ));
+            return bad(format!("\"{key}\" is not a field of \"{}\"", model.name));
         };
         if field.compute.is_some() {
             return bad(format!(
@@ -202,8 +199,9 @@ fn derive(
                 continue;
             }
             let Some(src) = &field.default else { continue };
-            let value = super::expr::run(src, &super::expr::Record::new(), &now)
-                .map_err(|e| DataError(format!("the default for \"{}\" failed: {e}", field.name)))?;
+            let value = super::expr::run(src, &super::expr::Record::new(), &now).map_err(|e| {
+                DataError(format!("the default for \"{}\" failed: {e}", field.name))
+            })?;
             if value != super::expr::Val::Null {
                 values.push((field.name.clone(), Some(value.to_string())));
             }
@@ -213,7 +211,11 @@ fn derive(
     // The record a compute sees: what is already stored, overlaid with what is
     // being written now. Both, because an update naming only `qty` must still
     // be able to compute `amount * qty` from the amount already there.
-    let computed: Vec<&Field> = model.fields.iter().filter(|f| f.compute.is_some()).collect();
+    let computed: Vec<&Field> = model
+        .fields
+        .iter()
+        .filter(|f| f.compute.is_some())
+        .collect();
     if computed.is_empty() {
         return Ok(());
     }
@@ -324,7 +326,12 @@ pub async fn count(db: &Db, schema: &str, model: &Model, raw: &Raw) -> Result<i6
     let query = query::parse(model, raw).map_err(|e| DataError(e.0))?;
     // The same filters, but the ordering and paging are meaningless for a
     // count and `ORDER BY` on a count is a wasted sort.
-    let bare = Query { order: None, limit: 1, offset: 0, ..query };
+    let bare = Query {
+        order: None,
+        limit: 1,
+        offset: 0,
+        ..query
+    };
     let frag = query::where_clause(&bare, 1);
     let where_only = frag.sql.split(" ORDER BY").next().unwrap_or("").to_string();
     let sql = format!(
@@ -378,7 +385,10 @@ pub async fn create(
     let mut holes: Vec<String> = Vec::new();
     let mut params: Vec<Option<String>> = Vec::new();
     for (name, text) in &values {
-        let ty = &model.field(name).expect("writable only returns declared fields").ty;
+        let ty = &model
+            .field(name)
+            .expect("writable only returns declared fields")
+            .ty;
         columns.push(query::quote(name));
         holes.push(format!("${}::{}", params.len() + 1, query::cast(ty)));
         params.push(text.clone());
@@ -442,7 +452,10 @@ pub async fn update(
     let mut sets: Vec<String> = Vec::new();
     let mut params: Vec<Option<String>> = Vec::new();
     for (name, text) in &values {
-        let ty = &model.field(name).expect("writable only returns declared fields").ty;
+        let ty = &model
+            .field(name)
+            .expect("writable only returns declared fields")
+            .ty;
         sets.push(format!(
             "{} = ${}::{}",
             query::quote(name),
@@ -515,7 +528,9 @@ pub async fn insert_verbatim(
             }
             None => continue,
         };
-        let Ok(text) = as_text(&ty, value) else { continue };
+        let Ok(text) = as_text(&ty, value) else {
+            continue;
+        };
         columns.push(query::quote(&name));
         holes.push(format!("${}::{}", params.len() + 1, query::cast(&ty)));
         params.push(text);
@@ -611,7 +626,10 @@ mod tests {
         let values = writable(&m, &body(r#"{"note": "rent"}"#)).unwrap();
         assert_eq!(missing_required(&m, &values), None);
         // Explicitly null is the same as absent, and says so.
-        assert!(writable(&m, &body(r#"{"note": null}"#)).unwrap_err().0.contains("required"));
+        assert!(writable(&m, &body(r#"{"note": null}"#))
+            .unwrap_err()
+            .0
+            .contains("required"));
     }
 
     fn amount_of(json: &str) -> String {
@@ -654,8 +672,11 @@ mod tests {
         // It arrives as 1.2345678901234567e+19 — already rounded. Postgres
         // would happily store that, which is the quiet wrong answer: a ledger
         // that silently drops digits is worse than one that refuses.
-        let e = writable(&model(), &body(r#"{"note":"x","amount": 12345678901234567890.12}"#))
-            .unwrap_err();
+        let e = writable(
+            &model(),
+            &body(r#"{"note":"x","amount": 12345678901234567890.12}"#),
+        )
+        .unwrap_err();
         assert!(e.0.contains("already rounded"), "{e}");
         assert!(e.0.contains("as a string"), "names the fix: {e}");
         // And the fix works.
@@ -667,10 +688,23 @@ mod tests {
 
     #[test]
     fn something_that_is_not_a_number_is_refused_before_postgres_sees_it() {
-        for bad_value in [r#""ten""#, r#""1.2.3""#, r#""NaN""#, r#""inf""#, r#""1e5""#, r#""""#] {
-            let e = writable(&model(), &body(&format!(r#"{{"note":"x","amount": {bad_value}}}"#)))
-                .unwrap_err();
-            assert!(e.0.contains("not a decimal"), "{bad_value} was accepted: {e}");
+        for bad_value in [
+            r#""ten""#,
+            r#""1.2.3""#,
+            r#""NaN""#,
+            r#""inf""#,
+            r#""1e5""#,
+            r#""""#,
+        ] {
+            let e = writable(
+                &model(),
+                &body(&format!(r#"{{"note":"x","amount": {bad_value}}}"#)),
+            )
+            .unwrap_err();
+            assert!(
+                e.0.contains("not a decimal"),
+                "{bad_value} was accepted: {e}"
+            );
         }
         assert!(writable(&model(), &body(r#"{"note":"x","qty": "many"}"#)).is_err());
     }

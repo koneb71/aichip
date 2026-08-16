@@ -84,7 +84,13 @@ pub fn suggest_name(path: &str) -> String {
         .unwrap_or_default();
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     cleaned.trim_start_matches(['-', '.']).to_string()
 }
@@ -110,8 +116,10 @@ impl Refusal {
                  about to go to GitHub."
                 .into(),
             Refusal::AlreadyPublished(url) => {
-                format!("this project already has an `origin` remote ({url}), so it is \
-                         published already")
+                format!(
+                    "this project already has an `origin` remote ({url}), so it is \
+                         published already"
+                )
             }
             Refusal::GhMissing => "the GitHub CLI (gh) is not installed, so aichip cannot \
                  create a repository. Install it and sign in from Connections."
@@ -225,14 +233,20 @@ mod tests {
     #[test]
     fn the_charset_is_the_defence() {
         assert!(check_name("my repo").is_err(), "a space is not allowed");
-        assert!(check_name("owner/name").is_err(), "the owner is not chosen here");
+        assert!(
+            check_name("owner/name").is_err(),
+            "the owner is not chosen here"
+        );
         assert!(check_name("what;rm -rf /").is_err());
         assert!(check_name("..").is_err());
         assert!(check_name("").is_err());
         assert!(check_name(&"a".repeat(101)).is_err());
 
         assert_eq!(check_name("  windows11  ").unwrap(), "windows11");
-        assert_eq!(check_name("my-project.v2_final").unwrap(), "my-project.v2_final");
+        assert_eq!(
+            check_name("my-project.v2_final").unwrap(),
+            "my-project.v2_final"
+        );
     }
 
     #[test]

@@ -21,12 +21,18 @@ pub fn router() -> Router<AppState> {
         // General chats: scoped to a workspace, attached to no project. Same
         // rows, same turn machinery — the NULL project is what changes what
         // the assistant stands in and may reach for.
-        .route("/workspaces/{id}/chats", get(list_general).post(open_general))
+        .route(
+            "/workspaces/{id}/chats",
+            get(list_general).post(open_general),
+        )
         .route("/workspaces/{id}/chats/new", post(new_general))
         .route("/chats/{id}", delete(delete_chat).patch(rename_chat))
         .route("/chats/{id}/messages", get(messages).post(send))
         .route("/chats/{id}/plan/{message_id}/approve", post(approve_plan))
-        .route("/chats/{id}/questions/{question_id}/answer", post(answer_question))
+        .route(
+            "/chats/{id}/questions/{question_id}/answer",
+            post(answer_question),
+        )
 }
 
 async fn list_chats(
@@ -196,13 +202,12 @@ async fn open_chat(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    if let Some(row) = sqlx::query(
-        "SELECT id FROM chats WHERE project_id=$1 ORDER BY updated_at DESC LIMIT 1",
-    )
-    .bind(project_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?
+    if let Some(row) =
+        sqlx::query("SELECT id FROM chats WHERE project_id=$1 ORDER BY updated_at DESC LIMIT 1")
+            .bind(project_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?
     {
         return Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })));
     }
@@ -427,7 +432,10 @@ async fn approve_plan(
     )
     .bind(chat_id)
     .bind(aichip_core::runs::chat_plan::approval(
-        body.plan.as_deref().map(str::trim).filter(|p| !p.is_empty()),
+        body.plan
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty()),
     ))
     .fetch_one(&state.db.pool)
     .await
@@ -504,7 +512,11 @@ async fn send(
              WHERE id = $1",
         )
         .bind(chat_id)
-        .bind(body.model_tier.and_then(|t| serde_json::to_value(t).ok()).and_then(|v| v.as_str().map(str::to_string)))
+        .bind(
+            body.model_tier
+                .and_then(|t| serde_json::to_value(t).ok())
+                .and_then(|v| v.as_str().map(str::to_string)),
+        )
         .bind(body.effort.map(|e| e.as_str().to_string()))
         .bind(body.plan_mode)
         .execute(&state.db.pool)
@@ -602,7 +614,9 @@ async fn send(
         .orchestrator
         .enqueue_chat_turn(
             chat_id,
-            body.engine.as_deref().unwrap_or(&state.orchestrator.default_engine()),
+            body.engine
+                .as_deref()
+                .unwrap_or(&state.orchestrator.default_engine()),
         )
         .await
         .map_err(internal)?;
@@ -629,7 +643,9 @@ async fn chat_title_for(
     .fetch_optional(&state.db.pool)
     .await
     .map_err(internal)?;
-    Ok(first.map(|(f,)| derive_title(&f)).unwrap_or_else(|| UNTITLED.to_string()))
+    Ok(first
+        .map(|(f,)| derive_title(&f))
+        .unwrap_or_else(|| UNTITLED.to_string()))
 }
 
 /// A chat title from its first message: the opening line, clipped to
@@ -658,7 +674,10 @@ mod tests {
 
     #[test]
     fn titles_come_from_the_first_line() {
-        assert_eq!(derive_title("fix the flaky login test"), "fix the flaky login test");
+        assert_eq!(
+            derive_title("fix the flaky login test"),
+            "fix the flaky login test"
+        );
         assert_eq!(derive_title("  padded  \nsecond line"), "padded");
         assert_eq!(derive_title("   "), UNTITLED);
     }

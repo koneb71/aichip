@@ -216,10 +216,7 @@ async fn save_layout(
     Ok(Json(json!({ "saved": true })))
 }
 
-async fn run(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
+async fn run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
     let run_id = state
         .orchestrator
         .enqueue_workflow(id, "manual")
@@ -239,7 +236,9 @@ async fn sync_from_repo(
         .await
         .map_err(internal)?
         .get("path");
-    let dir = std::path::Path::new(&path).join(".aichip").join("workflows");
+    let dir = std::path::Path::new(&path)
+        .join(".aichip")
+        .join("workflows");
 
     let mut imported: Vec<Value> = vec![];
     let mut errors: Vec<Value> = vec![];
@@ -260,7 +259,11 @@ async fn sync_from_repo(
         ) {
             continue;
         }
-        let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let Ok(yaml) = tokio::fs::read_to_string(&file).await else {
             errors.push(json!({ "file": name, "error": "could not read file" }));
             continue;

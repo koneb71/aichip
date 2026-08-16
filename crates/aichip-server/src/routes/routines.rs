@@ -25,7 +25,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workspaces/{id}/routines", get(list).post(create))
         .route("/routines/preview", post(preview))
-        .route("/routines/{id}", axum::routing::patch(update).delete(remove))
+        .route(
+            "/routines/{id}",
+            axum::routing::patch(update).delete(remove),
+        )
         .route("/routines/{id}/run", post(run_now))
         .route("/routines/{id}/runs", get(history))
 }
@@ -34,7 +37,9 @@ pub fn router() -> Router<AppState> {
 /// against. Returning UTC here would make the editor's preview lie by a
 /// timezone offset.
 fn next_occurrences(expr: &str, n: usize) -> Vec<DateTime<Local>> {
-    let Ok(cron) = Cron::from_str(expr) else { return vec![] };
+    let Ok(cron) = Cron::from_str(expr) else {
+        return vec![];
+    };
     let mut out = Vec::with_capacity(n);
     let mut from = Local::now();
     for _ in 0..n {
@@ -140,22 +145,37 @@ fn vet(body: &RoutineBody) -> Result<(), ApiError> {
         return Err((StatusCode::BAD_REQUEST, "the prompt is empty".into()));
     }
     if !matches!(body.kind.as_str(), "chat" | "research" | "task" | "watch") {
-        return Err((StatusCode::BAD_REQUEST, "kind must be chat, research, task or watch".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "kind must be chat, research, task or watch".into(),
+        ));
     }
     if body.kind == "watch" && !url_ok(body.url.as_deref()) {
         // Wrong at save time, not at 9am: the URL has to be a page WebFetch
         // can open.
-        return Err((StatusCode::BAD_REQUEST, "a watch needs a full page address (https://…)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a watch needs a full page address (https://…)".into(),
+        ));
     }
     if body.kind == "task" && body.project_id.is_none() {
-        return Err((StatusCode::BAD_REQUEST, "a task routine needs a project board".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a task routine needs a project board".into(),
+        ));
     }
     if Cron::from_str(&body.cron_expr).is_err() {
-        return Err((StatusCode::BAD_REQUEST, format!("\"{}\" isn't a valid schedule", body.cron_expr)));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("\"{}\" isn't a valid schedule", body.cron_expr),
+        ));
     }
     if let Some(c) = &body.catch_up {
         if !matches!(c.as_str(), "run_once" | "skip") {
-            return Err((StatusCode::BAD_REQUEST, "catchUp must be run_once or skip".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "catchUp must be run_once or skip".into(),
+            ));
         }
     }
     Ok(())
@@ -169,7 +189,10 @@ async fn create(
     vet(&body)?;
     if let Some(engine) = &body.engine {
         if state.orchestrator.engine(engine).is_none() {
-            return Err((StatusCode::BAD_REQUEST, format!("{engine} isn't installed on this machine")));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("{engine} isn't installed on this machine"),
+            ));
         }
     }
     let id: Uuid = sqlx::query_scalar(
@@ -216,16 +239,25 @@ async fn update(
 ) -> Result<Json<Value>, ApiError> {
     if let Some(expr) = &body.cron_expr {
         if Cron::from_str(expr).is_err() {
-            return Err((StatusCode::BAD_REQUEST, format!("\"{expr}\" isn't a valid schedule")));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("\"{expr}\" isn't a valid schedule"),
+            ));
         }
     }
     if let Some(c) = &body.catch_up {
         if !matches!(c.as_str(), "run_once" | "skip") {
-            return Err((StatusCode::BAD_REQUEST, "catchUp must be run_once or skip".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "catchUp must be run_once or skip".into(),
+            ));
         }
     }
     if body.url.is_some() && !url_ok(body.url.as_deref()) {
-        return Err((StatusCode::BAD_REQUEST, "a watch needs a full page address (https://…)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a watch needs a full page address (https://…)".into(),
+        ));
     }
     // Re-enabling resets the bookmark: the scheduler measures the next
     // occurrence from now, instead of instantly "catching up" a window that

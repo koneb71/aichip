@@ -60,7 +60,10 @@ pub struct Delta {
 pub fn delta(from: &str, to: &str) -> Delta {
     let (from, to) = (terminate(from), terminate(to));
     let diff = TextDiff::from_lines(&from, &to);
-    let mut d = Delta { added: 0, removed: 0 };
+    let mut d = Delta {
+        added: 0,
+        removed: 0,
+    };
     for change in diff.iter_all_changes() {
         match change.tag() {
             ChangeTag::Insert => d.added += 1,
@@ -89,7 +92,12 @@ mod tests {
         let before = "Intro.\nStep one.\nStep two.\nOutro.";
         let after = "Intro.\nStep one, revised.\nStep two.\nOutro.";
         let d = delta(before, after);
-        assert_eq!((d.added, d.removed), (1, 1), "{}", unified(before, after, "a", "b"));
+        assert_eq!(
+            (d.added, d.removed),
+            (1, 1),
+            "{}",
+            unified(before, after, "a", "b")
+        );
     }
 
     #[test]

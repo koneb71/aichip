@@ -68,9 +68,10 @@ async fn create(
     State(state): State<AppState>,
     Json(body): Json<SkillBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let workspace_id = body
-        .workspace_id
-        .ok_or((StatusCode::BAD_REQUEST, "workspace_id is required".to_string()))?;
+    let workspace_id = body.workspace_id.ok_or((
+        StatusCode::BAD_REQUEST,
+        "workspace_id is required".to_string(),
+    ))?;
     let name = body.name.as_deref().unwrap_or("").trim().to_string();
     no_secrets(&body)?;
 

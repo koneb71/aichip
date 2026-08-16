@@ -162,7 +162,11 @@ pub fn read(text: &str) -> Result<Bundle, BundleError> {
     let order: Vec<String> = doc
         .get("modelOrder")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut rows: Vec<(String, Vec<Map<String, Value>>)> = Vec::new();
@@ -175,7 +179,9 @@ pub fn read(text: &str) -> Result<Bundle, BundleError> {
             n
         };
         for name in names {
-            let Some(Value::Array(items)) = data.get(&name) else { continue };
+            let Some(Value::Array(items)) = data.get(&name) else {
+                continue;
+            };
             let mut out = Vec::new();
             for (i, item) in items.iter().enumerate() {
                 match item {
@@ -217,9 +223,8 @@ mod tests {
     fn a_self_reference_does_not_stall_the_sort() {
         // A tree of pages: satisfiable inside one table, so it must not look
         // like an unsatisfiable dependency.
-        let m = parsed(
-            "name: T\nmodels:\n  page: { fields: { parent: { type: \"ref:page\" } } }\n",
-        );
+        let m =
+            parsed("name: T\nmodels:\n  page: { fields: { parent: { type: \"ref:page\" } } }\n");
         assert_eq!(model_order(&m.models), vec!["page"]);
     }
 
@@ -248,11 +253,20 @@ mod tests {
     fn a_move_export_round_trips_its_rows_in_a_safe_order() {
         let m = parsed(TWO);
         let rows = vec![
-            ("line".to_string(), vec![json!({ "id": "1", "order_id": "9" })]),
-            ("order".to_string(), vec![json!({ "id": "9", "total": "5.00" })]),
+            (
+                "line".to_string(),
+                vec![json!({ "id": "1", "order_id": "9" })],
+            ),
+            (
+                "order".to_string(),
+                vec![json!({ "id": "9", "total": "5.00" })],
+            ),
         ];
         let back = read(&write("name: T", &m, "", &rows)).unwrap();
-        assert_eq!(back.rows[0].0, "order", "the target has to be written first");
+        assert_eq!(
+            back.rows[0].0, "order",
+            "the target has to be written first"
+        );
         assert_eq!(back.rows[1].0, "line");
         assert_eq!(back.rows[1].1[0]["order_id"], json!("9"));
         // A decimal is still the string it was, so no digits went through a
@@ -270,7 +284,10 @@ mod tests {
     #[test]
     fn something_that_is_not_a_bundle_is_refused_plainly() {
         assert!(read("not json").unwrap_err().0.contains("not a bundle"));
-        assert!(read("{}").unwrap_err().0.contains("not an aichip app bundle"));
+        assert!(read("{}")
+            .unwrap_err()
+            .0
+            .contains("not an aichip app bundle"));
         assert!(read(r#"{"kind":"aichip-app","format":1}"#)
             .unwrap_err()
             .0
@@ -283,7 +300,10 @@ mod tests {
         // comes out of `read` has no way to express a statement at all.
         let m = parsed(TWO);
         let text = write("name: T", &m, "DROP DATABASE postgres;", &[]);
-        assert!(text.contains("DROP DATABASE"), "it is still written, for a reader");
+        assert!(
+            text.contains("DROP DATABASE"),
+            "it is still written, for a reader"
+        );
         let back = read(&text).unwrap();
         assert_eq!(back.manifest, "name: T");
         // Bundle has exactly two fields, and neither is SQL.

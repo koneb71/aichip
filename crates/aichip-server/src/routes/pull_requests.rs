@@ -115,13 +115,18 @@ async fn refusal(state: &AppState, card: &Card) -> Option<String> {
             .active()
             .and_then(|a| a.problem.clone())
             .unwrap_or_else(|| "no account is signed in".into());
-        return Some(format!("the GitHub CLI is installed but not usable: {problem}"));
+        return Some(format!(
+            "the GitHub CLI is installed but not usable: {problem}"
+        ));
     }
     // Resolving doubles as the check: no `origin` that parses as a GitHub
     // repository means there is nowhere to open one. It also *remembers* the
     // answer, so the next render and every poll tick read a column instead of
     // spawning git.
-    if aichip_core::github::repo::resolve(&state.db, card.project_id).await.is_none() {
+    if aichip_core::github::repo::resolve(&state.db, card.project_id)
+        .await
+        .is_none()
+    {
         return Some(
             "this project has no GitHub `origin` remote, so there is nowhere to \
              open a pull request."
@@ -132,7 +137,10 @@ async fn refusal(state: &AppState, card: &Card) -> Option<String> {
 }
 
 /// What the drawer renders.
-async fn show(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+async fn show(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
         "SELECT pr_url, pr_number, pr_state, pr_checks, pr_review, pr_synced_at
            FROM tasks WHERE id = $1",
@@ -222,8 +230,7 @@ async fn open(
         None => {
             // Only for an issue on this very repository — GitHub's cross-repo
             // form needs write access there, so promising it would be a lie.
-            let project_repo =
-                aichip_core::github::repo::resolve(&state.db, card.project_id).await;
+            let project_repo = aichip_core::github::repo::resolve(&state.db, card.project_id).await;
             let closes = pr::closes_number(
                 card.source.as_deref(),
                 card.source_ref.as_deref(),
@@ -264,9 +271,12 @@ async fn refresh(
     // By number and from the *project*, not the worktree: a merged card's
     // worktree is often gone, and `gh pr view <branch>` stops resolving once
     // somebody deletes the branch.
-    let pull = pr::view(std::path::Path::new(&card.project_path), &number.to_string())
-        .await
-        .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
+    let pull = pr::view(
+        std::path::Path::new(&card.project_path),
+        &number.to_string(),
+    )
+    .await
+    .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
     store(&state, id, &pull).await?;
     Ok(Json(json!({ "pr": as_json(&pull) })))
 }
@@ -346,7 +356,10 @@ pub async fn list_issues(
     // Unknown counts as public, which is the fail-closed choice: the public
     // path is the one that warns that anyone can file an issue here.
     let public = match github::repo::parse_repo_ref(&repo) {
-        Ok(parsed) => github::repo::view(&parsed).await.map(|f| f.public).unwrap_or(true),
+        Ok(parsed) => github::repo::view(&parsed)
+            .await
+            .map(|f| f.public)
+            .unwrap_or(true),
         Err(_) => true,
     };
 
@@ -421,9 +434,12 @@ pub async fn import_issues(
         axum::http::StatusCode::CONFLICT,
         "this project has no GitHub `origin` remote".to_string(),
     ))?;
-    let parsed = github::repo::parse_repo_ref(&repo)
-        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
-    let public = github::repo::view(&parsed).await.map(|f| f.public).unwrap_or(true);
+    let parsed =
+        github::repo::parse_repo_ref(&repo).map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+    let public = github::repo::view(&parsed)
+        .await
+        .map(|f| f.public)
+        .unwrap_or(true);
 
     let wanted: std::collections::HashSet<i32> = body.numbers.iter().copied().collect();
     if wanted.is_empty() {
@@ -440,11 +456,18 @@ pub async fn import_issues(
 
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
-    for (i, issue) in issues.iter().filter(|i| wanted.contains(&i.number)).enumerate() {
+    for (i, issue) in issues
+        .iter()
+        .filter(|i| wanted.contains(&i.number))
+        .enumerate()
+    {
         let prompt = github::issues::issue_prompt(
             issue,
             &repo,
-            github::issues::Provenance { author: &issue.author, public },
+            github::issues::Provenance {
+                author: &issue.author,
+                public,
+            },
         );
         let spec = NewImportedTask {
             project_id,

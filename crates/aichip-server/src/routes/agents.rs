@@ -94,7 +94,9 @@ async fn list(
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
-    Ok(Json(json!({ "agents": rows.iter().map(agent_json).collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "agents": rows.iter().map(agent_json).collect::<Vec<_>>() }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -207,9 +209,13 @@ async fn update(
     Path(id): Path<Uuid>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<Value>, ApiError> {
-    let tier = body
-        .model_tier
-        .map(|t| serde_json::to_value(t).unwrap().as_str().unwrap().to_string());
+    let tier = body.model_tier.map(|t| {
+        serde_json::to_value(t)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    });
     let row = sqlx::query(
         "UPDATE agents SET
             name = COALESCE($1, name), icon = COALESCE($2, icon),
@@ -290,10 +296,12 @@ async fn generate(
     }
     let default_engine = state.orchestrator.default_engine();
     let engine_id = body.engine.as_deref().unwrap_or(&default_engine);
-    let engine = state
-        .orchestrator
-        .engine(engine_id)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
+    let engine = state.orchestrator.engine(engine_id).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("unknown engine {engine_id}"),
+        )
+    })?;
     let tier = body.model_tier.unwrap_or(ModelTier::Complex);
     let model_id = state.orchestrator.model_for(engine_id, tier);
     let prompt = format!("{GENERATE_PROMPT}{}\"", body.description.trim());
@@ -307,8 +315,8 @@ async fn generate(
         Some(ReasoningEffort::High),
         Duration::from_secs(180),
     )
-        .await
-        .map_err(internal)?;
+    .await
+    .map_err(internal)?;
     match extract_json(&output) {
         Ok(Value::Array(drafts)) => Ok(Json(json!({ "drafts": drafts }))),
         Ok(single @ Value::Object(_)) => Ok(Json(json!({ "drafts": [single] }))),

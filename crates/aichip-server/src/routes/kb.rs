@@ -33,8 +33,14 @@ pub fn router() -> Router<AppState> {
         .route("/kb/articles/{id}/move", post(move_page))
         .route("/kb/articles/{id}/revisions", get(revision_list))
         .route("/kb/articles/{id}/diff", get(revision_diff))
-        .route("/kb/articles/{id}/revisions/{seq}/accept", post(accept_revision))
-        .route("/kb/articles/{id}/revisions/{seq}/discard", post(discard_revision))
+        .route(
+            "/kb/articles/{id}/revisions/{seq}/accept",
+            post(accept_revision),
+        )
+        .route(
+            "/kb/articles/{id}/revisions/{seq}/discard",
+            post(discard_revision),
+        )
         .route("/kb/articles/{id}/restore", post(restore_revision))
         .route("/kb/articles/{id}/generate", post(regenerate))
         .route("/kb/generate", post(generate))
@@ -112,10 +118,7 @@ async fn list(
 /// In one response rather than five: a page view that fires a request per
 /// panel shows its breadcrumb, its children and its backlinks arriving at
 /// different moments, and the layout jumps under the reader each time.
-async fn one(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
+async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
     let row = reload(&state, id).await?;
     let mut page = article_row(&row, true);
 
@@ -238,10 +241,7 @@ async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
     .await
     .map_err(internal)?;
 
-    let total = rows
-        .first()
-        .map(|r| r.get::<i64, _>("total"))
-        .unwrap_or(0);
+    let total = rows.first().map(|r| r.get::<i64, _>("total")).unwrap_or(0);
 
     // Chats that were sent with this page, counted separately rather than
     // folded in with the cards: a chat is not a card and has no column, but a
@@ -314,7 +314,10 @@ async fn create(
         if depth > tree::MAX_DEPTH {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("pages can nest {} deep; this would be one more", tree::MAX_DEPTH + 1),
+                format!(
+                    "pages can nest {} deep; this would be one more",
+                    tree::MAX_DEPTH + 1
+                ),
             ));
         }
     }
@@ -345,7 +348,15 @@ async fn create(
         // Unguarded, and safe to be: the row was inserted two statements ago
         // and its id has not left this function, so there is no second editor
         // whose work this could be standing on.
-        write_body(&state, id, body.title.trim(), &body.content_html, None, None).await?;
+        write_body(
+            &state,
+            id,
+            body.title.trim(),
+            &body.content_html,
+            None,
+            None,
+        )
+        .await?;
     }
     Ok(Json(article_row(&reload(&state, id).await?, true)))
 }
@@ -390,7 +401,12 @@ async fn update(
         // Falls back to the stored title when the incoming one is blank, so
         // the two paths agree: the metadata branch already refuses to blank a
         // title, and the body branch must not be a way around it.
-        let title = match body.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let title = match body
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             Some(t) => t.to_string(),
             None => sqlx::query_scalar("SELECT title FROM kb_articles WHERE id=$1")
                 .bind(id)
@@ -419,7 +435,12 @@ async fn update(
              WHERE id = $1",
         )
         .bind(id)
-        .bind(body.title.as_deref().map(str::trim).filter(|t| !t.is_empty()))
+        .bind(
+            body.title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty()),
+        )
         .bind(body.status.as_deref())
         .bind(body.icon.as_deref())
         .bind(body.project_id.flatten())
@@ -457,13 +478,15 @@ async fn write_body(
         run_id: None,
         note: "",
     };
-    revisions::save_edit(&state.db, id, rev, base_version).await.map_err(|e| {
-        // A stale editor is a 409 the UI turns into a diff, not a 500.
-        match e.downcast_ref::<revisions::Conflict>() {
-            Some(c) => (StatusCode::CONFLICT, c.to_string()),
-            None => internal(e),
-        }
-    })?;
+    revisions::save_edit(&state.db, id, rev, base_version)
+        .await
+        .map_err(|e| {
+            // A stale editor is a 409 the UI turns into a diff, not a 500.
+            match e.downcast_ref::<revisions::Conflict>() {
+                Some(c) => (StatusCode::CONFLICT, c.to_string()),
+                None => internal(e),
+            }
+        })?;
     Ok(())
 }
 
@@ -667,7 +690,9 @@ async fn revision_diff(
         Some(seq) => Some(seq),
         None => {
             let revs = revisions::list(&state.db, id).await.map_err(internal)?;
-            revs.iter().find(|r| r.seq == range.to).and_then(|r| r.base_seq)
+            revs.iter()
+                .find(|r| r.seq == range.to)
+                .and_then(|r| r.base_seq)
         }
     };
     let from = match from_seq {
@@ -768,10 +793,12 @@ async fn upload(
             continue; // not a file part
         };
         let declared = field.content_type().map(str::to_string);
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("{filename}: upload failed: {e}")))?;
+        let bytes = field.bytes().await.map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("{filename}: upload failed: {e}"),
+            )
+        })?;
 
         // Sniffed, not trusted. The browser's content-type is a claim by the
         // uploader, and it decides how bytes are served back.
@@ -891,11 +918,10 @@ async fn serve_asset(
         ));
     };
     let key: String = row.get("object_key");
-    let bytes = storage
-        .get(&key)
-        .await
-        .map_err(internal)?
-        .ok_or((StatusCode::NOT_FOUND, "that file is no longer stored".to_string()))?;
+    let bytes = storage.get(&key).await.map_err(internal)?.ok_or((
+        StatusCode::NOT_FOUND,
+        "that file is no longer stored".to_string(),
+    ))?;
 
     let content_type: String = row.get("content_type");
     let filename: String = row.get("filename");
@@ -911,9 +937,15 @@ async fn serve_asset(
             // the name is user input and belongs quoted, not interpolated.
             (
                 header::CONTENT_DISPOSITION,
-                format!("inline; filename=\"{}\"", filename.replace(['"', '\\', '\n'], "_")),
+                format!(
+                    "inline; filename=\"{}\"",
+                    filename.replace(['"', '\\', '\n'], "_")
+                ),
             ),
-            (header::CACHE_CONTROL, "private, max-age=31536000".to_string()),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000".to_string(),
+            ),
         ],
         bytes,
     ))
@@ -981,13 +1013,12 @@ async fn regenerate(
     Path(id): Path<Uuid>,
     Json(body): Json<Rewrite>,
 ) -> Result<Json<Value>, ApiError> {
-    let workspace_id: Uuid =
-        sqlx::query_scalar("SELECT workspace_id FROM kb_articles WHERE id=$1")
-            .bind(id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(internal)?
-            .ok_or((StatusCode::NOT_FOUND, "no such article".to_string()))?;
+    let workspace_id: Uuid = sqlx::query_scalar("SELECT workspace_id FROM kb_articles WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such article".to_string()))?;
 
     let run_id = state
         .orchestrator
@@ -1013,7 +1044,10 @@ mod tests {
     /// than "decodes" or a binary gets filed as a document.
     #[test]
     fn a_renamed_executable_is_not_accepted_as_an_image_or_as_text() {
-        assert_eq!(sniff(b"\x7fELF\x02\x01\x01\x00\x00\x00", Some("image/png")), None);
+        assert_eq!(
+            sniff(b"\x7fELF\x02\x01\x01\x00\x00\x00", Some("image/png")),
+            None
+        );
     }
 
     #[test]
@@ -1026,7 +1060,10 @@ mod tests {
 
     #[test]
     fn real_images_are_recognised() {
-        assert_eq!(sniff(&[0x89, b'P', b'N', b'G', 0, 0], None), Some("image/png"));
+        assert_eq!(
+            sniff(&[0x89, b'P', b'N', b'G', 0, 0], None),
+            Some("image/png")
+        );
         assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0], None), Some("image/jpeg"));
         assert_eq!(sniff(b"%PDF-1.7", None), Some("application/pdf"));
     }
@@ -1043,6 +1080,9 @@ mod tests {
     #[test]
     fn markup_uploaded_as_text_is_served_as_plain_text() {
         let html = b"<html><script>alert(1)</script></html>";
-        assert_eq!(sniff(html, Some("text/html")), Some("text/plain; charset=utf-8"));
+        assert_eq!(
+            sniff(html, Some("text/html")),
+            Some("text/plain; charset=utf-8")
+        );
     }
 }

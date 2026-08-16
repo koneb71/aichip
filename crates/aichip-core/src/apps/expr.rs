@@ -533,8 +533,9 @@ fn binary(op: &str, l: Val, r: Val) -> R<Val> {
 }
 
 /// Every function, and the whole list of them.
-pub const FUNCTIONS: [&str; 9] =
-    ["now", "today", "len", "lower", "upper", "round", "abs", "coalesce", "concat"];
+pub const FUNCTIONS: [&str; 9] = [
+    "now", "today", "len", "lower", "upper", "round", "abs", "coalesce", "concat",
+];
 
 fn call(name: &str, args: &[Val], now: &str) -> R<Val> {
     let num = |i: usize| -> R<f64> {
@@ -553,15 +554,28 @@ fn call(name: &str, args: &[Val], now: &str) -> R<Val> {
             Some(Val::Null) | None => Val::Num(0.0),
             Some(other) => return err(format!("len wants text, not {}", other.type_name())),
         },
-        "lower" => Val::Str(args.first().unwrap_or(&Val::Null).to_string().to_lowercase()),
-        "upper" => Val::Str(args.first().unwrap_or(&Val::Null).to_string().to_uppercase()),
+        "lower" => Val::Str(
+            args.first()
+                .unwrap_or(&Val::Null)
+                .to_string()
+                .to_lowercase(),
+        ),
+        "upper" => Val::Str(
+            args.first()
+                .unwrap_or(&Val::Null)
+                .to_string()
+                .to_uppercase(),
+        ),
         "abs" => Val::Num(num(0)?.abs()),
         "round" => {
             let places = match args.get(1) {
                 None => 0.0,
                 Some(Val::Num(n)) => *n,
                 Some(other) => {
-                    return err(format!("round wants a number of places, not {}", other.type_name()))
+                    return err(format!(
+                        "round wants a number of places, not {}",
+                        other.type_name()
+                    ))
                 }
             };
             let f = 10f64.powi(places.clamp(0.0, 10.0) as i32);
@@ -629,7 +643,10 @@ mod tests {
 
             let got = run(src, &record, now);
             if case.get("error").and_then(J::as_bool) == Some(true) {
-                assert!(got.is_err(), "`{src}` should have been refused, got {got:?}");
+                assert!(
+                    got.is_err(),
+                    "`{src}` should have been refused, got {got:?}"
+                );
                 continue;
             }
             let got = got.unwrap_or_else(|e| panic!("`{src}` failed: {e}"));
@@ -671,4 +688,3 @@ mod tests {
         assert!(e.0.contains("coalesce"), "{e}");
     }
 }
-

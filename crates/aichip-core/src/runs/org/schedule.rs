@@ -80,8 +80,7 @@ pub fn parallel_batch(
 
 /// Do two declared file scopes share anything?
 pub fn scopes_overlap(a: &[String], b: &[String]) -> bool {
-    a.iter()
-        .any(|x| b.iter().any(|y| paths_overlap(x, y)))
+    a.iter().any(|x| b.iter().any(|y| paths_overlap(x, y)))
 }
 
 /// True when two paths are the same file, or one contains the other.
@@ -168,7 +167,11 @@ mod tests {
             assignment("backend", &[], &["backend/"]),
             assignment("models", &[], &["backend/app/models.py"]),
         ];
-        assert_eq!(batch(&pending, &[]), ["backend"], "nested scope is an overlap");
+        assert_eq!(
+            batch(&pending, &[]),
+            ["backend"],
+            "nested scope is an overlap"
+        );
     }
 
     #[test]
@@ -177,7 +180,11 @@ mod tests {
             assignment("mystery", &[], &[]),
             assignment("ui", &[], &["frontend/"]),
         ];
-        assert_eq!(batch(&pending, &[]), ["mystery"], "unknown means it could touch anything");
+        assert_eq!(
+            batch(&pending, &[]),
+            ["mystery"],
+            "unknown means it could touch anything"
+        );
     }
 
     #[test]
@@ -187,7 +194,11 @@ mod tests {
             assignment("mystery", &[], &[]),
             assignment("ui", &[], &["frontend/"]),
         ];
-        assert_eq!(batch(&pending, &[]), ["api", "ui"], "mystery waits its turn");
+        assert_eq!(
+            batch(&pending, &[]),
+            ["api", "ui"],
+            "mystery waits its turn"
+        );
     }
 
     #[test]

@@ -264,7 +264,10 @@ mod tests {
         let (out, dirs) = augment_prompt("hi", &atts);
         assert!(out.contains("here.png"));
         assert!(!out.contains("gone.png"));
-        assert!(out.contains("attached 1 file "), "singular, and count excludes the missing one");
+        assert!(
+            out.contains("attached 1 file "),
+            "singular, and count excludes the missing one"
+        );
         assert_eq!(dirs.len(), 1);
 
         std::fs::remove_dir_all(&root).ok();
@@ -272,7 +275,12 @@ mod tests {
 
     #[test]
     fn every_attachment_missing_is_the_same_as_none() {
-        let atts = vec![att(&PathBuf::from("/nope/nowhere"), "x.png", "image/png", "image")];
+        let atts = vec![att(
+            &PathBuf::from("/nope/nowhere"),
+            "x.png",
+            "image/png",
+            "image",
+        )];
         let (out, dirs) = augment_prompt("just text", &atts);
         assert_eq!(out, "just text");
         assert!(dirs.is_empty());

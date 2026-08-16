@@ -2,8 +2,8 @@
 //! DB, worktrees, or MCP — used for meta-work like AI agent generation. The
 //! engine still runs under the user's own CLI login (compliance unchanged).
 
-use aichip_shared::{AichipEvent, ModelTier, PermissionMode, ReasoningEffort};
 use aichip_engines::{Engine, RunSpec};
+use aichip_shared::{AichipEvent, ModelTier, PermissionMode, ReasoningEffort};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,7 +80,9 @@ pub async fn utility_run(
                 _ => {}
             }
         }
-        Ok(result.filter(|r| !r.is_empty()).unwrap_or_else(|| text_parts.join("\n")))
+        Ok(result
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| text_parts.join("\n")))
     };
     match tokio::time::timeout(timeout, collect).await {
         Ok(res) => res,
@@ -143,7 +145,8 @@ mod tests {
 
     #[test]
     fn parses_fenced_json() {
-        let v = extract_json("Here you go:\n```json\n[{\"name\":\"Planner\"}]\n```\nEnjoy!").unwrap();
+        let v =
+            extract_json("Here you go:\n```json\n[{\"name\":\"Planner\"}]\n```\nEnjoy!").unwrap();
         assert_eq!(v[0]["name"], "Planner");
     }
 

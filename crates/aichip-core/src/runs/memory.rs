@@ -69,7 +69,12 @@ pub async fn recall(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, kind, content, created_at)| Memory { id, kind, content, created_at })
+        .map(|(id, kind, content, created_at)| Memory {
+            id,
+            kind,
+            content,
+            created_at,
+        })
         .collect())
 }
 
@@ -84,7 +89,11 @@ pub fn render(memories: &[Memory]) -> Option<String> {
          Use it for continuity; trust the code over your memory when they disagree:\n",
     );
     for m in memories.iter().rev() {
-        block.push_str(&format!("- [{}] {}\n", m.created_at.format("%b %-d"), m.content));
+        block.push_str(&format!(
+            "- [{}] {}\n",
+            m.created_at.format("%b %-d"),
+            m.content
+        ));
     }
     Some(block)
 }

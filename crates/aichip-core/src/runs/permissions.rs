@@ -40,7 +40,9 @@ pub enum Decision {
     /// A person clicked Deny.
     Denied,
     /// The window closed with nobody there. Not a refusal.
-    Unanswered { waited: Duration },
+    Unanswered {
+        waited: Duration,
+    },
     /// The run ended while the question was still outstanding.
     RunGone,
 }
@@ -458,7 +460,11 @@ mod tests {
         }
         settle().await;
 
-        assert_eq!(gate.unparks.load(Ordering::SeqCst), 1, "the run must unpark");
+        assert_eq!(
+            gate.unparks.load(Ordering::SeqCst),
+            1,
+            "the run must unpark"
+        );
         assert!(slots.take_debt(), "and the slot must be owed back");
     }
 
@@ -548,7 +554,11 @@ mod tests {
     impl crate::runs::gate::Window for ChangingWindow {
         async fn wait(&self) -> Option<Duration> {
             let mut q = self.0.lock().unwrap();
-            if q.len() > 1 { q.remove(0) } else { q[0] }
+            if q.len() > 1 {
+                q.remove(0)
+            } else {
+                q[0]
+            }
         }
     }
 
@@ -574,19 +584,24 @@ mod tests {
         let first = {
             let b = b.clone();
             tokio::spawn(async move {
-                b.request(Uuid::new_v4(), "Bash".into(), serde_json::json!({})).await
+                b.request(Uuid::new_v4(), "Bash".into(), serde_json::json!({}))
+                    .await
             })
         };
         settle().await;
         tokio::time::advance(Duration::from_secs(61)).await;
         settle().await;
-        assert!(!first.is_finished(), "the first prompt kept the window it started with");
+        assert!(
+            !first.is_finished(),
+            "the first prompt kept the window it started with"
+        );
 
         // Second prompt: the new, short one. Closes at 61s.
         let second = {
             let b = b.clone();
             tokio::spawn(async move {
-                b.request(Uuid::new_v4(), "Edit".into(), serde_json::json!({})).await
+                b.request(Uuid::new_v4(), "Edit".into(), serde_json::json!({}))
+                    .await
             })
         };
         settle().await;
@@ -619,7 +634,11 @@ mod tests {
 
     #[tokio::test]
     async fn resolving_an_unknown_request_is_not_an_error() {
-        let b = broker(Arc::new(RecordingGate::default()), Arc::new(Slots::new(0)), None);
+        let b = broker(
+            Arc::new(RecordingGate::default()),
+            Arc::new(Slots::new(0)),
+            None,
+        );
         assert!(!b.resolve("no-such-request", true));
     }
 

@@ -209,6 +209,9 @@ mod tests {
         let text = dockerfile(Runtime::Node).unwrap();
         let install = text.find("npm install").unwrap();
         let copy_all = text.find("COPY . .").unwrap();
-        assert!(install < copy_all, "a source edit would reinstall every dependency");
+        assert!(
+            install < copy_all,
+            "a source edit would reinstall every dependency"
+        );
     }
 }

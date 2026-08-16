@@ -11,7 +11,9 @@ pub mod config;
 pub mod stream_parser;
 pub mod tools;
 
-use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, ProviderInfo, RunSpec};
+use crate::{
+    Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, ProviderInfo, RunSpec,
+};
 use aichip_shared::{AichipEvent, PermissionMode, ReasoningEffort};
 use async_trait::async_trait;
 use std::ffi::OsString;
@@ -85,7 +87,9 @@ pub struct OpenCodeEngine {
 
 impl Default for OpenCodeEngine {
     fn default() -> Self {
-        Self { binary: "opencode".to_string() }
+        Self {
+            binary: "opencode".to_string(),
+        }
     }
 }
 
@@ -169,7 +173,11 @@ impl Engine for OpenCodeEngine {
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
-        let instructions = match spec.append_system_prompt.as_deref().filter(|p| !p.is_empty()) {
+        let instructions = match spec
+            .append_system_prompt
+            .as_deref()
+            .filter(|p| !p.is_empty())
+        {
             Some(body) => Some(write_instructions(&spec.run_key, body)?),
             None => None,
         };
@@ -269,9 +277,7 @@ fn parse_providers(stdout: &str) -> Vec<ProviderInfo> {
         .lines()
         .filter_map(|line| {
             let cleaned: String = strip_ansi(line);
-            let text = cleaned
-                .trim_matches(|c: char| !c.is_alphanumeric())
-                .trim();
+            let text = cleaned.trim_matches(|c: char| !c.is_alphanumeric()).trim();
             let mut parts = text.split_whitespace();
             let (name, auth) = (parts.next()?, parts.next()?);
             // The header and footer lines ("Credentials", "1 credentials")
@@ -279,7 +285,10 @@ fn parse_providers(stdout: &str) -> Vec<ProviderInfo> {
             if name.eq_ignore_ascii_case("credentials") || name.chars().all(|c| c.is_numeric()) {
                 return None;
             }
-            Some(ProviderInfo { name: name.to_string(), auth: auth.to_string() })
+            Some(ProviderInfo {
+                name: name.to_string(),
+                auth: auth.to_string(),
+            })
         })
         .collect()
 }
@@ -393,7 +402,10 @@ mod tests {
     fn the_working_directory_is_passed_explicitly() {
         // Belt and braces against the PWD footgun — see `start`.
         let a = args_of(&spec());
-        let i = a.iter().position(|x| x == "--dir").expect("--dir must be passed");
+        let i = a
+            .iter()
+            .position(|x| x == "--dir")
+            .expect("--dir must be passed");
         assert_eq!(a[i + 1], "/tmp/worktree");
     }
 
@@ -441,7 +453,10 @@ mod tests {
         let a = args_of(&s);
         let i = a.iter().position(|x| x == "-s").unwrap();
         assert_eq!(a[i + 1], "ses_abc");
-        assert!(!a.contains(&"--fork".to_string()), "forking is not continuing");
+        assert!(
+            !a.contains(&"--fork".to_string()),
+            "forking is not continuing"
+        );
     }
 
     #[test]

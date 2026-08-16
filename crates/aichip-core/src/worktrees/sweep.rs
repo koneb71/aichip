@@ -23,7 +23,7 @@
 //! merge it into.
 
 use crate::db::Db;
-use crate::worktrees::manager::{self, WorktreeManager, Worktree};
+use crate::worktrees::manager::{self, Worktree, WorktreeManager};
 use sqlx::Row;
 use std::collections::HashSet;
 use std::path::Path;
@@ -80,14 +80,19 @@ pub async fn reconcile(db: &Db, worktrees: &WorktreeManager) -> anyhow::Result<S
             if claimed.contains(&h.path.to_string_lossy().to_string()) || !h.reclaimable() {
                 continue;
             }
-            let wt = Worktree { path: h.path.clone(), branch: h.branch.clone() };
+            let wt = Worktree {
+                path: h.path.clone(),
+                branch: h.branch.clone(),
+            };
             match worktrees.remove(repo, &wt).await {
                 Ok(()) => {
                     tracing::info!(branch = %h.branch, bytes = h.bytes, "swept an unclaimed worktree");
                     swept.worktrees += 1;
                     swept.bytes += h.bytes;
                 }
-                Err(e) => tracing::warn!(branch = %h.branch, error = %e, "could not sweep worktree"),
+                Err(e) => {
+                    tracing::warn!(branch = %h.branch, error = %e, "could not sweep worktree")
+                }
             }
         }
     }

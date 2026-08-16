@@ -175,7 +175,10 @@ fn check(ty: &FieldType, value: &str, field: &str) -> Result<(), QueryError> {
     if ok {
         Ok(())
     } else {
-        err(format!("\"{value}\" is not a valid {} for \"{field}\"", ty.as_str()))
+        err(format!(
+            "\"{value}\" is not a valid {} for \"{field}\"",
+            ty.as_str()
+        ))
     }
 }
 
@@ -237,7 +240,12 @@ pub fn parse(model: &Model, raw: &Raw) -> Result<Query, QueryError> {
             }
         };
 
-        filters.push(Filter { field, ty, op, values });
+        filters.push(Filter {
+            field,
+            ty,
+            op,
+            values,
+        });
     }
 
     let order = match &raw.order {
@@ -257,7 +265,12 @@ pub fn parse(model: &Model, raw: &Raw) -> Result<Query, QueryError> {
     let limit = raw.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = raw.offset.unwrap_or(0).max(0);
 
-    Ok(Query { filters, order, limit, offset })
+    Ok(Query {
+        filters,
+        order,
+        limit,
+        offset,
+    })
 }
 
 /// The SQL cast a value of this type needs on its way in.
@@ -398,7 +411,10 @@ mod tests {
     }
 
     fn raw(filters: &[&str]) -> Raw {
-        Raw { filters: filters.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        Raw {
+            filters: filters.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn q(filters: &[&str]) -> Result<Query, QueryError> {
@@ -440,7 +456,11 @@ mod tests {
         let query = q(&[&format!("note:eq:{nasty}")]).unwrap();
         let frag = where_clause(&query, 1);
         assert_eq!(frag.params, vec![nasty.to_string()]);
-        assert!(!frag.sql.contains("DROP"), "the value reached the SQL: {}", frag.sql);
+        assert!(
+            !frag.sql.contains("DROP"),
+            "the value reached the SQL: {}",
+            frag.sql
+        );
         assert!(frag.sql.contains("$1::text"));
     }
 
@@ -471,7 +491,11 @@ mod tests {
         let query = q(&["note:like:50%"]).unwrap();
         assert_eq!(query.filters[0].values, vec!["%50\\%%"]);
         let frag = where_clause(&query, 1);
-        assert!(frag.sql.contains("ESCAPE"), "the escape must be named: {}", frag.sql);
+        assert!(
+            frag.sql.contains("ESCAPE"),
+            "the escape must be named: {}",
+            frag.sql
+        );
     }
 
     #[test]
@@ -506,13 +530,34 @@ mod tests {
     #[test]
     fn ordering_is_only_ever_by_a_declared_field() {
         let m = model();
-        let ordered = parse(&m, &Raw { order: Some("-at".into()), ..Default::default() }).unwrap();
-        assert_eq!(ordered.order, Some(Order { field: "at".into(), descending: true }));
-        assert!(where_clause(&ordered, 1).sql.contains("ORDER BY \"at\" DESC"));
+        let ordered = parse(
+            &m,
+            &Raw {
+                order: Some("-at".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ordered.order,
+            Some(Order {
+                field: "at".into(),
+                descending: true
+            })
+        );
+        assert!(where_clause(&ordered, 1)
+            .sql
+            .contains("ORDER BY \"at\" DESC"));
 
         // Not by anything else, and never by request text.
-        let e = parse(&m, &Raw { order: Some("(select 1)".into()), ..Default::default() })
-            .unwrap_err();
+        let e = parse(
+            &m,
+            &Raw {
+                order: Some("(select 1)".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert!(e.0.contains("not a field"), "{e}");
     }
 
@@ -522,7 +567,14 @@ mod tests {
         // the most ordinary thing an app will want.
         assert!(q(&["created_at:gt:2026-01-01"]).is_ok());
         let m = model();
-        assert!(parse(&m, &Raw { order: Some("created_at".into()), ..Default::default() }).is_ok());
+        assert!(parse(
+            &m,
+            &Raw {
+                order: Some("created_at".into()),
+                ..Default::default()
+            }
+        )
+        .is_ok());
         assert!(q(&["id:eq:not-a-uuid"]).is_err());
         assert!(q(&["id:eq:2b1c0e9a-0000-4000-8000-000000000000"]).is_ok());
     }
@@ -530,11 +582,32 @@ mod tests {
     #[test]
     fn a_limit_is_clamped_rather_than_refused() {
         let m = model();
-        let big = parse(&m, &Raw { limit: Some(1_000_000), ..Default::default() }).unwrap();
+        let big = parse(
+            &m,
+            &Raw {
+                limit: Some(1_000_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(big.limit, MAX_LIMIT);
-        let none = parse(&m, &Raw { limit: Some(0), ..Default::default() }).unwrap();
+        let none = parse(
+            &m,
+            &Raw {
+                limit: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(none.limit, 1);
-        let back = parse(&m, &Raw { offset: Some(-5), ..Default::default() }).unwrap();
+        let back = parse(
+            &m,
+            &Raw {
+                offset: Some(-5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(back.offset, 0);
         // And it reaches the SQL as digits, because that is all it can be.
         assert!(where_clause(&big, 1).sql.ends_with("LIMIT 1000 OFFSET 0"));
@@ -554,7 +627,10 @@ mod tests {
         // to a browser. For a column holding money that is a real loss.
         let p = projection(&model());
         assert!(p.contains("'amount', t.\"amount\"::text"), "{p}");
-        assert!(p.contains("'qty', t.\"qty\""), "an int is fine as a number: {p}");
+        assert!(
+            p.contains("'qty', t.\"qty\""),
+            "an int is fine as a number: {p}"
+        );
         assert!(p.contains("'id', t.\"id\"::text"));
     }
 

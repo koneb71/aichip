@@ -99,11 +99,15 @@ async fn sweep_dir(dir: &Path, exts: &[&str], keep: &HashSet<String>) -> Swept {
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else { continue };
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
         if !exts.contains(&ext) {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         if keep.contains(stem) {
             continue;
         }
@@ -144,7 +148,10 @@ mod tests {
         let swept = sweep_dir(dir.path(), &["json"], &keep).await;
 
         assert_eq!(swept.files, 2, "the dead id and the unrecognised name");
-        assert!(dir.path().join(format!("{live}.json")).exists(), "a live run keeps its config");
+        assert!(
+            dir.path().join(format!("{live}.json")).exists(),
+            "a live run keeps its config"
+        );
         assert!(!dir.path().join(format!("{dead}.json")).exists());
         assert!(
             dir.path().join(format!("{dead}.txt")).exists(),
@@ -156,7 +163,12 @@ mod tests {
     #[tokio::test]
     async fn a_missing_directory_is_not_an_error() {
         // A fresh install has none of these until the first run.
-        let swept = sweep_dir(Path::new("/nonexistent/aichip/mcp"), &["json"], &HashSet::new()).await;
+        let swept = sweep_dir(
+            Path::new("/nonexistent/aichip/mcp"),
+            &["json"],
+            &HashSet::new(),
+        )
+        .await;
         assert_eq!(swept, Swept::default());
     }
 }

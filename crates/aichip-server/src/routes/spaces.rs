@@ -27,14 +27,17 @@ const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 /// Word / PowerPoint / Excel through `rag::extract`. Legacy .doc/.ppt are
 /// refused at upload — there is no reader for them, and refusing with the
 /// fix beats accepting a file that can only ever sit `unsupported`.
-const ALLOWED_EXT: &[&str] =
-    &["md", "txt", "csv", "json", "log", "pdf", "docx", "pptx", "xlsx", "xlsm", "xls", "ods"];
+const ALLOWED_EXT: &[&str] = &[
+    "md", "txt", "csv", "json", "log", "pdf", "docx", "pptx", "xlsx", "xlsm", "xls", "ods",
+];
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/projects/{id}/documents",
-            get(list).post(upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            get(list)
+                .post(upload)
+                .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
         .route("/projects/{id}/documents/reindex", post(reindex))
         .route("/projects/{id}/documents/status", get(status))
@@ -114,7 +117,10 @@ async fn upload(
         let Some(name) = field.file_name().and_then(sanitize_filename) else {
             return Err((StatusCode::BAD_REQUEST, "a file needs a usable name".into()));
         };
-        let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
         if !ALLOWED_EXT.contains(&ext.as_str()) {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -217,19 +223,21 @@ async fn remove(
     Path((project_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
     let dir = space_path(&state, project_id).await?;
-    let rel: String = sqlx::query_scalar(
-        "SELECT rel_path FROM project_documents WHERE id=$1 AND project_id=$2",
-    )
-    .bind(doc_id)
-    .bind(project_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?
-    .ok_or((StatusCode::NOT_FOUND, "no such document".to_string()))?;
+    let rel: String =
+        sqlx::query_scalar("SELECT rel_path FROM project_documents WHERE id=$1 AND project_id=$2")
+            .bind(doc_id)
+            .bind(project_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?
+            .ok_or((StatusCode::NOT_FOUND, "no such document".to_string()))?;
 
     // rel_path came from our own walk of the space folder, but a stored path
     // is still input: refuse anything that would resolve outside the space.
-    if rel.split(['/', '\\']).any(|part| part == ".." || part.is_empty()) {
+    if rel
+        .split(['/', '\\'])
+        .any(|part| part == ".." || part.is_empty())
+    {
         return Err((StatusCode::BAD_REQUEST, "refusing a suspicious path".into()));
     }
     let target = dir.join(&rel);

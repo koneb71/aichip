@@ -55,10 +55,9 @@ pub fn app(state: AppState) -> Router {
     // for dev checkouts. (v1.0 embeds these in the binary via rust-embed.)
     let dist = std::env::var("AICHIP_WEB_DIST").unwrap_or_else(|_| "web/dist".into());
     if std::path::Path::new(&dist).join("index.html").exists() {
-        let serve = tower_http::services::ServeDir::new(&dist)
-            .fallback(tower_http::services::ServeFile::new(
-                std::path::Path::new(&dist).join("index.html"),
-            ));
+        let serve = tower_http::services::ServeDir::new(&dist).fallback(
+            tower_http::services::ServeFile::new(std::path::Path::new(&dist).join("index.html")),
+        );
         router = router.fallback_service(serve);
     }
 
@@ -190,7 +189,11 @@ async fn reject_non_local_callers(
     // its headers is still alive at the move.
     let (host_ok, origin_ok) = {
         let headers = req.headers();
-        let str_of = |name| headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
+        let str_of = |name| {
+            headers
+                .get(name)
+                .and_then(|v: &HeaderValue| v.to_str().ok())
+        };
         let host = str_of(axum::http::header::HOST).unwrap_or_default();
         (
             LOCAL_HOSTS.contains(&bare_host(host)),
@@ -304,7 +307,10 @@ mod tests {
         let message = unacknowledged_message("0.0.0.0".parse().unwrap());
         assert!(message.contains("no authentication"), "{message}");
         // And corrects the belief that used to sit next to the bind.
-        assert!(message.contains("Host-header check does not stop this"), "{message}");
+        assert!(
+            message.contains("Host-header check does not stop this"),
+            "{message}"
+        );
         // Names the way out, and a safer alternative to it.
         assert!(message.contains(TRUST_NETWORK), "{message}");
         assert!(message.contains("SSH tunnel"), "{message}");

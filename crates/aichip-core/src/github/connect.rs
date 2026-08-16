@@ -72,7 +72,9 @@ pub enum Progress {
     /// Still waiting for the person to enter the code.
     Waiting,
     Connected,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// The one-time code and URL out of `gh`'s own output.
@@ -262,8 +264,14 @@ pub async fn poll(id: Uuid) -> Progress {
                         "sign-in did not complete. Try again.".into()
                     } else {
                         // gh's own last words beat any sentence written here.
-                        said.lines().rev().take(3).collect::<Vec<_>>()
-                            .into_iter().rev().collect::<Vec<_>>().join(" ")
+                        said.lines()
+                            .rev()
+                            .take(3)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join(" ")
                     },
                 }
             }

@@ -32,10 +32,7 @@ pub fn router() -> Router<AppState> {
             "/projects/{id}/preview-recipe",
             get(get_recipe).post(propose_recipe).put(approve_recipe),
         )
-        .route(
-            "/tasks/{id}/preview",
-            get(current).post(start).delete(stop),
-        )
+        .route("/tasks/{id}/preview", get(current).post(start).delete(stop))
 }
 
 /// Whether previews are possible at all on this machine.
@@ -84,12 +81,11 @@ async fn logs(
 /// alongside what they are currently costing.
 async fn get_limits(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let limits = aichip_core::previews::limits(&state.db).await;
-    let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM previews WHERE status IN ('building','running')",
-    )
-    .fetch_one(&state.db.pool)
-    .await
-    .unwrap_or(0);
+    let live: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM previews WHERE status IN ('building','running')")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap_or(0);
     Ok(Json(json!({
         "maxLive": limits.max_live,
         "idleMinutes": limits.idle_minutes,
@@ -182,13 +178,18 @@ async fn propose_recipe(
     // a file in the repository cannot talk it into anything on the way past.
     let survey = aichip_core::previews::recipe_writer::survey(std::path::Path::new(&path))
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("could not read the project: {e}")))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("could not read the project: {e}"),
+            )
+        })?;
 
     let engine_id = state.orchestrator.default_engine();
-    let engine = state
-        .orchestrator
-        .engine(&engine_id)
-        .ok_or((StatusCode::PRECONDITION_FAILED, "no engine available".to_string()))?;
+    let engine = state.orchestrator.engine(&engine_id).ok_or((
+        StatusCode::PRECONDITION_FAILED,
+        "no engine available".to_string(),
+    ))?;
     let model_id = state
         .orchestrator
         .model_for(&engine_id, aichip_shared::ModelTier::Complex);
@@ -289,7 +290,9 @@ async fn approve_recipe(
     .await
     .map_err(internal)?;
 
-    Ok(Json(json!({ "approved": true, "edited": edited, "kind": kind.as_str() })))
+    Ok(Json(
+        json!({ "approved": true, "edited": edited, "kind": kind.as_str() }),
+    ))
 }
 
 /// Everything this project has running, plus what it is costing.
@@ -307,12 +310,11 @@ async fn list_for_project(
     // Counted across every project, not just this one: the cap is a property of
     // the machine, and a tab that says "2 of 3" while another project holds the
     // third would be lying.
-    let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM previews WHERE status IN ('building','running')",
-    )
-    .fetch_one(&state.db.pool)
-    .await
-    .unwrap_or(0);
+    let live: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM previews WHERE status IN ('building','running')")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap_or(0);
     Ok(Json(json!({
         "previews": previews,
         "live": live,
@@ -360,10 +362,7 @@ async fn stop_base(
 }
 
 async fn docker_ready(_state: &AppState) -> bool {
-    matches!(
-        aichip_core::previews::docker::detect().await,
-        Some(Ok(_))
-    )
+    matches!(aichip_core::previews::docker::detect().await, Some(Ok(_)))
 }
 
 async fn current(
@@ -386,8 +385,7 @@ async fn start(
         None => {
             return Err((
                 StatusCode::PRECONDITION_FAILED,
-                "Docker isn't installed on this machine, so there is nothing to build with."
-                    .into(),
+                "Docker isn't installed on this machine, so there is nothing to build with.".into(),
             ))
         }
         Some(Err(problem)) => {

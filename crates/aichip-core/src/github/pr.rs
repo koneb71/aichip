@@ -185,7 +185,8 @@ pub fn roll_up_checks(entries: &[CheckEntry]) -> Checks {
     let mut pending = false;
     for entry in entries {
         match entry.outcome().to_ascii_uppercase().as_str() {
-            "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+            "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED"
+            | "STARTUP_FAILURE" => {
                 // One failure is the answer; nothing later can improve it.
                 return Checks::Failing;
             }
@@ -254,7 +255,9 @@ pub async fn create(
 ) -> Result<(), GhError> {
     gh(
         Some(cwd),
-        &["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body],
+        &[
+            "pr", "create", "--base", base, "--head", head, "--title", title, "--body", body,
+        ],
     )
     .await
     .map(|_| ())
@@ -382,13 +385,19 @@ mod tests {
         // CheckRun: status + conclusion. StatusContext: state, and nothing else.
         let mixed = vec![
             entry("COMPLETED", "SUCCESS"),
-            CheckEntry { state: "FAILURE".into(), ..Default::default() },
+            CheckEntry {
+                state: "FAILURE".into(),
+                ..Default::default()
+            },
         ];
         assert_eq!(roll_up_checks(&mixed), Checks::Failing);
 
         // And a finished CheckRun is read by its conclusion, not its status —
         // `COMPLETED` says it stopped, not that it passed.
-        assert_eq!(roll_up_checks(&[entry("COMPLETED", "FAILURE")]), Checks::Failing);
+        assert_eq!(
+            roll_up_checks(&[entry("COMPLETED", "FAILURE")]),
+            Checks::Failing
+        );
     }
 
     /// Never delete this. The day GitHub adds a check outcome, a card must not
@@ -398,7 +407,10 @@ mod tests {
         let entries = vec![entry("COMPLETED", "SUCCESS"), entry("SOMETHING_NEW", "")];
         assert_eq!(roll_up_checks(&entries), Checks::Pending);
 
-        let only_new = vec![CheckEntry { state: "MYSTERY".into(), ..Default::default() }];
+        let only_new = vec![CheckEntry {
+            state: "MYSTERY".into(),
+            ..Default::default()
+        }];
         assert_eq!(roll_up_checks(&only_new), Checks::Pending);
     }
 
@@ -448,7 +460,11 @@ mod tests {
         // Both arms, so the closing line cannot become the place an attribution
         // slips in unnoticed.
         for closes in [None, Some(42)] {
-            let body = pr_body("Add a retry button to the board", "aichip/retry-a1b2c3d4", closes);
+            let body = pr_body(
+                "Add a retry button to the board",
+                "aichip/retry-a1b2c3d4",
+                closes,
+            );
             assert!(body.contains("Add a retry button"));
             assert!(body.contains("aichip/retry-a1b2c3d4"));
             for banned in [
@@ -477,13 +493,19 @@ mod tests {
         assert!(with.find("do the thing").unwrap() < with.find("Closes #42").unwrap());
 
         // A card nobody imported gets byte-identical output to before.
-        assert_eq!(pr_body("do the thing", "b", None), pr_body_before("do the thing", "b"));
+        assert_eq!(
+            pr_body("do the thing", "b", None),
+            pr_body_before("do the thing", "b")
+        );
     }
 
     /// What the body was before `closes` existed, so the no-issue case is
     /// pinned as unchanged rather than merely believed to be.
     fn pr_body_before(prompt: &str, branch: &str) -> String {
-        format!("### What this card asked for\n\n{}\n\nBranch: `{branch}`\n", prompt.trim())
+        format!(
+            "### What this card asked for\n\n{}\n\nBranch: `{branch}`\n",
+            prompt.trim()
+        )
     }
 
     #[test]
@@ -491,14 +513,22 @@ mod tests {
         // The naive implementation truncates and returns, losing it.
         let body = pr_body(&"x".repeat(MAX_BODY + 5_000), "b", Some(7));
         assert!(body.contains("too long to include"));
-        assert!(body.contains("Closes #7"), "truncation ate the closing line");
+        assert!(
+            body.contains("Closes #7"),
+            "truncation ate the closing line"
+        );
     }
 
     #[test]
     fn only_an_issue_on_this_repository_is_closed() {
         // The ordinary case.
         assert_eq!(
-            closes_number(Some("github_issue"), Some("cli/cli#42"), Some(42), Some("cli/cli")),
+            closes_number(
+                Some("github_issue"),
+                Some("cli/cli#42"),
+                Some(42),
+                Some("cli/cli")
+            ),
             Some(42)
         );
         // A card somebody typed.
@@ -506,16 +536,31 @@ mod tests {
         // An issue from another repository: the cross-repo form only closes
         // with write access there, so promising it would be a lie.
         assert_eq!(
-            closes_number(Some("github_issue"), Some("other/repo#42"), Some(42), Some("cli/cli")),
+            closes_number(
+                Some("github_issue"),
+                Some("other/repo#42"),
+                Some(42),
+                Some("cli/cli")
+            ),
             None
         );
         // A half-written row must not produce `Closes #`.
         assert_eq!(
-            closes_number(Some("github_issue"), Some("cli/cli#42"), None, Some("cli/cli")),
+            closes_number(
+                Some("github_issue"),
+                Some("cli/cli#42"),
+                None,
+                Some("cli/cli")
+            ),
             None
         );
         assert_eq!(
-            closes_number(Some("github_issue"), Some("cli/cli#0"), Some(0), Some("cli/cli")),
+            closes_number(
+                Some("github_issue"),
+                Some("cli/cli#0"),
+                Some(0),
+                Some("cli/cli")
+            ),
             None
         );
         // A project whose repository is unknown cannot be compared against.
@@ -525,7 +570,12 @@ mod tests {
         );
         // A future importer must not inherit GitHub's convention.
         assert_eq!(
-            closes_number(Some("jira_ticket"), Some("cli/cli#42"), Some(42), Some("cli/cli")),
+            closes_number(
+                Some("jira_ticket"),
+                Some("cli/cli#42"),
+                Some(42),
+                Some("cli/cli")
+            ),
             None
         );
     }
@@ -535,7 +585,10 @@ mod tests {
         let long = "x".repeat(MAX_BODY + 5_000);
         let body = pr_body(&long, "b", None);
         assert!(body.len() < MAX_BODY + 500);
-        assert!(body.contains("too long to include"), "a silent cut is a lie");
+        assert!(
+            body.contains("too long to include"),
+            "a silent cut is a lie"
+        );
 
         // A multi-byte character straddling the cut must not produce invalid
         // UTF-8 — the string is returned, so this would be a panic.
@@ -567,10 +620,19 @@ mod tests {
         for s in [State::Open, State::Draft, State::Merged, State::Closed] {
             assert_eq!(State::parse(s.as_str()), Some(s));
         }
-        for c in [Checks::None, Checks::Pending, Checks::Passing, Checks::Failing] {
+        for c in [
+            Checks::None,
+            Checks::Pending,
+            Checks::Passing,
+            Checks::Failing,
+        ] {
             assert_eq!(Checks::parse(c.as_str()), Some(c));
         }
-        for r in [Review::Approved, Review::ChangesRequested, Review::ReviewRequired] {
+        for r in [
+            Review::Approved,
+            Review::ChangesRequested,
+            Review::ReviewRequired,
+        ] {
             assert_eq!(Review::parse(r.as_str()), Some(r));
         }
     }

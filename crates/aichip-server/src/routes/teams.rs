@@ -76,7 +76,9 @@ async fn list(
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
-    Ok(Json(json!({ "teams": rows.iter().map(team_json).collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "teams": rows.iter().map(team_json).collect::<Vec<_>>() }),
+    ))
 }
 
 #[derive(Deserialize)]

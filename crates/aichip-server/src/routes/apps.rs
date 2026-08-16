@@ -34,7 +34,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/apps/{id}/chart/{view}", get(chart))
         .route("/apps/{id}/run", get(container).post(start).delete(stop))
-        .route("/apps/{id}/dockerfile", get(dockerfile).post(approve_dockerfile))
+        .route(
+            "/apps/{id}/dockerfile",
+            get(dockerfile).post(approve_dockerfile),
+        )
         .route("/apps/{id}/grants", get(grants).put(set_grants))
         .route("/apps/{id}/actions/{action}", post(run_action))
         .route("/apps/{id}/export", get(export))
@@ -104,7 +107,9 @@ async fn list(
     let apps = apps::list(&state.db, filter.workspace_id)
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "apps": apps.iter().map(app_json).collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "apps": apps.iter().map(app_json).collect::<Vec<_>>() }),
+    ))
 }
 
 /// One app, with everything a screen needs to draw it.
@@ -114,10 +119,7 @@ async fn list(
 /// than the server has. A manifest that no longer parses still returns the app
 /// — with the error — because the way out of a broken manifest is the editor,
 /// and a 500 would take that away.
-async fn one(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
+async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
     let app = load(&state, id).await?;
     let mut body = app_json(&app);
     body["manifest"] = json!(app.manifest);
@@ -191,10 +193,12 @@ async fn generate(
 
     let default_engine = state.orchestrator.default_engine();
     let engine_id = body.engine.as_deref().unwrap_or(&default_engine);
-    let engine = state
-        .orchestrator
-        .engine(engine_id)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown engine {engine_id}")))?;
+    let engine = state.orchestrator.engine(engine_id).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("unknown engine {engine_id}"),
+        )
+    })?;
     let model_id = state
         .orchestrator
         .model_for(engine_id, aichip_shared::ModelTier::Complex);
@@ -212,7 +216,9 @@ async fn generate(
     .map_err(internal)?;
 
     let manifest = apps::scaffold::extract(&output);
-    let error = apps::manifest::parse(&manifest).err().map(|e| e.to_string());
+    let error = apps::manifest::parse(&manifest)
+        .err()
+        .map(|e| e.to_string());
     Ok(Json(json!({ "manifest": manifest, "error": error })))
 }
 
@@ -373,7 +379,9 @@ async fn change(
         .execute(&state.db.pool)
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "buildId": build_id, "taskId": task_id, "runId": run_id })))
+    Ok(Json(
+        json!({ "buildId": build_id, "taskId": task_id, "runId": run_id }),
+    ))
 }
 
 /// Put the app back the way it was before its most recent change.
@@ -574,7 +582,10 @@ async fn chart(
     let view = parsed
         .view(&view)
         .ok_or((StatusCode::NOT_FOUND, "no such view".to_string()))?;
-    let apps::manifest::ViewSpec::Chart { group_by, measure, .. } = &view.spec else {
+    let apps::manifest::ViewSpec::Chart {
+        group_by, measure, ..
+    } = &view.spec
+    else {
         return Err((StatusCode::BAD_REQUEST, "that view is not a chart".into()));
     };
     let model = parsed
@@ -607,7 +618,10 @@ fn container_app(app: &apps::App) -> Result<(), ApiError> {
     } else {
         Err((
             StatusCode::BAD_REQUEST,
-            format!("\"{}\" is a module — aichip draws it, so there is nothing to run.", app.name),
+            format!(
+                "\"{}\" is a module — aichip draws it, so there is nothing to run.",
+                app.name
+            ),
         ))
     }
 }
@@ -626,9 +640,9 @@ async fn docker_problem() -> Option<String> {
     match aichip_core::previews::docker::detect().await {
         Some(Ok(_)) => None,
         None => Some("Docker isn't installed, or isn't on this machine's PATH.".into()),
-        Some(Err(detail)) => {
-            Some(format!("Docker is installed but its daemon isn't responding. {detail}"))
-        }
+        Some(Err(detail)) => Some(format!(
+            "Docker is installed but its daemon isn't responding. {detail}"
+        )),
     }
 }
 
@@ -690,26 +704,30 @@ async fn dockerfile(
     let app = load(&state, id).await?;
     container_app(&app)?;
 
-    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile")).await.ok();
-    Ok(Json(match runtime::drift(app.runtime, committed.as_deref()) {
-        Build::Owned(text) => json!({ "text": text, "drifted": false, "sha": Value::Null }),
-        Build::Drifted { text, sha } => {
-            let approved: Option<String> =
-                sqlx::query_scalar("SELECT dockerfile_sha256 FROM apps WHERE id = $1")
-                    .bind(id)
-                    .fetch_one(&state.db.pool)
-                    .await
-                    .map_err(internal)?;
-            json!({
-                "text": text,
-                // Drifted *and unapproved* is what the gate reacts to. An edit
-                // someone already read is not a question any more.
-                "drifted": approved.as_deref() != Some(sha.as_str()),
-                "sha": sha,
-            })
-        }
-        Build::None => json!({ "text": Value::Null, "drifted": false, "sha": Value::Null }),
-    }))
+    let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
+        .await
+        .ok();
+    Ok(Json(
+        match runtime::drift(app.runtime, committed.as_deref()) {
+            Build::Owned(text) => json!({ "text": text, "drifted": false, "sha": Value::Null }),
+            Build::Drifted { text, sha } => {
+                let approved: Option<String> =
+                    sqlx::query_scalar("SELECT dockerfile_sha256 FROM apps WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(&state.db.pool)
+                        .await
+                        .map_err(internal)?;
+                json!({
+                    "text": text,
+                    // Drifted *and unapproved* is what the gate reacts to. An edit
+                    // someone already read is not a question any more.
+                    "drifted": approved.as_deref() != Some(sha.as_str()),
+                    "sha": sha,
+                })
+            }
+            Build::None => json!({ "text": Value::Null, "drifted": false, "sha": Value::Null }),
+        },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -731,7 +749,12 @@ async fn approve_dockerfile(
     container_app(&app)?;
     let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "this app has no Dockerfile".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                "this app has no Dockerfile".to_string(),
+            )
+        })?;
 
     // Re-derived from the file rather than trusted from the request, so what is
     // approved is what is on disk right now — not what the screen was showing
@@ -874,7 +897,10 @@ async fn export(
         .header("content-type", "application/json; charset=utf-8")
         // Quoted, and the slug is already a DNS label, so there is nothing in
         // it that could end the header early.
-        .header("content-disposition", format!("attachment; filename=\"{filename}\""))
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{filename}\""),
+        )
         .body(axum::body::Body::from(text))
         .map_err(internal)?)
 }

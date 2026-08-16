@@ -230,7 +230,10 @@ mod tests {
         let p = &build(&s, None)["agent"][AGENT_NAME]["permission"];
         assert_eq!(p["bash"], "deny");
         assert_eq!(p["edit"], "deny");
-        assert_eq!(p["read"], "allow", "denying two tools must not close the rest");
+        assert_eq!(
+            p["read"], "allow",
+            "denying two tools must not close the rest"
+        );
     }
 
     #[test]
@@ -269,7 +272,10 @@ mod tests {
         s.extra_read_dirs = vec![PathBuf::from("/home/u/.aichip/attachments/a1")];
         let p = &build(&s, None)["agent"][AGENT_NAME]["permission"];
         assert_eq!(p["external_directory"]["*"], "deny");
-        assert_eq!(p["external_directory"]["/home/u/.aichip/attachments/a1/**"], "allow");
+        assert_eq!(
+            p["external_directory"]["/home/u/.aichip/attachments/a1/**"],
+            "allow"
+        );
     }
 
     #[test]

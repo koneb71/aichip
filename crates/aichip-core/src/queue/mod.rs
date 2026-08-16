@@ -56,12 +56,23 @@ mod tests {
         // production always asked for attempt 0, so a limit with no reset time
         // — every OpenCode run — retried every five minutes forever.
         let now = Utc::now();
-        let mins = |holds: i32| {
-            (rate_limit_backoff(attempt_index(holds), None) - now).num_minutes()
-        };
-        assert!((5..=7).contains(&mins(1)), "first hold ~5m, got {}", mins(1));
-        assert!((15..=17).contains(&mins(2)), "second hold ~15m, got {}", mins(2));
-        assert!((45..=47).contains(&mins(3)), "third hold ~45m, got {}", mins(3));
+        let mins =
+            |holds: i32| (rate_limit_backoff(attempt_index(holds), None) - now).num_minutes();
+        assert!(
+            (5..=7).contains(&mins(1)),
+            "first hold ~5m, got {}",
+            mins(1)
+        );
+        assert!(
+            (15..=17).contains(&mins(2)),
+            "second hold ~15m, got {}",
+            mins(2)
+        );
+        assert!(
+            (45..=47).contains(&mins(3)),
+            "third hold ~45m, got {}",
+            mins(3)
+        );
         assert!((45..=47).contains(&mins(9)), "and it caps");
     }
 

@@ -222,7 +222,10 @@ mod tests {
     #[test]
     fn research_can_never_touch_the_repository() {
         for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"] {
-            assert!(DENIED.contains(&tool), "{tool} must be denied, not merely unlisted");
+            assert!(
+                DENIED.contains(&tool),
+                "{tool} must be denied, not merely unlisted"
+            );
             assert!(!TOOLS.contains(&tool));
         }
         // And no subagent fan-out: Complex-tier spend multiplied invisibly.
@@ -235,7 +238,10 @@ mod tests {
         // WebFetch for reasons that do not apply here.
         for tool in ["WebSearch", "WebFetch"] {
             assert!(TOOLS.contains(&tool), "{tool} is the point of the feature");
-            assert!(!DENIED.contains(&tool), "{tool} denied would beat the allow silently");
+            assert!(
+                !DENIED.contains(&tool),
+                "{tool} denied would beat the allow silently"
+            );
         }
     }
 
@@ -247,8 +253,10 @@ mod tests {
         assert!(p.contains("Markdown only"));
         assert!(p.contains("Sources"));
         // Repo before web, and kept apart.
-        assert!(p.find("Investigate the repository first").unwrap()
-            < p.find("Then use WebSearch").unwrap());
+        assert!(
+            p.find("Investigate the repository first").unwrap()
+                < p.find("Then use WebSearch").unwrap()
+        );
         assert!(p.contains("say plainly which findings come"));
     }
 
@@ -261,7 +269,10 @@ mod tests {
         let p = prompt("How does auth work?", ctx);
         let at = p.find("the API lives in api/").unwrap();
         assert!(at < p.find("## Format").unwrap());
-        assert!(p.find("How does auth work?").unwrap() < at, "the question reads first");
+        assert!(
+            p.find("How does auth work?").unwrap() < at,
+            "the question reads first"
+        );
     }
 
     #[test]
@@ -334,7 +345,10 @@ mod tests {
     fn the_title_is_the_reports_own_heading_or_the_question() {
         assert_eq!(title_from("# What I Found\n\nBody", "q"), "What I Found");
         assert_eq!(title_from("\n\n# Spaced\nBody", "q"), "Spaced");
-        assert_eq!(title_from("no heading here", "the question"), "the question");
+        assert_eq!(
+            title_from("no heading here", "the question"),
+            "the question"
+        );
         assert_eq!(title_from("", "  padded question  "), "padded question");
         // A heading buried under prose is a section, not a title.
         assert_eq!(title_from("prose first\n# Later", "q"), "q");
@@ -349,7 +363,10 @@ mod tests {
             "## Section\n\nBody."
         );
         // No heading → untouched; a section heading is not a title.
-        assert_eq!(body_without_title("## Section\n\nBody."), "## Section\n\nBody.");
+        assert_eq!(
+            body_without_title("## Section\n\nBody."),
+            "## Section\n\nBody."
+        );
         assert_eq!(body_without_title("plain text"), "plain text");
     }
 

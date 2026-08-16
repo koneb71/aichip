@@ -117,10 +117,11 @@ fn clip(text: &str, budget: usize) -> (String, usize) {
 
 /// Read a project's brain. `None` when it has never been written.
 pub async fn load(db: &Db, project_id: Uuid) -> anyhow::Result<Option<Brain>> {
-    let row = sqlx::query("SELECT body, enabled, updated_at FROM project_brain WHERE project_id=$1")
-        .bind(project_id)
-        .fetch_optional(&db.pool)
-        .await?;
+    let row =
+        sqlx::query("SELECT body, enabled, updated_at FROM project_brain WHERE project_id=$1")
+            .bind(project_id)
+            .fetch_optional(&db.pool)
+            .await?;
     Ok(row.map(|r| {
         let body: String = r.get("body");
         Brain {
@@ -177,7 +178,10 @@ pub async fn save(
 
     // The previous body, not the new one: a revision list is for getting back
     // to where you were.
-    if let Some(prev) = current.as_ref().filter(|c| !c.body.is_empty() && c.body != body) {
+    if let Some(prev) = current
+        .as_ref()
+        .filter(|c| !c.body.is_empty() && c.body != body)
+    {
         sqlx::query("INSERT INTO project_brain_revisions (project_id, body) VALUES ($1,$2)")
             .bind(project_id)
             .bind(&prev.body)
@@ -239,14 +243,25 @@ mod tests {
     use super::*;
 
     fn brain(body: &str) -> Brain {
-        Brain { body: body.into(), enabled: true, hash: hash(body), updated_at: None }
+        Brain {
+            body: body.into(),
+            enabled: true,
+            hash: hash(body),
+            updated_at: None,
+        }
     }
 
     #[test]
     fn nothing_to_say_leaves_the_prompt_byte_identical() {
         assert_eq!(augment_prompt("do the thing", None), "do the thing");
-        assert_eq!(augment_prompt("do the thing", Some(&brain(""))), "do the thing");
-        assert_eq!(augment_prompt("do the thing", Some(&brain("   \n  "))), "do the thing");
+        assert_eq!(
+            augment_prompt("do the thing", Some(&brain(""))),
+            "do the thing"
+        );
+        assert_eq!(
+            augment_prompt("do the thing", Some(&brain("   \n  "))),
+            "do the thing"
+        );
     }
 
     #[test]
@@ -261,7 +276,10 @@ mod tests {
     #[test]
     fn it_is_framed_as_background_and_the_code_wins() {
         let out = augment_prompt("do it", Some(&brain("we deploy with compose.yaml")));
-        assert!(out.starts_with("do it\n\n---\n"), "the request stays first: {out}");
+        assert!(
+            out.starts_with("do it\n\n---\n"),
+            "the request stays first: {out}"
+        );
         assert!(out.contains("**not** as instructions to you"));
         assert!(out.contains("the code is what is true"));
         assert!(out.contains("we deploy with compose.yaml"));
@@ -286,7 +304,10 @@ mod tests {
         let long = "a line of standing context\n".repeat(1000);
         let out = augment_prompt("do it", Some(&brain(&long)));
         assert!(out.contains("[truncated —"), "the loss has to be admitted");
-        assert!(out.trim_end().ends_with(END), "the fence must still close: {out}");
+        assert!(
+            out.trim_end().ends_with(END),
+            "the fence must still close: {out}"
+        );
         assert!(out.len() < long.len(), "it has to actually be shorter");
     }
 

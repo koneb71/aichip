@@ -263,9 +263,9 @@ fn parse_accounts(json: &str) -> Vec<Account> {
                     // gh's own words when it has them; otherwise name the state
                     // it reported, so an unfamiliar one is diagnosable rather
                     // than a shrug.
-                    e.error.clone().unwrap_or_else(|| {
-                        format!("gh reports this login as \"{}\"", e.state)
-                    })
+                    e.error
+                        .clone()
+                        .unwrap_or_else(|| format!("gh reports this login as \"{}\"", e.state))
                 }),
             })
         })
@@ -293,7 +293,10 @@ mod tests {
             classify_gh_failure("no pull requests found for branch \"main\""),
             GhError::NoPullRequest
         );
-        assert_eq!(classify_gh_failure("no git remotes found"), GhError::NoRemote);
+        assert_eq!(
+            classify_gh_failure("no git remotes found"),
+            GhError::NoRemote
+        );
 
         // Anything else is carried in gh's own words — the actionable half.
         match classify_gh_failure("HTTP 403: Resource not accessible by integration") {
@@ -398,19 +401,28 @@ mod tests {
 
     #[test]
     fn an_expired_token_is_installed_but_not_usable() {
-        let info = GitHubInfo { version: "gh version 2.96.0".into(), accounts: parse_accounts(EXPIRED) };
+        let info = GitHubInfo {
+            version: "gh version 2.96.0".into(),
+            accounts: parse_accounts(EXPIRED),
+        };
         assert!(!info.usable());
         let a = info.active().unwrap();
         assert_eq!(a.login, "vaconeiell");
         assert!(a.active);
         // The reason has to survive to the user; "not logged in" alone would
         // send them to `gh auth login` without saying why they were logged out.
-        assert_eq!(a.problem.as_deref(), Some("HTTP 401: Bad credentials (https://api.github.com/)"));
+        assert_eq!(
+            a.problem.as_deref(),
+            Some("HTTP 401: Bad credentials (https://api.github.com/)")
+        );
     }
 
     #[test]
     fn a_working_login_is_usable_and_has_nothing_to_report() {
-        let info = GitHubInfo { version: "gh version 2.96.0".into(), accounts: parse_accounts(WORKING) };
+        let info = GitHubInfo {
+            version: "gh version 2.96.0".into(),
+            accounts: parse_accounts(WORKING),
+        };
         assert!(info.usable());
         assert_eq!(info.active().unwrap().problem, None);
     }

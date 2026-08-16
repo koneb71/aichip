@@ -89,14 +89,13 @@ pub async fn is_stale(db: &Db, project_id: Uuid) -> bool {
     if !is_git {
         return true; // no commits to compare; the hash-diff decides
     }
-    let stored: Option<String> = sqlx::query_scalar(
-        "SELECT head_sha FROM project_index WHERE project_id = $1",
-    )
-    .bind(project_id)
-    .fetch_optional(&db.pool)
-    .await
-    .ok()
-    .flatten();
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT head_sha FROM project_index WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_optional(&db.pool)
+            .await
+            .ok()
+            .flatten();
     match (stored, head_sha(&root).await) {
         (Some(a), Some(b)) => a != b,
         _ => true,
@@ -202,7 +201,9 @@ pub async fn reconcile(db: &Db, project_id: Uuid) -> anyhow::Result<IndexReport>
         // pass would re-read and re-hash every file in the project to learn
         // what this loop is holding in a local variable.
         let lang = super::symbols::Lang::of(rel);
-        let parsed = lang.map(|l| super::symbols::parse(l, &text)).unwrap_or_default();
+        let parsed = lang
+            .map(|l| super::symbols::parse(l, &text))
+            .unwrap_or_default();
         // A parser bump changes what we know about a file, not what is in it.
         // Re-embedding 176 unchanged files to learn their function names would
         // cost minutes and produce byte-identical vectors.
@@ -283,7 +284,15 @@ pub async fn reconcile(db: &Db, project_id: Uuid) -> anyhow::Result<IndexReport>
     // being Ready meant nothing ever asked, the download never started, and
     // the vectors phase waited forever on a condition only it could satisfy.
     // Ask, and let the failure be the answer.
-    for Changed { rel, hash, bytes, chunks, needs_vectors, .. } in changed {
+    for Changed {
+        rel,
+        hash,
+        bytes,
+        chunks,
+        needs_vectors,
+        ..
+    } in changed
+    {
         if !needs_vectors {
             report.unchanged += 1; // re-read, not re-embedded
             continue;
@@ -347,9 +356,13 @@ async fn write_structure(db: &Db, project_id: Uuid, file: &Changed) -> anyhow::R
     // NULL leaves the status where it was — the re-parse-only case, where
     // knocking an indexed file back to 'pending' would take it out of search
     // for no reason at all.
-    let status: Option<&str> = file
-        .needs_vectors
-        .then(|| if file.chunks.is_empty() { "unsupported" } else { "pending" });
+    let status: Option<&str> = file.needs_vectors.then(|| {
+        if file.chunks.is_empty() {
+            "unsupported"
+        } else {
+            "pending"
+        }
+    });
     let doc_id: Uuid = sqlx::query_scalar(
         "INSERT INTO project_documents (project_id, rel_path, content_hash, bytes, lang, status, error)
          VALUES ($1,$2,$3,$4,$5,COALESCE($6,'pending'),NULL)
@@ -442,8 +455,11 @@ async fn rebuild_graph(db: &Db, project_id: Uuid) -> anyhow::Result<GraphReport>
             .collect();
 
     let paths: Vec<String> = files.iter().map(|(_, p, _)| p.clone()).collect();
-    let index_of: HashMap<&str, usize> =
-        files.iter().enumerate().map(|(i, (_, p, _))| (p.as_str(), i)).collect();
+    let index_of: HashMap<&str, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(i, (_, p, _))| (p.as_str(), i))
+        .collect();
 
     // What each name is defined in, so a Rust path naming a type rather than a
     // module still finds its file.
@@ -482,8 +498,10 @@ async fn rebuild_graph(db: &Db, project_id: Uuid) -> anyhow::Result<GraphReport>
             continue; // names a package, or names nothing — dropped, never guessed
         };
         resolved += 1;
-        let (Some(&a), Some(&b)) = (index_of.get(from_path.as_str()), index_of.get(to_path.as_str()))
-        else {
+        let (Some(&a), Some(&b)) = (
+            index_of.get(from_path.as_str()),
+            index_of.get(to_path.as_str()),
+        ) else {
             continue;
         };
         if a != b {
@@ -554,7 +572,11 @@ async fn embed_one(
     let vectors =
         crate::rag::embed::embed_batch(chunks.iter().map(|c| c.content.clone()).collect()).await?;
     if vectors.len() != chunks.len() {
-        anyhow::bail!("the embedder returned {} vectors for {} chunks", vectors.len(), chunks.len());
+        anyhow::bail!(
+            "the embedder returned {} vectors for {} chunks",
+            vectors.len(),
+            chunks.len()
+        );
     }
 
     let mut tx = db.pool.begin().await?;

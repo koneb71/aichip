@@ -134,7 +134,11 @@ fn trim_to(s: &str, max: usize) -> String {
     if t.chars().count() <= max {
         return t.to_string();
     }
-    t.chars().take(max).collect::<String>().trim_end().to_string()
+    t.chars()
+        .take(max)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 /// The message the person's answer becomes.
@@ -178,7 +182,10 @@ mod tests {
             header: None,
             options: labels
                 .iter()
-                .map(|l| Choice { label: (*l).into(), description: None })
+                .map(|l| Choice {
+                    label: (*l).into(),
+                    description: None,
+                })
                 .collect(),
             multi_select: false,
         }
@@ -232,15 +239,24 @@ mod tests {
         let out = validate(vec![q(&long, &["a", "b"])]).unwrap();
         assert!(out[0].question.chars().count() <= 400);
         // The cut must not have split a multi-byte character.
-        assert!(out[0].question.ends_with("café") || out[0].question.ends_with('é')
-            || !out[0].question.is_empty());
+        assert!(
+            out[0].question.ends_with("café")
+                || out[0].question.ends_with('é')
+                || !out[0].question.is_empty()
+        );
     }
 
     #[test]
     fn an_answer_names_the_question_it_answers() {
         let qs = vec![
-            Question { header: Some("Language".into()), ..q("Which language?", &["Rust", "Go"]) },
-            q("Which database, if any, should this use?", &["Postgres", "None"]),
+            Question {
+                header: Some("Language".into()),
+                ..q("Which language?", &["Rust", "Go"])
+            },
+            q(
+                "Which database, if any, should this use?",
+                &["Postgres", "None"],
+            ),
         ];
         let msg = answer_message(&qs, &[vec!["Rust".into()], vec!["None".into()]]);
         assert!(msg.contains("Language → Rust"));
@@ -258,15 +274,24 @@ mod tests {
             r#"{"question":"Which?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}"#,
         )
         .unwrap();
-        assert!(parsed.multi_select, "multiSelect did not survive the way in");
+        assert!(
+            parsed.multi_select,
+            "multiSelect did not survive the way in"
+        );
         let back = serde_json::to_value(&parsed).unwrap();
         assert_eq!(back["multiSelect"], serde_json::json!(true));
-        assert!(back.get("multi_select").is_none(), "stored under the wrong name");
+        assert!(
+            back.get("multi_select").is_none(),
+            "stored under the wrong name"
+        );
     }
 
     #[test]
     fn several_picks_on_one_question_are_joined() {
-        let qs = vec![Question { multi_select: true, ..q("Which?", &["a", "b"]) }];
+        let qs = vec![Question {
+            multi_select: true,
+            ..q("Which?", &["a", "b"])
+        }];
         assert!(answer_message(&qs, &[vec!["a".into(), "b".into()]]).ends_with("a, b"));
     }
 

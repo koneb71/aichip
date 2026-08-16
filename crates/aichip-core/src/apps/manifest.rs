@@ -35,7 +35,10 @@ pub struct ManifestError {
 
 impl ManifestError {
     fn new(at: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { at: at.into(), message: message.into() }
+        Self {
+            at: at.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -240,10 +243,24 @@ impl ChartKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewSpec {
-    List { columns: Vec<String>, sort: Option<Sort> },
-    Form { groups: Vec<Vec<String>>, buttons: Vec<String> },
-    Kanban { group_by: String, title: String, fields: Vec<String> },
-    Chart { kind: ChartKind, group_by: String, measure: String },
+    List {
+        columns: Vec<String>,
+        sort: Option<Sort>,
+    },
+    Form {
+        groups: Vec<Vec<String>>,
+        buttons: Vec<String>,
+    },
+    Kanban {
+        group_by: String,
+        title: String,
+        fields: Vec<String>,
+    },
+    Chart {
+        kind: ChartKind,
+        group_by: String,
+        measure: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,13 +275,30 @@ pub struct View {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// `None` for a value means clear that field — see [`pairs`].
-    Create { model: String, values: Vec<(String, Option<String>)> },
-    Update { values: Vec<(String, Option<String>)> },
+    Create {
+        model: String,
+        values: Vec<(String, Option<String>)>,
+    },
+    Update {
+        values: Vec<(String, Option<String>)>,
+    },
     Delete,
-    CreateTask { project: Option<String>, title: String, prompt: String },
-    StartRun { project: Option<String>, prompt: String, agent: Option<String> },
-    Notify { message: String },
-    Goto { view: String },
+    CreateTask {
+        project: Option<String>,
+        title: String,
+        prompt: String,
+    },
+    StartRun {
+        project: Option<String>,
+        prompt: String,
+        agent: Option<String>,
+    },
+    Notify {
+        message: String,
+    },
+    Goto {
+        view: String,
+    },
 }
 
 impl Step {
@@ -394,9 +428,12 @@ pub fn parse(yaml: &str) -> R<Manifest> {
     let port = match root.get("port") {
         None => None,
         Some(v) => {
-            let n = v.as_u64().filter(|n| (1..=65535).contains(n)).ok_or_else(|| {
-                ManifestError::new("port", "a port must be a whole number from 1 to 65535")
-            })?;
+            let n = v
+                .as_u64()
+                .filter(|n| (1..=65535).contains(n))
+                .ok_or_else(|| {
+                    ManifestError::new("port", "a port must be a whole number from 1 to 65535")
+                })?;
             Some(n as u16)
         }
     };
@@ -510,7 +547,9 @@ fn check_expressions(m: &Manifest) -> R<()> {
     // conflating them would mean teaching it about aggregation.
     for view in &m.views {
         if let ViewSpec::Chart { measure, .. } = &view.spec {
-            let model = m.model(&view.model).expect("views resolve their model at parse");
+            let model = m
+                .model(&view.model)
+                .expect("views resolve their model at parse");
             parse_measure(measure)
                 .and_then(|(_, field)| match field {
                     None => Ok(()),
@@ -540,8 +579,12 @@ pub fn parse_measure(src: &str) -> Result<(Agg, Option<String>), String> {
     let Some(inner) = rest.strip_suffix(')') else {
         return Err(format!("\"{trimmed}\" is missing its closing bracket"));
     };
-    let agg = Agg::parse(name.trim())
-        .ok_or_else(|| format!("\"{}\" is not one of count, sum, avg, min, max", name.trim()))?;
+    let agg = Agg::parse(name.trim()).ok_or_else(|| {
+        format!(
+            "\"{}\" is not one of count, sum, avg, min, max",
+            name.trim()
+        )
+    })?;
     let field = inner.trim();
     match (agg, field.is_empty()) {
         (Agg::Count, _) => Ok((agg, (!field.is_empty()).then(|| field.to_string()))),
@@ -635,7 +678,11 @@ fn parse_models(root: &Mapping) -> R<Vec<Model>> {
                 return Err(ManifestError::new(&fat, "this field is declared twice"));
             }
             let fbody = as_map(fbody, &fat)?;
-            known_keys(fbody, &["type", "required", "default", "compute", "label"], &fat)?;
+            known_keys(
+                fbody,
+                &["type", "required", "default", "compute", "label"],
+                &fat,
+            )?;
 
             let ty_text = req_str(fbody, "type", &fat)?;
             let ty = FieldType::parse(&ty_text).ok_or_else(|| {
@@ -682,7 +729,11 @@ fn parse_models(root: &Mapping) -> R<Vec<Model>> {
             indexes.push(field);
         }
 
-        out.push(Model { name, fields, indexes });
+        out.push(Model {
+            name,
+            fields,
+            indexes,
+        });
     }
 
     // Refs are resolved after every model is known, so order of declaration
@@ -787,15 +838,23 @@ fn parse_views(root: &Mapping, models: &[Model]) -> R<Vec<View>> {
                 }
             },
         };
-        let model = models.iter().find(|m| m.name == model_name).ok_or_else(|| {
-            ManifestError::new(
-                format!("{at}.model"),
-                format!("\"{model_name}\" is not a model this app declares"),
-            )
-        })?;
+        let model = models
+            .iter()
+            .find(|m| m.name == model_name)
+            .ok_or_else(|| {
+                ManifestError::new(
+                    format!("{at}.model"),
+                    format!("\"{model_name}\" is not a model this app declares"),
+                )
+            })?;
 
         let spec = parse_view_spec(kind, body, model, &at)?;
-        out.push(View { name, kind, model: model_name, spec });
+        out.push(View {
+            name,
+            kind,
+            model: model_name,
+            spec,
+        });
     }
 
     Ok(out)
@@ -872,7 +931,10 @@ fn parse_view_spec(kind: ViewKind, body: &Mapping, model: &Model, at: &str) -> R
             if groups.is_empty() {
                 groups.push(model.fields.iter().map(|f| f.name.clone()).collect());
             }
-            ViewSpec::Form { groups, buttons: opt_seq_str(body, "buttons", at)? }
+            ViewSpec::Form {
+                groups,
+                buttons: opt_seq_str(body, "buttons", at)?,
+            }
         }
         ViewKind::Kanban => {
             let group_by = req_str(body, "group_by", at)?;
@@ -888,7 +950,11 @@ fn parse_view_spec(kind: ViewKind, body: &Mapping, model: &Model, at: &str) -> R
             for (i, f) in fields.iter().enumerate() {
                 check(f, &format!("{at}.fields[{i}]"))?;
             }
-            ViewSpec::Kanban { group_by, title, fields }
+            ViewSpec::Kanban {
+                group_by,
+                title,
+                fields,
+            }
         }
         ViewKind::Chart => {
             // `shape` is the unambiguous spelling and the only one that works
@@ -898,7 +964,12 @@ fn parse_view_spec(kind: ViewKind, body: &Mapping, model: &Model, at: &str) -> R
             // chart` carries no shape in it, so it falls through to the default
             // rather than being read as a chart type.
             let shape_text = opt_str(body, "shape", at)?
-                .or_else(|| opt_str(body, "kind", at).ok().flatten().filter(|t| t != "chart"))
+                .or_else(|| {
+                    opt_str(body, "kind", at)
+                        .ok()
+                        .flatten()
+                        .filter(|t| t != "chart")
+                })
                 .unwrap_or_else(|| "bar".into());
             let chart = ChartKind::parse(&shape_text).ok_or_else(|| {
                 ManifestError::new(
@@ -908,7 +979,11 @@ fn parse_view_spec(kind: ViewKind, body: &Mapping, model: &Model, at: &str) -> R
             })?;
             let group_by = req_str(body, "group_by", at)?;
             check(&group_by, &format!("{at}.group_by"))?;
-            ViewSpec::Chart { kind: chart, group_by, measure: req_str(body, "measure", at)? }
+            ViewSpec::Chart {
+                kind: chart,
+                group_by,
+                measure: req_str(body, "measure", at)?,
+            }
         }
     })
 }
@@ -936,12 +1011,20 @@ fn parse_actions(root: &Mapping, models: &[Model], views: &[View]) -> R<Vec<Acti
             .and_then(Value::as_sequence)
             .ok_or_else(|| ManifestError::new(&steps_at, "an action needs a list of steps"))?;
         if steps_seq.is_empty() {
-            return Err(ManifestError::new(&steps_at, "an action needs at least one step"));
+            return Err(ManifestError::new(
+                &steps_at,
+                "an action needs at least one step",
+            ));
         }
 
         let mut steps = Vec::new();
         for (i, step) in steps_seq.iter().enumerate() {
-            steps.push(parse_step(step, models, views, &format!("{steps_at}[{i}]"))?);
+            steps.push(parse_step(
+                step,
+                models,
+                views,
+                &format!("{steps_at}[{i}]"),
+            )?);
         }
 
         out.push(Action {
@@ -982,7 +1065,10 @@ fn parse_step(step: &Value, models: &[Model], views: &[View], at: &str) -> R<Ste
                     format!("\"{model}\" is not a model this app declares"),
                 )
             })?;
-            Step::Create { values: parse_values(body, model_ref, at)?, model }
+            Step::Create {
+                values: parse_values(body, model_ref, at)?,
+                model,
+            }
         }
         "update" => {
             // The map *is* the values — `update: { category: pending }` — with
@@ -1022,14 +1108,22 @@ fn parse_step(step: &Value, models: &[Model], views: &[View], at: &str) -> R<Ste
             message: body
                 .as_str()
                 .map(str::to_string)
-                .or_else(|| as_map(body, at).ok().and_then(|m| opt_str(m, "message", at).ok()?))
+                .or_else(|| {
+                    as_map(body, at)
+                        .ok()
+                        .and_then(|m| opt_str(m, "message", at).ok()?)
+                })
                 .ok_or_else(|| ManifestError::new(at, "a notify step needs a message"))?,
         },
         "goto" => {
             let view = body
                 .as_str()
                 .map(str::to_string)
-                .or_else(|| as_map(body, at).ok().and_then(|m| opt_str(m, "view", at).ok()?))
+                .or_else(|| {
+                    as_map(body, at)
+                        .ok()
+                        .and_then(|m| opt_str(m, "view", at).ok()?)
+                })
                 .ok_or_else(|| ManifestError::new(at, "a goto step needs a view"))?;
             if !views.iter().any(|v| v.name == view) {
                 return Err(ManifestError::new(
@@ -1171,8 +1265,15 @@ fn known_keys(map: &Mapping, allowed: &[&str], at: &str) -> R<()> {
         let name = key_name(key, at)?;
         if !allowed.contains(&name.as_str()) {
             return Err(ManifestError::new(
-                if at.is_empty() { name.clone() } else { format!("{at}.{name}") },
-                format!("unknown key \"{name}\" — expected one of {}", allowed.join(", ")),
+                if at.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{at}.{name}")
+                },
+                format!(
+                    "unknown key \"{name}\" — expected one of {}",
+                    allowed.join(", ")
+                ),
             ));
         }
     }
@@ -1182,7 +1283,11 @@ fn known_keys(map: &Mapping, allowed: &[&str], at: &str) -> R<()> {
 fn req_str(map: &Mapping, key: &str, at: &str) -> R<String> {
     opt_str(map, key, at)?.ok_or_else(|| {
         ManifestError::new(
-            if at.is_empty() { key.to_string() } else { format!("{at}.{key}") },
+            if at.is_empty() {
+                key.to_string()
+            } else {
+                format!("{at}.{key}")
+            },
             "this key is required",
         )
     })
@@ -1198,7 +1303,11 @@ fn opt_str(map: &Mapping, key: &str, at: &str) -> R<Option<String>> {
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
         Some(Value::Bool(b)) => Ok(Some(b.to_string())),
         Some(_) => Err(ManifestError::new(
-            if at.is_empty() { key.to_string() } else { format!("{at}.{key}") },
+            if at.is_empty() {
+                key.to_string()
+            } else {
+                format!("{at}.{key}")
+            },
             "expected a single value here",
         )),
     }
@@ -1216,7 +1325,11 @@ fn opt_bool(map: &Mapping, key: &str, at: &str) -> R<Option<bool>> {
 }
 
 fn opt_seq_str(map: &Mapping, key: &str, at: &str) -> R<Vec<String>> {
-    let path = if at.is_empty() { key.to_string() } else { format!("{at}.{key}") };
+    let path = if at.is_empty() {
+        key.to_string()
+    } else {
+        format!("{at}.{key}")
+    };
     match map.get(key) {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Sequence(items)) => items
@@ -1375,7 +1488,9 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
 
     #[test]
     fn a_screen_bound_to_a_model_the_app_does_not_declare_is_refused() {
-        let e = err(&format!("{CONTAINER}menu:\n  - {{ view: notes, model: note }}\n"));
+        let e = err(&format!(
+            "{CONTAINER}menu:\n  - {{ view: notes, model: note }}\n"
+        ));
         assert_eq!(e.at, "menu[0].model");
         assert!(e.message.contains("not a model"), "{}", e.message);
     }
@@ -1392,11 +1507,9 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
     fn a_module_menu_does_not_take_a_model_key() {
         // A module view already names its model; a second binding here could
         // only agree or contradict it.
-        let e = err(
-            "name: T\nmodels:\n  a: { fields: { x: { type: text } } }\n\
+        let e = err("name: T\nmodels:\n  a: { fields: { x: { type: text } } }\n\
              views:\n  list: { model: a }\n\
-             menu:\n  - { view: list, model: a }\n",
-        );
+             menu:\n  - { view: list, model: a }\n");
         assert!(e.at.starts_with("menu[0]"), "{}", e.at);
     }
 
@@ -1406,7 +1519,11 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
         // manifest and a blank app, with no hint which line was dead weight.
         let e = err(&format!("{CONTAINER}views:\n  list: {{ model: task }}\n"));
         assert_eq!(e.at, "views");
-        assert!(e.message.contains("menu:"), "points at the fix: {}", e.message);
+        assert!(
+            e.message.contains("menu:"),
+            "points at the fix: {}",
+            e.message
+        );
 
         let e = err(&format!(
             "{CONTAINER}actions:\n  go:\n    label: Go\n    steps: [ delete ]\n"
@@ -1454,14 +1571,12 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
         // A create names its model, so this is knowable while somebody is
         // still looking at the manifest — rather than at the click, on a row
         // that could never have been written.
-        let e = err(
-            "name: T\nruntime: module\n\
+        let e = err("name: T\nruntime: module\n\
              models:\n  note:\n    fields:\n      \
              title: { type: text, required: true }\n\
              views:\n  list: { model: note }\n\
              actions:\n  blank:\n    label: Blank\n    steps:\n      \
-             - create: { model: note, values: { title: } }\n",
-        );
+             - create: { model: note, values: { title: } }\n");
         assert!(e.at.ends_with("title"), "names the field: {}", e.at);
         assert!(e.message.contains("required"), "{}", e.message);
     }
@@ -1470,13 +1585,11 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
     fn an_update_step_with_no_fields_at_all_is_still_refused() {
         // Clearing a field is a write; clearing *nothing* is a step that does
         // nothing, and stays an error.
-        let e = err(
-            "name: T\nruntime: module\n\
+        let e = err("name: T\nruntime: module\n\
              models:\n  note: { fields: { a: { type: text } } }\n\
              views:\n  list: { model: note }\n\
              actions:\n  nothing:\n    label: Nothing\n    steps:\n      \
-             - update: {}\n",
-        );
+             - update: {}\n");
         assert!(e.message.contains("needs values"), "{}", e.message);
     }
 
@@ -1488,7 +1601,14 @@ models:\n  task:\n    fields:\n      title: { type: text, required: true }\n";
         let names: Vec<&str> = m.models[0].fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
             names,
-            ["description", "amount", "qty", "total", "spent_on", "category"]
+            [
+                "description",
+                "amount",
+                "qty",
+                "total",
+                "spent_on",
+                "category"
+            ]
         );
     }
 
@@ -1589,12 +1709,14 @@ models:
 
         // Forward references are fine: refs resolve once every model is known,
         // so declaration order does not decide legality.
-        let m = parse(r#"
+        let m = parse(
+            r#"
 name: T
 models:
   line: { fields: { order_id: { type: "ref:order" } } }
   order: { fields: { total: { type: decimal } } }
-"#)
+"#,
+        )
         .unwrap();
         assert_eq!(m.models[0].fields[0].ty, FieldType::Ref("order".into()));
     }
@@ -1603,7 +1725,14 @@ models:
     fn identifiers_are_narrow_enough_that_nothing_needs_escaping() {
         // These names are interpolated into DDL. The defence is the charset,
         // not the quoting.
-        for bad in ["Thing", "th-ing", "1thing", "thing;drop", "th ing", "thing\"x"] {
+        for bad in [
+            "Thing",
+            "th-ing",
+            "1thing",
+            "thing;drop",
+            "th ing",
+            "thing\"x",
+        ] {
             let e = err(&format!(
                 "name: T\nmodels:\n  {bad}: {{ fields: {{ x: {{ type: text }} }} }}\n"
             ));
@@ -1629,7 +1758,8 @@ actions:
 
     #[test]
     fn starting_a_run_and_filing_a_card_are_separately_gated() {
-        let m = parse(r#"
+        let m = parse(
+            r#"
 name: T
 scopes: [write:board, run:agents]
 models:
@@ -1641,10 +1771,17 @@ actions:
   spend:
     steps:
       - start_run: { prompt: "p" }
-"#)
+"#,
+        )
         .unwrap();
-        assert_eq!(m.action("file").unwrap().steps[0].scope(), Some(Scope::WriteBoard));
-        assert_eq!(m.action("spend").unwrap().steps[0].scope(), Some(Scope::RunAgents));
+        assert_eq!(
+            m.action("file").unwrap().steps[0].scope(),
+            Some(Scope::WriteBoard)
+        );
+        assert_eq!(
+            m.action("spend").unwrap().steps[0].scope(),
+            Some(Scope::RunAgents)
+        );
         // The app's own rows need nothing.
         assert_eq!(Step::Delete.scope(), None);
     }
@@ -1706,7 +1843,10 @@ models:
       x: { type: text }
       x: { type: int }
 "#);
-        assert!(e.at.is_empty(), "reported by the YAML layer, not by ours: {e}");
+        assert!(
+            e.at.is_empty(),
+            "reported by the YAML layer, not by ours: {e}"
+        );
         assert!(e.message.contains("duplicate"), "{e}");
     }
 
@@ -1751,7 +1891,9 @@ menu:
 
     #[test]
     fn a_model_with_no_fields_is_not_a_model() {
-        assert!(err("name: T\nmodels:\n  thing: {}\n").message.contains("at least one field"));
+        assert!(err("name: T\nmodels:\n  thing: {}\n")
+            .message
+            .contains("at least one field"));
     }
 
     #[test]

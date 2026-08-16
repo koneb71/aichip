@@ -4,8 +4,8 @@ pub mod backfill;
 pub mod diff;
 pub mod render;
 pub mod revisions;
-pub mod tree;
 pub mod sanitize;
+pub mod tree;
 pub mod write;
 
 use crate::db::Db;
@@ -335,7 +335,11 @@ mod tests {
         let body = "some words here\n".repeat(500);
         let pages: Vec<ArticleRef> = (0..6).map(|i| page(&format!("P{i}"), &body)).collect();
         let out = augment_prompt("x", &pages);
-        assert!(out.len() < MAX_TOTAL_CHARS + 3000, "unbounded: {} chars", out.len());
+        assert!(
+            out.len() < MAX_TOTAL_CHARS + 3000,
+            "unbounded: {} chars",
+            out.len()
+        );
         // Every page is still named, so nothing vanishes without a trace.
         for i in 0..6 {
             assert!(out.contains(&format!("P{i}")), "P{i} disappeared entirely");

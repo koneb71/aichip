@@ -236,7 +236,10 @@ mod tests {
     fn done_when_becomes_acceptance_criteria() {
         let prompt = brief_as_prompt(
             "  Parse the upload.  ",
-            &["headers are validated".into(), "bad rows report a line".into()],
+            &[
+                "headers are validated".into(),
+                "bad rows report a line".into(),
+            ],
         );
         assert_eq!(
             prompt,

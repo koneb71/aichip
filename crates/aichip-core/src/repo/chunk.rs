@@ -45,9 +45,28 @@ fn starts_definition(line: &str) -> bool {
     }
     let t = line.trim_start();
     const OPENERS: [&str; 22] = [
-        "fn ", "pub fn ", "async fn ", "pub async fn ", "impl ", "struct ", "enum ", "trait ",
-        "mod ", "pub struct ", "pub enum ", "pub trait ", "pub mod ", "def ", "class ",
-        "function ", "export ", "const ", "let ", "var ", "type ", "interface ",
+        "fn ",
+        "pub fn ",
+        "async fn ",
+        "pub async fn ",
+        "impl ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "mod ",
+        "pub struct ",
+        "pub enum ",
+        "pub trait ",
+        "pub mod ",
+        "def ",
+        "class ",
+        "function ",
+        "export ",
+        "const ",
+        "let ",
+        "var ",
+        "type ",
+        "interface ",
     ];
     OPENERS.iter().any(|o| t.starts_with(o))
 }
@@ -64,9 +83,26 @@ fn symbol_of(line: &str) -> Option<String> {
     while let Some(w) = words.next() {
         let is_keyword = matches!(
             w,
-            "pub" | "async" | "export" | "default" | "fn" | "def" | "class" | "function"
-                | "struct" | "enum" | "trait" | "mod" | "impl" | "const" | "let" | "var"
-                | "type" | "interface" | "static" | "abstract"
+            "pub"
+                | "async"
+                | "export"
+                | "default"
+                | "fn"
+                | "def"
+                | "class"
+                | "function"
+                | "struct"
+                | "enum"
+                | "trait"
+                | "mod"
+                | "impl"
+                | "const"
+                | "let"
+                | "var"
+                | "type"
+                | "interface"
+                | "static"
+                | "abstract"
         );
         if !is_keyword {
             name = Some(w);
@@ -226,7 +262,10 @@ mod tests {
     fn a_chunk_names_the_definition_it_opens_with() {
         let src = format!(
             "use std::fmt;\n\npub fn alpha() {{\n{}\n}}\n\npub fn beta() {{\n    ok();\n}}\n",
-            (0..80).map(|i| format!("    step({i});")).collect::<Vec<_>>().join("\n")
+            (0..80)
+                .map(|i| format!("    step({i});"))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         let chunks = chunk_code(&src);
         assert!(chunks.len() >= 2);
@@ -237,8 +276,14 @@ mod tests {
     #[test]
     fn symbol_extraction_handles_the_real_language_mix() {
         for (line, want) in [
-            ("pub async fn enqueue_task(id: Uuid) {", Some("enqueue_task")),
-            ("export function RepoMapPanel({ projectId }) {", Some("RepoMapPanel")),
+            (
+                "pub async fn enqueue_task(id: Uuid) {",
+                Some("enqueue_task"),
+            ),
+            (
+                "export function RepoMapPanel({ projectId }) {",
+                Some("RepoMapPanel"),
+            ),
             ("export const api = {", Some("api")),
             ("class WorktreeManager:", Some("WorktreeManager")),
             ("def resolve(spec, root):", Some("resolve")),
@@ -246,7 +291,11 @@ mod tests {
             ("impl Orchestrator {", Some("Orchestrator")),
             ("    // just a comment", None),
         ] {
-            let got = if starts_definition(line) { symbol_of(line) } else { None };
+            let got = if starts_definition(line) {
+                symbol_of(line)
+            } else {
+                None
+            };
             assert_eq!(got.as_deref(), want, "for {line:?}");
         }
     }

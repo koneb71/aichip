@@ -15,12 +15,21 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks", get(list).post(create))
-        .route("/tasks/{id}", axum::routing::patch(move_task).delete(delete_task))
+        .route(
+            "/tasks/{id}",
+            axum::routing::patch(move_task).delete(delete_task),
+        )
         .route("/tasks/{id}/blockers", post(add_blocker))
-        .route("/tasks/{id}/blockers/{blocker_id}", axum::routing::delete(remove_blocker))
+        .route(
+            "/tasks/{id}/blockers/{blocker_id}",
+            axum::routing::delete(remove_blocker),
+        )
         .route("/tasks/{id}/retry", post(retry))
         .route("/tasks/{id}/comments", get(comments).post(post_comment))
-        .route("/tasks/{id}/articles", get(task_articles).put(set_task_articles))
+        .route(
+            "/tasks/{id}/articles",
+            get(task_articles).put(set_task_articles),
+        )
         .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
@@ -34,7 +43,10 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}/plan", get(plan).patch(edit_plan))
         .route("/runs/{id}/plan/approve", post(approve_plan))
         .route("/runs/{id}/plan/revise", post(revise_plan))
-        .route("/permissions/{request_id}/resolve", post(resolve_permission))
+        .route(
+            "/permissions/{request_id}/resolve",
+            post(resolve_permission),
+        )
 }
 
 #[derive(Deserialize)]
@@ -169,8 +181,8 @@ async fn list(
             // the effort it would get at Medium. Marked in the payload below
             // so the UI can say "decided per run" rather than state a figure
             // as though it were settled.
-            let choice = TierChoice::parse(&r.get::<String, _>("model_tier"))
-                .unwrap_or(TierChoice::Medium);
+            let choice =
+                TierChoice::parse(&r.get::<String, _>("model_tier")).unwrap_or(TierChoice::Medium);
             let tier = choice.fixed().unwrap_or_default();
             let (effective_effort, effort_source) = aichip_shared::resolve_effort(
                 parse_effort(r.get("agent_effort")),
@@ -299,9 +311,13 @@ async fn create(
     let tier = body.model_tier.as_str();
     // Store NULL when the caller didn't choose, so the card inherits whatever
     // the default is *when it runs* rather than freezing today's value.
-    let mode: Option<String> = body
-        .permission_mode
-        .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string());
+    let mode: Option<String> = body.permission_mode.map(|m| {
+        serde_json::to_value(m)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    });
     let row = sqlx::query(
         "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11) RETURNING id",
@@ -361,7 +377,11 @@ async fn start(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     vet_task(&state, id).await?;
-    let run_id = state.orchestrator.enqueue_task(id).await.map_err(internal)?;
+    let run_id = state
+        .orchestrator
+        .enqueue_task(id)
+        .await
+        .map_err(internal)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -398,7 +418,11 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
             format!(
                 "blocked by {} — land {} first",
                 blockers.join(", "),
-                if blockers.len() == 1 { "that card" } else { "those cards" }
+                if blockers.len() == 1 {
+                    "that card"
+                } else {
+                    "those cards"
+                }
             ),
         ));
     }
@@ -551,10 +575,7 @@ async fn run_events(
 
 /// Permission requests live in memory while the engine's MCP call blocks on
 /// them, so a dashboard refresh needs to re-fetch anything still pending.
-async fn pending_permissions(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Json<Value> {
+async fn pending_permissions(State(state): State<AppState>, Path(id): Path<Uuid>) -> Json<Value> {
     let pending: Vec<Value> = state
         .permissions
         .pending_for_run(id)
@@ -774,7 +795,10 @@ pub(crate) async fn move_task(
         ));
     }
     if body.prompt.as_deref().is_some_and(|p| p.trim().is_empty()) {
-        return Err((StatusCode::BAD_REQUEST, "the description can't be empty".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "the description can't be empty".into(),
+        ));
     }
 
     let reassigning = body.agent_id.is_some() || body.team_id.is_some();
@@ -864,7 +888,13 @@ pub(crate) async fn move_task(
     // happened above, before the column changed.
     let mut run_id: Option<Uuid> = None;
     if starting {
-        run_id = Some(state.orchestrator.enqueue_task(id).await.map_err(internal)?);
+        run_id = Some(
+            state
+                .orchestrator
+                .enqueue_task(id)
+                .await
+                .map_err(internal)?,
+        );
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
 }
@@ -896,7 +926,10 @@ async fn require_same_workspace(
 
     ok.map(|_| ()).ok_or((
         StatusCode::BAD_REQUEST,
-        format!("that {} is not in this card's workspace", table.trim_end_matches('s')),
+        format!(
+            "that {} is not in this card's workspace",
+            table.trim_end_matches('s')
+        ),
     ))
 }
 
@@ -1025,7 +1058,12 @@ async fn post_comment(
     )
     .bind(task_id)
     .bind(content)
-    .bind(body.file_path.as_deref().map(str::trim).filter(|p| !p.is_empty()))
+    .bind(
+        body.file_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty()),
+    )
     .bind(body.line)
     .bind(body.hunk.as_deref())
     .fetch_one(&state.db.pool)
@@ -1054,7 +1092,9 @@ async fn post_comment(
             .enqueue_review_fix(comment_id)
             .await
             .map_err(internal)?;
-        return Ok(Json(json!({ "id": comment_id, "runIds": [run_id], "fixRunId": run_id })));
+        return Ok(Json(
+            json!({ "id": comment_id, "runIds": [run_id], "fixRunId": run_id }),
+        ));
     }
 
     // Every mentioned agent replies, capped so one comment can't fan out a
@@ -1144,7 +1184,10 @@ async fn bakeoff(
             Some(path) => state
                 .orchestrator
                 .worktrees
-                .diff(std::path::Path::new(&path), &r.get::<String, _>("default_branch"))
+                .diff(
+                    std::path::Path::new(&path),
+                    &r.get::<String, _>("default_branch"),
+                )
                 .await
                 .unwrap_or_default(),
             None => String::new(),
@@ -1247,7 +1290,10 @@ async fn add_blocker(
     .await
     .map_err(internal)?;
     if !same_project {
-        return Err((StatusCode::BAD_REQUEST, "both cards must be on the same board".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "both cards must be on the same board".into(),
+        ));
     }
     // Would this edge close a loop? Walk the new blocker's own blockers all
     // the way up; finding this card there means A→B→…→A.
@@ -1342,12 +1388,15 @@ mod tests {
     fn mentions_match_case_insensitively_and_allow_spaces_in_names() {
         let rex = Uuid::new_v4();
         let ada = Uuid::new_v4();
-        let agents = vec![
-            (rex, "Rex".to_string()),
-            (ada, "Ada Lovelace".to_string()),
-        ];
-        assert_eq!(mentioned_agents("hey @rex, look at this", &agents), vec![rex]);
-        assert_eq!(mentioned_agents("@Ada Lovelace what do you think?", &agents), vec![ada]);
+        let agents = vec![(rex, "Rex".to_string()), (ada, "Ada Lovelace".to_string())];
+        assert_eq!(
+            mentioned_agents("hey @rex, look at this", &agents),
+            vec![rex]
+        );
+        assert_eq!(
+            mentioned_agents("@Ada Lovelace what do you think?", &agents),
+            vec![ada]
+        );
         assert_eq!(
             mentioned_agents("@rex and @ada lovelace both", &agents),
             vec![rex, ada]
@@ -1400,13 +1449,12 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 
 /// True when the task's latest run is still live.
 async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
-    let row = sqlx::query(
-        "SELECT status FROM runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(task_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?;
+    let row =
+        sqlx::query("SELECT status FROM runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1")
+            .bind(task_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
     Ok(matches!(
         row.map(|r| r.get::<String, _>("status")).as_deref(),
         Some("queued" | "starting" | "running" | "waiting_permission" | "rate_limited")
@@ -1453,13 +1501,19 @@ async fn drop_worktree(state: &AppState, task_id: Uuid) -> Result<(), ApiError> 
             return Ok(());
         }
 
-        let wt = aichip_core::worktrees::manager::Worktree { path: path.into(), branch };
+        let wt = aichip_core::worktrees::manager::Worktree {
+            path: path.into(),
+            branch,
+        };
         // Best effort: a worktree the user already deleted by hand must not
         // block deleting the card.
         if let Err(e) = state
             .orchestrator
             .worktrees
-            .remove(std::path::Path::new(&row.get::<String, _>("project_path")), &wt)
+            .remove(
+                std::path::Path::new(&row.get::<String, _>("project_path")),
+                &wt,
+            )
             .await
         {
             tracing::warn!(%task_id, error = %e, "could not remove worktree");
@@ -1552,7 +1606,11 @@ async fn retry(
     if fresh {
         drop_worktree(&state, id).await?;
     }
-    let run_id = state.orchestrator.enqueue_task(id).await.map_err(internal)?;
+    let run_id = state
+        .orchestrator
+        .enqueue_task(id)
+        .await
+        .map_err(internal)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -1621,7 +1679,9 @@ async fn resume_run(
         session_id: session_id.as_deref(),
         session_engine: session_engine.as_deref(),
         engine: &engine_id,
-        engine_can_resume: engine.map(|e| e.capabilities().resume_sessions).unwrap_or(false),
+        engine_can_resume: engine
+            .map(|e| e.capabilities().resume_sessions)
+            .unwrap_or(false),
         cwd,
         is_task_run: row.get::<Option<Uuid>, _>("task_id").is_some()
             && row.get::<Option<Uuid>, _>("chat_id").is_none()
@@ -1634,7 +1694,9 @@ async fn resume_run(
     let session = aichip_core::runs::resume::decide(&prior)
         .map_err(|r| (StatusCode::CONFLICT, r.message()))?;
 
-    let task_id: Uuid = row.get::<Option<Uuid>, _>("task_id").expect("checked above");
+    let task_id: Uuid = row
+        .get::<Option<Uuid>, _>("task_id")
+        .expect("checked above");
     // Not `run_is_active`, which asks about the card: this asks whether
     // anything at all is still working on it, the same guard Retry uses,
     // because two engines in one worktree is the failure both prevent.
@@ -1732,14 +1794,13 @@ async fn edit_plan(
             "an empty plan approves nothing — delete the card instead".into(),
         ));
     }
-    let updated = sqlx::query(
-        "UPDATE steps SET output_text = $2 WHERE run_id = $1 AND step_key = 'plan'",
-    )
-    .bind(run_id)
-    .bind(body.content.trim())
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
+    let updated =
+        sqlx::query("UPDATE steps SET output_text = $2 WHERE run_id = $1 AND step_key = 'plan'")
+            .bind(run_id)
+            .bind(body.content.trim())
+            .execute(&state.db.pool)
+            .await
+            .map_err(internal)?;
     if updated.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "this run has no plan".into()));
     }
@@ -1772,7 +1833,11 @@ async fn approve_plan(
     }
     // Re-queued rather than resumed in place: the planning dispatch already
     // released its slot, so this takes a fresh one when the queue has room.
-    state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
+    state
+        .orchestrator
+        .queue(run_id, 10)
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({ "approved": true })))
 }
 
@@ -1817,7 +1882,11 @@ async fn revise_plan(
             "this run is not waiting for approval".into(),
         ));
     }
-    state.orchestrator.queue(run_id, 10).await.map_err(internal)?;
+    state
+        .orchestrator
+        .queue(run_id, 10)
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({ "revising": true })))
 }
 

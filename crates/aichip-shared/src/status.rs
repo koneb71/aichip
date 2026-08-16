@@ -107,8 +107,19 @@ mod tests {
     #[test]
     fn only_starting_and_running_burn_tokens() {
         assert!(Starting.is_working() && Running.is_working());
-        for status in [Queued, WaitingPermission, RateLimited, Completed, Failed, Canceled] {
-            assert!(!status.is_working(), "{} should not be working", status.as_str());
+        for status in [
+            Queued,
+            WaitingPermission,
+            RateLimited,
+            Completed,
+            Failed,
+            Canceled,
+        ] {
+            assert!(
+                !status.is_working(),
+                "{} should not be working",
+                status.as_str()
+            );
         }
     }
 

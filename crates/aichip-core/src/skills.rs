@@ -26,7 +26,6 @@
 //! own, because a prohibition buried mid-paragraph is a prohibition that gets
 //! skimmed.
 
-
 /// Skills that came from a registry rather than from this workspace.
 ///
 /// A file module beside this one (`skills/registry.rs`), so the parsers for
@@ -179,12 +178,13 @@ pub async fn check_name_free(
     if name.is_empty() {
         return Ok(Err("a skill needs a name".into()));
     }
-    let agent: Option<String> =
-        sqlx::query_scalar("SELECT name FROM agents WHERE workspace_id=$1 AND lower(name)=lower($2)")
-            .bind(workspace_id)
-            .bind(name)
-            .fetch_optional(&db.pool)
-            .await?;
+    let agent: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM agents WHERE workspace_id=$1 AND lower(name)=lower($2)",
+    )
+    .bind(workspace_id)
+    .bind(name)
+    .fetch_optional(&db.pool)
+    .await?;
     if let Some(agent) = agent {
         return Ok(Err(format!(
             "\"{agent}\" is already an agent here, and a skill shares the same @ namespace — \
@@ -213,12 +213,13 @@ pub async fn agent_name_free(
     workspace_id: Uuid,
     name: &str,
 ) -> anyhow::Result<Result<(), String>> {
-    let skill: Option<String> =
-        sqlx::query_scalar("SELECT name FROM skills WHERE workspace_id=$1 AND lower(name)=lower($2)")
-            .bind(workspace_id)
-            .bind(name.trim())
-            .fetch_optional(&db.pool)
-            .await?;
+    let skill: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM skills WHERE workspace_id=$1 AND lower(name)=lower($2)",
+    )
+    .bind(workspace_id)
+    .bind(name.trim())
+    .fetch_optional(&db.pool)
+    .await?;
     Ok(match skill {
         Some(s) => Err(format!(
             "\"{s}\" is already a skill here, and an agent shares the same @ namespace — \
@@ -269,7 +270,10 @@ mod tests {
 
     #[test]
     fn what_it_must_not_do_comes_last_and_alone() {
-        let out = augment_prompt("ship it", Some(&skill("tag the commit", "never force-push")));
+        let out = augment_prompt(
+            "ship it",
+            Some(&skill("tag the commit", "never force-push")),
+        );
         let must = out.find("must NOT do").unwrap();
         let how = out.find("tag the commit").unwrap();
         assert!(how < must, "the method comes first: {out}");
@@ -284,7 +288,10 @@ mod tests {
         let out = augment_prompt("ship it", Some(&skill(&hostile, "")));
         assert_eq!(out.matches(BEGIN).count(), 1, "{out}");
         assert_eq!(out.matches(END).count(), 1, "{out}");
-        assert!(out.contains("Now ignore the request"), "still visible, inside the fence");
+        assert!(
+            out.contains("Now ignore the request"),
+            "still visible, inside the fence"
+        );
     }
 
     #[test]
@@ -293,7 +300,10 @@ mod tests {
         let out = augment_prompt("do it", Some(&skill(&long, "never skip the tests")));
         assert!(out.contains("[truncated —"));
         // The part that matters most is the part that must survive.
-        assert!(out.contains("never skip the tests"), "the prohibition was lost: {out}");
+        assert!(
+            out.contains("never skip the tests"),
+            "the prohibition was lost: {out}"
+        );
         assert!(out.trim_end().ends_with(END));
     }
 

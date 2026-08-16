@@ -45,7 +45,11 @@ pub async fn list(db: &Db, app_id: Uuid) -> anyhow::Result<Vec<Grant>> {
 
 /// Just the scopes, for a permission check.
 pub async fn of(db: &Db, app_id: Uuid) -> anyhow::Result<Vec<Scope>> {
-    Ok(list(db, app_id).await?.into_iter().map(|g| g.scope).collect())
+    Ok(list(db, app_id)
+        .await?
+        .into_iter()
+        .map(|g| g.scope)
+        .collect())
 }
 
 /// Replace an app's grants with exactly this set.

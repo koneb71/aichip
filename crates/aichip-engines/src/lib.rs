@@ -205,10 +205,18 @@ mod tests {
 
     #[async_trait]
     impl Engine for Fake {
-        fn id(&self) -> &'static str { "fake" }
-        fn label(&self) -> &'static str { "Fake Engine" }
-        fn capabilities(&self) -> Capabilities { self.0 }
-        async fn detect(&self) -> Option<EngineInfo> { None }
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        fn label(&self) -> &'static str {
+            "Fake Engine"
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.0
+        }
+        async fn detect(&self) -> Option<EngineInfo> {
+            None
+        }
         fn start(&self, _spec: RunSpec) -> anyhow::Result<EngineProcess> {
             anyhow::bail!("not a real engine")
         }
@@ -228,7 +236,10 @@ mod tests {
     fn an_engine_that_cannot_ask_refuses_reviewed_rather_than_downgrading() {
         let engine = Fake(caps(false, true));
         let err = vet(&engine, PermissionMode::Reviewed, false).unwrap_err();
-        assert!(err.contains("Fake Engine"), "the message must name the engine");
+        assert!(
+            err.contains("Fake Engine"),
+            "the message must name the engine"
+        );
         assert!(err.contains("Auto-edit"), "and offer a way forward");
     }
 
@@ -249,7 +260,11 @@ mod tests {
     #[test]
     fn a_fully_capable_engine_passes_everything() {
         let engine = Fake(caps(true, true));
-        for mode in [PermissionMode::Reviewed, PermissionMode::AutoEdit, PermissionMode::FullAuto] {
+        for mode in [
+            PermissionMode::Reviewed,
+            PermissionMode::AutoEdit,
+            PermissionMode::FullAuto,
+        ] {
             vet(&engine, mode, true).unwrap();
         }
     }

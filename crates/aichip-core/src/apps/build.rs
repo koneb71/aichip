@@ -31,7 +31,7 @@
 //!   into something built specially for it.
 
 use super::App;
-use crate::worktrees::manager::{self, WorktreeManager, Worktree};
+use crate::worktrees::manager::{self, Worktree, WorktreeManager};
 use crate::Db;
 use sqlx::Row;
 use uuid::Uuid;
@@ -156,7 +156,11 @@ pub fn revertible(builds: &[Build]) -> Option<Uuid> {
 
 /// The commit message a landed build leaves behind.
 pub fn commit_message(brief: &str) -> String {
-    let first = brief.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let first = brief
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     let short: String = first.chars().take(72).collect();
     if short.is_empty() {
         "aichip: change this app".to_string()
@@ -232,10 +236,20 @@ pub async fn settle(
     let (Some(path), Some(branch)): (Option<String>, Option<String>) =
         (row.get("worktree_path"), row.get("branch"))
     else {
-        return mark(db, build_id, "landed", None, manager::head(&app.path).await.as_deref()).await;
+        return mark(
+            db,
+            build_id,
+            "landed",
+            None,
+            manager::head(&app.path).await.as_deref(),
+        )
+        .await;
     };
 
-    let worktree = Worktree { path: path.into(), branch };
+    let worktree = Worktree {
+        path: path.into(),
+        branch,
+    };
     let brief: String = row.get("brief");
     if let Err(e) = worktrees
         .squash_merge(&app.path, &worktree, "main", &commit_message(&brief))
@@ -269,7 +283,9 @@ pub async fn settle(
 /// gives. `reset --hard` discards uncommitted edits in the app's folder — the
 /// caller says so before asking.
 pub async fn revert(db: &Db, id: Uuid) -> anyhow::Result<App> {
-    let build = get(db, id).await?.ok_or_else(|| anyhow::anyhow!("no such build"))?;
+    let build = get(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no such build"))?;
     let builds = list(db, build.app_id).await?;
     if revertible(&builds) != Some(id) {
         anyhow::bail!(
@@ -277,10 +293,9 @@ pub async fn revert(db: &Db, id: Uuid) -> anyhow::Result<App> {
              silently throw away the changes made after it"
         );
     }
-    let base = build
-        .base_commit
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("this build never recorded where the app stood before it"))?;
+    let base = build.base_commit.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("this build never recorded where the app stood before it")
+    })?;
     let app = super::get(db, build.app_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("this app is no longer installed"))?;
@@ -392,7 +407,11 @@ mod tests {
         // A change that failed left the folder exactly as the last landed one
         // did, so that one is still the newest thing to undo.
         let landed = build("landed", Some("aaa"));
-        let list = vec![build("failed", None), build("conflicted", None), landed.clone()];
+        let list = vec![
+            build("failed", None),
+            build("conflicted", None),
+            landed.clone(),
+        ];
         assert_eq!(revertible(&list), Some(landed.id));
     }
 
@@ -400,7 +419,10 @@ mod tests {
     fn only_a_completed_run_lands() {
         assert_eq!(settlement_for(RunStatus::Completed), Some(Settlement::Land));
         assert_eq!(settlement_for(RunStatus::Failed), Some(Settlement::Failed));
-        assert_eq!(settlement_for(RunStatus::Canceled), Some(Settlement::Failed));
+        assert_eq!(
+            settlement_for(RunStatus::Canceled),
+            Some(Settlement::Failed)
+        );
         // A run still going settles nothing — the build stays `running` and
         // the row is picked up when it actually finishes.
         assert_eq!(settlement_for(RunStatus::Running), None);
@@ -409,10 +431,19 @@ mod tests {
 
     #[test]
     fn a_commit_message_is_one_readable_line() {
-        assert_eq!(commit_message("add a total column"), "aichip: add a total column");
+        assert_eq!(
+            commit_message("add a total column"),
+            "aichip: add a total column"
+        );
         // A brief is a textarea, so it arrives with newlines in it.
-        assert_eq!(commit_message("add a total\n\nand a chart"), "aichip: add a total");
-        assert_eq!(commit_message("\n  make it blue  \n"), "aichip: make it blue");
+        assert_eq!(
+            commit_message("add a total\n\nand a chart"),
+            "aichip: add a total"
+        );
+        assert_eq!(
+            commit_message("\n  make it blue  \n"),
+            "aichip: make it blue"
+        );
         assert_eq!(commit_message("   "), "aichip: change this app");
         let long = commit_message(&"x".repeat(200));
         assert!(long.len() < 90, "a subject line that long is a paragraph");

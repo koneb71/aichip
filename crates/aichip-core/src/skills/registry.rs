@@ -61,7 +61,9 @@ struct FrontMatter {
 fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
     // Normalising CRLF by allocating would cost a copy of every skill; the
     // markers are matched with the carriage return optional instead.
-    let rest = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n"))?;
+    let rest = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))?;
     for marker in ["\n---\n", "\n---\r\n", "\r\n---\r\n", "\r\n---\n"] {
         if let Some(end) = rest.find(marker) {
             return Some((&rest[..end], &rest[end + marker.len()..]));
@@ -86,7 +88,11 @@ pub fn parse_skill_md(text: &str) -> Result<SkillDoc, String> {
         name,
         // A folded block arrives with its newlines already turned into
         // spaces by YAML, but it can still carry a trailing one.
-        description: fm.description.split_whitespace().collect::<Vec<_>>().join(" "),
+        description: fm
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
         body: body.trim().to_string(),
     })
 }
@@ -224,7 +230,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(doc.name, "deploy-to-vercel");
-        assert_eq!(doc.description, "Deploy applications and websites to Vercel.");
+        assert_eq!(
+            doc.description,
+            "Deploy applications and websites to Vercel."
+        );
         assert!(doc.body.starts_with("# Deploy to Vercel"));
         assert!(doc.body.ends_with("Deploy any project."), "body is trimmed");
     }

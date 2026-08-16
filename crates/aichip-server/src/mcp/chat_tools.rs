@@ -48,7 +48,10 @@ pub async fn rpc(
                 .pointer("/params/name")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let args = req.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+            let args = req
+                .pointer("/params/arguments")
+                .cloned()
+                .unwrap_or(json!({}));
             match call_tool(&state, chat_id, name, args).await {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]
@@ -92,9 +95,7 @@ async fn planning(state: &AppState, chat_id: Uuid) -> bool {
 }
 
 pub fn tools_list(kind: &str, planning: bool) -> Value {
-    let obj = |props: Value, required: Vec<&str>| {
-        json!({ "type": "object", "properties": props, "required": required })
-    };
+    let obj = |props: Value, required: Vec<&str>| json!({ "type": "object", "properties": props, "required": required });
     // Offered everywhere, including plan mode and a space: a brief can be
     // ambiguous whatever the chat is scoped to, and asking is the *most*
     // plan-mode-appropriate thing an assistant can do.
@@ -324,7 +325,11 @@ async fn chat_project(state: &AppState, chat_id: Uuid) -> Result<(Uuid, Uuid, St
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| e.to_string())?;
-    Ok((row.get("project_id"), row.get("workspace_id"), row.get("kind")))
+    Ok((
+        row.get("project_id"),
+        row.get("workspace_id"),
+        row.get("kind"),
+    ))
 }
 
 async fn call_tool(
@@ -346,10 +351,15 @@ async fn call_tool(
     }
     let doc_tool = matches!(name, "search_documents" | "list_documents");
     if is_space && !doc_tool {
-        return Err("this chat is scoped to a document space — the board tools work in project chats".into());
+        return Err(
+            "this chat is scoped to a document space — the board tools work in project chats"
+                .into(),
+        );
     }
     if !is_space && doc_tool {
-        return Err("this chat's project is a repository — the document tools work in spaces".into());
+        return Err(
+            "this chat's project is a repository — the document tools work in spaces".into(),
+        );
     }
     match name {
         "create_task" => {
@@ -587,7 +597,9 @@ async fn call_tool(
             let Some(run_id) = run_id else {
                 // A different fact from "already finished", and the assistant
                 // should not report one as the other.
-                return Err("this task has never been started, so there is nothing to cancel".into());
+                return Err(
+                    "this task has never been started, so there is nothing to cancel".into(),
+                );
             };
             // The route handler itself, not a copy of it: its guards, its
             // wording, and anything added to it later apply here without a
@@ -639,8 +651,7 @@ async fn call_tool(
             match args.get("path").and_then(Value::as_str) {
                 Some(path) => {
                     if !stats.iter().any(|f| f.path == path) {
-                        let names: Vec<_> =
-                            stats.iter().take(20).map(|f| f.path.clone()).collect();
+                        let names: Vec<_> = stats.iter().take(20).map(|f| f.path.clone()).collect();
                         return Err(format!(
                             "no file called {path} changed in this task. These did: {}",
                             names.join(", ")
@@ -730,7 +741,11 @@ async fn call_tool(
             Ok(json!({ "filed": true, "column": column }))
         }
         "search_code" => {
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
             if query.is_empty() {
                 return Err("say what to look for".into());
             }
@@ -763,7 +778,10 @@ async fn call_tool(
             }
         }
         "search_documents" => {
-            let query = args.get("query").and_then(Value::as_str).ok_or("query is required")?;
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or("query is required")?;
             let limit = args
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -842,7 +860,11 @@ fn clip(text: &str, budget: usize) -> (String, usize) {
         return (text.to_string(), 0);
     }
     let kept: String = text.chars().take(budget).collect();
-    let cut = kept.rfind('\n').map(|i| &kept[..i]).unwrap_or(&kept).to_string();
+    let cut = kept
+        .rfind('\n')
+        .map(|i| &kept[..i])
+        .unwrap_or(&kept)
+        .to_string();
     let dropped = text.chars().count() - cut.chars().count();
     (
         format!("{cut}\n[truncated — {dropped} more characters]"),
@@ -871,7 +893,11 @@ async fn resolve_agent(
     workspace_id: Uuid,
     asked: Option<&Value>,
 ) -> Result<(Option<Uuid>, Option<String>), String> {
-    if let Some(name) = asked.and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+    if let Some(name) = asked
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
         // Matched without regard to case, because everything upstream is:
         // `@frontend` finds the agent called Frontend, and a model echoing the
         // user's own typing back must not turn a mention that already resolved
@@ -888,15 +914,16 @@ async fn resolve_agent(
         return match row {
             Some(r) => Ok((Some(r.get("id")), Some(r.get("name")))),
             None => {
-                let known = sqlx::query("SELECT name FROM agents WHERE workspace_id=$1 ORDER BY name")
-                    .bind(workspace_id)
-                    .fetch_all(&state.db.pool)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .iter()
-                    .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let known =
+                    sqlx::query("SELECT name FROM agents WHERE workspace_id=$1 ORDER BY name")
+                        .bind(workspace_id)
+                        .fetch_all(&state.db.pool)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .iter()
+                        .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                 Err(if known.is_empty() {
                     format!("no agent named \"{name}\" — this workspace has no agents yet")
                 } else {
@@ -1066,15 +1093,33 @@ mod tests {
 
         assert_eq!(
             planning,
-            full.iter().filter(|n| !acting.contains(&n.as_str())).cloned().collect::<Vec<_>>()
+            full.iter()
+                .filter(|n| !acting.contains(&n.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
         );
         for name in acting {
-            assert!(!planning.contains(&name.to_string()), "{name} survived plan mode");
-            assert!(full.contains(&name.to_string()), "{name} is not in the board list at all");
+            assert!(
+                !planning.contains(&name.to_string()),
+                "{name} survived plan mode"
+            );
+            assert!(
+                full.contains(&name.to_string()),
+                "{name} is not in the board list at all"
+            );
         }
         // Reading the board is what makes a plan worth anything.
-        for name in ["list_tasks", "get_task_status", "list_agents", "get_diff", "search_code"] {
-            assert!(planning.contains(&name.to_string()), "{name} should survive plan mode");
+        for name in [
+            "list_tasks",
+            "get_task_status",
+            "list_agents",
+            "get_diff",
+            "search_code",
+        ] {
+            assert!(
+                planning.contains(&name.to_string()),
+                "{name} should survive plan mode"
+            );
         }
 
         // The invariant that actually matters, and it spans two crates: what
@@ -1092,8 +1137,10 @@ mod tests {
             .into_iter()
             .filter(|t| t.starts_with("mcp__aichip__"))
             .collect();
-        let offered: std::collections::HashSet<String> =
-            planning.iter().map(|n| format!("mcp__aichip__{n}")).collect();
+        let offered: std::collections::HashSet<String> = planning
+            .iter()
+            .map(|n| format!("mcp__aichip__{n}"))
+            .collect();
         assert_eq!(offered, allowed);
     }
 
@@ -1190,7 +1237,10 @@ mod tests {
             super::unescape_html("Snakes &amp; Ladders board game app"),
             "Snakes & Ladders board game app"
         );
-        assert_eq!(super::unescape_html("Fix &lt;head&gt; ordering"), "Fix <head> ordering");
+        assert_eq!(
+            super::unescape_html("Fix &lt;head&gt; ordering"),
+            "Fix <head> ordering"
+        );
         // Applied once: `&amp;` is decoded last, so this stays as the text it
         // was rather than decoding twice into `<`.
         assert_eq!(super::unescape_html("&amp;lt;"), "&lt;");
@@ -1242,7 +1292,10 @@ mod tests {
         for t in tools_list("repo", false)["tools"].as_array().unwrap() {
             let name = t["name"].as_str().unwrap();
             assert!(!name.contains("merge"), "{name} lands code from chat");
-            assert!(!name.contains("retry"), "{name} can discard an unmerged diff");
+            assert!(
+                !name.contains("retry"),
+                "{name} can discard an unmerged diff"
+            );
         }
     }
 

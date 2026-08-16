@@ -32,7 +32,10 @@ pub fn parse_line(line: &str) -> Vec<AichipEvent> {
 /// being throttled and the queue should back off until `resetsAt`.
 fn parse_rate_limit_event(v: &Value) -> Vec<AichipEvent> {
     let info = v.get("rate_limit_info").cloned().unwrap_or(Value::Null);
-    let raw = info.get("status").and_then(Value::as_str).unwrap_or("allowed");
+    let raw = info
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("allowed");
     let status = aichip_shared::LimitStatus::parse(raw);
     let reset_at = info
         .get("resetsAt")
@@ -72,7 +75,10 @@ fn parse_rate_limit_event(v: &Value) -> Vec<AichipEvent> {
 fn parse_system(v: &Value) -> Vec<AichipEvent> {
     if v.get("subtype").and_then(Value::as_str) == Some("init") {
         vec![AichipEvent::RunStarted {
-            session_id: v.get("session_id").and_then(Value::as_str).map(String::from),
+            session_id: v
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(String::from),
             model: v.get("model").and_then(Value::as_str).map(String::from),
         }]
     } else {
@@ -341,7 +347,9 @@ mod tests {
         let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1785183600,"rateLimitType":"seven_day"},"session_id":"s1"}"#;
         let events = parse_line(line);
         assert!(
-            !events.iter().any(|e| matches!(e, AichipEvent::RateLimited { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, AichipEvent::RateLimited { .. })),
             "a warning must not stop the run: {events:?}"
         );
         assert!(matches!(
@@ -360,9 +368,16 @@ mod tests {
         // telemetry — it must still not stop anything.
         let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1785183600,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false},"session_id":"s1"}"#;
         let events = parse_line(line);
-        assert!(!events.iter().any(|e| matches!(e, AichipEvent::RateLimited { .. })));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AichipEvent::RateLimited { .. })));
         match &events[..] {
-            [AichipEvent::UsageStatus { limit_type, status, resets_at, using_overage }] => {
+            [AichipEvent::UsageStatus {
+                limit_type,
+                status,
+                resets_at,
+                using_overage,
+            }] => {
                 assert_eq!(limit_type, "five_hour");
                 assert_eq!(status, "allowed");
                 assert_eq!(resets_at.unwrap().timestamp(), 1785183600);
@@ -379,10 +394,8 @@ mod tests {
         // Both: the position is recorded *and* the run is stopped. Reporting
         // usage must not have cost us the backoff.
         match &events[..] {
-            [
-                AichipEvent::UsageStatus { status, .. },
-                AichipEvent::RateLimited { reset_at, message },
-            ] => {
+            [AichipEvent::UsageStatus { status, .. }, AichipEvent::RateLimited { reset_at, message }] =>
+            {
                 assert_eq!(status, "blocked");
                 assert_eq!(reset_at.unwrap().timestamp(), 1785183600);
                 assert!(message.contains("five_hour"));

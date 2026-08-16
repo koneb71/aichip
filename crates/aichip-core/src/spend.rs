@@ -278,7 +278,9 @@ pub async fn by_day(db: &Db, ws: Option<Uuid>, days: i32) -> anyhow::Result<Vec<
 /// missed, and "no requests yet" is a different fact from "every request
 /// missed".
 pub fn cache_hit_rate(input: i64, cache_read: i64, cache_creation: i64) -> Option<f64> {
-    let sent = input.saturating_add(cache_read).saturating_add(cache_creation);
+    let sent = input
+        .saturating_add(cache_read)
+        .saturating_add(cache_creation);
     if sent <= 0 {
         return None;
     }

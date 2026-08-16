@@ -25,10 +25,7 @@
 /// what aichip owns. Stripping the *user's* variables would be overreach and
 /// would break real setups, since OpenCode authenticates some providers from
 /// the environment on purpose.
-pub const AICHIP_OWN_SECRETS: &[&str] = &[
-    "AICHIP_S3_ACCESS_KEY",
-    "AICHIP_S3_SECRET_KEY",
-];
+pub const AICHIP_OWN_SECRETS: &[&str] = &["AICHIP_S3_ACCESS_KEY", "AICHIP_S3_SECRET_KEY"];
 
 /// Fragments that make a name look like a secret regardless of vendor.
 const SECRET_SUBSTRINGS: &[&str] = &[
@@ -185,7 +182,11 @@ mod own_secret_tests {
     /// break working installs to solve a problem aichip didn't create.
     #[test]
     fn the_users_own_credentials_are_left_alone() {
-        for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY"] {
+        for key in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
             assert!(
                 !AICHIP_OWN_SECRETS.contains(&key),
                 "{key} belongs to the user, not to aichip"

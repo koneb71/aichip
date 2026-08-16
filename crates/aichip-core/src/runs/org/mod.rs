@@ -23,8 +23,8 @@ pub mod roster;
 pub mod schedule;
 
 use aichip_engines::RunSpec;
-use futures::StreamExt;
 use aichip_shared::{ModelTier, PermissionMode, ReasoningEffort, RunStatus};
+use futures::StreamExt;
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -32,9 +32,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::memory;
-use super::orchestrator::{
-    next_seq, slugify, CallerKind, Orchestrator, SeqAlloc, StreamOutcome,
-};
+use super::orchestrator::{next_seq, slugify, CallerKind, Orchestrator, SeqAlloc, StreamOutcome};
 use plan::{
     assignment_prompt, has_blocking, inspect_plan, parse_plan, plan_prompt, repair_prompt,
     resolve_assignee, Defect, Plan, PlannedTask, Severity, TaskSize,
@@ -59,7 +57,15 @@ const MANAGER_TOOLS: &[&str] = &["Read", "Grep", "Glob", "mcp__aichip__post_mess
 /// Workers get the usual coding surface plus the org tools. Listed
 /// explicitly because org runs don't use the interactive permission proxy.
 const WORKER_TOOLS: &[&str] = &[
-    "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "TodoWrite",
+    "Read",
+    "Grep",
+    "Glob",
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Bash",
+    "TodoWrite",
 ];
 
 /// A worker may escalate this many times before it has to make a call.
@@ -136,9 +142,7 @@ struct OrgCtx {
 /// Where a dispatch of this run should pick up.
 enum Phase {
     Plan,
-    Execute {
-        manager_session: Option<String>,
-    },
+    Execute { manager_session: Option<String> },
 }
 
 impl Orchestrator {
@@ -441,12 +445,11 @@ impl Orchestrator {
     /// assignment: a half-materialized plan must re-plan rather than run an
     /// empty team.
     async fn org_phase(&self, run_id: Uuid) -> anyhow::Result<Phase> {
-        let planned = sqlx::query(
-            "SELECT session_id, status FROM steps WHERE run_id=$1 AND step_key='plan'",
-        )
-        .bind(run_id)
-        .fetch_optional(&self.db.pool)
-        .await?;
+        let planned =
+            sqlx::query("SELECT session_id, status FROM steps WHERE run_id=$1 AND step_key='plan'")
+                .bind(run_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
         let Some(planned) = planned else {
             return Ok(Phase::Plan);
         };
@@ -487,7 +490,14 @@ impl Orchestrator {
         .await?;
 
         let plan_step = self
-            .create_step(ctx.run_id, "plan", Some(&manager.name), "Plan the work", "", 0.0)
+            .create_step(
+                ctx.run_id,
+                "plan",
+                Some(&manager.name),
+                "Plan the work",
+                "",
+                0.0,
+            )
             .await?;
         let effort = Some(
             manager
@@ -515,9 +525,17 @@ impl Orchestrator {
             .await?;
         if outcome.status != RunStatus::Completed {
             let reason = outcome.reason.unwrap_or_default();
-            self.post(ctx.run_id, Some(plan_step), "system", None, "status",
-                      &format!("Planning failed: {reason}")).await?;
-            self.finish(ctx.run_id, outcome.status, Some(reason)).await?;
+            self.post(
+                ctx.run_id,
+                Some(plan_step),
+                "system",
+                None,
+                "status",
+                &format!("Planning failed: {reason}"),
+            )
+            .await?;
+            self.finish(ctx.run_id, outcome.status, Some(reason))
+                .await?;
             return Ok(None);
         }
 
@@ -542,7 +560,14 @@ impl Orchestrator {
             )
             .await?;
             let repair_step = self
-                .create_step(ctx.run_id, "plan_repair", Some(&manager.name), "Revise the plan", "", 0.1)
+                .create_step(
+                    ctx.run_id,
+                    "plan_repair",
+                    Some(&manager.name),
+                    "Revise the plan",
+                    "",
+                    0.1,
+                )
                 .await?;
             let repaired = self
                 .run_member(
@@ -570,20 +595,42 @@ impl Orchestrator {
                 .map(Defect::message)
                 .collect::<Vec<_>>()
                 .join(" ");
-            self.post(ctx.run_id, Some(plan_step), "system", None, "status",
-                      &format!("The plan still isn't runnable. {why}")).await?;
-            self.finish(ctx.run_id, RunStatus::Failed, Some(why)).await?;
+            self.post(
+                ctx.run_id,
+                Some(plan_step),
+                "system",
+                None,
+                "status",
+                &format!("The plan still isn't runnable. {why}"),
+            )
+            .await?;
+            self.finish(ctx.run_id, RunStatus::Failed, Some(why))
+                .await?;
             return Ok(None);
         }
         for advisory in &defects {
-            self.post(ctx.run_id, Some(plan_step), "system", None, "status", &advisory.message())
-                .await?;
+            self.post(
+                ctx.run_id,
+                Some(plan_step),
+                "system",
+                None,
+                "status",
+                &advisory.message(),
+            )
+            .await?;
         }
 
         let plan = parsed.unwrap_or_default();
         if !plan.summary.trim().is_empty() {
-            self.post(ctx.run_id, Some(plan_step), &manager.name, None, "message", &plan.summary)
-                .await?;
+            self.post(
+                ctx.run_id,
+                Some(plan_step),
+                &manager.name,
+                None,
+                "message",
+                &plan.summary,
+            )
+            .await?;
         }
 
         for (index, task) in plan.tasks.iter().enumerate() {
@@ -649,8 +696,11 @@ impl Orchestrator {
                 .filter(|a| a.status == "completed" || a.status == "skipped")
                 .map(|a| a.key.clone())
                 .collect();
-            let pending: Vec<Assignment> =
-                all.iter().filter(|a| a.status == "queued").cloned().collect();
+            let pending: Vec<Assignment> = all
+                .iter()
+                .filter(|a| a.status == "queued")
+                .cloned()
+                .collect();
             if pending.is_empty() {
                 break;
             }
@@ -695,8 +745,15 @@ impl Orchestrator {
                     &assignment.done_when,
                     &context_for(&assignment, &completed),
                 ));
-                self.post(ctx.run_id, Some(assignment.step_id), &member.name, None, "status",
-                          &format!("Starting: {}", assignment.title)).await?;
+                self.post(
+                    ctx.run_id,
+                    Some(assignment.step_id),
+                    &member.name,
+                    None,
+                    "status",
+                    &format!("Starting: {}", assignment.title),
+                )
+                .await?;
                 jobs.push((assignment, member, prompt));
             }
             if batch.len() > 1 {
@@ -725,8 +782,8 @@ impl Orchestrator {
                 .collect();
             let concurrency = 1 + extra.len();
 
-            let results = futures::stream::iter(jobs.into_iter().map(
-                |(assignment, member, prompt)| {
+            let results =
+                futures::stream::iter(jobs.into_iter().map(|(assignment, member, prompt)| {
                     let this = self.clone();
                     let tools = tools.clone();
                     async move {
@@ -744,11 +801,10 @@ impl Orchestrator {
                             .await;
                         (assignment, member, outcome)
                     }
-                },
-            ))
-            .buffer_unordered(concurrency)
-            .collect::<Vec<_>>()
-            .await;
+                }))
+                .buffer_unordered(concurrency)
+                .collect::<Vec<_>>()
+                .await;
             drop(extra);
 
             // Report everything that landed before deciding what to do about
@@ -758,8 +814,15 @@ impl Orchestrator {
             for (assignment, member, outcome) in results {
                 let outcome = outcome?;
                 if outcome.status == RunStatus::Completed {
-                    self.post(ctx.run_id, Some(assignment.step_id), &member.name, None,
-                              "result", &outcome.output).await?;
+                    self.post(
+                        ctx.run_id,
+                        Some(assignment.step_id),
+                        &member.name,
+                        None,
+                        "result",
+                        &outcome.output,
+                    )
+                    .await?;
                     self.remember_assignment(ctx, &member, &assignment.title, &outcome.output)
                         .await;
                     finished.push((assignment, member.name.clone(), outcome.output));
@@ -786,15 +849,31 @@ impl Orchestrator {
                     .join("\n\n");
                 let (last, _, _) = &finished[finished.len() - 1];
                 added += self
-                    .replan_round(ctx, manager, workers, &manager_session, last, &who,
-                                  &titles, &report, added)
+                    .replan_round(
+                        ctx,
+                        manager,
+                        workers,
+                        &manager_session,
+                        last,
+                        &who,
+                        &titles,
+                        &report,
+                        added,
+                    )
                     .await?;
             }
 
             for (assignment, who, outcome) in failures {
                 match self
-                    .triage_failure(ctx, manager, workers, &manager_session, &assignment, &who,
-                                    &outcome)
+                    .triage_failure(
+                        ctx,
+                        manager,
+                        workers,
+                        &manager_session,
+                        &assignment,
+                        &who,
+                        &outcome,
+                    )
                     .await?
                 {
                     Some(reason) => {
@@ -850,18 +929,22 @@ impl Orchestrator {
     ) -> anyhow::Result<usize> {
         let _ = finished; // kept for the call site's readability
         let all = self.load_assignments(ctx.run_id).await?;
-        let pending: Vec<Assignment> =
-            all.iter().filter(|a| a.status == "queued").cloned().collect();
+        let pending: Vec<Assignment> = all
+            .iter()
+            .filter(|a| a.status == "queued")
+            .cloned()
+            .collect();
         // Nothing left to adjust: skip the call entirely.
         if pending.is_empty() {
             return Ok(0);
         }
 
-        let round: i32 = sqlx::query("UPDATE runs SET replans = replans + 1 WHERE id=$1 RETURNING replans")
-            .bind(ctx.run_id)
-            .fetch_one(&self.db.pool)
-            .await?
-            .get("replans");
+        let round: i32 =
+            sqlx::query("UPDATE runs SET replans = replans + 1 WHERE id=$1 RETURNING replans")
+                .bind(ctx.run_id)
+                .fetch_one(&self.db.pool)
+                .await?
+                .get("replans");
         if round > MAX_REPLANS {
             return Ok(0);
         }
@@ -906,13 +989,7 @@ impl Orchestrator {
         }
 
         let note = decision.note.clone();
-        let (mutations, refused) = apply_decision(
-            decision,
-            &pending,
-            workers,
-            all.len(),
-            budget,
-        );
+        let (mutations, refused) = apply_decision(decision, &pending, workers, all.len(), budget);
         let mut new_positions = all.len() as f64 + 1.0;
         let mut added = 0usize;
 
@@ -924,10 +1001,23 @@ impl Orchestrator {
                         .execute(&self.db.pool)
                         .await?;
                     log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
-                    self.post(ctx.run_id, Some(step_id), &manager.name, None, "status",
-                              &format!("Dropped \"{key}\" — no longer needed.")).await?;
+                    self.post(
+                        ctx.run_id,
+                        Some(step_id),
+                        &manager.name,
+                        None,
+                        "status",
+                        &format!("Dropped \"{key}\" — no longer needed."),
+                    )
+                    .await?;
                 }
-                Mutation::Revise { step_id, key, assignee, brief, done_when } => {
+                Mutation::Revise {
+                    step_id,
+                    key,
+                    assignee,
+                    brief,
+                    done_when,
+                } => {
                     sqlx::query(
                         "UPDATE steps SET assignee = COALESCE($1, assignee),
                                 brief = COALESCE($2, brief),
@@ -960,7 +1050,9 @@ impl Orchestrator {
                     // hand, and silently replacing their words with the model's
                     // is the worst outcome available — so the card keeps what it
                     // says and gains a comment explaining what changed.
-                    epic::note_revision(&self.db, step_id, &manager.name, &note).await.ok();
+                    epic::note_revision(&self.db, step_id, &manager.name, &note)
+                        .await
+                        .ok();
                 }
                 Mutation::Add(task) => {
                     let assignee = resolve_assignee(workers, &task.assignee)
@@ -970,13 +1062,28 @@ impl Orchestrator {
                         .await?;
                     new_positions += 1.0;
                     added += 1;
-                    self.post(ctx.run_id, Some(step_id), &manager.name, Some(&assignee),
-                              "assignment", &format!("**{}** — {}", task.title, task.brief)).await?;
+                    self.post(
+                        ctx.run_id,
+                        Some(step_id),
+                        &manager.name,
+                        Some(&assignee),
+                        "assignment",
+                        &format!("**{}** — {}", task.title, task.brief),
+                    )
+                    .await?;
                 }
             }
         }
         if !note.trim().is_empty() {
-            self.post(ctx.run_id, Some(step), &manager.name, None, "message", &note).await?;
+            self.post(
+                ctx.run_id,
+                Some(step),
+                &manager.name,
+                None,
+                "message",
+                &note,
+            )
+            .await?;
         }
         for refusal in refused {
             tracing::debug!(run_id = %ctx.run_id, "re-plan refused: {refusal}");
@@ -998,15 +1105,19 @@ impl Orchestrator {
         outcome: &StreamOutcome,
     ) -> anyhow::Result<Option<String>> {
         let reason = outcome.reason.clone().unwrap_or_default();
-        self.post(ctx.run_id, Some(failed.step_id), "system", None, "status",
-                  &format!("{who} could not finish \"{}\": {reason}", failed.title)).await?;
+        self.post(
+            ctx.run_id,
+            Some(failed.step_id),
+            "system",
+            None,
+            "status",
+            &format!("{who} could not finish \"{}\": {reason}", failed.title),
+        )
+        .await?;
 
         // A second failure on the same work is a pattern, not a fluke.
         if failed.attempt >= 2 {
-            return Ok(Some(format!(
-                "\"{}\" failed twice: {reason}",
-                failed.title
-            )));
+            return Ok(Some(format!("\"{}\" failed twice: {reason}", failed.title)));
         }
 
         let step = self
@@ -1041,16 +1152,32 @@ impl Orchestrator {
             Triage::parse("")
         };
         if !triage.note.trim().is_empty() {
-            self.post(ctx.run_id, Some(step), &manager.name, None, "message", &triage.note)
-                .await?;
+            self.post(
+                ctx.run_id,
+                Some(step),
+                &manager.name,
+                None,
+                "message",
+                &triage.note,
+            )
+            .await?;
         }
 
         match triage.action {
             TriageAction::Abort => Ok(Some(format!("\"{}\" failed: {reason}", failed.title))),
             TriageAction::Drop => {
-                self.post(ctx.run_id, Some(failed.step_id), &manager.name, None, "status",
-                          &format!("Dropping \"{}\" — the goal survives without it.", failed.title))
-                    .await?;
+                self.post(
+                    ctx.run_id,
+                    Some(failed.step_id),
+                    &manager.name,
+                    None,
+                    "status",
+                    &format!(
+                        "Dropping \"{}\" — the goal survives without it.",
+                        failed.title
+                    ),
+                )
+                .await?;
                 Ok(None)
             }
             TriageAction::Retry | TriageAction::Reassign => {
@@ -1072,8 +1199,15 @@ impl Orchestrator {
                 let step_id = self
                     .create_assignment(ctx.run_id, &task, &assignee, 999.0, "replan", 2)
                     .await?;
-                self.post(ctx.run_id, Some(step_id), &manager.name, Some(&assignee), "assignment",
-                          &format!("Another go at **{}** — {}", task.title, task.brief)).await?;
+                self.post(
+                    ctx.run_id,
+                    Some(step_id),
+                    &manager.name,
+                    Some(&assignee),
+                    "assignment",
+                    &format!("Another go at **{}** — {}", task.title, task.brief),
+                )
+                .await?;
                 Ok(None)
             }
         }
@@ -1096,7 +1230,14 @@ impl Orchestrator {
             .join("\n\n");
 
         let step = self
-            .create_step(ctx.run_id, "review", Some(&manager.name), "Review the work", "", 1000.0)
+            .create_step(
+                ctx.run_id,
+                "review",
+                Some(&manager.name),
+                "Review the work",
+                "",
+                1000.0,
+            )
             .await?;
         let outcome = self
             .run_member(
@@ -1124,8 +1265,15 @@ impl Orchestrator {
             )
             .await?;
         if outcome.status == RunStatus::Completed {
-            self.post(ctx.run_id, Some(step), &manager.name, None, "result", &outcome.output)
-                .await?;
+            self.post(
+                ctx.run_id,
+                Some(step),
+                &manager.name,
+                None,
+                "result",
+                &outcome.output,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1216,7 +1364,14 @@ impl Orchestrator {
         log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
 
         let outcome = self
-            .stream_run(ctx.run_id, Some(step_id), &ctx.seq, ctx.engine.clone(), spec, CallerKind::OrgMember)
+            .stream_run(
+                ctx.run_id,
+                Some(step_id),
+                &ctx.seq,
+                ctx.engine.clone(),
+                spec,
+                CallerKind::OrgMember,
+            )
             .await?;
 
         sqlx::query(
@@ -1266,8 +1421,15 @@ impl Orchestrator {
         from_agent: &str,
         question: &str,
     ) -> anyhow::Result<String> {
-        self.post(run_id, Some(step_id), from_agent, None, "question", question)
-            .await?;
+        self.post(
+            run_id,
+            Some(step_id),
+            from_agent,
+            None,
+            "question",
+            question,
+        )
+        .await?;
         // Counted after posting, so the third question is the last one
         // answered rather than the fourth.
         let asked: i64 = sqlx::query(
@@ -1280,8 +1442,15 @@ impl Orchestrator {
         if asked > MAX_CONSULTS_PER_STEP {
             let answer = "You've already escalated several times — use your best judgement \
                           on this one and note the assumption in your summary.";
-            self.post(run_id, Some(step_id), "system", Some(from_agent), "answer", answer)
-                .await?;
+            self.post(
+                run_id,
+                Some(step_id),
+                "system",
+                Some(from_agent),
+                "answer",
+                answer,
+            )
+            .await?;
             return Ok(answer.to_string());
         }
 
@@ -1362,8 +1531,15 @@ impl Orchestrator {
                     assumption in your summary."
                 .to_string();
         }
-        self.post(run_id, Some(step_id), &manager_name, Some(from_agent), "answer", &text)
-            .await?;
+        self.post(
+            run_id,
+            Some(step_id),
+            &manager_name,
+            Some(from_agent),
+            "answer",
+            &text,
+        )
+        .await?;
         Ok(text)
     }
 
@@ -1453,12 +1629,11 @@ impl Orchestrator {
             Some(r) => Ok(r.get("id")),
             // The unique index absorbed a duplicate; reuse the existing row.
             None => {
-                let existing =
-                    sqlx::query("SELECT id FROM steps WHERE run_id=$1 AND step_key=$2")
-                        .bind(run_id)
-                        .bind(&task.key)
-                        .fetch_one(&self.db.pool)
-                        .await?;
+                let existing = sqlx::query("SELECT id FROM steps WHERE run_id=$1 AND step_key=$2")
+                    .bind(run_id)
+                    .bind(&task.key)
+                    .fetch_one(&self.db.pool)
+                    .await?;
                 Ok(existing.get("id"))
             }
         }
@@ -1502,7 +1677,9 @@ impl Orchestrator {
         id: Option<&serde_json::Value>,
         title: &str,
     ) -> anyhow::Result<Option<Member>> {
-        let Some(agent_id) = id.and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+        let Some(agent_id) = id
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
         else {
             return Ok(None);
         };

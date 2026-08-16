@@ -85,7 +85,10 @@ pub fn looks_like_secret(text: &str) -> Option<Finding> {
 
         // A PEM block header is unambiguous, and its own line.
         if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
-            return Some(Finding { what: "a private key".into(), line: line_no });
+            return Some(Finding {
+                what: "a private key".into(),
+                line: line_no,
+            });
         }
 
         // `NAME=value` or `NAME: value` where the name reads as a secret.
@@ -98,7 +101,10 @@ pub fn looks_like_secret(text: &str) -> Option<Finding> {
             let word = word.trim_end_matches(|c: char| matches!(c, '.' | ';' | ')'));
             for (prefix, min_len, what) in KEY_SHAPES {
                 if word.starts_with(prefix) && word.len() >= *min_len {
-                    return Some(Finding { what: (*what).into(), line: line_no });
+                    return Some(Finding {
+                        what: (*what).into(),
+                        line: line_no,
+                    });
                 }
             }
             // A connection string carrying a password, checked here rather
@@ -106,7 +112,10 @@ pub fn looks_like_secret(text: &str) -> Option<Finding> {
             // secret-shaped — `DATABASE_URL` reads as a location, and a bare
             // `postgres://…` pasted into a note has no name at all.
             if word.contains("://") && credentials_in_url(&word.to_ascii_lowercase()) {
-                return Some(Finding { what: "a password inside a URL".into(), line: line_no });
+                return Some(Finding {
+                    what: "a password inside a URL".into(),
+                    line: line_no,
+                });
             }
         }
     }
@@ -115,13 +124,15 @@ pub fn looks_like_secret(text: &str) -> Option<Finding> {
 
 /// `NAME=value` / `NAME: value` with a secret-shaped name and a real value.
 fn assignment(line: &str, line_no: usize) -> Option<Finding> {
-    let (name, value) = line
-        .split_once('=')
-        .or_else(|| line.split_once(':'))?;
+    let (name, value) = line.split_once('=').or_else(|| line.split_once(':'))?;
 
     // The name is the last word before the separator, so `export FOO=…` and
     // `  api_key: …` both work.
-    let name = name.split_whitespace().last()?.trim_matches('"').trim_matches('\'');
+    let name = name
+        .split_whitespace()
+        .last()?
+        .trim_matches('"')
+        .trim_matches('\'');
     if name.is_empty() || !is_auth_env(name) {
         return None;
     }
@@ -151,9 +162,15 @@ fn assignment(line: &str, line_no: usize) -> Option<Finding> {
 
 /// `scheme://user:password@host` — the one URL that is a credential.
 fn credentials_in_url(url: &str) -> bool {
-    let Some((_, rest)) = url.split_once("://") else { return false };
-    let Some((authority, _)) = rest.split_once('/').or(Some((rest, ""))) else { return false };
-    let Some((userinfo, _)) = authority.split_once('@') else { return false };
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let Some((authority, _)) = rest.split_once('/').or(Some((rest, ""))) else {
+        return false;
+    };
+    let Some((userinfo, _)) = authority.split_once('@') else {
+        return false;
+    };
     // A password, not just a username, and not a placeholder one.
     match userinfo.split_once(':') {
         Some((_, pass)) => pass.len() >= 6 && !PLACEHOLDERS.iter().any(|p| pass.starts_with(p)),
@@ -189,8 +206,14 @@ mod tests {
             found("ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnop"),
             Some("a value assigned to ANTHROPIC_API_KEY".into())
         );
-        assert_eq!(found("token: ghp_abcdefghijklmnopqrstuvwxyz"), Some("a GitHub token".into()));
-        assert_eq!(found("use AKIAIOSFODNN7EXAMPLE for s3"), Some("an AWS access key id".into()));
+        assert_eq!(
+            found("token: ghp_abcdefghijklmnopqrstuvwxyz"),
+            Some("a GitHub token".into())
+        );
+        assert_eq!(
+            found("use AKIAIOSFODNN7EXAMPLE for s3"),
+            Some("an AWS access key id".into())
+        );
         assert_eq!(
             found("-----BEGIN OPENSSH PRIVATE KEY-----"),
             Some("a private key".into())

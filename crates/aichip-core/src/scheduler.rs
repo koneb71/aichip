@@ -129,13 +129,7 @@ impl Scheduler {
                 }
             };
             let catch_up = CatchUp::from(row.get::<String, _>("catch_up").as_str());
-            let decision = decide(
-                &cron,
-                row.get("last_fired_at"),
-                now,
-                catch_up,
-                GRACE,
-            );
+            let decision = decide(&cron, row.get("last_fired_at"), now, catch_up, GRACE);
 
             match decision {
                 Decision::Wait => continue,
@@ -155,7 +149,11 @@ impl Scheduler {
                     );
                 }
                 Decision::Fire => {
-                    match self.orchestrator.enqueue_workflow(workflow_id, "schedule").await {
+                    match self
+                        .orchestrator
+                        .enqueue_workflow(workflow_id, "schedule")
+                        .await
+                    {
                         Ok(run_id) => tracing::info!(
                             workflow = %row.get::<String, _>("name"),
                             %run_id,

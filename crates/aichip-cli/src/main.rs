@@ -2,15 +2,18 @@ use aichip_core::runs::gate::{DbGate, DbWindow};
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
-use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::mock::MockEngine;
+use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::Engine;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "aichip", about = "Local-first multi-agent workflow platform — no API keys")]
+#[command(
+    name = "aichip",
+    about = "Local-first multi-agent workflow platform — no API keys"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -235,7 +238,10 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
 
     let orphans = orchestrator.recover_orphans().await?;
     if orphans > 0 {
-        tracing::warn!(orphans, "marked orphaned runs from previous session as failed");
+        tracing::warn!(
+            orphans,
+            "marked orphaned runs from previous session as failed"
+        );
     }
     tokio::spawn(orchestrator.clone().run_loop());
     tokio::spawn(aichip_core::Scheduler::new(db.clone(), orchestrator.clone()).run_loop());

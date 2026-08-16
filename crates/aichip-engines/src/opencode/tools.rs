@@ -71,10 +71,20 @@ mod tests {
         // one of them ever maps to None, that capability silently vanishes on
         // an OpenCode run.
         for tool in [
-            "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash",
+            "Read",
+            "Grep",
+            "Glob",
+            "Edit",
+            "Write",
+            "MultiEdit",
+            "NotebookEdit",
+            "Bash",
             "TodoWrite",
         ] {
-            assert!(permission_key(tool).is_some(), "{tool} has no OpenCode equivalent");
+            assert!(
+                permission_key(tool).is_some(),
+                "{tool} has no OpenCode equivalent"
+            );
         }
     }
 
@@ -82,7 +92,16 @@ mod tests {
     fn every_mapping_targets_a_key_opencode_understands() {
         // A typo here would be rejected by OpenCode as an invalid config,
         // which surfaces as a run that dies at spawn for no obvious reason.
-        for tool in ["Read", "Grep", "Glob", "Edit", "Bash", "Task", "TodoWrite", "WebFetch"] {
+        for tool in [
+            "Read",
+            "Grep",
+            "Glob",
+            "Edit",
+            "Bash",
+            "Task",
+            "TodoWrite",
+            "WebFetch",
+        ] {
             let key = permission_key(tool).unwrap();
             assert!(
                 OPENCODE_PERMISSION_KEYS.contains(&key),
@@ -116,7 +135,10 @@ mod tests {
     fn flat_only_keys_are_identified() {
         assert!(is_flat_only("todowrite"));
         assert!(is_flat_only("webfetch"));
-        assert!(!is_flat_only("bash"), "bash takes {{pattern: action}} rules");
+        assert!(
+            !is_flat_only("bash"),
+            "bash takes {{pattern: action}} rules"
+        );
         assert!(!is_flat_only("edit"));
         assert!(!is_flat_only("external_directory"));
     }

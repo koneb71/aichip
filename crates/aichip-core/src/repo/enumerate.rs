@@ -25,8 +25,8 @@ pub const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// index what a person writes, not every blob in the tree. Lockfiles,
 /// minified bundles and generated clients are the noise this keeps out.
 const CODE_EXTENSIONS: [&str; 24] = [
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "py", "go", "rb", "java", "kt", "swift", "c", "h",
-    "cc", "cpp", "hpp", "cs", "php", "sh", "sql", "toml", "yaml", "yml",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "py", "go", "rb", "java", "kt", "swift", "c", "h", "cc",
+    "cpp", "hpp", "cs", "php", "sh", "sql", "toml", "yaml", "yml",
 ];
 
 /// Documentation worth indexing beside the code: a README answers "how does
@@ -91,7 +91,13 @@ pub async fn files(root: &Path, vcs_is_git: bool) -> anyhow::Result<Vec<String>>
 async fn tracked(root: &Path) -> anyhow::Result<Vec<String>> {
     let out = tokio::process::Command::new("git")
         .current_dir(root)
-        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
         .output()
         .await?;
     if !out.status.success() {
@@ -116,7 +122,9 @@ async fn walk(root: &Path) -> anyhow::Result<Vec<String>> {
             continue; // a folder deleted mid-walk is not an error
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(ft) = entry.file_type().await else { continue };
+            let Ok(ft) = entry.file_type().await else {
+                continue;
+            };
             // A symlink out of the project is a folder escape; not followed.
             if ft.is_symlink() {
                 continue;
@@ -171,7 +179,12 @@ mod tests {
 
     #[test]
     fn skips_binaries_and_the_extensionless() {
-        for p in ["web/public/logo.png", "Makefile", "assets/font.woff2", "a.pdf"] {
+        for p in [
+            "web/public/logo.png",
+            "Makefile",
+            "assets/font.woff2",
+            "a.pdf",
+        ] {
             assert!(!is_indexable(p), "{p} must not be indexed");
         }
     }

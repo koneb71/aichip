@@ -128,8 +128,14 @@ mod tests {
         while let Some(e) = proc.events.recv().await {
             events.push(e);
         }
-        assert!(matches!(events.first(), Some(AichipEvent::RunStarted { .. })));
-        assert!(matches!(events.last(), Some(AichipEvent::RunCompleted { .. })));
+        assert!(matches!(
+            events.first(),
+            Some(AichipEvent::RunStarted { .. })
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(AichipEvent::RunCompleted { .. })
+        ));
         assert!(events
             .iter()
             .any(|e| matches!(e, AichipEvent::ToolCall { .. })));

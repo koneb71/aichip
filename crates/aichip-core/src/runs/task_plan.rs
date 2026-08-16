@@ -69,8 +69,14 @@ pub const PLANNING_TOOLS: &[&str] = &["Read", "Grep", "Glob"];
 /// `Bash` is on the list even though `git log` would genuinely help a plan:
 /// one `>` redirect and the work has happened. The promise being kept is
 /// "nothing changed", and it has to hold against a shell.
-pub const PLANNING_DENIED: &[&str] =
-    &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "WebFetch"];
+pub const PLANNING_DENIED: &[&str] = &[
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Bash",
+    "WebFetch",
+];
 
 /// Ask for a plan, not for the work.
 pub fn plan_prompt(task_prompt: &str) -> String {
@@ -153,7 +159,10 @@ mod tests {
     /// through to work would do the thing the user asked to see first.
     #[test]
     fn a_written_plan_is_not_a_licence_to_start() {
-        assert_eq!(decide(true, PlanStep::Written("do the thing"), false), Phase::Plan);
+        assert_eq!(
+            decide(true, PlanStep::Written("do the thing"), false),
+            Phase::Plan
+        );
     }
 
     #[test]
@@ -162,7 +171,9 @@ mod tests {
         // since the agent proposed it.
         assert_eq!(
             decide(true, PlanStep::Written("edited by hand"), true),
-            Phase::Work { plan: Some("edited by hand".into()) }
+            Phase::Work {
+                plan: Some("edited by hand".into())
+            }
         );
     }
 

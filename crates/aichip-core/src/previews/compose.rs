@@ -117,8 +117,12 @@ fn namespace_built_images(doc: &mut Value, preview_id: &uuid::Uuid) {
         return;
     };
     for (name, spec) in services.iter_mut() {
-        let Some(name) = name.as_str().map(str::to_string) else { continue };
-        let Some(map) = spec.as_mapping_mut() else { continue };
+        let Some(name) = name.as_str().map(str::to_string) else {
+            continue;
+        };
+        let Some(map) = spec.as_mapping_mut() else {
+            continue;
+        };
         if !map.contains_key(Value::String("build".into())) {
             continue;
         }
@@ -140,7 +144,10 @@ fn label_build(service: &mut serde_yaml::Mapping) {
     let expanded = match build {
         Some(Value::String(context)) => {
             let mut m = serde_yaml::Mapping::new();
-            m.insert(Value::String("context".into()), Value::String(context.clone()));
+            m.insert(
+                Value::String("context".into()),
+                Value::String(context.clone()),
+            );
             Some(m)
         }
         _ => None,
@@ -170,7 +177,11 @@ fn slug(name: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let trimmed = cleaned.trim_matches('-').to_string();
-    if trimmed.is_empty() { "service".into() } else { trimmed }
+    if trimmed.is_empty() {
+        "service".into()
+    } else {
+        trimmed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,9 +196,7 @@ impl ComposeError {
             Self::Unparseable(why) => {
                 format!("This project's compose file could not be read: {why}")
             }
-            Self::NoServices => {
-                "This project's compose file defines no services.".to_string()
-            }
+            Self::NoServices => "This project's compose file defines no services.".to_string(),
         }
     }
 }
@@ -263,7 +272,10 @@ fn is_webbish(name: &str) -> bool {
 /// host side is discarded on purpose — it is the number that would collide.
 fn container_port(spec: &Value) -> Option<u16> {
     let map = spec.as_mapping()?;
-    if let Some(ports) = map.get(Value::String("ports".into())).and_then(Value::as_sequence) {
+    if let Some(ports) = map
+        .get(Value::String("ports".into()))
+        .and_then(Value::as_sequence)
+    {
         for entry in ports {
             if let Some(p) = port_of_entry(entry) {
                 return Some(p);
@@ -382,8 +394,16 @@ services:
 
         for name in ["backend", "frontend"] {
             let spec = services.get(Value::String(name.into())).unwrap();
-            let image = spec.get(Value::String("image".into())).unwrap().as_str().unwrap();
-            assert_eq!(image, format!("aichip-preview-123456789abc-{name}"), "{out}");
+            let image = spec
+                .get(Value::String("image".into()))
+                .unwrap()
+                .as_str()
+                .unwrap();
+            assert_eq!(
+                image,
+                format!("aichip-preview-123456789abc-{name}"),
+                "{out}"
+            );
             // And the label, so the existing accounting works unchanged.
             let labels = spec
                 .get(Value::String("build".into()))
@@ -444,7 +464,10 @@ services:
         let text = "services:\n  api:\n    build: ./api\n    image: my-api:local\n";
         let out = plan(text).unwrap().render(&ID, 5000);
         assert!(out.contains("aichip-preview-123456789abc-api"), "{out}");
-        assert!(!out.contains("my-api:local"), "the colliding tag must be gone: {out}");
+        assert!(
+            !out.contains("my-api:local"),
+            "the colliding tag must be gone: {out}"
+        );
     }
 
     #[test]
@@ -473,7 +496,10 @@ services:
             (r#"services: {web: {ports: ["9000:80"]}}"#, 80),
             (r#"services: {web: {ports: ["127.0.0.1:9000:80"]}}"#, 80),
             (r#"services: {web: {ports: ["9000:80/tcp"]}}"#, 80),
-            (r#"services: {web: {ports: [{target: 8080, published: 9000}]}}"#, 8080),
+            (
+                r#"services: {web: {ports: [{target: 8080, published: 9000}]}}"#,
+                8080,
+            ),
             (r#"services: {web: {expose: [3000]}}"#, 3000),
         ];
         for (yaml, want) in cases {
@@ -522,7 +548,10 @@ services:
     #[test]
     fn refuses_what_it_cannot_read() {
         assert!(matches!(plan("services:"), Err(ComposeError::NoServices)));
-        assert!(matches!(plan("services: {}"), Err(ComposeError::NoServices)));
+        assert!(matches!(
+            plan("services: {}"),
+            Err(ComposeError::NoServices)
+        ));
         assert!(matches!(plan("name: x"), Err(ComposeError::NoServices)));
         assert!(matches!(
             plan("services: {web: {ports: [\"80\"]}"),

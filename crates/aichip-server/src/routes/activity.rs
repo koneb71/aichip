@@ -44,7 +44,9 @@ async fn set_budget(
         .set_daily_budget(body.cap_usd)
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "capUsd": state.orchestrator.daily_budget().await })))
+    Ok(Json(
+        json!({ "capUsd": state.orchestrator.daily_budget().await }),
+    ))
 }
 
 async fn pause(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -148,13 +150,15 @@ async fn activity(
         // Where to send someone who clicks it. A team's plan lives in the team
         // room; a card's lives on the card, and opening an org room for a run
         // that has no team shows an empty one.
-        .map(|r| json!({
-            "runId": r["id"],
-            "kind": "plan",
-            "label": r["label"],
-            "isOrg": r["isOrg"],
-            "projectId": r["projectId"],
-        }))
+        .map(|r| {
+            json!({
+                "runId": r["id"],
+                "kind": "plan",
+                "label": r["label"],
+                "isOrg": r["isOrg"],
+                "projectId": r["projectId"],
+            })
+        })
         .collect();
     for run in &live {
         let run_id: Uuid = serde_json::from_value(run["id"].clone()).map_err(internal)?;
@@ -228,7 +232,8 @@ async fn activity(
     let today: f64 = daily
         .last()
         .filter(|r| {
-            r.get::<chrono::DateTime<chrono::Utc>, _>("day").date_naive()
+            r.get::<chrono::DateTime<chrono::Utc>, _>("day")
+                .date_naive()
                 == chrono::Utc::now().date_naive()
         })
         .map(|r| r.get::<Option<f64>, _>("cost").unwrap_or(0.0))

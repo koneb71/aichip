@@ -209,7 +209,10 @@ mod tests {
 
     #[test]
     fn a_one_line_card_with_nothing_attached_goes_cheap() {
-        let s = Signals { brief_chars: 60, ..sig() };
+        let s = Signals {
+            brief_chars: 60,
+            ..sig()
+        };
         let d = classify(&s, Phase::Single);
         assert_eq!(d.tier, ModelTier::Easy);
         assert_eq!(d.rule, "small_and_unreferenced");
@@ -222,12 +225,24 @@ mod tests {
         // a described one — so it must fall through to Medium rather than
         // satisfying "short and unreferenced" by saying nothing at all.
         for chars in [0, 1, MIN_BRIEF - 1] {
-            let d = classify(&Signals { brief_chars: chars, ..sig() }, Phase::Single);
+            let d = classify(
+                &Signals {
+                    brief_chars: chars,
+                    ..sig()
+                },
+                Phase::Single,
+            );
             assert_eq!(d.tier, ModelTier::Medium, "{chars} chars");
             assert_eq!(d.rule, "no_signal");
         }
         // And the first length that *has* said something does buy Easy.
-        let d = classify(&Signals { brief_chars: MIN_BRIEF, ..sig() }, Phase::Single);
+        let d = classify(
+            &Signals {
+                brief_chars: MIN_BRIEF,
+                ..sig()
+            },
+            Phase::Single,
+        );
         assert_eq!(d.tier, ModelTier::Easy);
     }
 
@@ -235,7 +250,11 @@ mod tests {
     fn shortness_alone_does_not_buy_cheap() {
         // A terse card with a runbook attached is not a small job — the
         // brevity is the *prompt* being short, not the work.
-        let s = Signals { brief_chars: 60, kb_articles: 1, ..sig() };
+        let s = Signals {
+            brief_chars: 60,
+            kb_articles: 1,
+            ..sig()
+        };
         assert_eq!(classify(&s, Phase::Single).tier, ModelTier::Medium);
     }
 
@@ -271,7 +290,11 @@ mod tests {
             (ModelTier::Medium, ModelTier::Complex),
             (ModelTier::Complex, ModelTier::Complex),
         ] {
-            let s = Signals { prior_failed: true, prior_tier: Some(prior), ..sig() };
+            let s = Signals {
+                prior_failed: true,
+                prior_tier: Some(prior),
+                ..sig()
+            };
             assert_eq!(classify(&s, Phase::Single).tier, expected, "from {prior:?}");
         }
     }
@@ -295,13 +318,20 @@ mod tests {
     fn a_retry_of_a_planning_pass_still_escalates() {
         // Ordering check: the retry rule sits above the phase rules, so a
         // failed plan pass does not silently fall through to planning_pass.
-        let s = Signals { prior_failed: true, prior_tier: Some(ModelTier::Medium), ..sig() };
+        let s = Signals {
+            prior_failed: true,
+            prior_tier: Some(ModelTier::Medium),
+            ..sig()
+        };
         assert_eq!(classify(&s, Phase::Plan).rule, "retry_escalation");
     }
 
     #[test]
     fn replanned_work_is_treated_as_unclear() {
-        let s = Signals { replans: 1, ..sig() };
+        let s = Signals {
+            replans: 1,
+            ..sig()
+        };
         let d = classify(&s, Phase::Single);
         assert_eq!(d.tier, ModelTier::Complex);
         assert_eq!(d.rule, "replanned");
@@ -315,11 +345,33 @@ mod tests {
             (sig(), Phase::Single),
             (sig(), Phase::Plan),
             (sig(), Phase::Work),
-            (Signals { brief_chars: 10, ..sig() }, Phase::Single),
-            (Signals { replans: 2, ..sig() }, Phase::Single),
-            (Signals { prior_failed: true, ..sig() }, Phase::Single),
             (
-                Signals { brief_chars: 9_000, attachments: 4, ..sig() },
+                Signals {
+                    brief_chars: 10,
+                    ..sig()
+                },
+                Phase::Single,
+            ),
+            (
+                Signals {
+                    replans: 2,
+                    ..sig()
+                },
+                Phase::Single,
+            ),
+            (
+                Signals {
+                    prior_failed: true,
+                    ..sig()
+                },
+                Phase::Single,
+            ),
+            (
+                Signals {
+                    brief_chars: 9_000,
+                    attachments: 4,
+                    ..sig()
+                },
                 Phase::Single,
             ),
         ];
@@ -334,7 +386,11 @@ mod tests {
     fn the_same_signals_always_give_the_same_answer() {
         // No clock, no randomness — a card that reruns unchanged must not
         // wander between tiers.
-        let s = Signals { brief_chars: 300, kb_articles: 1, ..sig() };
+        let s = Signals {
+            brief_chars: 300,
+            kb_articles: 1,
+            ..sig()
+        };
         let first = classify(&s, Phase::Single);
         for _ in 0..5 {
             assert_eq!(classify(&s, Phase::Single), first);

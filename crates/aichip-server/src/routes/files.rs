@@ -37,13 +37,13 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::StatusCode;
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -125,13 +125,12 @@ async fn project_tree(state: &AppState, id: Uuid) -> Result<Root, ApiError> {
 /// a container, and `manages` is both tighter and the answer already used to
 /// decide whether a run may go full-auto.
 async fn task_tree(state: &AppState, id: Uuid) -> Result<Root, ApiError> {
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT worktree_path FROM tasks WHERE id=$1")
-            .bind(id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(internal)?
-            .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+    let stored: Option<String> = sqlx::query_scalar("SELECT worktree_path FROM tasks WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
 
     let Some(stored) = stored else {
         return Err((
@@ -154,8 +153,7 @@ async fn task_tree(state: &AppState, id: Uuid) -> Result<Root, ApiError> {
 }
 
 fn fs_browse_root() -> PathBuf {
-    std::fs::canonicalize(super::fs::browse_root())
-        .unwrap_or_else(|_| super::fs::browse_root())
+    std::fs::canonicalize(super::fs::browse_root()).unwrap_or_else(|_| super::fs::browse_root())
 }
 
 async fn project_root(state: &AppState, id: Uuid) -> Result<PathBuf, ApiError> {
@@ -225,7 +223,9 @@ async fn list_in(root: &Path, q: PathQuery) -> Result<Json<Value>, ApiError> {
     let mut read = tokio::fs::read_dir(&dir).await.map_err(internal)?;
     while let Ok(Some(entry)) = read.next_entry().await {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Ok(file_type) = entry.file_type().await else { continue };
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
         let is_dir = file_type.is_dir();
         if is_dir && SKIP_DIRS.contains(&name.as_str()) {
             continue;
@@ -264,7 +264,9 @@ async fn list_in(root: &Path, q: PathQuery) -> Result<Json<Value>, ApiError> {
                 .unwrap_or_default(),
         )
     };
-    Ok(Json(json!({ "path": rel_dir, "parent": parent, "entries": entries })))
+    Ok(Json(
+        json!({ "path": rel_dir, "parent": parent, "entries": entries }),
+    ))
 }
 
 async fn read_in(tree: &Root, q: PathQuery) -> Result<Json<Value>, ApiError> {
@@ -358,22 +360,24 @@ async fn write_in(
 ) -> Result<Json<Value>, ApiError> {
     // Gate 4.
     if !headers.contains_key(WRITE_HEADER) {
-        return Err((StatusCode::BAD_REQUEST, "not a write from the dashboard".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "not a write from the dashboard".into(),
+        ));
     }
     // Gate 2.
     if let Err(why) = &tree.writable {
         return Err((StatusCode::FORBIDDEN, why.clone()));
     }
     // Gates 1 and 3.
-    let target = resolve_for_write(&tree.path, &body.path)
-        .map_err(|why| (StatusCode::BAD_REQUEST, why))?;
+    let target =
+        resolve_for_write(&tree.path, &body.path).map_err(|why| (StatusCode::BAD_REQUEST, why))?;
 
     let bytes = body.content.as_bytes();
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            "this file is larger than aichip will serve, so it will not save it either"
-                .into(),
+            "this file is larger than aichip will serve, so it will not save it either".into(),
         ));
     }
 
@@ -401,20 +405,14 @@ async fn write_in(
                     ));
                 }
                 None => {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        "a file already exists there".into(),
-                    ));
+                    return Err((StatusCode::CONFLICT, "a file already exists there".into()));
                 }
             }
             p.clone()
         }
         WriteTarget::New(p) => {
             if body.base_hash.is_some() {
-                return Err((
-                    StatusCode::CONFLICT,
-                    "that file no longer exists".into(),
-                ));
+                return Err((StatusCode::CONFLICT, "that file no longer exists".into()));
             }
             p.clone()
         }
@@ -436,10 +434,17 @@ async fn write_in(
 /// somewhere else entirely.
 async fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let tmp = dir.join(format!(".{name}.aichip-tmp"));
 
-    let mode = tokio::fs::metadata(path).await.ok().map(|m| m.permissions());
+    let mode = tokio::fs::metadata(path)
+        .await
+        .ok()
+        .map(|m| m.permissions());
 
     let result = async {
         let mut f = tokio::fs::File::create(&tmp).await?;
@@ -505,7 +510,11 @@ fn resolve_for_write(root: &Path, rel: &str) -> Result<WriteTarget, String> {
 
     if let Some(existing) = resolve(root, rel) {
         for part in existing.components() {
-            if part.as_os_str().to_string_lossy().eq_ignore_ascii_case(".git") {
+            if part
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".git")
+            {
                 return Err("aichip will not write inside .git".into());
             }
         }
@@ -524,8 +533,8 @@ fn resolve_for_write(root: &Path, rel: &str) -> Result<WriteTarget, String> {
         None => ("", rel),
     };
     let name = safe_file_name(name)?;
-    let parent = resolve(root, parent_rel)
-        .ok_or_else(|| "that folder does not exist".to_string())?;
+    let parent =
+        resolve(root, parent_rel).ok_or_else(|| "that folder does not exist".to_string())?;
     if !parent.is_dir() {
         return Err("that folder does not exist".into());
     }
@@ -627,7 +636,9 @@ async fn search(
             if depth > SEARCH_MAX_DEPTH {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 visited += 1;
                 if visited > SEARCH_MAX_VISITED {
@@ -681,8 +692,7 @@ async fn search(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_hash, relative, resolve, resolve_for_write, safe_file_name, score_path,
-        WriteTarget,
+        content_hash, relative, resolve, resolve_for_write, safe_file_name, score_path, WriteTarget,
     };
     use std::path::Path;
 
@@ -830,7 +840,10 @@ mod tests {
         std::fs::write(nested.join("main.rs"), "fn main() {}").unwrap();
 
         // Empty path is the root itself.
-        assert_eq!(resolve(&root, "").unwrap(), std::fs::canonicalize(&root).unwrap());
+        assert_eq!(
+            resolve(&root, "").unwrap(),
+            std::fs::canonicalize(&root).unwrap()
+        );
         assert!(resolve(&root, "src/main.rs").is_some());
         // A leading slash is treated as project-relative, not absolute.
         assert!(resolve(&root, "/src/main.rs").is_some());
@@ -885,7 +898,10 @@ mod tests {
         let canonical = std::fs::canonicalize(&root).unwrap();
         assert_eq!(relative(&root, &canonical), "");
         assert_eq!(relative(&root, &canonical.join("a")), "a");
-        assert_eq!(relative(&root, Path::new(&canonical).join("a/b").as_path()), "a/b");
+        assert_eq!(
+            relative(&root, Path::new(&canonical).join("a/b").as_path()),
+            "a/b"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

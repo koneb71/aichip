@@ -86,10 +86,7 @@ fn claude_args(spec: &RunSpec, mcp_config: Option<PathBuf>) -> Vec<OsString> {
         args.push("--add-dir".into());
         args.push(dir.clone().into());
     }
-    if spec.permission_prompt_tool
-        && has_mcp
-        && spec.permission_mode != PermissionMode::FullAuto
-    {
+    if spec.permission_prompt_tool && has_mcp && spec.permission_mode != PermissionMode::FullAuto {
         args.push("--permission-prompt-tool".into());
         args.push("mcp__aichip__approve".into());
     }
@@ -163,7 +160,8 @@ impl Engine for ClaudeEngine {
         };
 
         let mut cmd = Command::new(&self.binary);
-        cmd.current_dir(&spec.cwd).args(claude_args(&spec, mcp_config));
+        cmd.current_dir(&spec.cwd)
+            .args(claude_args(&spec, mcp_config));
 
         // A child inherits this process's environment. The loop below only
         // vets what we *set*, so anything aichip holds as its own secret has
@@ -319,7 +317,10 @@ mod tests {
         let mut s = spec();
         s.effort = Some(ReasoningEffort::XHigh);
         let args = args_of(&s);
-        let i = args.iter().position(|a| a == "--effort").expect("flag present");
+        let i = args
+            .iter()
+            .position(|a| a == "--effort")
+            .expect("flag present");
         assert_eq!(args[i + 1], "xhigh");
     }
 

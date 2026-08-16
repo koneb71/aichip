@@ -110,19 +110,18 @@ pub async fn install(db: &Db, project_id: Uuid, reference: &str) -> anyhow::Resu
 
     let mut out = Installed::default();
     for entry in entries.iter().filter(|e| e.source == reference) {
-        out.skills.push(mirror_one(db, workspace_id, project_id, &root, entry).await);
+        out.skills
+            .push(mirror_one(db, workspace_id, project_id, &root, entry).await);
     }
     if out.skills.is_empty() {
         anyhow::bail!("{reference} installed no skills — check the repository has a skills folder");
     }
 
     // Committed, not merely written. See `Installed::committed`.
-    out.committed = crate::worktrees::manager::commit_all(
-        &root,
-        &format!("Add agent skills from {reference}"),
-    )
-    .await
-    .unwrap_or(false);
+    out.committed =
+        crate::worktrees::manager::commit_all(&root, &format!("Add agent skills from {reference}"))
+            .await
+            .unwrap_or(false);
     Ok(out)
 }
 
@@ -223,7 +222,9 @@ async fn mirror_one(
             return out;
         }
         Err(e) => {
-            out.mirror_error = Some(format!("installed, but the library could not be checked: {e}"));
+            out.mirror_error = Some(format!(
+                "installed, but the library could not be checked: {e}"
+            ));
             return out;
         }
     }
@@ -290,10 +291,14 @@ async fn bundled_files(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
     while let Some((at, depth)) = stack.pop() {
-        let Ok(mut rd) = tokio::fs::read_dir(&at).await else { continue };
+        let Ok(mut rd) = tokio::fs::read_dir(&at).await else {
+            continue;
+        };
         while let Ok(Some(e)) = rd.next_entry().await {
             let path = e.path();
-            let Ok(ft) = e.file_type().await else { continue };
+            let Ok(ft) = e.file_type().await else {
+                continue;
+            };
             if ft.is_dir() {
                 if depth < 2 {
                     stack.push((path, depth + 1));

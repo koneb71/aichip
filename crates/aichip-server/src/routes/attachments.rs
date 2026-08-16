@@ -72,7 +72,13 @@ pub(crate) fn sanitize_filename(raw: &str) -> Option<String> {
 
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     // Keep the extension when truncating — it is what `classify` reads.
@@ -109,7 +115,9 @@ fn content_matches(mime: &str, kind: &str, bytes: &[u8]) -> bool {
             "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G']),
             "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
             "image/gif" => bytes.starts_with(b"GIF8"),
-            "image/webp" => bytes.starts_with(b"RIFF") && bytes.len() > 12 && &bytes[8..12] == b"WEBP",
+            "image/webp" => {
+                bytes.starts_with(b"RIFF") && bytes.len() > 12 && &bytes[8..12] == b"WEBP"
+            }
             _ => false,
         },
         _ => false,
@@ -134,9 +142,11 @@ async fn upload(
     let root = core::default_root();
     let mut saved: Vec<Value> = vec![];
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("malformed upload: {e}"))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("malformed upload: {e}")))?
+    {
         if saved.len() >= MAX_ATTACHMENTS {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -147,23 +157,35 @@ async fn upload(
             continue; // not a file part
         };
         let Some(filename) = sanitize_filename(&raw_name) else {
-            return Err((StatusCode::BAD_REQUEST, format!("unusable filename: {raw_name}")));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unusable filename: {raw_name}"),
+            ));
         };
         let Some((mime, kind)) = classify(&filename) else {
             let exts: Vec<&str> = ALLOWED.iter().map(|(e, _, _)| *e).collect();
             return Err((
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!("{filename}: only these types are accepted: {}", exts.join(", ")),
+                format!(
+                    "{filename}: only these types are accepted: {}",
+                    exts.join(", ")
+                ),
             ));
         };
 
         let bytes = field.bytes().await.map_err(|e| {
-            (StatusCode::BAD_REQUEST, format!("{filename}: upload failed: {e}"))
+            (
+                StatusCode::BAD_REQUEST,
+                format!("{filename}: upload failed: {e}"),
+            )
         })?;
         if bytes.len() > MAX_ATTACHMENT_BYTES {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("{filename} is larger than {} MB", MAX_ATTACHMENT_BYTES / 1024 / 1024),
+                format!(
+                    "{filename} is larger than {} MB",
+                    MAX_ATTACHMENT_BYTES / 1024 / 1024
+                ),
             ));
         }
         if !content_matches(mime, kind, &bytes) {
@@ -246,7 +268,11 @@ async fn serve(
 
     // Text kinds are served as plain text whatever their nominal type: an
     // uploaded .json or .csv must never be interpreted as a document.
-    let content_type = if kind == "text" { "text/plain; charset=utf-8" } else { &mime };
+    let content_type = if kind == "text" {
+        "text/plain; charset=utf-8"
+    } else {
+        &mime
+    };
     // Only render inline what the browser previews safely.
     let disposition = if kind == "image" || kind == "pdf" {
         "inline".to_string()
@@ -260,9 +286,15 @@ async fn serve(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_DISPOSITION, disposition)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-        .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; sandbox",
+        )
         // Bytes never change for a given id.
-        .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(
+            header::CACHE_CONTROL,
+            "private, max-age=31536000, immutable",
+        )
         .body(Body::from(bytes))
         .map_err(internal)
 }
@@ -376,11 +408,20 @@ mod tests {
 
     #[test]
     fn sanitize_strips_directories_and_rejects_the_dangerous() {
-        assert_eq!(sanitize_filename("diagram.png").as_deref(), Some("diagram.png"));
+        assert_eq!(
+            sanitize_filename("diagram.png").as_deref(),
+            Some("diagram.png")
+        );
         // Traversal is reduced to a basename, never allowed through.
-        assert_eq!(sanitize_filename("../../etc/passwd").as_deref(), Some("passwd"));
+        assert_eq!(
+            sanitize_filename("../../etc/passwd").as_deref(),
+            Some("passwd")
+        );
         // A Windows client sends backslashes.
-        assert_eq!(sanitize_filename("C:\\users\\me\\y.png").as_deref(), Some("y.png"));
+        assert_eq!(
+            sanitize_filename("C:\\users\\me\\y.png").as_deref(),
+            Some("y.png")
+        );
         // Dotfiles, bare dots and NULs are refused outright.
         assert_eq!(sanitize_filename(".bashrc"), None);
         assert_eq!(sanitize_filename(".."), None);
@@ -388,7 +429,10 @@ mod tests {
         assert_eq!(sanitize_filename("a\0b.txt"), None);
         assert_eq!(sanitize_filename("   "), None);
         // Everything outside [A-Za-z0-9._-] becomes '_'.
-        assert_eq!(sanitize_filename("my report (1).pdf").as_deref(), Some("my_report__1_.pdf"));
+        assert_eq!(
+            sanitize_filename("my report (1).pdf").as_deref(),
+            Some("my_report__1_.pdf")
+        );
     }
 
     #[test]
@@ -396,7 +440,10 @@ mod tests {
         let name = format!("{}.png", "a".repeat(300));
         let out = sanitize_filename(&name).unwrap();
         assert!(out.len() <= 128);
-        assert!(out.ends_with(".png"), "extension drives classify(), so it must survive");
+        assert!(
+            out.ends_with(".png"),
+            "extension drives classify(), so it must survive"
+        );
     }
 
     #[test]
@@ -412,14 +459,30 @@ mod tests {
 
     #[test]
     fn magic_bytes_catch_a_renamed_file() {
-        assert!(content_matches("image/png", "image", &[0x89, b'P', b'N', b'G', 0x0d]));
+        assert!(content_matches(
+            "image/png",
+            "image",
+            &[0x89, b'P', b'N', b'G', 0x0d]
+        ));
         // An ELF binary renamed to .png must not pass.
         assert!(!content_matches("image/png", "image", b"\x7fELF\x02\x01"));
         assert!(content_matches("application/pdf", "pdf", b"%PDF-1.7 ..."));
         assert!(!content_matches("application/pdf", "pdf", b"not a pdf"));
-        assert!(content_matches("image/jpeg", "image", &[0xFF, 0xD8, 0xFF, 0xE0]));
-        assert!(content_matches("image/webp", "image", b"RIFF\0\0\0\0WEBPVP8 "));
-        assert!(!content_matches("image/webp", "image", b"RIFF\0\0\0\0AVI LIST"));
+        assert!(content_matches(
+            "image/jpeg",
+            "image",
+            &[0xFF, 0xD8, 0xFF, 0xE0]
+        ));
+        assert!(content_matches(
+            "image/webp",
+            "image",
+            b"RIFF\0\0\0\0WEBPVP8 "
+        ));
+        assert!(!content_matches(
+            "image/webp",
+            "image",
+            b"RIFF\0\0\0\0AVI LIST"
+        ));
         // Text is judged by the absence of NULs, same as files.rs.
         assert!(content_matches("text/plain", "text", b"hello\nworld"));
         assert!(!content_matches("text/plain", "text", b"hel\0lo"));

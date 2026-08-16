@@ -83,7 +83,11 @@ pub async fn handle(
                  /__aichip/client.js and use window.aichip",
             );
         }
-        if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if let Some(origin) = req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+        {
             // Exactly this app's own origin. Port-agnostic for the same reason
             // the dashboard's check is: a dev server serves the page from a
             // different one.
@@ -115,7 +119,10 @@ pub async fn handle(
         Route::Health => return reply(StatusCode::OK, json!({ "ok": true, "slug": slug })),
         Route::Unknown => return oops(StatusCode::NOT_FOUND, "no such thing"),
         Route::WrongMethod => {
-            return oops(StatusCode::METHOD_NOT_ALLOWED, "that path does not take this method")
+            return oops(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "that path does not take this method",
+            )
         }
         _ => {}
     }
@@ -130,7 +137,9 @@ pub async fn handle(
     }
 
     if let Some(needed) = route.scope() {
-        let held = apps::grants::of(&state.db, app.id).await.unwrap_or_default();
+        let held = apps::grants::of(&state.db, app.id)
+            .await
+            .unwrap_or_default();
         if !held.contains(&needed) {
             // Its own shape, not a bare error: a missing permission is
             // something the person can grant, and the client turns this into a
@@ -150,7 +159,12 @@ pub async fn handle(
     let query = parts.uri.query().unwrap_or("").to_string();
     let body = match axum::body::to_bytes(body, MAX_BODY).await {
         Ok(b) => b,
-        Err(_) => return oops(StatusCode::PAYLOAD_TOO_LARGE, "that request body is too large"),
+        Err(_) => {
+            return oops(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "that request body is too large",
+            )
+        }
     };
 
     match serve(state, &app, route, &query, &body).await {
@@ -178,8 +192,12 @@ async fn serve(
             .map_err(|e| (StatusCode::NOT_FOUND, e.0))
     };
     let json_body = || -> Result<serde_json::Map<String, Value>, Failed> {
-        serde_json::from_slice(body)
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("that is not a JSON object: {e}")))
+        serde_json::from_slice(body).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("that is not a JSON object: {e}"),
+            )
+        })
     };
     let uuid = |s: &str| -> Result<uuid::Uuid, Failed> {
         s.parse()
@@ -189,7 +207,9 @@ async fn serve(
 
     let out = match route {
         Route::Me => {
-            let held = apps::grants::of(&state.db, app.id).await.unwrap_or_default();
+            let held = apps::grants::of(&state.db, app.id)
+                .await
+                .unwrap_or_default();
             // Nothing about the workspace: an app is told who *it* is, not
             // where it lives.
             json!({
@@ -256,69 +276,89 @@ async fn serve(
         // Everything below is aichip's data, behind a grant already checked.
         // Each is an explicit projection, never a forwarded response — see the
         // note at the top of `apps::bridge` about `t.prompt`.
-        Route::Projects => rows_json(
-            state,
-            "SELECT id, name, default_branch, vcs FROM projects
+        Route::Projects => {
+            rows_json(
+                state,
+                "SELECT id, name, default_branch, vcs FROM projects
               WHERE workspace_id = $1 AND kind = 'repo' ORDER BY name",
-            app.workspace_id,
-            &["id", "name", "defaultBranch", "vcs"],
-        )
-        .await?,
-        Route::Tasks => rows_json(
-            state,
-            // No `prompt`. It is text a person typed and may contain anything.
-            "SELECT t.id, t.title, t.board_column, t.created_at, p.name AS project
+                app.workspace_id,
+                &["id", "name", "defaultBranch", "vcs"],
+            )
+            .await?
+        }
+        Route::Tasks => {
+            rows_json(
+                state,
+                // No `prompt`. It is text a person typed and may contain anything.
+                "SELECT t.id, t.title, t.board_column, t.created_at, p.name AS project
                FROM tasks t JOIN projects p ON p.id = t.project_id
               WHERE p.workspace_id = $1 AND p.kind = 'repo'
               ORDER BY t.created_at DESC LIMIT 500",
-            app.workspace_id,
-            &["id", "title", "boardColumn", "createdAt", "project"],
-        )
-        .await?,
-        Route::Runs => rows_json(
-            state,
-            // No transcripts, no prompts, no session ids.
-            "SELECT r.id, r.status, r.engine, r.model, r.cost_usd, r.started_at, r.finished_at
+                app.workspace_id,
+                &["id", "title", "boardColumn", "createdAt", "project"],
+            )
+            .await?
+        }
+        Route::Runs => {
+            rows_json(
+                state,
+                // No transcripts, no prompts, no session ids.
+                "SELECT r.id, r.status, r.engine, r.model, r.cost_usd, r.started_at, r.finished_at
                FROM runs r JOIN projects p ON p.id = r.project_id
               WHERE p.workspace_id = $1
               ORDER BY r.created_at DESC LIMIT 500",
-            app.workspace_id,
-            &["id", "status", "engine", "model", "costUsd", "startedAt", "finishedAt"],
-        )
-        .await?,
-        Route::Spend => rows_json(
-            state,
-            "SELECT p.name AS project, sum(r.cost_usd) AS cost, count(*) AS runs
+                app.workspace_id,
+                &[
+                    "id",
+                    "status",
+                    "engine",
+                    "model",
+                    "costUsd",
+                    "startedAt",
+                    "finishedAt",
+                ],
+            )
+            .await?
+        }
+        Route::Spend => {
+            rows_json(
+                state,
+                "SELECT p.name AS project, sum(r.cost_usd) AS cost, count(*) AS runs
                FROM runs r JOIN projects p ON p.id = r.project_id
               WHERE p.workspace_id = $1 AND r.cost_usd IS NOT NULL
               GROUP BY p.name ORDER BY 2 DESC NULLS LAST",
-            app.workspace_id,
-            &["project", "cost", "runs"],
-        )
-        .await?,
-        Route::Agents => rows_json(
-            state,
-            // No `system_prompt`: an agent's instructions are not an app's
-            // business, and they are the most sensitive column on the table.
-            "SELECT id, name, icon, color, engine FROM agents
+                app.workspace_id,
+                &["project", "cost", "runs"],
+            )
+            .await?
+        }
+        Route::Agents => {
+            rows_json(
+                state,
+                // No `system_prompt`: an agent's instructions are not an app's
+                // business, and they are the most sensitive column on the table.
+                "SELECT id, name, icon, color, engine FROM agents
               WHERE workspace_id = $1 ORDER BY name",
-            app.workspace_id,
-            &["id", "name", "icon", "color", "engine"],
-        )
-        .await?,
-        Route::KbPages => rows_json(
-            state,
-            // Text, never `body`: the HTML is markup an agent may have written,
-            // and the KB itself diffs on text for the same reason.
-            "SELECT a.id, a.title, a.summary, left(a.content_text, 4000) AS text
+                app.workspace_id,
+                &["id", "name", "icon", "color", "engine"],
+            )
+            .await?
+        }
+        Route::KbPages => {
+            rows_json(
+                state,
+                // Text, never `body`: the HTML is markup an agent may have written,
+                // and the KB itself diffs on text for the same reason.
+                "SELECT a.id, a.title, a.summary, left(a.content_text, 4000) AS text
                FROM kb_articles a
                LEFT JOIN projects p ON p.id = a.project_id
               WHERE COALESCE(p.workspace_id, a.workspace_id) = $1
               ORDER BY a.title LIMIT 200",
-            app.workspace_id,
-            &["id", "title", "summary", "text"],
-        )
-        .await?,
+                app.workspace_id,
+                &["id", "title", "summary", "text"],
+            )
+            .await?
+        }
 
         Route::CreateTask => {
             let body = json_body()?;
@@ -515,7 +555,10 @@ mod tests {
     fn the_policy_pins_an_app_to_its_own_origin() {
         let csp = csp().to_str().unwrap().to_string();
         assert!(csp.contains("connect-src 'self'"), "{csp}");
-        assert!(csp.contains("form-action 'self'"), "a form is a way out too: {csp}");
+        assert!(
+            csp.contains("form-action 'self'"),
+            "a form is a way out too: {csp}"
+        );
         // …and the dashboard has to be able to embed it, or the iframe is blank.
         assert!(csp.contains("frame-ancestors http://localhost:*"), "{csp}");
     }

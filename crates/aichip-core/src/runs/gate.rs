@@ -103,8 +103,7 @@ impl RunGate for DbGate {
         // issues tool calls in parallel, so the alternative is five shells for
         // one moment of needing you.
         if parked {
-            let ctx =
-                crate::attention::ctx_for_run(&self.db, run_id, Some(waiting_for)).await;
+            let ctx = crate::attention::ctx_for_run(&self.db, run_id, Some(waiting_for)).await;
             crate::attention::fire(&self.db, crate::attention::Event::Permission, ctx).await;
         }
         parked

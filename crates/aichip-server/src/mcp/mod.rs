@@ -8,11 +8,11 @@ pub mod chat_tools;
 pub mod org_tools;
 
 use crate::AppState;
+use aichip_core::runs::permissions::Decision;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use aichip_core::runs::permissions::Decision;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -59,7 +59,10 @@ async fn rpc(
             }]
         }),
         "tools/call" => {
-            let args = req.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+            let args = req
+                .pointer("/params/arguments")
+                .cloned()
+                .unwrap_or(json!({}));
             let tool_name = args
                 .get("tool_name")
                 .and_then(Value::as_str)

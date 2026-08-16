@@ -11,20 +11,26 @@ use aichip_shared::{
     is_known_model_for, EngineTierEffort, EngineTierMapping, ModelTier, PermissionMode,
     ReasoningEffort, TierMapping, MODEL_CHOICES,
 };
-use std::collections::BTreeMap;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/models", get(get_models).put(set_models))
-        .route("/settings/permissions", get(get_permissions).put(set_permissions))
+        .route(
+            "/settings/permissions",
+            get(get_permissions).put(set_permissions),
+        )
         .route("/settings/effort", get(get_effort).put(set_effort))
-        .route("/settings/permissions/apply-to-agents", axum::routing::post(apply_to_agents))
+        .route(
+            "/settings/permissions/apply-to-agents",
+            axum::routing::post(apply_to_agents),
+        )
         .route("/settings/attention", get(get_attention).put(set_attention))
 }
 
@@ -212,12 +218,11 @@ async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
     // the default, so this number is exactly "how many agents will ignore
     // the setting above" — worth showing rather than leaving to be discovered
     // when a run stops to ask anyway.
-    let overriding: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM agents WHERE permission_preset IS NOT NULL",
-    )
-    .fetch_one(&state.db.pool)
-    .await
-    .unwrap_or(0);
+    let overriding: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agents WHERE permission_preset IS NOT NULL")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap_or(0);
 
     Json(json!({
         "agentsOverriding": overriding,
@@ -249,10 +254,11 @@ async fn get_effort(State(state): State<AppState>) -> Json<Value> {
     // Agents carrying their own budget outrank this, exactly as they do for
     // permissions — worth counting here rather than leaving it to be discovered
     // when a card thinks harder or less hard than the setting says.
-    let overriding: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE effort IS NOT NULL")
-        .fetch_one(&state.db.pool)
-        .await
-        .unwrap_or(0);
+    let overriding: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agents WHERE effort IS NOT NULL")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap_or(0);
     Json(json!({
         "agentsOverriding": overriding,
         "defaultEffort": state.orchestrator.default_effort().await,
@@ -301,14 +307,15 @@ async fn set_permissions(
 /// carefully-configured agent may do — this is an explicit action the user
 /// takes once.
 async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let cleared = sqlx::query("UPDATE agents SET permission_preset = NULL WHERE permission_preset IS NOT NULL")
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?
-        .rows_affected();
+    let cleared = sqlx::query(
+        "UPDATE agents SET permission_preset = NULL WHERE permission_preset IS NOT NULL",
+    )
+    .execute(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .rows_affected();
     Ok(Json(json!({ "cleared": cleared })))
 }
-
 
 /// The most dangerous write in the app.
 ///

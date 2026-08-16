@@ -52,7 +52,6 @@ impl ReasoningEffort {
     }
 }
 
-
 /// Which of the four places decided a run's thinking budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -121,7 +120,11 @@ mod tests {
     #[test]
     fn at_least_raises_but_never_lowers() {
         assert_eq!(Low.at_least(High), High);
-        assert_eq!(Max.at_least(High), Max, "a deliberate Max must not be capped");
+        assert_eq!(
+            Max.at_least(High),
+            Max,
+            "a deliberate Max must not be capped"
+        );
     }
 
     #[test]

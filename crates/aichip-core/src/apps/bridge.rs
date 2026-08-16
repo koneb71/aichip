@@ -199,7 +199,11 @@ mod tests {
         let route = r("GET", "/__aichip/app.css");
         assert_eq!(route, Route::AppCss);
         assert!(route.header_exempt(), "a <link> cannot send X-Aichip-App");
-        assert_eq!(route.scope(), None, "the theme is aichip's own text, not the user's data");
+        assert_eq!(
+            route.scope(),
+            None,
+            "the theme is aichip's own text, not the user's data"
+        );
         // It is a stylesheet, not a surface: nothing else may be asked of it.
         assert_eq!(r("POST", "/__aichip/app.css"), Route::WrongMethod);
         assert_eq!(r("DELETE", "/__aichip/app.css"), Route::WrongMethod);
@@ -211,8 +215,14 @@ mod tests {
         assert_eq!(r("GET", "/__aichip/app.css"), Route::AppCss);
         assert_eq!(r("GET", "/__aichip/me"), Route::Me);
         assert_eq!(r("GET", "/__aichip/schema"), Route::Schema);
-        assert_eq!(r("GET", "/__aichip/data/note"), Route::DataList("note".into()));
-        assert_eq!(r("POST", "/__aichip/data/note"), Route::DataCreate("note".into()));
+        assert_eq!(
+            r("GET", "/__aichip/data/note"),
+            Route::DataList("note".into())
+        );
+        assert_eq!(
+            r("POST", "/__aichip/data/note"),
+            Route::DataCreate("note".into())
+        );
         assert_eq!(
             r("PATCH", "/__aichip/data/note/abc"),
             Route::DataUpdate("note".into(), "abc".into())
@@ -244,7 +254,10 @@ mod tests {
     fn an_app_can_file_a_card_but_never_start_a_run() {
         // Starting a run spends money and executes code. It is not reachable
         // from the bridge at all — not behind a scope, absent.
-        for path in ["/__aichip/api/tasks/abc/start", "/__aichip/api/runs/abc/cancel"] {
+        for path in [
+            "/__aichip/api/tasks/abc/start",
+            "/__aichip/api/runs/abc/cancel",
+        ] {
             assert_eq!(r("POST", path), Route::Unknown, "{path} resolved");
         }
         assert_eq!(Route::CreateTask.scope(), Some(Scope::WriteBoard));

@@ -248,8 +248,7 @@ mod tests {
             panic!("markdown is text");
         };
         assert_eq!(t, "# Title\n\nBody.");
-        let Extracted::Text(t) = extract("data.csv", b"name,amount\ncoffee,4.50\n").unwrap()
-        else {
+        let Extracted::Text(t) = extract("data.csv", b"name,amount\ncoffee,4.50\n").unwrap() else {
             panic!("csv is text");
         };
         assert!(t.contains("coffee,4.50"));

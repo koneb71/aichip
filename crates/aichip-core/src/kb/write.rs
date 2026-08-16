@@ -179,21 +179,24 @@ mod tests {
             "Deploying to staging"
         );
         // h1 wins when both are present, being the more specific claim.
-        assert_eq!(
-            title_from("<h1>Runbook</h1><h2>Steps</h2>", "b"),
-            "Runbook"
-        );
+        assert_eq!(title_from("<h1>Runbook</h1><h2>Steps</h2>", "b"), "Runbook");
     }
 
     #[test]
     fn a_headingless_article_still_gets_a_title() {
-        assert_eq!(title_from("<p>no heading</p>", "How deploys work"), "How deploys work");
+        assert_eq!(
+            title_from("<p>no heading</p>", "How deploys work"),
+            "How deploys work"
+        );
     }
 
     #[test]
     fn generation_can_never_touch_the_repository() {
         for tool in ["Edit", "Write", "Bash", "MultiEdit"] {
-            assert!(DENIED.contains(&tool), "{tool} must be denied, not merely unlisted");
+            assert!(
+                DENIED.contains(&tool),
+                "{tool} must be denied, not merely unlisted"
+            );
             assert!(!TOOLS.contains(&tool));
         }
     }
@@ -216,11 +219,10 @@ mod tests {
     #[test]
     fn standing_context_never_comes_after_the_output_contract() {
         let ctx = "\n\n---\n\nStanding context: the API lives in api/.";
-        for p in [
-            prompt("x", ctx),
-            rewrite_prompt("x", "T", "<p>y</p>", ctx),
-        ] {
-            let at = p.find("the API lives in api/").expect("the context travels");
+        for p in [prompt("x", ctx), rewrite_prompt("x", "T", "<p>y</p>", ctx)] {
+            let at = p
+                .find("the API lives in api/")
+                .expect("the context travels");
             let fmt = p.find("## Format").expect("the contract is still there");
             assert!(at < fmt, "context landed after the format contract:\n{p}");
             assert!(p.contains("HTML only"));

@@ -132,7 +132,9 @@ mod tests {
         let b = sign(&req, &creds);
         assert_eq!(a, b);
         assert_eq!(a.len(), 3);
-        assert!(a[2].1.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/s3/"));
+        assert!(a[2]
+            .1
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/s3/"));
     }
 
     /// Changing anything the signature covers has to change the signature —
@@ -156,15 +158,37 @@ mod tests {
         let original = sig(&base);
 
         let variants = [
-            Request { method: "GET", ..copy(&base) },
-            Request { path: "/b/other", ..copy(&base) },
-            Request { query: "x=1", ..copy(&base) },
-            Request { host: "elsewhere", ..copy(&base) },
-            Request { payload: b"tampered", ..copy(&base) },
-            Request { timestamp: "20260102T000000Z", ..copy(&base) },
+            Request {
+                method: "GET",
+                ..copy(&base)
+            },
+            Request {
+                path: "/b/other",
+                ..copy(&base)
+            },
+            Request {
+                query: "x=1",
+                ..copy(&base)
+            },
+            Request {
+                host: "elsewhere",
+                ..copy(&base)
+            },
+            Request {
+                payload: b"tampered",
+                ..copy(&base)
+            },
+            Request {
+                timestamp: "20260102T000000Z",
+                ..copy(&base)
+            },
         ];
         for v in &variants {
-            assert_ne!(sig(v), original, "a signed field did not affect the signature");
+            assert_ne!(
+                sig(v),
+                original,
+                "a signed field did not affect the signature"
+            );
         }
     }
 

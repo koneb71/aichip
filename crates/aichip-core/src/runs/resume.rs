@@ -102,14 +102,17 @@ impl Refusal {
     pub fn message(&self) -> String {
         match self {
             Self::StillOwesAnOutcome(s) => {
-                format!("this run is still {} — stop it first", s.as_str().replace('_', " "))
+                format!(
+                    "this run is still {} — stop it first",
+                    s.as_str().replace('_', " ")
+                )
             }
             Self::NothingToResume => {
                 "this run never reported a session, so there is nothing to pick up".into()
             }
-            Self::DifferentEngine { session, engine } => format!(
-                "the session belongs to {session} and this card now runs on {engine}"
-            ),
+            Self::DifferentEngine { session, engine } => {
+                format!("the session belongs to {session} and this card now runs on {engine}")
+            }
             Self::EngineCannotResume { engine } => {
                 format!("{engine} can't resume a previous session")
             }
@@ -179,7 +182,9 @@ pub fn continuation_prompt(original: &str, stop_reason: Option<&str>) -> String 
             "The previous run stopped before finishing. What it reported:\n\n{}\n\n",
             crate::runs::orchestrator::clip_chars(reason, 500),
         )),
-        None => p.push_str("The previous run stopped before finishing, with no reason recorded.\n\n"),
+        None => {
+            p.push_str("The previous run stopped before finishing, with no reason recorded.\n\n")
+        }
     }
     p.push_str(
         "First check where you actually got to — read the files you were \
@@ -220,7 +225,10 @@ mod tests {
     fn a_project_without_git_resumes_in_place() {
         // The arm most likely to be got backwards: no worktree path is normal
         // here, not a reclaimed one.
-        let p = Prior { cwd: Cwd::InPlace, ..ok() };
+        let p = Prior {
+            cwd: Cwd::InPlace,
+            ..ok()
+        };
         assert_eq!(decide(&p), Ok("sess-1".to_string()));
     }
 
@@ -235,7 +243,11 @@ mod tests {
             RunStatus::RateLimited,
         ] {
             let p = Prior { status, ..ok() };
-            assert_eq!(decide(&p), Err(Refusal::StillOwesAnOutcome(status)), "{status:?}");
+            assert_eq!(
+                decide(&p),
+                Err(Refusal::StillOwesAnOutcome(status)),
+                "{status:?}"
+            );
         }
     }
 
@@ -248,13 +260,19 @@ mod tests {
         // button on all of them is noise rather than an offer. Keeping the two
         // apart is the point; if a surface ever wants "keep going", it does
         // not have to reopen this decision.
-        let p = Prior { status: RunStatus::Completed, ..ok() };
+        let p = Prior {
+            status: RunStatus::Completed,
+            ..ok()
+        };
         assert!(decide(&p).is_ok());
     }
 
     #[test]
     fn a_session_from_another_engine_is_refused_rather_than_silently_ignored() {
-        let p = Prior { session_engine: Some("opencode"), ..ok() };
+        let p = Prior {
+            session_engine: Some("opencode"),
+            ..ok()
+        };
         assert_eq!(
             decide(&p),
             Err(Refusal::DifferentEngine {
@@ -263,37 +281,60 @@ mod tests {
             })
         );
         // And a session with no recorded engine is treated the same way.
-        let p = Prior { session_engine: None, ..ok() };
+        let p = Prior {
+            session_engine: None,
+            ..ok()
+        };
         assert!(matches!(decide(&p), Err(Refusal::DifferentEngine { .. })));
     }
 
     #[test]
     fn an_engine_that_cannot_resume_is_refused_at_the_click() {
-        let p = Prior { engine_can_resume: false, ..ok() };
+        let p = Prior {
+            engine_can_resume: false,
+            ..ok()
+        };
         assert_eq!(
             decide(&p),
-            Err(Refusal::EngineCannotResume { engine: "claude-code".into() })
+            Err(Refusal::EngineCannotResume {
+                engine: "claude-code".into()
+            })
         );
     }
 
     #[test]
     fn a_reclaimed_worktree_is_refused() {
-        let p = Prior { cwd: Cwd::Gone, ..ok() };
+        let p = Prior {
+            cwd: Cwd::Gone,
+            ..ok()
+        };
         assert_eq!(decide(&p), Err(Refusal::WorktreeGone));
     }
 
     #[test]
     fn a_missing_or_blank_session_is_nothing_to_resume() {
-        assert_eq!(decide(&Prior { session_id: None, ..ok() }), Err(Refusal::NothingToResume));
         assert_eq!(
-            decide(&Prior { session_id: Some("   "), ..ok() }),
+            decide(&Prior {
+                session_id: None,
+                ..ok()
+            }),
+            Err(Refusal::NothingToResume)
+        );
+        assert_eq!(
+            decide(&Prior {
+                session_id: Some("   "),
+                ..ok()
+            }),
             Err(Refusal::NothingToResume)
         );
     }
 
     #[test]
     fn only_a_card_run_is_resumable() {
-        let p = Prior { is_task_run: false, ..ok() };
+        let p = Prior {
+            is_task_run: false,
+            ..ok()
+        };
         assert_eq!(decide(&p), Err(Refusal::NotATaskRun));
     }
 
@@ -302,7 +343,10 @@ mod tests {
         for r in [
             Refusal::StillOwesAnOutcome(RunStatus::Running),
             Refusal::NothingToResume,
-            Refusal::DifferentEngine { session: "a".into(), engine: "b".into() },
+            Refusal::DifferentEngine {
+                session: "a".into(),
+                engine: "b".into(),
+            },
             Refusal::EngineCannotResume { engine: "b".into() },
             Refusal::WorktreeGone,
             Refusal::NotATaskRun,
@@ -311,13 +355,19 @@ mod tests {
             assert!(!m.is_empty(), "{r:?}");
             // A tooltip, not a paragraph.
             assert!(m.len() < 120, "{r:?}: {m}");
-            assert!(!m.contains('_'), "{r:?}: {m} still reads as a database value");
+            assert!(
+                !m.contains('_'),
+                "{r:?}: {m} still reads as a database value"
+            );
         }
     }
 
     #[test]
     fn the_continuation_carries_the_reason_and_says_not_to_start_over() {
-        let p = continuation_prompt("Build the login page", Some("API Error: connection refused"));
+        let p = continuation_prompt(
+            "Build the login page",
+            Some("API Error: connection refused"),
+        );
         assert!(p.contains("API Error: connection refused"));
         assert!(p.contains("Do not start over"));
         assert!(p.contains("Build the login page"));

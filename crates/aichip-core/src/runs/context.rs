@@ -157,8 +157,14 @@ mod tests {
     #[test]
     fn a_disabled_brain_and_a_disabled_skill_contribute_nothing() {
         let s = Standing {
-            brain: Some(Brain { enabled: false, ..brain("the API lives in api/") }),
-            skill: Some(Skill { enabled: false, ..skill("write tests first", "") }),
+            brain: Some(Brain {
+                enabled: false,
+                ..brain("the API lives in api/")
+            }),
+            skill: Some(Skill {
+                enabled: false,
+                ..skill("write tests first", "")
+            }),
         };
         assert_eq!(s.apply("do the thing"), "do the thing");
         assert!(s.is_empty());
@@ -166,7 +172,10 @@ mod tests {
 
     #[test]
     fn an_empty_brain_body_contributes_nothing() {
-        let s = Standing { brain: Some(brain("   \n  ")), skill: None };
+        let s = Standing {
+            brain: Some(brain("   \n  ")),
+            skill: None,
+        };
         assert_eq!(s.apply("do the thing"), "do the thing");
     }
 
@@ -195,13 +204,19 @@ mod tests {
             (None, None),
             (Some(brain("a fact")), None),
             (None, Some(skill("a method", "a prohibition"))),
-            (Some(brain("a fact")), Some(skill("a method", "a prohibition"))),
+            (
+                Some(brain("a fact")),
+                Some(skill("a method", "a prohibition")),
+            ),
         ] {
             let by_hand = crate::skills::augment_prompt(
                 &crate::brain::augment_prompt("the request", b.as_ref()),
                 sk.as_ref(),
             );
-            let standing = Standing { brain: b, skill: sk };
+            let standing = Standing {
+                brain: b,
+                skill: sk,
+            };
             assert_eq!(standing.apply("the request"), by_hand);
         }
     }
@@ -242,7 +257,11 @@ mod tests {
         };
         let out = s.apply("the request");
         assert!(out.starts_with("the request"));
-        assert_eq!(out.matches("[truncated —").count(), 2, "one per oversized block");
+        assert_eq!(
+            out.matches("[truncated —").count(),
+            2,
+            "one per oversized block"
+        );
         // Bounded: two 4000-char bodies plus a must-not and the framing.
         assert!(out.len() < 14_000, "{}", out.len());
     }
@@ -253,7 +272,10 @@ mod tests {
         // drop it in unconditionally, so "nothing" has to be the empty string
         // rather than a stray separator in the middle of the document.
         assert_eq!(Standing::default().block(), "");
-        let s = Standing { brain: Some(brain("a fact")), skill: None };
+        let s = Standing {
+            brain: Some(brain("a fact")),
+            skill: None,
+        };
         assert!(s.block().contains("a fact"));
         // And it is exactly what `apply` would have appended.
         assert_eq!(s.apply("the request"), format!("the request{}", s.block()));
@@ -264,7 +286,10 @@ mod tests {
         // Pinned because the two sites that use it — workflow steps and KB
         // generation — have no skill to name, and a future edit that "helpfully"
         // threads one through would be inferring rather than being told.
-        let s = Standing { brain: Some(brain("a fact")), skill: None };
+        let s = Standing {
+            brain: Some(brain("a fact")),
+            skill: None,
+        };
         let out = s.apply("the request");
         assert!(out.contains("a fact"));
         assert!(!out.contains("<<<BEGIN SKILL>>>"));

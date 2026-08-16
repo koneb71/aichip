@@ -268,7 +268,9 @@ mod tests {
         let long = slug(&"a".repeat(200), &id);
         assert!(long.len() < 63, "{} chars", long.len());
         for s in [slug("Fix the login", &id), long] {
-            assert!(s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            assert!(s
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
             assert!(!s.starts_with('-') && !s.ends_with('-'));
         }
     }

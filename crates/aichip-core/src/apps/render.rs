@@ -56,10 +56,18 @@ fn view_json(v: &super::manifest::View) -> Value {
             "sort": sort.as_ref().map(|s| json!({ "field": s.field, "descending": s.descending })),
         }),
         ViewSpec::Form { groups, buttons } => json!({ "groups": groups, "buttons": buttons }),
-        ViewSpec::Kanban { group_by, title, fields } => {
+        ViewSpec::Kanban {
+            group_by,
+            title,
+            fields,
+        } => {
             json!({ "groupBy": group_by, "title": title, "fields": fields })
         }
-        ViewSpec::Chart { kind, group_by, measure } => {
+        ViewSpec::Chart {
+            kind,
+            group_by,
+            measure,
+        } => {
             json!({ "shape": kind.as_str(), "groupBy": group_by, "measure": measure })
         }
     };
@@ -79,9 +87,15 @@ pub async fn chart(
     raw: &Raw,
 ) -> Result<Vec<Value>, String> {
     let (agg, field) = parse_measure(measure)?;
-    let (group, _) = super::query::parse(model, &Raw { filters: vec![format!("{group_by}:notnull")], ..Default::default() })
-        .map(|_| (group_by.to_string(), ()))
-        .map_err(|e| e.0)?;
+    let (group, _) = super::query::parse(
+        model,
+        &Raw {
+            filters: vec![format!("{group_by}:notnull")],
+            ..Default::default()
+        },
+    )
+    .map(|_| (group_by.to_string(), ()))
+    .map_err(|e| e.0)?;
 
     // Every identifier below is checked against the model before it is used —
     // the group column by the filter parse above, the measured column here —
@@ -153,10 +167,19 @@ mod tests {
 
     #[test]
     fn a_measure_reads_its_aggregate_and_field() {
-        assert_eq!(parse_measure("sum(total)").unwrap(), (Agg::Sum, Some("total".into())));
-        assert_eq!(parse_measure(" avg( amount ) ").unwrap(), (Agg::Avg, Some("amount".into())));
+        assert_eq!(
+            parse_measure("sum(total)").unwrap(),
+            (Agg::Sum, Some("total".into()))
+        );
+        assert_eq!(
+            parse_measure(" avg( amount ) ").unwrap(),
+            (Agg::Avg, Some("amount".into()))
+        );
         assert_eq!(parse_measure("count()").unwrap(), (Agg::Count, None));
-        assert_eq!(parse_measure("count(id)").unwrap(), (Agg::Count, Some("id".into())));
+        assert_eq!(
+            parse_measure("count(id)").unwrap(),
+            (Agg::Count, Some("id".into()))
+        );
     }
 
     #[test]
@@ -165,7 +188,9 @@ mod tests {
             let e = parse_measure(bad).unwrap_err();
             assert!(!e.is_empty(), "{bad} was accepted");
         }
-        assert!(parse_measure("median(x)").unwrap_err().contains("count, sum, avg"));
+        assert!(parse_measure("median(x)")
+            .unwrap_err()
+            .contains("count, sum, avg"));
     }
 
     #[test]
@@ -203,6 +228,9 @@ mod tests {
         )
         .unwrap();
         let json = manifest_json(&m);
-        assert_eq!(json["actions"][0]["steps"][0]["scope"], serde_json::json!("run:agents"));
+        assert_eq!(
+            json["actions"][0]["steps"][0]["scope"],
+            serde_json::json!("run:agents")
+        );
     }
 }

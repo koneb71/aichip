@@ -178,7 +178,11 @@ async fn dispatch(
                 .enqueue_research(
                     project_id,
                     // Exactly one owner, same rule the table CHECKs.
-                    if project_id.is_none() { Some(workspace_id) } else { None },
+                    if project_id.is_none() {
+                        Some(workspace_id)
+                    } else {
+                        None
+                    },
                     &prompt,
                     Some(&engine),
                     // Research has no auto-routing; "auto" falls to the
@@ -187,9 +191,25 @@ async fn dispatch(
                     effort,
                 )
                 .await?;
-            Ok(Fired { research_id: Some(research_id), run_id: Some(run_id), ..Default::default() })
+            Ok(Fired {
+                research_id: Some(research_id),
+                run_id: Some(run_id),
+                ..Default::default()
+            })
         }
-        "task" => fire_task(db, orchestrator, &r.get::<String, _>("name"), project_id, &prompt, &engine, tier, effort).await,
+        "task" => {
+            fire_task(
+                db,
+                orchestrator,
+                &r.get::<String, _>("name"),
+                project_id,
+                &prompt,
+                &engine,
+                tier,
+                effort,
+            )
+            .await
+        }
         // A watch is a chat firing wearing a composed prompt. Always general-
         // scoped: the general chat is the one that carries WebSearch/WebFetch,
         // and a page watch has no use for a repository checkout.
@@ -332,7 +352,11 @@ async fn fire_chat(
             .execute(&db.pool)
             .await?;
     }
-    Ok(Fired { chat_id: Some(chat_id), run_id: Some(run_id), ..Default::default() })
+    Ok(Fired {
+        chat_id: Some(chat_id),
+        run_id: Some(run_id),
+        ..Default::default()
+    })
 }
 
 /// Tell the attention hook a routine's run just ended.
@@ -367,7 +391,9 @@ pub async fn announce_finished(db: &Db, run_id: Uuid, status: aichip_shared::Run
         if let Some(research_id) = r.get::<Option<Uuid>, _>("research_id") {
             format!("{base}/research/{research_id}")
         } else if let Some(chat_id) = r.get::<Option<Uuid>, _>("chat_id") {
-            let scope = project_id.map(|p| p.to_string()).unwrap_or_else(|| "general".into());
+            let scope = project_id
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "general".into());
             format!("{base}/chat?project={scope}&chat={chat_id}")
         } else {
             crate::attention::link(base, project_id, r.get::<Option<Uuid>, _>("task_id"))
@@ -438,11 +464,17 @@ async fn fire_task(
                 .bind(task_id)
                 .execute(&db.pool)
                 .await?;
-            Ok(Fired { task_id: Some(task_id), run_id: Some(run_id), ..Default::default() })
+            Ok(Fired {
+                task_id: Some(task_id),
+                run_id: Some(run_id),
+                ..Default::default()
+            })
         }
         // The card exists but did not start — leave it in the backlog where
         // it is visible and startable by hand, and say so in the history.
-        Err(e) => Err(anyhow::anyhow!("the card was created but did not start: {e}")),
+        Err(e) => Err(anyhow::anyhow!(
+            "the card was created but did not start: {e}"
+        )),
     }
 }
 

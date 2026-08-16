@@ -35,7 +35,11 @@ pub async fn tables(db: &Db, schema: &str) -> anyhow::Result<Vec<LiveTable>> {
         };
         match out.iter_mut().find(|t| t.name == table) {
             Some(t) => t.columns.push(column),
-            None => out.push(LiveTable { name: table, columns: vec![column], indexes: vec![] }),
+            None => out.push(LiveTable {
+                name: table,
+                columns: vec![column],
+                indexes: vec![],
+            }),
         }
     }
 

@@ -74,11 +74,11 @@ pub fn rate_limit_signal(text: &str) -> bool {
         "overloaded",
         "429",
         // Non-Anthropic phrasings, which the Claude-only version missed:
-        "quota",             // Google, generic
+        "quota",              // Google, generic
         "resource_exhausted", // Gemini / gRPC
         "resource exhausted",
-        "tokens per min",    // OpenAI TPM
-        "requests per min",  // OpenAI RPM
+        "tokens per min",   // OpenAI TPM
+        "requests per min", // OpenAI RPM
         "too many requests",
         "capacity",
     ]
@@ -102,7 +102,9 @@ mod tests {
         // These are the ones the Claude-only heuristic let through, which
         // would have left an OpenCode run retrying into a wall.
         assert!(rate_limit_signal("RESOURCE_EXHAUSTED: quota exceeded"));
-        assert!(rate_limit_signal("Rate limit reached: tokens per min (TPM)"));
+        assert!(rate_limit_signal(
+            "Rate limit reached: tokens per min (TPM)"
+        ));
         assert!(rate_limit_signal("Too Many Requests"));
     }
 

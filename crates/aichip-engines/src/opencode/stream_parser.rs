@@ -35,16 +35,24 @@ pub struct StreamState {
 
 impl StreamState {
     pub fn new(model: Option<String>) -> Self {
-        Self { model, ..Default::default() }
+        Self {
+            model,
+            ..Default::default()
+        }
     }
 
     /// Called on stdout EOF, with whether the process exited cleanly.
     pub fn finish(self, exit_ok: bool) -> AichipEvent {
         if let Some((_, message)) = self.rate_limited {
-            return AichipEvent::RateLimited { reset_at: None, message };
+            return AichipEvent::RateLimited {
+                reset_at: None,
+                message,
+            };
         }
         if !self.errors.is_empty() {
-            return AichipEvent::RunFailed { reason: self.errors.join("\n") };
+            return AichipEvent::RunFailed {
+                reason: self.errors.join("\n"),
+            };
         }
         if !exit_ok {
             return AichipEvent::RunFailed {
@@ -56,16 +64,16 @@ impl StreamState {
                 reason: "opencode produced no session — it may not be authenticated".into(),
             };
         };
-        let (cost, usage) = self.messages.values().fold(
-            (0.0, Usage::default()),
-            |(c, mut u), (mc, mu)| {
-                u.input_tokens += mu.input_tokens;
-                u.output_tokens += mu.output_tokens;
-                u.cache_read_tokens += mu.cache_read_tokens;
-                u.cache_creation_tokens += mu.cache_creation_tokens;
-                (c + mc, u)
-            },
-        );
+        let (cost, usage) =
+            self.messages
+                .values()
+                .fold((0.0, Usage::default()), |(c, mut u), (mc, mu)| {
+                    u.input_tokens += mu.input_tokens;
+                    u.output_tokens += mu.output_tokens;
+                    u.cache_read_tokens += mu.cache_read_tokens;
+                    u.cache_creation_tokens += mu.cache_creation_tokens;
+                    (c + mc, u)
+                });
         AichipEvent::RunCompleted {
             session_id,
             cost_usd: Some(cost),
@@ -107,7 +115,9 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> Vec<AichipEvent> {
             if let Some(text) = part.get("text").and_then(Value::as_str) {
                 if !text.is_empty() {
                     state.last_text = text.to_string();
-                    events.push(AichipEvent::AssistantText { text: text.to_string() });
+                    events.push(AichipEvent::AssistantText {
+                        text: text.to_string(),
+                    });
                 }
             }
         }
@@ -123,7 +133,11 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> Vec<AichipEvent> {
         Some("error") => {
             let message = v
                 .get("error")
-                .map(|e| e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string()))
+                .map(|e| {
+                    e.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| e.to_string())
+                })
                 .unwrap_or_else(|| "unknown error".into());
             if rate_limit_signal(&message) {
                 state.rate_limited = Some((None, message));
@@ -165,7 +179,10 @@ fn parse_plain_text(line: &str) -> Vec<AichipEvent> {
             tool_name: tool,
             input: Value::Null,
         },
-        AichipEvent::PermissionResolved { request_id, allowed: false },
+        AichipEvent::PermissionResolved {
+            request_id,
+            allowed: false,
+        },
     ]
 }
 
@@ -191,7 +208,11 @@ fn parse_tool(part: &Value) -> Vec<AichipEvent> {
 
     let is_error = state.get("status").and_then(Value::as_str) == Some("error");
     let summary = if is_error {
-        state.get("error").and_then(Value::as_str).unwrap_or("").to_string()
+        state
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
     } else {
         state
             .get("output")
@@ -255,7 +276,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, AichipEvent::RunStarted { .. }))
             .collect();
-        assert_eq!(starts.len(), 1, "exactly one start, however many lines carry the id");
+        assert_eq!(
+            starts.len(),
+            1,
+            "exactly one start, however many lines carry the id"
+        );
         match starts[0] {
             AichipEvent::RunStarted { session_id, model } => {
                 assert!(session_id.as_deref().unwrap().starts_with("ses_"));
@@ -269,11 +294,17 @@ mod tests {
     fn the_terminal_event_is_synthesised_because_the_stream_has_none() {
         let (events, terminal) = run(SIMPLE, true);
         assert!(
-            !events.iter().any(|e| matches!(e, AichipEvent::RunCompleted { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, AichipEvent::RunCompleted { .. })),
             "no line should produce a completion — OpenCode emits none"
         );
         match terminal {
-            AichipEvent::RunCompleted { result_text, cost_usd, .. } => {
+            AichipEvent::RunCompleted {
+                result_text,
+                cost_usd,
+                ..
+            } => {
                 assert_eq!(result_text, "ok");
                 assert!(cost_usd.unwrap() > 0.0);
             }
@@ -287,9 +318,11 @@ mod tests {
         let calls: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                AichipEvent::ToolCall { tool_name, tool_use_id, .. } => {
-                    Some((tool_name.clone(), tool_use_id.clone()))
-                }
+                AichipEvent::ToolCall {
+                    tool_name,
+                    tool_use_id,
+                    ..
+                } => Some((tool_name.clone(), tool_use_id.clone())),
                 _ => None,
             })
             .collect();
@@ -299,9 +332,11 @@ mod tests {
         let results: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                AichipEvent::ToolResult { tool_use_id, is_error, .. } => {
-                    Some((tool_use_id.clone(), *is_error))
-                }
+                AichipEvent::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => Some((tool_use_id.clone(), *is_error)),
                 _ => None,
             })
             .collect();
@@ -318,7 +353,9 @@ mod tests {
         // than a running total for the whole run.
         let (_, terminal) = run(TOOLS, true);
         match terminal {
-            AichipEvent::RunCompleted { cost_usd, usage, .. } => {
+            AichipEvent::RunCompleted {
+                cost_usd, usage, ..
+            } => {
                 let cost = cost_usd.unwrap();
                 assert!((cost - 0.029301).abs() < 1e-6, "got {cost}");
                 assert_eq!(usage.input_tokens, 8747 + 9152);
@@ -342,7 +379,9 @@ mod tests {
             &mut state,
         );
         // Only the synthesised start; the error itself waits for the end.
-        assert!(events.iter().all(|e| matches!(e, AichipEvent::RunStarted { .. })));
+        assert!(events
+            .iter()
+            .all(|e| matches!(e, AichipEvent::RunStarted { .. })));
         match state.finish(false) {
             AichipEvent::RunFailed { reason } => assert!(reason.contains("tool blew up")),
             other => panic!("expected RunFailed, got {other:?}"),

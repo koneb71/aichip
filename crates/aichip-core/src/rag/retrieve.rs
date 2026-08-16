@@ -189,8 +189,14 @@ pub fn augment_prompt(prompt: &str, passages: &[Passage]) -> String {
 /// mistake `kb::neutralise` documents avoiding.
 fn neutralise(text: &str) -> String {
     let own = crate::fence::scrub_foreign(text, &[DOC_BEGIN, DOC_END]);
-    own.replace(DOC_END, "[end of quoted excerpt — literal text from the document]")
-        .replace(DOC_BEGIN, "[begin quoted excerpt — literal text from the document]")
+    own.replace(
+        DOC_END,
+        "[end of quoted excerpt — literal text from the document]",
+    )
+    .replace(
+        DOC_BEGIN,
+        "[begin quoted excerpt — literal text from the document]",
+    )
 }
 
 /// A file name has no business carrying a newline into the fence label.
@@ -217,7 +223,10 @@ mod tests {
     fn no_passages_leaves_the_prompt_byte_identical() {
         // The property the call site depends on: retrieval that found nothing
         // costs nothing, so the augment can run unconditionally every turn.
-        assert_eq!(augment_prompt("what's the deploy window?", &[]), "what's the deploy window?");
+        assert_eq!(
+            augment_prompt("what's the deploy window?", &[]),
+            "what's the deploy window?"
+        );
     }
 
     #[test]

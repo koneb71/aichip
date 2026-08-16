@@ -48,7 +48,10 @@ async fn list(
         (Some(p), _) => ("rs.project_id = $1", p),
         (None, Some(w)) => ("rs.workspace_id = $1 AND rs.project_id IS NULL", w),
         (None, None) => {
-            return Err((StatusCode::BAD_REQUEST, "name a project or a workspace".into()))
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "name a project or a workspace".into(),
+            ))
         }
     };
     let rows = sqlx::query(&format!(
@@ -121,10 +124,7 @@ async fn create(
 /// Everything the detail view needs in one response: the question, the
 /// report if there is one, and where the latest run stands — so the page can
 /// decide live-view vs report-view without a second request.
-async fn one(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
+async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(&format!(
         "SELECT rs.id, rs.project_id, rs.question, rs.title, rs.report_md,
                 rs.kb_article_id, rs.created_at, rs.updated_at,
@@ -224,7 +224,9 @@ async fn cancel(
     .await
     .map_err(internal)?;
     let Some(run_id) = run_id else {
-        return Ok(Json(json!({ "canceled": false, "detail": "nothing is running" })));
+        return Ok(Json(
+            json!({ "canceled": false, "detail": "nothing is running" }),
+        ));
     };
     super::tasks::cancel_run(State(state), Path(run_id)).await
 }
@@ -289,11 +291,18 @@ async fn save_to_kb(
     let report: String = row
         .get::<Option<String>, _>("report_md")
         .filter(|r| !r.trim().is_empty())
-        .ok_or((StatusCode::CONFLICT, "this research has no report yet".to_string()))?;
+        .ok_or((
+            StatusCode::CONFLICT,
+            "this research has no report yet".to_string(),
+        ))?;
 
     let title: String = {
         let t: String = row.get("title");
-        if t.trim().is_empty() { row.get::<String, _>("question") } else { t }
+        if t.trim().is_empty() {
+            row.get::<String, _>("question")
+        } else {
+            t
+        }
     };
     let title: String = title.chars().take(120).collect();
 

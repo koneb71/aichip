@@ -29,10 +29,10 @@ pub mod query;
 pub mod render;
 pub mod run;
 pub mod runtime;
-pub mod skeleton;
 pub mod scaffold;
 pub mod schema;
 pub mod scope;
+pub mod skeleton;
 pub mod sync;
 
 pub use manifest::{Manifest, ManifestError, Runtime};
@@ -77,7 +77,13 @@ fn home() -> PathBuf {
 pub fn schema_name(slug: &str) -> String {
     let cleaned: String = slug
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("app_{cleaned}")
 }
@@ -267,7 +273,11 @@ pub async fn install(
     .fetch_one(&mut *tx)
     .await?;
 
-    let scopes: Vec<String> = parsed.scopes.iter().map(|s| s.as_str().to_string()).collect();
+    let scopes: Vec<String> = parsed
+        .scopes
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
     sqlx::query(
         "INSERT INTO apps (id, project_id, workspace_id, slug, name, icon, summary, brief,
                            runtime, state, schema_name, manifest, manifest_sha256,
@@ -332,7 +342,11 @@ pub async fn set_manifest(
     // file on disk is already what git has.
     commit(&app.path, &format!("Update {}", parsed.name)).await?;
 
-    let scopes: Vec<String> = parsed.scopes.iter().map(|s| s.as_str().to_string()).collect();
+    let scopes: Vec<String> = parsed
+        .scopes
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
     sqlx::query(
         "UPDATE apps SET manifest = $2, manifest_sha256 = $3, name = $4, icon = $5,
                          summary = $6, requested_scopes = $7, port = $8, updated_at = now()
@@ -423,7 +437,10 @@ pub async fn reconcile_schema(db: &Db, app: &App) -> anyhow::Result<SchemaOutcom
         .bind(app.id)
         .execute(&db.pool)
         .await?;
-        return Ok(SchemaOutcome { applied: plan, pending: None });
+        return Ok(SchemaOutcome {
+            applied: plan,
+            pending: None,
+        });
     }
 
     // One outstanding question per app: a new proposal replaces the old rather
@@ -447,7 +464,13 @@ pub async fn reconcile_schema(db: &Db, app: &App) -> anyhow::Result<SchemaOutcom
     .await?;
     tx.commit().await?;
 
-    Ok(SchemaOutcome { applied: Vec::new(), pending: Some(PendingPlan { id, statements: plan }) })
+    Ok(SchemaOutcome {
+        applied: Vec::new(),
+        pending: Some(PendingPlan {
+            id,
+            statements: plan,
+        }),
+    })
 }
 
 /// The migration this app is waiting on, if any.
@@ -473,13 +496,12 @@ pub async fn pending_plan(db: &Db, app_id: Uuid) -> anyhow::Result<Option<Pendin
 /// executes. All of it in one transaction, so a migration that fails half way
 /// leaves the schema as it was rather than in a shape nothing describes.
 pub async fn apply_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
-    let row = sqlx::query(
-        "SELECT statements FROM app_schema_plans WHERE id = $1 AND status = 'pending'",
-    )
-    .bind(plan_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("that change has already been dealt with"))?;
+    let row =
+        sqlx::query("SELECT statements FROM app_schema_plans WHERE id = $1 AND status = 'pending'")
+            .bind(plan_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("that change has already been dealt with"))?;
     use sqlx::Row;
     let statements: Vec<Stmt> = serde_json::from_value(row.get("statements"))?;
 
@@ -492,12 +514,10 @@ pub async fn apply_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
         return Err(e);
     }
 
-    sqlx::query(
-        "UPDATE app_schema_plans SET status = 'applied', applied_at = now() WHERE id = $1",
-    )
-    .bind(plan_id)
-    .execute(&db.pool)
-    .await?;
+    sqlx::query("UPDATE app_schema_plans SET status = 'applied', applied_at = now() WHERE id = $1")
+        .bind(plan_id)
+        .execute(&db.pool)
+        .await?;
     Ok(statements)
 }
 
@@ -546,7 +566,9 @@ pub async fn export(db: &Db, app: &App, with_data: bool) -> anyhow::Result<Strin
     let mut rows = Vec::new();
     if with_data {
         for name in bundle::model_order(&parsed.models) {
-            let Some(model) = parsed.model(&name) else { continue };
+            let Some(model) = parsed.model(&name) else {
+                continue;
+            };
             // Everything, in id order so two exports of an unchanged app are
             // the same bytes and a bundle in git diffs to nothing.
             let all = data::list(
@@ -581,7 +603,9 @@ pub async fn import(db: &Db, workspace_id: Uuid, text: &str) -> anyhow::Result<A
     let app = install(db, workspace_id, &parsed_bundle.manifest, "imported").await?;
 
     for (model_name, rows) in &parsed_bundle.rows {
-        let Some(model) = parsed.model(model_name) else { continue };
+        let Some(model) = parsed.model(model_name) else {
+            continue;
+        };
         for row in rows {
             // Ids and timestamps are kept: a `ref:` holds the id of another
             // row, so re-minting them would quietly break every link in the
@@ -657,7 +681,8 @@ mod tests {
             assert!(!s.starts_with('-') && !s.ends_with('-'), "{s}");
             assert!(s.len() <= 63, "{s}");
             assert!(
-                s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
                 "{s}"
             );
         }

@@ -28,10 +28,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(publish_project),
         )
         .route("/github/clone", axum::routing::post(clone))
-        .route(
-            "/github/clone/{id}",
-            get(clone_status).delete(cancel_clone),
-        )
+        .route("/github/clone/{id}", get(clone_status).delete(cancel_clone))
 }
 
 /// Clone a repository into a new folder and make it a project.
@@ -80,7 +77,10 @@ async fn clone(
     if !known && parsed.host != "github.com" {
         return Err((
             StatusCode::CONFLICT,
-            format!("aichip is not signed in to {} — sign in from Connections first", parsed.host),
+            format!(
+                "aichip is not signed in to {} — sign in from Connections first",
+                parsed.host
+            ),
         ));
     }
 
@@ -88,7 +88,10 @@ async fn clone(
     // is the only shape available: `sandboxed` canonicalizes, so it can say
     // nothing about a folder that does not exist yet. Same as `fs::mkdir`.
     let root = crate::routes::fs::browse_root();
-    let parent = body.parent.map(std::path::PathBuf::from).unwrap_or_else(|| root.clone());
+    let parent = body
+        .parent
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.clone());
     let parent = crate::routes::fs::sandboxed(&root, &parent).ok_or((
         StatusCode::FORBIDDEN,
         "that path is outside the folder aichip is allowed to browse".to_string(),
@@ -104,7 +107,9 @@ async fn clone(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let _ = &state;
-    Ok(Json(json!({ "id": id, "destination": destination.to_string_lossy() })))
+    Ok(Json(
+        json!({ "id": id, "destination": destination.to_string_lossy() }),
+    ))
 }
 
 async fn clone_status(
@@ -154,9 +159,7 @@ struct ConnectBody {
     scopes: Vec<String>,
 }
 
-async fn connect(
-    body: Option<Json<ConnectBody>>,
-) -> Result<Json<Value>, super::ApiError> {
+async fn connect(body: Option<Json<ConnectBody>>) -> Result<Json<Value>, super::ApiError> {
     let scopes = body.map(|Json(b)| b.scopes).unwrap_or_default();
     let started = aichip_core::github::connect::start(&scopes)
         .await
@@ -164,16 +167,12 @@ async fn connect(
     Ok(Json(serde_json::to_value(started).unwrap_or(Value::Null)))
 }
 
-async fn connect_status(
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-) -> Json<Value> {
+async fn connect_status(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) -> Json<Value> {
     let progress = aichip_core::github::connect::poll(id).await;
     Json(serde_json::to_value(progress).unwrap_or(Value::Null))
 }
 
-async fn cancel_connect(
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-) -> Json<Value> {
+async fn cancel_connect(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) -> Json<Value> {
     aichip_core::github::connect::cancel(id).await;
     Json(json!({ "cancelled": true }))
 }
@@ -225,13 +224,8 @@ async fn publish_project(
         "visibility must be \"private\" or \"public\"".to_string(),
     ))?;
 
-    match aichip_core::github::publish::publish(
-        &state.db,
-        id,
-        body.name.as_deref(),
-        visibility,
-    )
-    .await
+    match aichip_core::github::publish::publish(&state.db, id, body.name.as_deref(), visibility)
+        .await
     {
         Ok(slug) => Ok(Json(json!({
             "repo": slug,

@@ -93,7 +93,10 @@ pub async fn survey(dir: &Path) -> anyhow::Result<Survey> {
     while let Some(e) = listing.next_entry().await? {
         let name = e.file_name().to_string_lossy().to_string();
         // Noise that tells you nothing and can be enormous.
-        if matches!(name.as_str(), ".git" | "node_modules" | "target" | "dist" | ".venv") {
+        if matches!(
+            name.as_str(),
+            ".git" | "node_modules" | "target" | "dist" | ".venv"
+        ) {
             continue;
         }
         let suffix = if e.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
@@ -203,7 +206,8 @@ mod tests {
 
     #[test]
     fn takes_the_dockerfile_out_of_a_fenced_reply() {
-        let reply = "Here you go:\n\n```dockerfile\nFROM node:20\nEXPOSE 3000\n```\n\nHope that helps!";
+        let reply =
+            "Here you go:\n\n```dockerfile\nFROM node:20\nEXPOSE 3000\n```\n\nHope that helps!";
         assert_eq!(
             extract(reply).unwrap(),
             (Kind::Dockerfile, "FROM node:20\nEXPOSE 3000".to_string())
@@ -242,7 +246,10 @@ mod tests {
         assert_eq!(extract("I need to know which port you want."), None);
         assert_eq!(extract(""), None);
         assert_eq!(extract("```\njust some text\n```"), None);
-        assert_eq!(extract("```\n# This project has no FROM instruction\n```"), None);
+        assert_eq!(
+            extract("```\n# This project has no FROM instruction\n```"),
+            None
+        );
         // YAML that is not a compose file is not a stack.
         assert_eq!(extract("```yaml\nname: hello\n```"), None);
     }

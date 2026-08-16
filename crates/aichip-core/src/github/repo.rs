@@ -146,7 +146,11 @@ fn check(part: &str, max: usize, dots_ok: bool, what: &str) -> Result<(), String
         Err(format!(
             "\"{part}\" is not a {what} GitHub would accept — letters, digits and \
              dashes{}, at most {max} characters, and not starting with a dash",
-            if dots_ok { ", dots and underscores" } else { "" }
+            if dots_ok {
+                ", dots and underscores"
+            } else {
+                ""
+            }
         ))
     }
 }
@@ -175,11 +179,12 @@ pub async fn resolve(db: &Db, project_id: Uuid) -> Option<String> {
 
     // A claim rather than a plain write: two callers resolving at once should
     // agree, and neither should overwrite an answer somebody set deliberately.
-    let _ = sqlx::query("UPDATE projects SET github_repo = $2 WHERE id = $1 AND github_repo IS NULL")
-        .bind(project_id)
-        .bind(&slug)
-        .execute(&db.pool)
-        .await;
+    let _ =
+        sqlx::query("UPDATE projects SET github_repo = $2 WHERE id = $1 AND github_repo IS NULL")
+            .bind(project_id)
+            .bind(&slug)
+            .execute(&db.pool)
+            .await;
     Some(slug)
 }
 
@@ -287,7 +292,11 @@ fn clones() -> &'static Mutex<HashMap<Uuid, Cloning>> {
 // `rename_all` renames the *variants*; the fields inside them need their own
 // rule, or `project_id` reaches a browser expecting `projectId` and the clone
 // appears to succeed into nothing.
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "state")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "state"
+)]
 pub enum CloneProgress {
     Cloning,
     /// Cloned, and the project row exists.
@@ -371,7 +380,8 @@ pub async fn start_clone(
         "repo",
         "clone",
         &facts.slug,
-        temp.to_str().ok_or("that folder's name is not valid text")?,
+        temp.to_str()
+            .ok_or("that folder's name is not valid text")?,
     ])
     .map_err(|e| e.to_string())?;
 
@@ -615,7 +625,10 @@ mod tests {
     fn a_repository_may_be_called_dot_github_even_though_an_owner_may_not() {
         // `cli/.github` is a real repository.
         assert_eq!(ok("cli/.github").name, ".github");
-        assert!(parse_repo_ref(".cli/thing").is_err(), "an owner may not start with a dot");
+        assert!(
+            parse_repo_ref(".cli/thing").is_err(),
+            "an owner may not start with a dot"
+        );
     }
 
     #[test]
@@ -698,7 +711,10 @@ mod progress_tests {
 
         let json = serde_json::to_string(&CloneProgress::Cloning).unwrap();
         assert_eq!(json, "{\"state\":\"cloning\"}");
-        let json = serde_json::to_string(&CloneProgress::Failed { reason: "no".into() }).unwrap();
+        let json = serde_json::to_string(&CloneProgress::Failed {
+            reason: "no".into(),
+        })
+        .unwrap();
         assert!(json.contains("\"state\":\"failed\"") && json.contains("\"reason\":\"no\""));
     }
 }

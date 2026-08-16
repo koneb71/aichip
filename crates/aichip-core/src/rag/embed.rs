@@ -38,7 +38,11 @@ static EMBEDDER: OnceLock<Mutex<Option<TextEmbedding>>> = OnceLock::new();
 static STATUS: Mutex<Option<EmbedStatus>> = Mutex::new(None);
 
 pub fn status() -> EmbedStatus {
-    STATUS.lock().unwrap().clone().unwrap_or(EmbedStatus::NotReady)
+    STATUS
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or(EmbedStatus::NotReady)
 }
 
 fn set_status(s: EmbedStatus) {
@@ -95,9 +99,14 @@ pub fn to_bytes(v: &[f32]) -> Vec<u8> {
 /// must be loud, not a silently shorter vector that cosines against nothing.
 pub fn from_bytes(b: &[u8]) -> anyhow::Result<Vec<f32>> {
     if b.len() % 4 != 0 {
-        anyhow::bail!("embedding blob of {} bytes is not a whole number of f32s", b.len());
+        anyhow::bail!(
+            "embedding blob of {} bytes is not a whole number of f32s",
+            b.len()
+        );
     }
-    Ok(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
 }
 
 /// Cosine similarity. 0.0 — never a panic — on dimension mismatch or a zero

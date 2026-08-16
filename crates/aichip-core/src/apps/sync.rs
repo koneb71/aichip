@@ -63,7 +63,14 @@ pub async fn scan(db: &Db, workspace_id: Uuid, project_path: &Path) -> anyhow::R
             .find(|a| a.name.eq_ignore_ascii_case(&name))
             .map(|a: &App| a.id);
 
-        out.push(Found { dir: dir_name, name, summary, manifest, error, installed_as });
+        out.push(Found {
+            dir: dir_name,
+            name,
+            summary,
+            manifest,
+            error,
+            installed_as,
+        });
     }
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(out)
@@ -118,13 +125,11 @@ mod tests {
     fn a_folder_name_cannot_climb_out_of_the_apps_directory() {
         // `adopt` joins this onto a path, so the check is what keeps it inside.
         for bad in ["../../etc", "a/b", "a\\b", "", ".hidden", "./x"] {
-            let rejected =
-                bad.is_empty() || bad.contains(['/', '\\']) || bad.starts_with('.');
+            let rejected = bad.is_empty() || bad.contains(['/', '\\']) || bad.starts_with('.');
             assert!(rejected, "{bad} would have been accepted");
         }
         for good in ["expenses", "my-app", "app_2"] {
-            let rejected =
-                good.is_empty() || good.contains(['/', '\\']) || good.starts_with('.');
+            let rejected = good.is_empty() || good.contains(['/', '\\']) || good.starts_with('.');
             assert!(!rejected, "{good} was rejected");
         }
     }

@@ -22,7 +22,10 @@ pub fn router() -> Router<AppState> {
         .route("/mcp-servers", get(list).post(create))
         .route("/mcp-servers/{id}", patch(update).delete(remove))
         .route("/mcp-servers/{id}/test", post(test))
-        .route("/agents/{id}/mcp-servers", get(for_agent).put(set_for_agent))
+        .route(
+            "/agents/{id}/mcp-servers",
+            get(for_agent).put(set_for_agent),
+        )
 }
 
 const TRANSPORTS: &[&str] = &["stdio", "http", "sse"];
@@ -79,7 +82,9 @@ async fn list(
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
-    Ok(Json(json!({ "servers": rows.iter().map(server_json).collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "servers": rows.iter().map(server_json).collect::<Vec<_>>() }),
+    ))
 }
 
 /// Validate the parts a run can't recover from: a name that would break the
@@ -92,7 +97,10 @@ fn validate(body: &ServerBody) -> Result<(String, String), ApiError> {
     }
     let transport = body.transport.clone().unwrap_or_else(|| "stdio".into());
     if !TRANSPORTS.contains(&transport.as_str()) {
-        return Err(bad(format!("transport must be one of {}", TRANSPORTS.join(", "))));
+        return Err(bad(format!(
+            "transport must be one of {}",
+            TRANSPORTS.join(", ")
+        )));
     }
     if transport == "stdio" {
         if body.command.as_deref().unwrap_or("").trim().is_empty() {
@@ -111,7 +119,9 @@ async fn create(
     State(state): State<AppState>,
     Json(body): Json<ServerBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let workspace_id = body.workspace_id.ok_or_else(|| bad("workspace_id is required"))?;
+    let workspace_id = body
+        .workspace_id
+        .ok_or_else(|| bad("workspace_id is required"))?;
     let (name, transport) = validate(&body)?;
 
     let row = sqlx::query(&format!(
@@ -130,7 +140,9 @@ async fn create(
     .await
     .map_err(|e| {
         if e.to_string().contains("mcp_servers_workspace_id_name_key") {
-            bad(format!("a server called \"{name}\" already exists in this workspace"))
+            bad(format!(
+                "a server called \"{name}\" already exists in this workspace"
+            ))
         } else {
             internal(e)
         }
@@ -150,7 +162,11 @@ async fn update(
     // COALESCE so a patch of one field doesn't blank the rest. `name` is
     // slugged only when present; an empty slug would silently rename the
     // server to nothing and orphan every agent's tool prefix.
-    let name = body.name.as_deref().map(slug_name).filter(|n| !n.is_empty());
+    let name = body
+        .name
+        .as_deref()
+        .map(slug_name)
+        .filter(|n| !n.is_empty());
 
     let row = sqlx::query(&format!(
         "UPDATE mcp_servers SET
@@ -166,7 +182,11 @@ async fn update(
     ))
     .bind(id)
     .bind(name)
-    .bind(body.transport.as_ref().filter(|t| TRANSPORTS.contains(&t.as_str())))
+    .bind(
+        body.transport
+            .as_ref()
+            .filter(|t| TRANSPORTS.contains(&t.as_str())),
+    )
     .bind(body.command.as_deref().map(str::trim))
     .bind(body.args.clone())
     .bind(body.env.clone())
@@ -220,11 +240,13 @@ async fn test(
             )
             .await
         }
-        _ => probe_http(
-            row.get::<Option<String>, _>("url").unwrap_or_default(),
-            row.get::<Value, _>("headers"),
-        )
-        .await,
+        _ => {
+            probe_http(
+                row.get::<Option<String>, _>("url").unwrap_or_default(),
+                row.get::<Value, _>("headers"),
+            )
+            .await
+        }
     };
 
     Ok(Json(match result {
@@ -267,7 +289,11 @@ async fn probe_stdio(
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
 
-    for msg in [initialize_request(), initialized_notification(), tools_request()] {
+    for msg in [
+        initialize_request(),
+        initialized_notification(),
+        tools_request(),
+    ] {
         stdin.write_all(format!("{msg}\n").as_bytes()).await?;
     }
     stdin.flush().await?;
@@ -281,7 +307,9 @@ async fn probe_stdio(
                 return Ok(tools);
             }
         }
-        Err(anyhow::anyhow!("the server closed without listing its tools"))
+        Err(anyhow::anyhow!(
+            "the server closed without listing its tools"
+        ))
     };
     let tools = tokio::time::timeout(deadline, read)
         .await
@@ -423,7 +451,9 @@ mod tests {
     fn other_traffic_on_the_wire_is_ignored() {
         // The initialize reply and any log notifications arrive first.
         assert!(tools_from_reply(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
-        assert!(tools_from_reply(r#"{"jsonrpc":"2.0","method":"notifications/message"}"#).is_none());
+        assert!(
+            tools_from_reply(r#"{"jsonrpc":"2.0","method":"notifications/message"}"#).is_none()
+        );
         assert!(tools_from_reply("not json at all").is_none());
     }
 

@@ -81,9 +81,9 @@ fn record_of(model: &Model, row: Option<&Value>) -> expr::Record {
     let mut record = expr::Record::new();
     if let Some(Value::Object(fields)) = row {
         for (key, value) in fields {
-            let numeric = model.field(key).is_some_and(|f| {
-                matches!(f.ty, super::manifest::FieldType::Decimal)
-            });
+            let numeric = model
+                .field(key)
+                .is_some_and(|f| matches!(f.ty, super::manifest::FieldType::Decimal));
             record.insert(
                 key.clone(),
                 match (numeric, value) {
@@ -123,7 +123,9 @@ pub async fn run(
         return bad("that row is gone");
     }
 
-    let held = grants::of(db, app.id).await.map_err(|e| ActionError(e.to_string()))?;
+    let held = grants::of(db, app.id)
+        .await
+        .map_err(|e| ActionError(e.to_string()))?;
     let mut out = Outcome::default();
 
     for step in &action.steps {
@@ -166,7 +168,10 @@ pub async fn run(
                 row = None;
             }
 
-            Step::Create { model: target, values } => {
+            Step::Create {
+                model: target,
+                values,
+            } => {
                 let target = manifest
                     .model(target)
                     .ok_or_else(|| ActionError(format!("\"{target}\" is not a model")))?;
@@ -175,7 +180,11 @@ pub async fn run(
                     .map_err(|e| ActionError(e.0))?;
             }
 
-            Step::CreateTask { project, title, prompt } => {
+            Step::CreateTask {
+                project,
+                title,
+                prompt,
+            } => {
                 let project_id = resolve_project(db, app, project.as_deref()).await?;
                 make_task(
                     db,
@@ -189,7 +198,9 @@ pub async fn run(
                 out.messages.push("Added a card to your backlog.".into());
             }
 
-            Step::StartRun { project, prompt, .. } => {
+            Step::StartRun {
+                project, prompt, ..
+            } => {
                 let project_id = resolve_project(db, app, project.as_deref()).await?;
                 let text = interpolate(prompt, &record, &now);
                 let title: String = text.chars().take(60).collect();
@@ -230,11 +241,7 @@ fn resolved(
 /// Resolved by name at the moment of the click rather than checked at install,
 /// because project names are a property of *this* machine — an app shared with
 /// someone else would otherwise refuse to install over a name they do not have.
-async fn resolve_project(
-    db: &Db,
-    app: &App,
-    name: Option<&str>,
-) -> Result<Uuid, ActionError> {
+async fn resolve_project(db: &Db, app: &App, name: Option<&str>) -> Result<Uuid, ActionError> {
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return bad(
             "this step works on one of your projects, so the manifest has to name one: \
@@ -305,12 +312,18 @@ mod tests {
             "Categorise: Coffee"
         );
         assert_eq!(interpolate("{{ amount * qty }}", &record(), NOW), "12.75");
-        assert_eq!(interpolate("on {{ today() }}", &record(), NOW), "on 2026-08-02");
+        assert_eq!(
+            interpolate("on {{ today() }}", &record(), NOW),
+            "on 2026-08-02"
+        );
     }
 
     #[test]
     fn text_without_braces_is_untouched() {
-        assert_eq!(interpolate("just a prompt", &record(), NOW), "just a prompt");
+        assert_eq!(
+            interpolate("just a prompt", &record(), NOW),
+            "just a prompt"
+        );
         assert_eq!(interpolate("", &record(), NOW), "");
     }
 

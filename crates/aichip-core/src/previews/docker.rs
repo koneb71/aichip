@@ -64,7 +64,9 @@ pub async fn build(
             cmd.stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            let mut child = cmd.spawn().map_err(|e| format!("could not run docker: {e}"))?;
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("could not run docker: {e}"))?;
             // Dropped after the write so docker sees EOF and starts building.
             {
                 let mut stdin = child.stdin.take().ok_or("docker took no stdin")?;
@@ -221,7 +223,14 @@ pub async fn compose_up(
 /// Every service's output in a stack, prefixed with which service said it.
 pub async fn compose_logs(project: &str, lines: u32) -> String {
     Command::new(DOCKER)
-        .args(["compose", "-p", project, "logs", "--tail", &lines.to_string()])
+        .args([
+            "compose",
+            "-p",
+            project,
+            "logs",
+            "--tail",
+            &lines.to_string(),
+        ])
         .output()
         .await
         .map(|o| {
@@ -239,7 +248,14 @@ pub async fn compose_logs(project: &str, lines: u32) -> String {
 /// where the rewritten file may already be gone.
 pub async fn compose_down_project(project: &str) {
     let _ = Command::new(DOCKER)
-        .args(["compose", "-p", project, "down", "--volumes", "--remove-orphans"])
+        .args([
+            "compose",
+            "-p",
+            project,
+            "down",
+            "--volumes",
+            "--remove-orphans",
+        ])
         .output()
         .await;
 }
@@ -356,7 +372,10 @@ pub async fn images_for(prefix: &str) -> Vec<String> {
 }
 
 pub async fn remove_image(tag: &str) {
-    let _ = Command::new(DOCKER).args(["rmi", "--force", tag]).output().await;
+    let _ = Command::new(DOCKER)
+        .args(["rmi", "--force", tag])
+        .output()
+        .await;
 }
 
 /// Every preview *stack* compose currently knows about, by project name.
@@ -410,7 +429,11 @@ pub async fn list_owned() -> Vec<String> {
 /// The last `n` non-empty lines, which is the part of a build log worth
 /// showing. Whole logs are megabytes and the failure is always at the end.
 fn tail(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
 }

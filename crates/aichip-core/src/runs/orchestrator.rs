@@ -7,31 +7,31 @@
 //! - chat runs (project assistant turns): real checkout cwd, but locked to a
 //!   read-only + aichip-tools allowed list — never Bash/Edit/Write there.
 
-use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
-use aichip_shared::{EngineTierEffort, EngineTierMapping, McpWiring, 
-    AichipEvent, EventEnvelope, ModelTier, PermissionMode, ReasoningEffort, RunStatus,
-    TierChoice,
-};
 use aichip_engines::{Engine, RunSpec};
+use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
+use aichip_shared::{
+    AichipEvent, EngineTierEffort, EngineTierMapping, EventEnvelope, McpWiring, ModelTier,
+    PermissionMode, ReasoningEffort, RunStatus, TierChoice,
+};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::apps;
 use crate::bus::EventBus;
 use crate::db::Db;
+use crate::queue::rate_limit_backoff;
 use crate::runs::attachments;
 use crate::runs::memory;
 use crate::runs::mentions;
 use crate::runs::task_plan;
 use crate::runs::usage_tally::{UsageDelta, UsageTally};
-use crate::queue::rate_limit_backoff;
 use crate::worktrees::manager::WorktreeManager;
 
 /// Tools a chat run may use: read-only inspection of the checkout plus
@@ -63,13 +63,7 @@ pub const CHAT_ALLOWED_TOOLS: &[&str] = &[
 /// assistant must never reach has to be denied by name or the CLI will happily
 /// pick it up — and the assistant runs in the user's real checkout, not a
 /// worktree, so an edit here would land straight on their files.
-pub const CHAT_DENIED_TOOLS: &[&str] = &[
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
-    "Bash",
-];
+pub const CHAT_DENIED_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"];
 
 /// The weakest permission mode this engine can actually honour for a read-only
 /// tool set.
@@ -172,7 +166,10 @@ pub enum QueueGate {
     Paused,
     /// Today's spend reached the cap. Clears itself at midnight — there is no
     /// resume for this one, which is why it can't just be a bool.
-    OverBudget { spent_today: f64, cap_usd: f64 },
+    OverBudget {
+        spent_today: f64,
+        cap_usd: f64,
+    },
 }
 
 pub struct Orchestrator {
@@ -251,12 +248,21 @@ pub(crate) struct StepPermission {
 /// Pure so it can be tested without a database or a worktree on disk — the
 /// gate is a safety property and deserves to be pinned down directly rather
 /// than inferred from an integration run.
-pub(crate) fn resolve_step_permission(asked: PermissionMode, gate_satisfied: bool) -> StepPermission {
+pub(crate) fn resolve_step_permission(
+    asked: PermissionMode,
+    gate_satisfied: bool,
+) -> StepPermission {
     if asked == PermissionMode::FullAuto && !gate_satisfied {
         // Down, never up: refusing FullAuto is de-escalation and safe.
-        StepPermission { mode: PermissionMode::Reviewed, downgraded: true }
+        StepPermission {
+            mode: PermissionMode::Reviewed,
+            downgraded: true,
+        }
     } else {
-        StepPermission { mode: asked, downgraded: false }
+        StepPermission {
+            mode: asked,
+            downgraded: false,
+        }
     }
 }
 
@@ -304,7 +310,10 @@ impl CallerKind {
     /// the card to review with nothing done. Workflows and organizations
     /// decide their own outcome once every step is in.
     pub(crate) fn finalizes(self) -> bool {
-        !matches!(self, Self::TaskPlanning | Self::WorkflowStep | Self::OrgMember)
+        !matches!(
+            self,
+            Self::TaskPlanning | Self::WorkflowStep | Self::OrgMember
+        )
     }
 
     /// Can this run be handed back to `execute` later, unchanged?
@@ -520,7 +529,11 @@ impl Orchestrator {
             anyhow::bail!(
                 "blocked by {} — land {} first",
                 blockers.join(", "),
-                if blockers.len() == 1 { "that card" } else { "those cards" }
+                if blockers.len() == 1 {
+                    "that card"
+                } else {
+                    "those cards"
+                }
             );
         }
 
@@ -686,7 +699,9 @@ impl Orchestrator {
         task_id: Option<Uuid>,
         status: RunStatus,
     ) -> anyhow::Result<()> {
-        let Some(task_id) = task_id else { return Ok(()) };
+        let Some(task_id) = task_id else {
+            return Ok(());
+        };
         if status == RunStatus::Completed {
             sqlx::query(
                 "UPDATE tasks t SET board_column = CASE WHEN p.vcs = 'git' THEN 'review' ELSE 'done' END
@@ -840,7 +855,11 @@ impl Orchestrator {
         for (loser, path) in losers {
             if let Some(path) = path {
                 let repo = std::path::Path::new(&project_path);
-                if let Err(e) = self.worktrees.discard(repo, std::path::Path::new(&path)).await {
+                if let Err(e) = self
+                    .worktrees
+                    .discard(repo, std::path::Path::new(&path))
+                    .await
+                {
                     // Disk left behind is untidy, not broken.
                     tracing::warn!(%loser, error=%e, "could not remove losing variant's worktree");
                 }
@@ -904,24 +923,19 @@ impl Orchestrator {
 
     /// Queue a workflow execution. `trigger` distinguishes manual runs from
     /// scheduled ones for the activity view.
-    pub async fn enqueue_workflow(
-        &self,
-        workflow_id: Uuid,
-        trigger: &str,
-    ) -> anyhow::Result<Uuid> {
+    pub async fn enqueue_workflow(&self, workflow_id: Uuid, trigger: &str) -> anyhow::Result<Uuid> {
         // The workflow's own `defaults.engine` is authoritative — dispatch
         // reads it too. Recording it here means the activity list shows the
         // truth for the window between queued and running, rather than
         // whatever literal happened to be in this INSERT.
-        let engine = sqlx::query_scalar::<_, String>(
-            "SELECT source_yaml FROM workflows WHERE id = $1",
-        )
-        .bind(workflow_id)
-        .fetch_optional(&self.db.pool)
-        .await?
-        .and_then(|yaml| Workflow::from_yaml(&yaml).ok())
-        .map(|w| w.defaults.engine)
-        .unwrap_or_else(|| self.default_engine());
+        let engine =
+            sqlx::query_scalar::<_, String>("SELECT source_yaml FROM workflows WHERE id = $1")
+                .bind(workflow_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+                .and_then(|yaml| Workflow::from_yaml(&yaml).ok())
+                .map(|w| w.defaults.engine)
+                .unwrap_or_else(|| self.default_engine());
 
         let row = sqlx::query(
             "INSERT INTO runs (workflow_id, status, trigger, engine)
@@ -1052,7 +1066,9 @@ impl Orchestrator {
                     tokio::spawn(async move {
                         if let Err(e) = this.execute(run_id).await {
                             tracing::error!(%run_id, error=%e, "run execution error");
-                            let _ = this.finish(run_id, RunStatus::Failed, Some(e.to_string())).await;
+                            let _ = this
+                                .finish(run_id, RunStatus::Failed, Some(e.to_string()))
+                                .await;
                         }
                         drop(permit);
                     });
@@ -1259,7 +1275,10 @@ impl Orchestrator {
 
         let spent_today = self.spent_today().await;
         if spent_today >= cap_usd {
-            QueueGate::OverBudget { spent_today, cap_usd }
+            QueueGate::OverBudget {
+                spent_today,
+                cap_usd,
+            }
         } else {
             QueueGate::Open
         }
@@ -1282,7 +1301,8 @@ impl Orchestrator {
     /// pausing is about not spending more, not about throwing away work in
     /// progress.
     pub async fn set_queue_paused(&self, paused: bool) -> anyhow::Result<()> {
-        self.put_setting("queue_paused", serde_json::json!(paused)).await
+        self.put_setting("queue_paused", serde_json::json!(paused))
+            .await
     }
 
     /// How much freedom a new task gets when the caller doesn't say.
@@ -1356,7 +1376,10 @@ impl Orchestrator {
     /// anything", which is what the pause is for, so it is stored as no cap.
     pub async fn set_daily_budget(&self, cap: Option<f64>) -> anyhow::Result<()> {
         match cap.filter(|c| *c > 0.0) {
-            Some(cap) => self.put_setting("daily_budget_usd", serde_json::json!(cap)).await,
+            Some(cap) => {
+                self.put_setting("daily_budget_usd", serde_json::json!(cap))
+                    .await
+            }
             None => {
                 sqlx::query("DELETE FROM settings WHERE key = 'daily_budget_usd'")
                     .execute(&self.db.pool)
@@ -1386,7 +1409,10 @@ impl Orchestrator {
         let over = matches!(gate, QueueGate::OverBudget { .. });
         if over != self.announced_over_budget.swap(over, Ordering::SeqCst) && over {
             let spent = match &gate {
-                QueueGate::OverBudget { spent_today, cap_usd } => {
+                QueueGate::OverBudget {
+                    spent_today,
+                    cap_usd,
+                } => {
                     format!("${spent_today:.2} of ${cap_usd:.2} spent — the queue is holding until midnight")
                 }
                 _ => String::new(),
@@ -1425,9 +1451,9 @@ impl Orchestrator {
             "SELECT status, chat_id, workflow_id, team_id, comment_id, kb_brief, research_id
              FROM runs WHERE id=$1",
         )
-            .bind(run_id)
-            .fetch_one(&self.db.pool)
-            .await?;
+        .bind(run_id)
+        .fetch_one(&self.db.pool)
+        .await?;
         // The guard this never had. `execute` reads only the columns that
         // decide *which kind* of run it is, so a queue row that outlived its
         // run — cancelled, already finished, or claimed twice — dispatched a
@@ -1501,9 +1527,8 @@ impl Orchestrator {
         // A session id is only meaningful to the engine that minted it.
         // Handing an OpenCode `ses_…` to Claude doesn't error — it starts
         // over with none of the context, which is the quiet kind of wrong.
-        let resume_session_id: Option<String> = run
-            .get::<Option<String>, _>("session_id")
-            .filter(|_| {
+        let resume_session_id: Option<String> =
+            run.get::<Option<String>, _>("session_id").filter(|_| {
                 run.get::<Option<String>, _>("session_engine").as_deref() == Some(&engine_id)
             });
         let engine = self
@@ -1594,8 +1619,9 @@ impl Orchestrator {
         // time, so changing the default reaches work already in the backlog.
         let permission_mode = match agent_preset
             .or_else(|| run.get::<Option<String>, _>("permission_mode"))
-            .and_then(|m| serde_json::from_value::<PermissionMode>(serde_json::Value::String(m)).ok())
-        {
+            .and_then(|m| {
+                serde_json::from_value::<PermissionMode>(serde_json::Value::String(m)).ok()
+            }) {
             Some(explicit) => explicit,
             None => self.default_permission_mode().await,
         };
@@ -1623,30 +1649,29 @@ impl Orchestrator {
         // starts. A router that changed which model ran your work without
         // saying so would be the same silent downgrade this codebase refuses
         // elsewhere — the reason has to survive to the card.
-        let (tier, tier_source, tier_rule, tier_reason) =
-            match TierChoice::parse(&tier_str).unwrap_or(TierChoice::Medium) {
-                TierChoice::Auto => {
-                    let signals = self.tier_signals(run_id, task_id, &run).await;
-                    let phase = match (&phase, planning) {
-                        (_, true) => aichip_shared::TierPhase::Plan,
-                        (task_plan::Phase::Work { plan: Some(_) }, _) => {
-                            aichip_shared::TierPhase::Work
-                        }
-                        _ => aichip_shared::TierPhase::Single,
-                    };
-                    let d = aichip_shared::classify_tier(&signals, phase);
-                    tracing::info!(%run_id, tier = ?d.tier, rule = d.rule, "auto tier");
-                    (d.tier, "auto", Some(d.rule.to_string()), Some(d.because))
-                }
-                fixed => (
-                    // `unwrap_or_default` is safe here only because `Auto` is
-                    // handled above: `fixed()` is `None` for that case alone.
-                    fixed.fixed().unwrap_or_default(),
-                    tier_source,
-                    None,
-                    None,
-                ),
-            };
+        let (tier, tier_source, tier_rule, tier_reason) = match TierChoice::parse(&tier_str)
+            .unwrap_or(TierChoice::Medium)
+        {
+            TierChoice::Auto => {
+                let signals = self.tier_signals(run_id, task_id, &run).await;
+                let phase = match (&phase, planning) {
+                    (_, true) => aichip_shared::TierPhase::Plan,
+                    (task_plan::Phase::Work { plan: Some(_) }, _) => aichip_shared::TierPhase::Work,
+                    _ => aichip_shared::TierPhase::Single,
+                };
+                let d = aichip_shared::classify_tier(&signals, phase);
+                tracing::info!(%run_id, tier = ?d.tier, rule = d.rule, "auto tier");
+                (d.tier, "auto", Some(d.rule.to_string()), Some(d.because))
+            }
+            fixed => (
+                // `unwrap_or_default` is safe here only because `Auto` is
+                // handled above: `fixed()` is `None` for that case alone.
+                fixed.fixed().unwrap_or_default(),
+                tier_source,
+                None,
+                None,
+            ),
+        };
         let effort = self
             .resolve_effort(agent_effort, card_effort, &engine_id, tier)
             .await;
@@ -1663,9 +1688,14 @@ impl Orchestrator {
             // Persist the reason as an event, not just a status, so it shows
             // up in the run's transcript where the user is already looking.
             let seq = next_seq(&self.db, run_id).await?;
-            self.persist_and_publish(run_id, None, seq, &AichipEvent::RunFailed {
-                reason: reason.clone(),
-            })
+            self.persist_and_publish(
+                run_id,
+                None,
+                seq,
+                &AichipEvent::RunFailed {
+                    reason: reason.clone(),
+                },
+            )
             .await?;
             self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
             return Ok(());
@@ -1737,7 +1767,9 @@ impl Orchestrator {
         // Attachments are folded in here rather than at the route, so that
         // re-running a task re-attaches and `tasks.prompt` keeps holding
         // exactly what the user typed.
-        let atts = attachments::for_task(&self.db, task_id).await.unwrap_or_default();
+        let atts = attachments::for_task(&self.db, task_id)
+            .await
+            .unwrap_or_default();
         // What the run is actually asked for depends on the phase: draft a
         // plan, or carry out the one that was approved. Attachments are folded
         // into either, since a spec you were given is context for planning too.
@@ -1831,12 +1863,18 @@ impl Orchestrator {
                 permission_mode
             },
             allowed_tools: if planning {
-                task_plan::PLANNING_TOOLS.iter().map(|t| t.to_string()).collect()
+                task_plan::PLANNING_TOOLS
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect()
             } else {
                 allowed_tools
             },
             denied_tools: if planning {
-                task_plan::PLANNING_DENIED.iter().map(|t| t.to_string()).collect()
+                task_plan::PLANNING_DENIED
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect()
             } else {
                 vec![]
             },
@@ -1873,7 +1911,18 @@ impl Orchestrator {
         // run, and letting `stream_run` mark it terminal would send the card
         // to review with nothing done.
         let outcome = self
-            .stream_run(run_id, None, &seq, engine, spec, if planning { CallerKind::TaskPlanning } else { CallerKind::TaskWork })
+            .stream_run(
+                run_id,
+                None,
+                &seq,
+                engine,
+                spec,
+                if planning {
+                    CallerKind::TaskPlanning
+                } else {
+                    CallerKind::TaskWork
+                },
+            )
             .await?;
 
         // A held run is coming back; it has not ended. `park_for_approval`
@@ -1909,10 +1958,21 @@ impl Orchestrator {
                 let title: String = run.get("title");
                 let note = format!(
                     "Completed task \"{title}\": {}",
-                    if outcome.output.is_empty() { "(no summary)" } else { &outcome.output }
+                    if outcome.output.is_empty() {
+                        "(no summary)"
+                    } else {
+                        &outcome.output
+                    }
                 );
-                if let Err(e) =
-                    memory::remember(&self.db, agent_id, Some(project_id), Some(task_id), "task_result", &note).await
+                if let Err(e) = memory::remember(
+                    &self.db,
+                    agent_id,
+                    Some(project_id),
+                    Some(task_id),
+                    "task_result",
+                    &note,
+                )
+                .await
                 {
                     tracing::warn!(%run_id, error = %e, "agent memory write failed");
                 }
@@ -1985,21 +2045,23 @@ impl Orchestrator {
         // to open the moment the run is queued rather than only once it lands.
         let article_id = match article_id {
             Some(id) => id,
-            None => sqlx::query_scalar(
-                "INSERT INTO kb_articles
+            None => {
+                sqlx::query_scalar(
+                    "INSERT INTO kb_articles
                     (workspace_id, project_id, parent_id, title, status, origin, position)
                  VALUES ($1, $2, $3, $4, 'draft', 'agent',
                          COALESCE((SELECT max(position) + 1000 FROM kb_articles
                                     WHERE workspace_id = $1
                                       AND parent_id IS NOT DISTINCT FROM $3), 1000))
                  RETURNING id",
-            )
-            .bind(workspace_id)
-            .bind(project_id)
-            .bind(parent_id)
-            .bind(crate::kb::sanitize::summarize(brief, 80))
-            .fetch_one(&self.db.pool)
-            .await?,
+                )
+                .bind(workspace_id)
+                .bind(project_id)
+                .bind(parent_id)
+                .bind(crate::kb::sanitize::summarize(brief, 80))
+                .fetch_one(&self.db.pool)
+                .await?
+            }
         };
 
         let run_id: Uuid = sqlx::query_scalar(
@@ -2046,7 +2108,9 @@ impl Orchestrator {
             .ok_or_else(|| anyhow::anyhow!("unknown engine {engine_id}"))?;
 
         let brief: String = row.get::<Option<String>, _>("kb_brief").unwrap_or_default();
-        let existing: String = row.get::<Option<String>, _>("content_html").unwrap_or_default();
+        let existing: String = row
+            .get::<Option<String>, _>("content_html")
+            .unwrap_or_default();
         // The revision the agent is working from, captured before it starts.
         // If a person edits the page while it runs, the review UI compares
         // against *this* and can say the page moved on underneath it — rather
@@ -2092,8 +2156,14 @@ impl Orchestrator {
             effort: None,
             resume_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
-            allowed_tools: crate::kb::write::TOOLS.iter().map(|t| t.to_string()).collect(),
-            denied_tools: crate::kb::write::DENIED.iter().map(|t| t.to_string()).collect(),
+            allowed_tools: crate::kb::write::TOOLS
+                .iter()
+                .map(|t| t.to_string())
+                .collect(),
+            denied_tools: crate::kb::write::DENIED
+                .iter()
+                .map(|t| t.to_string())
+                .collect(),
             append_system_prompt: None,
             mcp: McpWiring::default(),
             run_key: run_id.to_string(),
@@ -2103,14 +2173,15 @@ impl Orchestrator {
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
-        let outcome = self.stream_run(run_id, None, &seq, engine, spec, CallerKind::KbGeneration).await?;
+        let outcome = self
+            .stream_run(run_id, None, &seq, engine, spec, CallerKind::KbGeneration)
+            .await?;
         if outcome.status != RunStatus::Completed {
             return Ok(());
         }
 
         let article_id: Uuid = row.get("kb_article_id");
-        let prepared =
-            crate::kb::render::prepare(&crate::kb::write::extract_html(&outcome.output));
+        let prepared = crate::kb::render::prepare(&crate::kb::write::extract_html(&outcome.output));
         if prepared.html.trim().is_empty() {
             // A brand-new page with nothing in it is litter, not a draft:
             // remove the placeholder rather than leaving an empty row in the
@@ -2343,7 +2414,10 @@ impl Orchestrator {
             // resolves this per capability. The denials still bind either way.
             permission_mode: chat_permission_mode(engine.as_ref()),
             allowed_tools: tools.iter().map(|t| t.to_string()).collect(),
-            denied_tools: crate::runs::research::DENIED.iter().map(|t| t.to_string()).collect(),
+            denied_tools: crate::runs::research::DENIED
+                .iter()
+                .map(|t| t.to_string())
+                .collect(),
             append_system_prompt: None,
             mcp: McpWiring::default(),
             run_key: run_id.to_string(),
@@ -2364,8 +2438,12 @@ impl Orchestrator {
         if report.trim().is_empty() {
             // Unlike KB there is no placeholder to clean up: the researches
             // row keeps the question, and the page offers a re-run.
-            self.finish(run_id, RunStatus::Failed, Some("the agent produced no report".into()))
-                .await?;
+            self.finish(
+                run_id,
+                RunStatus::Failed,
+                Some("the agent produced no report".into()),
+            )
+            .await?;
             return Ok(());
         }
         // Scrubbed at write time, not at save-to-KB: the report quotes web
@@ -2374,14 +2452,12 @@ impl Orchestrator {
         // article it is handed.
         let report = crate::fence::scrub_foreign(&report, &[]);
         let title = crate::runs::research::title_from(&report, &question);
-        sqlx::query(
-            "UPDATE researches SET report_md=$1, title=$2, updated_at=now() WHERE id=$3",
-        )
-        .bind(&report)
-        .bind(&title)
-        .bind(research_id)
-        .execute(&self.db.pool)
-        .await?;
+        sqlx::query("UPDATE researches SET report_md=$1, title=$2, updated_at=now() WHERE id=$3")
+            .bind(&report)
+            .bind(&title)
+            .bind(research_id)
+            .execute(&self.db.pool)
+            .await?;
         Ok(())
     }
 
@@ -2423,9 +2499,9 @@ impl Orchestrator {
 
         // A session is only resumable by the engine that created it — a
         // mock-produced session id would make the real CLI fail instantly.
-        let session_id: Option<String> = row
-            .get::<Option<String>, _>("session_id")
-            .filter(|_| row.get::<Option<String>, _>("session_engine").as_deref() == Some(&engine_id));
+        let session_id: Option<String> = row.get::<Option<String>, _>("session_id").filter(|_| {
+            row.get::<Option<String>, _>("session_engine").as_deref() == Some(&engine_id)
+        });
         let user_message: String = row
             .get::<Option<String>, _>("user_message")
             .unwrap_or_else(|| "Introduce yourself briefly.".to_string());
@@ -2489,7 +2565,9 @@ impl Orchestrator {
         // yet. The same fenced, capped block a board run gets, because these
         // bodies are written by people *and by other agents* and must read as
         // reference material rather than as instructions.
-        let pages = crate::kb::for_chat(&self.db, chat_id).await.unwrap_or_default();
+        let pages = crate::kb::for_chat(&self.db, chat_id)
+            .await
+            .unwrap_or_default();
         let user_message = crate::kb::augment_prompt(&user_message, &pages);
 
         // Plan mode, appended last of the per-message blocks so it is the
@@ -2548,11 +2626,9 @@ impl Orchestrator {
         // pasting it here would spend it twice and put the method in front of
         // a conversation that has not agreed on the job yet.
         let user_message = match (&session_id, project_id) {
-            (None, Some(pid)) => {
-                crate::runs::context::Standing::brain_only(&self.db, Some(pid))
-                    .await
-                    .apply(&user_message)
-            }
+            (None, Some(pid)) => crate::runs::context::Standing::brain_only(&self.db, Some(pid))
+                .await
+                .apply(&user_message),
             _ => user_message,
         };
 
@@ -2563,7 +2639,8 @@ impl Orchestrator {
         // lists is decided server-side by kind, so a space sees the document
         // tools and never the board tools (whose cards would edit the
         // document folder in place).
-        let is_repo = project_kind.as_deref() == Some("repo") || project_kind.as_deref() == Some("app");
+        let is_repo =
+            project_kind.as_deref() == Some("repo") || project_kind.as_deref() == Some("app");
         let mcp = match project_id {
             Some(_) => McpWiring {
                 aichip_url: self
@@ -2612,12 +2689,18 @@ impl Orchestrator {
         let (cwd, allowed, system_prompt) = match row.get::<Option<String>, _>("project_path") {
             Some(path) if is_repo => (
                 PathBuf::from(path),
-                CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                CHAT_ALLOWED_TOOLS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
                 CHAT_SYSTEM_PROMPT,
             ),
             Some(path) => (
                 PathBuf::from(path),
-                SPACE_CHAT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                SPACE_CHAT_ALLOWED_TOOLS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
                 SPACE_CHAT_SYSTEM_PROMPT,
             ),
             None => {
@@ -2629,7 +2712,10 @@ impl Orchestrator {
                 tokio::fs::create_dir_all(&scratch).await?;
                 (
                     scratch,
-                    crate::runs::research::WEB_TOOLS.iter().map(|s| s.to_string()).collect(),
+                    crate::runs::research::WEB_TOOLS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     GENERAL_CHAT_SYSTEM_PROMPT,
                 )
             }
@@ -2946,7 +3032,9 @@ impl Orchestrator {
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
-        let outcome = self.stream_run(run_id, None, &seq, engine, spec, CallerKind::CommentReply).await?;
+        let outcome = self
+            .stream_run(run_id, None, &seq, engine, spec, CallerKind::CommentReply)
+            .await?;
 
         if outcome.status == RunStatus::Completed {
             let reply = if outcome.output.trim().is_empty() {
@@ -3171,12 +3259,15 @@ this workflow manually."
                 // for `permission_prompt_tool` — so a step that did stop to
                 // ask pointed the CLI at a server that wasn't there, and the
                 // agent's own connections were silently unavailable.
-                let user_servers = crate::mcp_servers::for_agent(&self.db, agent.as_ref().map(|a| a.id))
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(%run_id, %step_id, error=%e, "could not load step MCP servers");
-                        vec![]
-                    });
+                let user_servers = crate::mcp_servers::for_agent(
+                    &self.db,
+                    agent.as_ref().map(|a| a.id),
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(%run_id, %step_id, error=%e, "could not load step MCP servers");
+                    vec![]
+                });
                 let mcp = McpWiring {
                     aichip_url: self
                         .mcp_base_url
@@ -3231,8 +3322,8 @@ this workflow manually."
                 // async.
                 let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
 
-                let results = futures::stream::iter(plans.into_iter().map(
-                    |(db_step_id, step_key, cwd)| {
+                let results =
+                    futures::stream::iter(plans.into_iter().map(|(db_step_id, step_key, cwd)| {
                         let this = self.clone();
                         let engine = step_engine.clone();
                         let seq = seq.clone();
@@ -3246,9 +3337,9 @@ this workflow manually."
                             resume_session_id: resume.clone(),
                             permission_mode,
                             allowed_tools: step_tools.clone(),
-                                            append_system_prompt: agent
-                                .as_ref()
-                                .and_then(|a| (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())),
+                            append_system_prompt: agent.as_ref().and_then(|a| {
+                                (!a.system_prompt.is_empty()).then(|| a.system_prompt.clone())
+                            }),
                             denied_tools: vec![],
                             mcp: mcp.clone(),
                             // Per step, not per run: concurrent steps would
@@ -3264,21 +3355,28 @@ this workflow manually."
                         };
                         async move {
                             let outcome = this
-                                .stream_run(run_id, Some(db_step_id), &seq, engine, spec, CallerKind::WorkflowStep)
+                                .stream_run(
+                                    run_id,
+                                    Some(db_step_id),
+                                    &seq,
+                                    engine,
+                                    spec,
+                                    CallerKind::WorkflowStep,
+                                )
                                 .await;
                             (db_step_id, step_key, outcome)
                         }
-                    },
-                ))
-                .buffer_unordered(concurrency)
-                .collect::<Vec<_>>()
-                .await;
+                    }))
+                    .buffer_unordered(concurrency)
+                    .collect::<Vec<_>>()
+                    .await;
                 drop(extra);
 
                 let mut step_outputs = Vec::with_capacity(results.len());
                 for (db_step_id, step_key, outcome) in results {
                     let outcome = outcome?;
-                    self.finish_step_row(db_step_id, &engine_id, &outcome).await?;
+                    self.finish_step_row(db_step_id, &engine_id, &outcome)
+                        .await?;
                     if outcome.status != RunStatus::Completed {
                         failure = Some(format!(
                             "step '{step_key}' {}: {}",
@@ -3300,7 +3398,8 @@ this workflow manually."
 
         if failure.as_deref() == Some("canceled") {
             self.finish(run_id, RunStatus::Canceled, None).await?;
-            self.settle_task_for_run(task_id, RunStatus::Canceled).await?;
+            self.settle_task_for_run(task_id, RunStatus::Canceled)
+                .await?;
             return Ok(());
         }
         let status = match failure {
@@ -3358,10 +3457,12 @@ this workflow manually."
         )
         .bind(run_id)
         .bind(&outcome.session_id)
-        .bind(sqlx::query_scalar::<_, String>("SELECT engine FROM runs WHERE id=$1")
-            .bind(run_id)
-            .fetch_one(&self.db.pool)
-            .await?)
+        .bind(
+            sqlx::query_scalar::<_, String>("SELECT engine FROM runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_one(&self.db.pool)
+                .await?,
+        )
         .bind(&outcome.output)
         .execute(&self.db.pool)
         .await?;
@@ -3642,10 +3743,7 @@ this workflow manually."
         let asked = spec
             .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok())
             .unwrap_or(PermissionMode::AutoEdit);
-        resolve_step_permission(
-            asked,
-            full_auto_opt_in && self.worktrees.manages(cwd),
-        )
+        resolve_step_permission(asked, full_auto_opt_in && self.worktrees.manages(cwd))
     }
 
     /// Shared streaming loop: spawn the engine, persist+publish every event,
@@ -3818,8 +3916,10 @@ this workflow manually."
             tracing::warn!(%run_id, error = %e, "could not record token usage");
         }
 
-        let (status, reason) =
-            outcome.unwrap_or((RunStatus::Failed, Some("event stream ended unexpectedly".into())));
+        let (status, reason) = outcome.unwrap_or((
+            RunStatus::Failed,
+            Some("event stream ended unexpectedly".into()),
+        ));
         // A held run is already `rate_limited` with a queue row behind it, put
         // there together by `hold_rate_limited`; finishing it here would strand
         // that row under a terminal status, which is the leak this slice is
@@ -3901,7 +4001,11 @@ this workflow manually."
         // Debug-assert rather than return an error, because the callers that
         // could get this wrong are inside this file and this is a programming
         // mistake, not a runtime condition.
-        debug_assert_ne!(status, RunStatus::RateLimited, "a held run has not finished");
+        debug_assert_ne!(
+            status,
+            RunStatus::RateLimited,
+            "a held run has not finished"
+        );
         self.forget_cancel(run_id);
         let mut tx = self.db.pool.begin().await?;
         // `COALESCE`, because a cancel carries `reason: None` and the broker
@@ -3912,11 +4016,11 @@ this workflow manually."
             "UPDATE runs SET status=$1, error_reason=COALESCE($2, error_reason),
              finished_at=now() WHERE id=$3",
         )
-            .bind(status.as_str())
-            .bind(reason)
-            .bind(run_id)
-            .execute(&mut *tx)
-            .await?;
+        .bind(status.as_str())
+        .bind(reason)
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
         // Nothing waiting to be dispatched can outlive the run it belongs to.
         // A run reaches here from a cancel, a crash in `execute`, a failed
         // dispatch or a plain ending, and any of those can happen while a
@@ -4076,11 +4180,12 @@ fn review_fix_prompt(
     hunk: Option<&str>,
     note: &str,
 ) -> String {
-    let mut prompt = String::from("You are acting on review feedback for work you already did.\n\n");
+    let mut prompt =
+        String::from("You are acting on review feedback for work you already did.\n\n");
     match (file_path, line) {
-        (Some(path), Some(line)) => {
-            prompt.push_str(&format!("The reviewer commented on {path}, around line {line}.\n"))
-        }
+        (Some(path), Some(line)) => prompt.push_str(&format!(
+            "The reviewer commented on {path}, around line {line}.\n"
+        )),
         (Some(path), None) => prompt.push_str(&format!("The reviewer commented on {path}.\n")),
         _ => prompt.push_str("The reviewer commented on the change as a whole.\n"),
     }
@@ -4184,7 +4289,10 @@ mod tests {
     fn a_plan_first_run_with_no_stored_plan_plans_again() {
         use crate::runs::task_plan::{decide, Phase, PlanStep};
         assert_eq!(decide(true, PlanStep::Missing, true), Phase::Plan);
-        assert_eq!(decide(false, PlanStep::Missing, true), Phase::Work { plan: None });
+        assert_eq!(
+            decide(false, PlanStep::Missing, true),
+            Phase::Work { plan: None }
+        );
     }
 
     /// The chat assistant must never be handed a mode its engine cannot honour.
@@ -4248,8 +4356,8 @@ mod tests {
             for gate in [true, false] {
                 let got = resolve_step_permission(asked, gate).mode;
                 assert!(
-                    got == asked || (asked == PermissionMode::FullAuto
-                        && got == PermissionMode::Reviewed),
+                    got == asked
+                        || (asked == PermissionMode::FullAuto && got == PermissionMode::Reviewed),
                     "{asked:?} with gate={gate} became {got:?}"
                 );
             }
@@ -4346,7 +4454,10 @@ mod tests {
         for mut rx in receivers {
             assert!(rx.try_recv().is_ok(), "every live step must be signalled");
         }
-        assert!(cancels.lock().unwrap()[&run].requested, "intent outlives the steps");
+        assert!(
+            cancels.lock().unwrap()[&run].requested,
+            "intent outlives the steps"
+        );
     }
 
     /// A cancel arriving between steps must not be lost: the flag is what a

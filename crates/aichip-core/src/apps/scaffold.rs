@@ -31,7 +31,9 @@ use super::scope::ALL as ALL_SCOPES;
 /// expects.
 fn file_contract(runtime: Runtime) -> String {
     let files = runtimes::required_files(runtime).join(", ");
-    let port = runtimes::port(runtime).map(|p| p.to_string()).unwrap_or_default();
+    let port = runtimes::port(runtime)
+        .map(|p| p.to_string())
+        .unwrap_or_default();
     match runtime {
         Runtime::Module => String::new(),
         Runtime::Node => format!(
@@ -352,7 +354,13 @@ pub fn extract(output: &str) -> String {
             .split_once(':')
             .is_some_and(|(k, _)| !k.is_empty() && !k.starts_with(char::is_whitespace));
         if is_key {
-            return text.lines().skip(i).collect::<Vec<_>>().join("\n").trim().to_string();
+            return text
+                .lines()
+                .skip(i)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
         }
     }
     text.to_string()
@@ -371,19 +379,33 @@ mod tests {
         // because the parser is the same one for all three.
         for runtime in [Runtime::Module, Runtime::Node, Runtime::Static] {
             let p = manifest_prompt("anything", runtime);
-            for ty in ["text", "int", "decimal", "bool", "date", "datetime", "json", "ref:"] {
-                assert!(p.contains(ty), "{runtime:?}'s prompt never mentions the {ty} type");
+            for ty in [
+                "text", "int", "decimal", "bool", "date", "datetime", "json", "ref:",
+            ] {
+                assert!(
+                    p.contains(ty),
+                    "{runtime:?}'s prompt never mentions the {ty} type"
+                );
             }
             for f in FUNCTIONS {
                 assert!(p.contains(f), "{runtime:?}'s prompt never mentions {f}()");
             }
             for scope in ALL_SCOPES {
-                assert!(p.contains(scope.as_str()), "{runtime:?}'s prompt never mentions {scope}");
+                assert!(
+                    p.contains(scope.as_str()),
+                    "{runtime:?}'s prompt never mentions {scope}"
+                );
             }
             for reserved in manifest::RESERVED_FIELDS {
-                assert!(p.contains(reserved), "{runtime:?}'s prompt never says {reserved} is taken");
+                assert!(
+                    p.contains(reserved),
+                    "{runtime:?}'s prompt never says {reserved} is taken"
+                );
             }
-            assert!(p.contains("anything"), "the description has to reach the model");
+            assert!(
+                p.contains("anything"),
+                "the description has to reach the model"
+            );
             assert!(
                 p.contains(&format!("runtime: {}", runtime.as_str())),
                 "{runtime:?}'s prompt asks for the wrong runtime"
@@ -394,8 +416,19 @@ mod tests {
     #[test]
     fn the_prompt_names_every_step_and_view_kind() {
         let p = manifest_prompt("x", Runtime::Module);
-        for step in ["update", "create", "delete", "notify", "goto", "create_task", "start_run"] {
-            assert!(p.contains(step), "the prompt never mentions the {step} step");
+        for step in [
+            "update",
+            "create",
+            "delete",
+            "notify",
+            "goto",
+            "create_task",
+            "start_run",
+        ] {
+            assert!(
+                p.contains(step),
+                "the prompt never mentions the {step} step"
+            );
         }
         for kind in ["list", "form", "kanban", "chart"] {
             assert!(p.contains(kind), "the prompt never mentions {kind} views");
@@ -412,8 +445,14 @@ mod tests {
             let p = manifest_prompt("x", runtime);
             assert!(!p.contains("\nviews:"), "{runtime:?} was offered views");
             assert!(!p.contains("\nactions:"), "{runtime:?} was offered actions");
-            assert!(p.contains("\nmenu:"), "{runtime:?} was not told about screens");
-            assert!(p.contains("model:"), "{runtime:?} was not told model: selects CRUD");
+            assert!(
+                p.contains("\nmenu:"),
+                "{runtime:?} was not told about screens"
+            );
+            assert!(
+                p.contains("model:"),
+                "{runtime:?} was not told model: selects CRUD"
+            );
             // Models it does get: the tables are the same tables.
             assert!(p.contains("\nmodels:"));
         }
@@ -424,17 +463,29 @@ mod tests {
         // aichip owns the build and the agent never sees it, so this prompt is
         // the only place the two sides are made to agree.
         let p = build_prompt("name: T", Runtime::Node, "add a page");
-        assert!(p.contains("process.env.PORT"), "a hardcoded port serves nothing");
+        assert!(
+            p.contains("process.env.PORT"),
+            "a hardcoded port serves nothing"
+        );
         for f in runtimes::required_files(Runtime::Node) {
             assert!(p.contains(f), "the prompt never mentions {f}");
         }
         assert!(p.contains("Do not write a Dockerfile"));
         assert!(p.contains("add a page"), "the brief has to reach the model");
-        assert!(p.contains("name: T"), "the agent needs the manifest as it stands");
+        assert!(
+            p.contains("name: T"),
+            "the agent needs the manifest as it stands"
+        );
         // The screen convention: an agent that doesn't know views/ exists will
         // bolt new pages onto server.js and the sidebar never learns of them.
-        assert!(p.contains("views/"), "the node contract never mentions the views/ layout");
-        assert!(p.contains("menu:"), "the contract never says screens are declared");
+        assert!(
+            p.contains("views/"),
+            "the node contract never mentions the views/ layout"
+        );
+        assert!(
+            p.contains("menu:"),
+            "the contract never says screens are declared"
+        );
 
         let s = build_prompt("name: T", Runtime::Static, "x");
         assert!(s.contains("index.html"));
@@ -456,7 +507,10 @@ mod tests {
         assert!(p.contains("do not use a shell"));
         // And it says what landing means, because there is no review step.
         assert!(p.contains("automatically"));
-        assert!(p.contains("waits for a person"), "the schema gate has to be predictable");
+        assert!(
+            p.contains("waits for a person"),
+            "the schema gate has to be predictable"
+        );
     }
 
     #[test]

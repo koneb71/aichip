@@ -109,12 +109,18 @@ mod tests {
 
     #[test]
     fn each_suffix_is_read_as_itself() {
-        assert_eq!(classify("notes-a1b2c3.app.localhost"), Some((HostKind::App, "notes-a1b2c3")));
+        assert_eq!(
+            classify("notes-a1b2c3.app.localhost"),
+            Some((HostKind::App, "notes-a1b2c3"))
+        );
         assert_eq!(
             classify("card-a.preview.localhost:4820"),
             Some((HostKind::Preview, "card-a"))
         );
-        assert_eq!(classify("http://x.app.localhost:4820/"), Some((HostKind::App, "x")));
+        assert_eq!(
+            classify("http://x.app.localhost:4820/"),
+            Some((HostKind::App, "x"))
+        );
     }
 
     #[test]
@@ -142,7 +148,12 @@ mod tests {
     #[test]
     fn the_dashboards_own_hosts_fall_through() {
         // They must reach the dashboard router, not be read as a slug.
-        for host in ["localhost:4820", "127.0.0.1:4820", "[::1]:4820", "localhost"] {
+        for host in [
+            "localhost:4820",
+            "127.0.0.1:4820",
+            "[::1]:4820",
+            "localhost",
+        ] {
             assert_eq!(classify(host), None, "{host} was taken for a slug");
         }
     }
@@ -172,8 +183,14 @@ mod tests {
         // safer than normalising, because there is no legitimate bridge path
         // with a dot segment in it and nothing then has to agree about how the
         // cleaning was done.
-        assert_eq!(bridge_path("/__aichip/../api/settings"), Some(Err(Traversal)));
-        assert_eq!(bridge_path("/__aichip/data/../../settings"), Some(Err(Traversal)));
+        assert_eq!(
+            bridge_path("/__aichip/../api/settings"),
+            Some(Err(Traversal))
+        );
+        assert_eq!(
+            bridge_path("/__aichip/data/../../settings"),
+            Some(Err(Traversal))
+        );
         assert_eq!(bridge_path("/__aichip/./me"), Some(Err(Traversal)));
     }
 

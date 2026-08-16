@@ -132,7 +132,10 @@ async fn upsert(
     }
     if let Some(c) = &body.catch_up {
         if !matches!(c.as_str(), "run_once" | "skip") {
-            return Err((StatusCode::BAD_REQUEST, "catchUp must be run_once or skip".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "catchUp must be run_once or skip".into(),
+            ));
         }
     }
     if let Some(engine) = &body.engine {
@@ -252,9 +255,10 @@ async fn run_now(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = manager_row(&state, project_id)
-        .await?
-        .ok_or((StatusCode::NOT_FOUND, "this project has no manager".to_string()))?;
+    let row = manager_row(&state, project_id).await?.ok_or((
+        StatusCode::NOT_FOUND,
+        "this project has no manager".to_string(),
+    ))?;
     let id: Uuid = row.get("id");
     // `fire` records the firing either way, so a refusal — the thread is
     // busy, the engine is gone — lands in the history a person can read

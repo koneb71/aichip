@@ -50,10 +50,18 @@ pub struct Stmt {
 
 impl Stmt {
     fn safe(sql: impl Into<String>, why: impl Into<String>) -> Self {
-        Self { sql: sql.into(), destructive: false, why: why.into() }
+        Self {
+            sql: sql.into(),
+            destructive: false,
+            why: why.into(),
+        }
     }
     fn destroys(sql: impl Into<String>, why: impl Into<String>) -> Self {
-        Self { sql: sql.into(), destructive: true, why: why.into() }
+        Self {
+            sql: sql.into(),
+            destructive: true,
+            why: why.into(),
+        }
     }
 }
 
@@ -232,7 +240,6 @@ fn alter_table(schema: &str, model: &Model, live: &LiveTable, out: &mut Vec<Stmt
             ));
         }
     }
-
 }
 
 /// Bring a model's indexes in line. Neither direction is ever a question: an
@@ -259,7 +266,10 @@ fn reconcile_indexes(schema: &str, model: &Model, live: Option<&LiveTable>, out:
         }
     }
     for name in existing {
-        let wanted = model.indexes.iter().any(|f| &index_name(&model.name, f) == name);
+        let wanted = model
+            .indexes
+            .iter()
+            .any(|f| &index_name(&model.name, f) == name);
         if !wanted {
             out.push(Stmt::safe(
                 format!("DROP INDEX IF EXISTS {}.{}", q(schema), q(name)),
@@ -290,7 +300,9 @@ mod tests {
     use crate::apps::manifest;
 
     fn models(yaml: &str) -> Vec<Model> {
-        manifest::parse(yaml).expect("test manifest must parse").models
+        manifest::parse(yaml)
+            .expect("test manifest must parse")
+            .models
     }
 
     const ONE: &str = "name: T\nmodels:\n  expense:\n    fields:\n      \
@@ -300,11 +312,26 @@ mod tests {
         vec![LiveTable {
             name: "expense".into(),
             columns: vec![
-                LiveColumn { name: "id".into(), data_type: "uuid".into() },
-                LiveColumn { name: "created_at".into(), data_type: "timestamp with time zone".into() },
-                LiveColumn { name: "updated_at".into(), data_type: "timestamp with time zone".into() },
-                LiveColumn { name: "note".into(), data_type: "text".into() },
-                LiveColumn { name: "amount".into(), data_type: "numeric".into() },
+                LiveColumn {
+                    name: "id".into(),
+                    data_type: "uuid".into(),
+                },
+                LiveColumn {
+                    name: "created_at".into(),
+                    data_type: "timestamp with time zone".into(),
+                },
+                LiveColumn {
+                    name: "updated_at".into(),
+                    data_type: "timestamp with time zone".into(),
+                },
+                LiveColumn {
+                    name: "note".into(),
+                    data_type: "text".into(),
+                },
+                LiveColumn {
+                    name: "amount".into(),
+                    data_type: "numeric".into(),
+                },
             ],
             indexes: vec![],
         }]
@@ -316,7 +343,10 @@ mod tests {
         // no models must not ask. A plan that always has something in it is a
         // plan nobody reads.
         let plan = plan("app_t", &models(ONE), &live_expense());
-        let real: Vec<&Stmt> = plan.iter().filter(|s| !s.sql.starts_with("CREATE SCHEMA")).collect();
+        let real: Vec<&Stmt> = plan
+            .iter()
+            .filter(|s| !s.sql.starts_with("CREATE SCHEMA"))
+            .collect();
         assert!(real.is_empty(), "expected nothing to do, got {real:#?}");
         assert!(!needs_approval(&plan));
     }
@@ -325,7 +355,10 @@ mod tests {
     fn a_new_model_is_created_without_asking() {
         let plan = plan("app_t", &models(ONE), &[]);
         assert!(!needs_approval(&plan));
-        let create = plan.iter().find(|s| s.sql.contains("CREATE TABLE")).unwrap();
+        let create = plan
+            .iter()
+            .find(|s| s.sql.contains("CREATE TABLE"))
+            .unwrap();
         // aichip's own three columns are there, and they are the only NOT NULLs.
         assert!(create.sql.contains("\"id\" UUID PRIMARY KEY"));
         assert!(create.sql.contains("\"created_at\" TIMESTAMPTZ NOT NULL"));
@@ -337,9 +370,14 @@ mod tests {
     fn a_declared_field_is_never_not_null() {
         // Adding a required column to a table with rows would mean inventing a
         // value for every one of them. `required` is checked on write instead.
-        let m = models("name: T\nmodels:\n  t:\n    fields:\n      a: { type: text, required: true }\n");
+        let m = models(
+            "name: T\nmodels:\n  t:\n    fields:\n      a: { type: text, required: true }\n",
+        );
         let plan = plan("app_t", &m, &[]);
-        let create = plan.iter().find(|s| s.sql.contains("CREATE TABLE")).unwrap();
+        let create = plan
+            .iter()
+            .find(|s| s.sql.contains("CREATE TABLE"))
+            .unwrap();
         assert!(create.sql.contains("\"a\" TEXT"));
         assert!(
             !create.sql.contains("\"a\" TEXT NOT NULL"),
@@ -356,12 +394,18 @@ mod tests {
         );
         let added = plan("app_t", &grown, &live_expense());
         assert!(!needs_approval(&added), "adding a column loses nothing");
-        assert!(added.iter().any(|s| s.sql.contains("ADD COLUMN IF NOT EXISTS \"paid\"")));
+        assert!(added
+            .iter()
+            .any(|s| s.sql.contains("ADD COLUMN IF NOT EXISTS \"paid\"")));
 
-        let shrunk = models("name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n");
+        let shrunk =
+            models("name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n");
         let removed = plan("app_t", &shrunk, &live_expense());
         assert!(needs_approval(&removed));
-        let drop = removed.iter().find(|s| s.sql.contains("DROP COLUMN")).unwrap();
+        let drop = removed
+            .iter()
+            .find(|s| s.sql.contains("DROP COLUMN"))
+            .unwrap();
         assert!(drop.destructive);
         assert!(drop.sql.contains("\"amount\""));
         assert!(drop.why.contains("everything stored in it"), "{}", drop.why);
@@ -369,15 +413,27 @@ mod tests {
 
     #[test]
     fn changing_a_type_asks_and_says_what_it_costs() {
-        let retyped =
-            models("name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n      \
-                    amount: { type: int }\n");
+        let retyped = models(
+            "name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n      \
+                    amount: { type: int }\n",
+        );
         let plan = plan("app_t", &retyped, &live_expense());
         assert!(needs_approval(&plan));
-        let alter = plan.iter().find(|s| s.sql.contains("ALTER COLUMN")).unwrap();
+        let alter = plan
+            .iter()
+            .find(|s| s.sql.contains("ALTER COLUMN"))
+            .unwrap();
         assert!(alter.destructive);
-        assert!(alter.why.contains("numeric"), "names what it is now: {}", alter.why);
-        assert!(alter.why.contains("int"), "names what it becomes: {}", alter.why);
+        assert!(
+            alter.why.contains("numeric"),
+            "names what it is now: {}",
+            alter.why
+        );
+        assert!(
+            alter.why.contains("int"),
+            "names what it becomes: {}",
+            alter.why
+        );
     }
 
     #[test]
@@ -395,7 +451,9 @@ mod tests {
         let plan = plan("app_t", &models(ONE), &live_expense());
         for reserved in RESERVED_FIELDS {
             assert!(
-                !plan.iter().any(|s| s.sql.contains(&format!("DROP COLUMN \"{reserved}\""))),
+                !plan
+                    .iter()
+                    .any(|s| s.sql.contains(&format!("DROP COLUMN \"{reserved}\""))),
                 "proposed dropping {reserved}"
             );
         }
@@ -420,7 +478,10 @@ mod tests {
             !plan.iter().any(|s| s.sql.contains("ALTER COLUMN")),
             "a matching datetime column must not look changed"
         );
-        assert_eq!(live_type_of(&FieldType::Datetime), "timestamp with time zone");
+        assert_eq!(
+            live_type_of(&FieldType::Datetime),
+            "timestamp with time zone"
+        );
         assert_eq!(FieldType::Datetime.sql(), "TIMESTAMPTZ");
     }
 
@@ -435,7 +496,10 @@ mod tests {
              indexes: [at]\n",
         );
         let fresh = plan("app_t", &m, &[]);
-        let create = fresh.iter().position(|s| s.sql.contains("CREATE TABLE")).unwrap();
+        let create = fresh
+            .iter()
+            .position(|s| s.sql.contains("CREATE TABLE"))
+            .unwrap();
         let index = fresh
             .iter()
             .position(|s| s.sql.contains("CREATE INDEX"))
@@ -470,16 +534,26 @@ mod tests {
              order:\n    fields:\n      total: { type: decimal }\n",
         );
         let plan = plan("app_t", &m, &[]);
-        let last_create = plan.iter().rposition(|s| s.sql.contains("CREATE TABLE")).unwrap();
-        let fk = plan.iter().position(|s| s.sql.contains("FOREIGN KEY")).unwrap();
-        assert!(fk > last_create, "the key was added before its target existed");
+        let last_create = plan
+            .iter()
+            .rposition(|s| s.sql.contains("CREATE TABLE"))
+            .unwrap();
+        let fk = plan
+            .iter()
+            .position(|s| s.sql.contains("FOREIGN KEY"))
+            .unwrap();
+        assert!(
+            fk > last_create,
+            "the key was added before its target existed"
+        );
         assert!(plan[fk].sql.contains("REFERENCES \"app_t\".\"order\"(id)"));
         assert!(!needs_approval(&plan));
     }
 
     #[test]
     fn every_statement_can_explain_itself_to_the_person_approving_it() {
-        let shrunk = models("name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n");
+        let shrunk =
+            models("name: T\nmodels:\n  expense:\n    fields:\n      note: { type: text }\n");
         for stmt in plan("app_t", &shrunk, &live_expense()) {
             assert!(!stmt.why.is_empty(), "no explanation for: {}", stmt.sql);
             assert!(stmt.why.ends_with('.'), "not a sentence: {}", stmt.why);

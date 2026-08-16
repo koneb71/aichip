@@ -40,7 +40,11 @@ pub const ACTING_TOOL_NAMES: &[&str] = &["create_task", "start_task", "move_task
 /// Order is preserved so the remaining list stays the one the pinned test
 /// describes, minus the four.
 pub fn without_acting(allowed: &[String]) -> Vec<String> {
-    allowed.iter().filter(|t| !ACTING_TOOLS.contains(&t.as_str())).cloned().collect()
+    allowed
+        .iter()
+        .filter(|t| !ACTING_TOOLS.contains(&t.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// `denied` with the acting tools added.
@@ -179,7 +183,11 @@ mod tests {
         for t in ["Edit", "Write", "Bash"] {
             assert!(out.iter().any(|d| d == t), "{t} was dropped");
         }
-        assert_eq!(with_acting_denied(&out), out, "applying it twice must not grow it");
+        assert_eq!(
+            with_acting_denied(&out),
+            out,
+            "applying it twice must not grow it"
+        );
     }
 
     #[test]
@@ -217,7 +225,10 @@ mod tests {
         // question about a plan that already assumed an answer.
         let ask = t.find("ask_user").expect("names the tool");
         let write = t.find("write the plan").expect("still asks for a plan");
-        assert!(ask < write, "the instruction asks for the plan before it allows a question");
+        assert!(
+            ask < write,
+            "the instruction asks for the plan before it allows a question"
+        );
         // What makes the options worth clicking rather than a formality.
         assert!(t.contains("genuinely different"));
         // And the thing a model cannot infer: its turn ends, but the mode does
@@ -244,7 +255,10 @@ mod tests {
         assert!(!ACTING_TOOLS.contains(&"mcp__aichip__ask_user"));
         assert!(!ACTING_TOOL_NAMES.contains(&"ask_user"));
         let allowed = strings(&["mcp__aichip__ask_user", "mcp__aichip__create_task"]);
-        assert_eq!(without_acting(&allowed), strings(&["mcp__aichip__ask_user"]));
+        assert_eq!(
+            without_acting(&allowed),
+            strings(&["mcp__aichip__ask_user"])
+        );
     }
 
     #[test]

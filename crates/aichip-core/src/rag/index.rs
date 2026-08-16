@@ -66,7 +66,11 @@ pub async fn reconcile(
     .map(|r| {
         (
             r.get::<String, _>("rel_path"),
-            (r.get::<Uuid, _>("id"), r.get::<String, _>("content_hash"), r.get::<String, _>("status")),
+            (
+                r.get::<Uuid, _>("id"),
+                r.get::<String, _>("content_hash"),
+                r.get::<String, _>("status"),
+            ),
         )
     })
     .collect();
@@ -83,7 +87,12 @@ pub async fn reconcile(
         let meta = tokio::fs::metadata(&abs).await?;
         if meta.len() > MAX_INDEX_BYTES {
             upsert_status(
-                db, project_id, &rel, "", meta.len() as i64, "unsupported",
+                db,
+                project_id,
+                &rel,
+                "",
+                meta.len() as i64,
+                "unsupported",
                 Some("too large to index — the assistant can still Read it"),
             )
             .await?;
@@ -113,7 +122,13 @@ pub async fn reconcile(
             Ok(Ok(super::extract::Extracted::Text(t))) => t,
             Ok(Ok(super::extract::Extracted::Unsupported(reason))) => {
                 upsert_status(
-                    db, project_id, &rel, &hash, bytes.len() as i64, "unsupported", Some(reason),
+                    db,
+                    project_id,
+                    &rel,
+                    &hash,
+                    bytes.len() as i64,
+                    "unsupported",
+                    Some(reason),
                 )
                 .await?;
                 report.unsupported += 1;
@@ -121,7 +136,12 @@ pub async fn reconcile(
             }
             Ok(Err(e)) => {
                 upsert_status(
-                    db, project_id, &rel, &hash, bytes.len() as i64, "failed",
+                    db,
+                    project_id,
+                    &rel,
+                    &hash,
+                    bytes.len() as i64,
+                    "failed",
                     Some(&e.to_string()),
                 )
                 .await?;
@@ -130,7 +150,12 @@ pub async fn reconcile(
             }
             Err(join) => {
                 upsert_status(
-                    db, project_id, &rel, &hash, bytes.len() as i64, "failed",
+                    db,
+                    project_id,
+                    &rel,
+                    &hash,
+                    bytes.len() as i64,
+                    "failed",
                     Some(&format!("the extractor crashed on this file: {join}")),
                 )
                 .await?;
@@ -140,8 +165,16 @@ pub async fn reconcile(
         };
         let chunks = super::chunk::chunk(&text);
         if chunks.is_empty() {
-            upsert_status(db, project_id, &rel, &hash, bytes.len() as i64, "unsupported", Some("empty file"))
-                .await?;
+            upsert_status(
+                db,
+                project_id,
+                &rel,
+                &hash,
+                bytes.len() as i64,
+                "unsupported",
+                Some("empty file"),
+            )
+            .await?;
             report.unsupported += 1;
             continue;
         }
@@ -193,7 +226,12 @@ pub async fn reconcile(
                 // reconcile retries — the commonest cause is a network blip
                 // during the one-time model download.
                 upsert_status(
-                    db, project_id, &rel, &hash, bytes.len() as i64, "failed",
+                    db,
+                    project_id,
+                    &rel,
+                    &hash,
+                    bytes.len() as i64,
+                    "failed",
                     Some(&e.to_string()),
                 )
                 .await?;
@@ -271,5 +309,3 @@ async fn walk(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     out.sort();
     Ok(out)
 }
-
-

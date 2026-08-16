@@ -30,8 +30,14 @@ pub async fn rpc(
         "ping" => json!({}),
         "tools/list" => tools_list(),
         "tools/call" => {
-            let name = req.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
-            let args = req.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+            let name = req
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let args = req
+                .pointer("/params/arguments")
+                .cloned()
+                .unwrap_or(json!({}));
             match call_tool(&state, run_id, step_id, name, args).await {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]

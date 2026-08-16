@@ -49,8 +49,23 @@ pub fn prepare(raw_html: &str) -> Prepared {
 /// at every block boundary the whole page collapses to a single line and the
 /// diff is worthless.
 const BLOCK_ENDS: &[&str] = &[
-    "</p>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>", "</li>", "</tr>", "</pre>",
-    "</blockquote>", "</div>", "</figcaption>", "</summary>", "<br>", "<br/>", "<br />",
+    "</p>",
+    "</h1>",
+    "</h2>",
+    "</h3>",
+    "</h4>",
+    "</h5>",
+    "</h6>",
+    "</li>",
+    "</tr>",
+    "</pre>",
+    "</blockquote>",
+    "</div>",
+    "</figcaption>",
+    "</summary>",
+    "<br>",
+    "<br/>",
+    "<br />",
 ];
 
 /// Project sanitised HTML down to block-per-line plain text.
@@ -107,7 +122,10 @@ fn extract_ids(html: &str, prefix: &str) -> Vec<Uuid> {
     // mentions the path cannot forge a link — the scan only matches where the
     // sanitiser actually produced an attribute.
     for part in html.split(prefix).skip(1) {
-        let raw: String = part.chars().take_while(|c| *c != '"' && *c != '/').collect();
+        let raw: String = part
+            .chars()
+            .take_while(|c| *c != '"' && *c != '/')
+            .collect();
         if let Ok(id) = Uuid::parse_str(&raw) {
             if !ids.contains(&id) {
                 ids.push(id);
@@ -232,7 +250,9 @@ mod tests {
     #[test]
     fn prose_that_mentions_a_page_path_does_not_forge_a_link() {
         let id = Uuid::new_v4();
-        let p = prepare(&format!("<p>the page lives at /knowledge/{id} on this host</p>"));
+        let p = prepare(&format!(
+            "<p>the page lives at /knowledge/{id} on this host</p>"
+        ));
         assert!(p.link_ids.is_empty(), "{:?}", p.link_ids);
     }
 

@@ -80,7 +80,11 @@ enforced outside this conversation, so spend it on {} and leave the rest in the 
 Cards you create without starting cost nothing and are the right answer whenever you are \
 unsure.",
             if max_starts == 1 { "" } else { "s" },
-            if max_starts == 1 { "the one that matters most" } else { "the ones that matter most" },
+            if max_starts == 1 {
+                "the one that matters most"
+            } else {
+                "the ones that matter most"
+            },
         )
     };
 
@@ -185,12 +189,7 @@ pub async fn starts_used(db: &Db, pass: &Pass) -> i32 {
 ///
 /// Called after the card has been vetted and before it is enqueued, so a
 /// refusal here leaves nothing running.
-pub async fn record_start(
-    db: &Db,
-    pass: &Pass,
-    task_id: Uuid,
-    title: &str,
-) -> Result<(), String> {
+pub async fn record_start(db: &Db, pass: &Pass, task_id: Uuid, title: &str) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO manager_actions (routine_run_id, kind, task_id, detail)
          VALUES ($1,'start',$2,$3)",
