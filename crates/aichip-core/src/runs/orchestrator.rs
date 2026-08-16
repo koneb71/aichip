@@ -2705,10 +2705,32 @@ impl Orchestrator {
         }
 
         if outcome.status == RunStatus::Completed || stopped {
+            // Did this turn end by asking rather than by answering?
+            //
+            // In plan mode the assistant is told to call `ask_user` when a
+            // choice would change the plan, and that tool ends the turn on
+            // purpose. What it leaves behind is a question, not a plan — so
+            // marking the reply `is_plan` would put an Approve button under
+            // it, and approving sends "carry out the plan exactly as you
+            // wrote it" when there is no plan to carry out. On a chat that
+            // can create and start cards, that is the expensive kind of
+            // wrong.
+            let asked: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM chat_questions
+                                 WHERE run_id = $1 AND answered_at IS NULL)",
+            )
+            .bind(run_id)
+            .fetch_one(&self.db.pool)
+            .await
+            .unwrap_or(false);
+            let planning = planning && !asked;
+
             // An older open plan stops being open the moment a newer one
             // lands: two Approve buttons in one thread is an invitation to
             // carry out the same work twice. A stopped turn wrote no plan
-            // worth approving, so it supersedes nothing.
+            // worth approving, so it supersedes nothing — and neither does a
+            // turn that only asked a question, which leaves the previous plan
+            // exactly as applicable as it was.
             if planning && !stopped {
                 sqlx::query(
                     "UPDATE chat_messages SET plan_outcome = 'superseded'

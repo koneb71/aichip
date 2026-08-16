@@ -77,10 +77,25 @@ pub fn instruction() -> &'static str {
      are switched off deliberately, so do not try them and do not report \
      their absence as a fault. Nothing you write will happen until the person \
      approves it.\n\n\
-     Write the plan as a short numbered list of the cards you would create — \
-     each with the title you would give it and one line on what it covers — \
-     followed by anything you are unsure about. If the request turns out to \
-     need no cards at all, say that instead of inventing some."
+     **If a choice would change the plan, ask before writing it.** Call \
+     mcp__aichip__ask_user with the readings as options and stop there — a \
+     question is cheap and a plan built on the wrong assumption wastes the \
+     whole turn, plus the approval that follows it. Make the options genuinely \
+     different approaches, not degrees of the same one, and give each the \
+     one line that says what picking it means. Ask about what you cannot \
+     settle by reading the code; do not ask for permission to proceed, and do \
+     not ask about something the person already told you. Answering keeps you \
+     in plan mode, so you carry on planning with the answer in hand.\n\n\
+     **One round of questions is usually enough.** If you have already asked \
+     in this conversation, plan against your best reading and put what is \
+     still open at the bottom, rather than asking again — ask a second time \
+     only when the answer you got opened a fork you could not have seen \
+     before. A plan they can argue with beats a third question.\n\n\
+     Once the choices are settled, write the plan as a short numbered list of \
+     the cards you would create — each with the title you would give it and \
+     one line on what it covers — followed by anything still uncertain that \
+     was not worth a question. If the request turns out to need no cards at \
+     all, say that instead of inventing some."
 }
 
 /// What approving a plan sends back.
@@ -187,6 +202,49 @@ mod tests {
             assert!(t.contains(word), "the instruction never mentions {word}");
         }
         assert!(t.contains("until the person approves"));
+    }
+
+    #[test]
+    fn the_instruction_asks_before_it_plans() {
+        // The tool was always available in plan mode — `tools_list` keeps it
+        // out of the acting filter deliberately — but the instruction used to
+        // steer the other way, telling the assistant to write its uncertainty
+        // down as prose at the end. So it never asked, and a plan built on the
+        // wrong reading was only discovered at approval.
+        let t = instruction();
+        assert!(t.contains("ask_user"));
+        // Before, not after: a question asked underneath a finished plan is a
+        // question about a plan that already assumed an answer.
+        let ask = t.find("ask_user").expect("names the tool");
+        let write = t.find("write the plan").expect("still asks for a plan");
+        assert!(ask < write, "the instruction asks for the plan before it allows a question");
+        // What makes the options worth clicking rather than a formality.
+        assert!(t.contains("genuinely different"));
+        // And the thing a model cannot infer: its turn ends, but the mode does
+        // not, so it should expect to carry on planning afterwards.
+        assert!(t.contains("keeps you in plan mode"));
+    }
+
+    #[test]
+    fn the_instruction_bounds_how_long_it_can_keep_asking() {
+        // Nothing in the machinery stops an assistant asking every turn: the
+        // question ends the turn, the answer starts another plan turn, and
+        // round trips are free to it and not to the person paying for them.
+        // The bound is a soft one on purpose — the second question is
+        // sometimes the useful one — but it has to exist.
+        let t = instruction();
+        assert!(t.contains("One round of questions is usually enough"));
+        assert!(t.contains("already asked"));
+    }
+
+    #[test]
+    fn ask_user_is_not_one_of_the_tools_plan_mode_takes_away() {
+        // The whole feature rests on this: asking has to survive the filter
+        // that removes the acting tools.
+        assert!(!ACTING_TOOLS.contains(&"mcp__aichip__ask_user"));
+        assert!(!ACTING_TOOL_NAMES.contains(&"ask_user"));
+        let allowed = strings(&["mcp__aichip__ask_user", "mcp__aichip__create_task"]);
+        assert_eq!(without_acting(&allowed), strings(&["mcp__aichip__ask_user"]));
     }
 
     #[test]
