@@ -26,6 +26,15 @@
 //! own, because a prohibition buried mid-paragraph is a prohibition that gets
 //! skimmed.
 
+
+/// Skills that came from a registry rather than from this workspace.
+///
+/// A file module beside this one (`skills/registry.rs`), so the parsers for
+/// somebody else's on-disk format sit next to the skills they become without
+/// enlarging the module that every run already depends on.
+pub mod install;
+pub mod registry;
+
 use crate::db::Db;
 use sqlx::Row;
 use uuid::Uuid;

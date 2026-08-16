@@ -19,6 +19,10 @@ pub fn router() -> Router<AppState> {
         .route("/skills", get(list).post(create))
         .route("/skills/{id}", patch(update).delete(remove))
         .route("/skills/{id}/try", post(try_it))
+        // Installing is project-shaped even though the library is
+        // workspace-shaped: the files land in one checkout, and that checkout
+        // is what an agent reads.
+        .route("/projects/{id}/skills/install", post(install))
 }
 
 #[derive(Deserialize)]
@@ -224,4 +228,28 @@ async fn try_it(
         // skill says what you thought it said.
         "prompt": prompt,
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallBody {
+    /// `owner/repo`, a GitHub URL, or a skills.sh page. Normalised and
+    /// refused in the core rather than passed on for the installer to fail at.
+    reference: String,
+}
+
+/// Install a skill from a registry into this project, and mirror it.
+///
+/// Slow on purpose — `npx` fetches a package and then a repository, which
+/// takes as long as it takes. The button says so rather than the request
+/// pretending to be quick and the person pressing it twice.
+async fn install(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<InstallBody>,
+) -> Result<Json<Value>, ApiError> {
+    let out = aichip_core::skills::install::install(&state.db, project_id, &body.reference)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::to_value(out).map_err(internal)?))
 }
