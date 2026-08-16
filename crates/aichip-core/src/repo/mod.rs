@@ -14,4 +14,5 @@ pub mod enumerate;
 pub mod imports;
 pub mod index;
 pub mod rank;
+pub mod slice;
 pub mod symbols;

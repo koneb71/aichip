@@ -59,6 +59,13 @@ pub const ISSUE_END: &str = "<<<END GITHUB ISSUE>>>";
 pub const DOC_BEGIN: &str = "<<<BEGIN SPACE DOCUMENT";
 pub const DOC_END: &str = "<<<END SPACE DOCUMENT>>>";
 
+/// The repo map's pair. Unlike the others this quotes text aichip generated
+/// from paths on disk rather than prose somebody wrote — see
+/// `crate::repo::slice`, which scrubs its own markers too because the only way
+/// one appears is that a file is named after it.
+pub const MAP_BEGIN: &str = "<<<BEGIN REPO MAP>>>";
+pub const MAP_END: &str = "<<<END REPO MAP>>>";
+
 /// Every marker, and the whole reason this module is not four constants.
 pub const ALL: &[&str] = &[
     BRAIN_BEGIN,
@@ -71,6 +78,8 @@ pub const ALL: &[&str] = &[
     ISSUE_END,
     DOC_BEGIN,
     DOC_END,
+    MAP_BEGIN,
+    MAP_END,
 ];
 
 /// What a stripped marker becomes.
@@ -107,6 +116,7 @@ mod tests {
             [KB_BEGIN, KB_END],
             [ISSUE_BEGIN, ISSUE_END],
             [DOC_BEGIN, DOC_END],
+            [MAP_BEGIN, MAP_END],
         ] {
             let hostile = ALL.join("\n");
             let out = scrub_foreign(&hostile, &owner);
