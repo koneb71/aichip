@@ -2,25 +2,56 @@
 
 **A local-first multi-agent workflow platform for coding agents — no API keys.**
 
-aichip orchestrates official coding-agent CLIs — [Claude Code](https://code.claude.com) and
-[OpenCode](https://opencode.ai) today — on *your own machine*, under *your own* subscription
-login. It gives you:
+aichip is a dashboard for running the coding-agent CLIs you already have installed.
+It spawns [Claude Code](https://code.claude.com) and [OpenCode](https://opencode.ai) as
+child processes on your own machine, under your own subscription login, and gives them a
+board, a queue, git worktrees, a diff to review, and a record of what everything cost.
 
-- **Parallel task board** — kick off many coding tasks at once, each isolated in its own git
-  worktree; watch live streams, review diffs, merge.
-- **Pipelines / DAGs** — chained stages (plan → implement → review → fix) defined in YAML.
-- **Scheduled agents** — cron-style recurring workflows (nightly dep updates, issue triage).
-- **Agent teams & debate** — reusable agent definitions, N parallel attempts + a judge.
-- **Model tiering** — route easy work to a fast model and hard work to a strong one, per task
-  or per pipeline step. The mapping is *per engine*, because "medium" cannot name one model
-  globally: OpenCode has never heard of `claude-opus-5`.
-- **More than one engine** — pick which CLI runs a card, a chat, a team or a single workflow
-  step, and pit two against each other on the same brief in a bake-off. An engine that isn't
-  installed is simply not offered, and one that can't honour a permission mode says so before
-  you start rather than failing forty minutes in.
-- **Apps** — describe a small tool, get a manifest you can read, install it and use it in the
-  dashboard. Its models become real Postgres tables and its views become screens; nothing it
-  ships executes.
+It is for people who already work with one of these CLIs in a terminal and want more than
+one thing happening at a time — several cards in flight, each in its own worktree, with a
+place to see what they did before any of it reaches your working copy.
+
+## What makes it different
+
+- **It runs your CLI, not an API.** No API key goes anywhere near it, because none is
+  needed: the binary on your `PATH` is already logged in, and aichip just starts it.
+- **Everything is local.** Postgres runs under `~/.aichip`, the code index and document
+  embeddings are computed on your machine, and nothing is sent anywhere aichip controls.
+- **The review surface is git.** A board task runs in an isolated worktree, so the thing
+  you approve is an ordinary diff on an ordinary branch, and the thing you reject costs
+  you a deleted branch rather than an undo.
+- **Refusals are up front.** An engine that cannot pause to ask for permission is refused
+  at the click, not silently downgraded; a schema change that drops a column waits for
+  you; a plan-first run has the mutating tools *denied*, not merely left off a list.
+
+## Contents
+
+- [How it stays within the terms of service](#how-it-stays-within-the-terms-of-service)
+- [Status](#status)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [The board](#the-board)
+- [Adding a folder](#adding-a-folder)
+- [Attachments and file references](#attachments-and-file-references)
+- [The Map tab](#the-map-tab)
+- [Chat](#chat)
+- [Research](#research)
+- [Document spaces](#document-spaces)
+- [The Brain and skills](#the-brain-and-skills)
+- [Routines](#routines)
+- [A project manager](#a-project-manager)
+- [Workflows](#workflows)
+- [Organizations](#organizations)
+- [Apps](#apps)
+- [Knowledge base](#knowledge-base)
+- [What it costs, and spending less](#what-it-costs-and-spending-less)
+- [Engines](#engines)
+- [Database](#database)
+- [Running in Docker](#running-in-docker)
+- [Development](#development)
+- [Workspace layout](#workspace-layout)
+- [Contributing](#contributing)
+- [Licence](#licence)
 
 ## How it stays within the terms of service
 
@@ -37,21 +68,46 @@ aichip is **process orchestration, not API access**. The compliance model is str
    inspecting its config files. Where a CLI can name its providers (`opencode providers
    list`), aichip shows the **name and auth type only** — never a credential.
 
-These four invariants are contribution rules. PRs that violate them will not be merged.
+These four invariants are stated at the top of
+[`crates/aichip-engines/src/lib.rs`](crates/aichip-engines/src/lib.rs) and are contribution
+rules. PRs that violate them will not be merged.
 
 ## Status
 
-Early development. Task board, agents, teams, chat, pipelines, scheduling,
-prompt attachments and apps all work end to end; see the roadmap below.
+Early development, and version 0.1. The board, agents, teams, chat, research, workflows,
+routines, apps, the knowledge base and the code map all work end to end. Interfaces still
+move between commits, and there is no migration story for anything but the database.
+
+## Requirements
+
+- **macOS or Linux.** Windows is not supported; nothing has been tested there.
+- **A Rust toolchain** (stable, 2021 edition) to build the workspace.
+- **Node and pnpm** to build the dashboard. The server serves `web/dist`, so a source
+  checkout needs `pnpm build` once before `serve` has a UI to hand out.
+- **git** on `PATH`. It is not optional: worktrees are how a task stays reviewable.
+- **At least one agent CLI on `PATH`** — `claude` or `opencode` — already logged in.
+  `aichip doctor` tells you which ones it found.
+
+Optional:
+
+- **`gh`**, for cloning from GitHub, importing issues as cards, and opening pull requests.
+  Everything else works without it, and `doctor` reports a missing `gh` as a note.
+- **Docker**, only for branch previews, for running Postgres yourself, or for the MinIO
+  bucket that holds files pasted into knowledge-base pages. Nothing else needs it.
+
+The first document you index and the first project you map download a small embedding
+model (about 35 MB) into `~/.aichip/models`. That is an artifact download, the same class
+as a cargo dependency; no content leaves the machine in either direction.
 
 ## Quick start
 
 ```bash
 cargo run -p aichip-cli -- doctor   # checks git + every agent CLI it can find
+cd web && pnpm install && pnpm build && cd ..
 cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4820
 ```
 
-The first run downloads and initializes a private Postgres under `~/.aichip/pgdata`,
+The first `serve` downloads and initializes a private Postgres under `~/.aichip/pgdata`,
 so there is nothing to install or configure.
 
 ## The board
@@ -156,6 +212,202 @@ compare `web/src/lib/api.ts:120-160` with the screenshot I attached
 The reference is inserted as a backticked path, which resolves against the
 repository root in both chat and task runs.
 
+## The Map tab
+
+What a project is made of, read out of the code rather than written down. The index is
+built on demand — when the project page opens, when a card's work lands, when `HEAD`
+moves — and a sha256 hash-diff makes the repeat passes cheap: an unchanged file costs one
+read and one hash.
+
+Three ways in, answering different questions:
+
+- **Search by meaning.** "Where does the thing that rate-limits live" is a question
+  `grep` cannot answer, because grep needs the word and not knowing the word is the whole
+  problem. Ranking is cosine similarity over embeddings computed locally with ONNX
+  inference; no model API is called and no vector extension is required. Agents get the
+  same search as an MCP tool, so a run does not start by reading the directory tree.
+- **A graph you can open up.** Symbols and imports come from tree-sitter — a real parser,
+  because a regex cannot tell a definition from the same words inside a comment, and the
+  map's promise is that a name it shows exists at the line it shows. Rust, TypeScript,
+  TSX and Python have their insides drawn; other files are still listed and still
+  searchable. An import that cannot be resolved against the project's real file list
+  becomes nothing rather than a guess: a wrong edge sends you to change a file that has
+  nothing to do with yours.
+- **A list**, which answers the same as the graph without needing a mouse.
+
+Node size is PageRank over the import edges — twenty-five lines of power iteration rather
+than a graph library. It sizes dots and breaks ties; it deliberately does not order
+search results, because "most depended upon" reliably names the infrastructure everybody
+already knows about and never the file you should be editing.
+
+Everything here is derived and never authored, so each rendering names the branch and
+commit it was read at.
+
+## Chat
+
+Every project has an assistant beside its board, and there is a project-less General chat
+for everything that is not about one repository. It reads the code and the board, and it
+can file and start cards.
+
+### Plan mode
+
+That last part is where a misunderstanding turns into money: the assistant creates a card,
+assigns an agent, starts it, and the first sign it had the wrong idea is a run that has
+already spent. **Plan mode** takes the four acting tools away for a turn — create, start,
+move and cancel — asks for a plan instead, and gives you a button.
+
+The plan turn *finishes* like any other reply rather than parking, because a parked run
+would block the next message in the conversation it is meant to be part of. So you can
+argue with a plan in the next sentence. Approve carries it out; **Edit first** opens the
+plan as text and the edited version is what is authoritative; there is no Reject button
+because closing the plan and typing something else is already the answer.
+
+### It asks instead of guessing
+
+In plan mode the assistant is told to ask before writing a plan on a wrong assumption.
+The question arrives as a card with **options**, not as prose: a closed set is unambiguous
+in both directions, and it forces the assistant to have thought of the alternatives rather
+than merely noticing it was unsure. A single question with a single answer is answered by
+clicking the option — a Send button after that is a step with no decision in it. Anything
+else (several questions, or a multi-select) keeps the button, because nothing else can
+know when you have finished choosing. At most four questions at once, with two to four
+options each; past that it is interviewing rather than clarifying. There is always a way
+out that is not one of the options, because the composer is right below and a question you
+can only answer its own way is a form. Answering keeps you in plan mode, with the answer
+in hand.
+
+## Research
+
+Ask a question about a project and get back a cited markdown report. A research run is
+read-only over your **real checkout** — no worktree, no branch — with `Read`, `Grep`,
+`Glob` and the CLI's own `WebSearch` and `WebFetch`, which is the half no other run type
+gets. The five mutating tools plus `Task` are denied outright: research runs at the strong
+tier, and a subagent fan-out would multiply that spend invisibly while making the live
+transcript unreadable.
+
+The report lands on the Research page and can be filed into the knowledge base with one
+click. Filing is idempotent — the second click returns the article the first one made.
+
+## Document spaces
+
+A project does not have to be a repository. A **space** is a folder of documents: drop in
+`md txt csv json log pdf docx pptx xlsx xlsm xls ods` and they are chunked, embedded and
+searchable. Legacy `.doc` and `.ppt` are refused at upload rather than accepted and left
+permanently unreadable.
+
+Chatting in a space retrieves the passages that answer the question and folds them into
+the prompt, cited by file and position. Retrieval is the same local pipeline the Map tab
+uses: chunks in Postgres, embeddings from ONNX inference on your machine, ranking by
+brute-force cosine in Rust. A space is thousands of chunks, and brute force ranks that in
+milliseconds — no vector extension required.
+
+Retrieved passages are fenced and labelled as reference material before they reach a run,
+for the same reason knowledge-base pages are: the text arrived from a file somebody else
+wrote, and a run holding Edit and Bash should not treat it as instructions.
+
+## The Brain and skills
+
+Two ways to stop retyping the same context into every card.
+
+**The Brain** is a project's standing context — *"the API lives in `/backend`"*, *"we do
+not add dependencies without asking"*. It reaches every run in that project without
+anybody remembering to attach it, which is the point: a thing you must remember every time
+is a thing you use no times.
+
+**A skill** is how one particular job is done here — the release checklist, the way
+migrations get written, what a bug report has to contain. An agent is *who* does the work;
+a skill is *how* this job goes. It applies when you name it — `@its-name` in chat, or
+picked on a card — and never because something matched a description. That is a deliberate
+refusal of the more magical design: a skill that only applies when you name it cannot
+steer a request that never mentioned it, and when one misbehaves the cause is the thing
+you just typed.
+
+Both are user-editable text pasted into a run holding Edit, Write and Bash, so both get the
+same treatment: framed as background rather than orders, unable to close their own fence,
+and capped so neither can bury the actual task. Text that looks like a credential is
+refused on save.
+
+### Installing a skill from a registry
+
+aichip can install Agent Skills into a project:
+
+```
+npx skills add owner/repo
+```
+
+is run in the project, and what lands is a real skill — `.agents/skills/<name>/` with its
+`SKILL.md` and whatever it bundles, symlinked into `.claude/skills/` so Claude Code reads
+it natively. That folder is the copy with full fidelity: a skill shipping
+`resources/deploy.sh` still has its script.
+
+Each `SKILL.md` is then mirrored into an aichip skill row, so the same skill can be
+`@name`d in a chat, bound to a card, and carried to an engine that has never heard of the
+format. **The folder is what wins.** The row is re-derived from disk on every install and
+every sync, so an edit made to the mirror is overwritten the next time either happens —
+copy it into a skill of your own if you want to change it.
+
+Two things this deliberately does not do. It never installs globally: `-g` writes to
+`~/.claude/skills`, and not touching an engine's own directory is the second compliance
+invariant. And it reads `skills-lock.json` for what happened rather than parsing the
+installer's stdout, which is a spinner and a box-drawn table full of escape codes.
+
+The result is committed, because a worktree is branched from `HEAD` and an uncommitted
+skill never reaches a card run at all. Whatever arrived that is not markdown — the scripts
+and data an agent may execute — is listed back to you, because the installer's own parting
+advice is to review skills before use and a list of what landed is the only version of
+that advice you can act on.
+
+## Routines
+
+A prompt that runs on a schedule. Four kinds, each landing where that work naturally
+lives:
+
+- **Chat** — a turn in the routine's own standing thread, so the replies collect in one
+  place and this morning's answer knows what yesterday's said.
+- **Research** — a fresh cited report each time.
+- **Task** — a card created and started on a project's board.
+- **Watch** — check a page on a schedule and report what changed.
+
+A routine never executes anything itself. Firing only *enqueues* through the same doors a
+person uses, so concurrency limits, backoff, permission prompts and spend accounting
+behave exactly as they do for manual work. The history row is written *before* the work,
+which is why a firing that produced nothing still shows up saying why — "didn't run: the
+assistant was still working" — instead of the list quietly thinning out.
+
+The "next run" time on the page comes from the same cron parser that will fire it, so it
+is not a second implementation that can disagree.
+
+## A project manager
+
+A project can be given a **manager**: an agent that reviews the board on a cron, with
+nobody watching.
+
+A pass is a turn in the project's standing manager thread, so the session resumes and this
+morning's pass can say what moved since yesterday's — the difference between a manager and
+a series of strangers each meeting the board for the first time. It lists the cards, reads
+diffs and statuses to find out what actually happened rather than assuming it went well,
+and finishes with a few lines: what changed, what it did, what it left alone, what it
+wants you to look at.
+
+What keeps it honest is a **cap on how many cards one pass may start** — two by default,
+ten at the most, and zero is a legitimate setting for a repository you are not ready to
+let it touch. The cap is enforced by counting rows in the actions log inside the tool
+handler, so the model cannot talk its way past it; it is also stated in the prompt,
+because an agent that discovers its budget by being refused wastes the refusal and tends
+to retry. Cards it creates without starting cost nothing and are the right answer whenever
+it is unsure.
+
+Two more rails worth knowing:
+
+- **It cannot start a card that came from outside aichip.** An imported issue was written
+  by somebody who is not the owner of this machine, and a person belongs between that text
+  and an agent that can write files.
+- **Board text is material, not instructions.** A card telling the manager to ignore its
+  limits is content somebody typed; the manager is told to report it rather than obey it.
+
+Every acting tool call is recorded, and the project's manager panel shows what each pass
+did — which is the question a manager has to answer that a plain routine does not.
+
 ## Workflows
 
 Build workflows on a canvas — drag between node handles to say "run after",
@@ -171,7 +423,7 @@ on: { schedule: "0 3 * * *" }     # standard 5-field cron
 defaults: { permission_mode: auto_edit }
 steps:
   - id: audit
-    model: easy                    # easy | medium | complex → Sonnet | Opus | Fable
+    model: easy                    # easy | medium | complex, mapped per engine
     prompt: "List outdated dependencies and flag any with security advisories."
   - id: fix
     needs: [audit]
@@ -576,8 +828,12 @@ Linux box, running unattended, or away from your laptop — not because it's tid
 cargo build            # build the Rust workspace
 cargo test             # unit + fixture tests (mock engine; no model usage, no rate limits)
 cd web && pnpm install && pnpm dev   # dashboard dev server (proxies to the Rust API)
-cd web && pnpm test    # canvas ↔ YAML round-trip tests
+cd web && pnpm test    # vitest — canvas ↔ YAML round-trip, diff, mention, kb tree
 ```
+
+The mock engine replays recorded stream-json fixtures with configurable pacing and is the
+backbone of the Rust suite, so a full `cargo test` spends nothing and cannot be rate
+limited. Rust tests live inline in `#[cfg(test)] mod tests` next to the code they cover.
 
 Adding a migration under `crates/aichip-core/migrations/` does not always
 retrigger a rebuild, because sqlx embeds them at compile time. If a new column
@@ -585,9 +841,19 @@ comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild
 
 ## Workspace layout
 
-- `crates/aichip-shared` — event types, model tiers, API DTOs
+- `crates/aichip-shared` — event types, model tiers, workflow YAML, the auth-env guard
 - `crates/aichip-engines` — engine adapter trait, Claude Code and OpenCode adapters, mock engine
-- `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler
-- `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy
+- `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler, apps, RAG, code map
+- `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy + preview proxy
 - `crates/aichip-cli` — the `aichip` binary (`serve`, `doctor`)
-- `web/` — React dashboard
+- `web/` — React 18 + Vite + Tailwind 4 dashboard
+
+## Contributing
+
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it
+covers the build, the test story, and the four compliance invariants that decide whether a
+change to the engine layer can be merged at all.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
