@@ -17,6 +17,7 @@ use super::tools;
 use crate::RunSpec;
 use aichip_shared::{McpServerSpec, McpTransport, McpWiring, PermissionMode};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// The agent aichip defines and runs under.
@@ -53,7 +54,63 @@ pub fn build(spec: &RunSpec, instructions_path: Option<&Path>) -> Value {
     if let Some(mcp) = mcp(&spec.mcp) {
         cfg.insert("mcp".into(), mcp);
     }
+    if let Some(provider) = local_provider(&spec.model_id, &spec.extra_env) {
+        cfg.insert("provider".into(), provider);
+    }
     Value::Object(cfg)
+}
+
+/// Which local runtimes aichip knows how to declare, and where each serves its
+/// OpenAI-compatible API.
+///
+/// Both expose one at `/v1`, which is what makes a single provider shape work
+/// for the pair.
+const LOCAL: &[(&str, &str, &str)] = &[
+    ("ollama", "http://127.0.0.1:11434", "Ollama (local)"),
+    ("lmstudio", "http://127.0.0.1:1234", "LM Studio (local)"),
+];
+
+/// Declare a local runtime as a provider when the run's model names one.
+///
+/// Without this, `ollama/deepseek-r1` is a model id OpenCode has never heard
+/// of: it fronts local runtimes only once configured to, and a stock install
+/// is not. aichip already writes this config, so the provider goes in beside
+/// everything else and the id resolves — otherwise the dashboard offers a
+/// model that produces a run refused at spawn, which is worse than not
+/// offering it.
+///
+/// Emitted only when the model actually names one, so a run on a hosted model
+/// carries no mention of a local server it is not using.
+///
+/// The address comes from `extra_env` when the caller supplies it — that is
+/// the aichip setting, and this crate cannot read the database — and falls
+/// back to the stock port, which is what the setting defaults to anyway.
+fn local_provider(model_id: &str, extra_env: &HashMap<String, String>) -> Option<Value> {
+    let (id, default_base, label) = LOCAL
+        .iter()
+        .find(|(id, _, _)| model_id.starts_with(&format!("{id}/")))?;
+    let model = model_id.split_once('/')?.1;
+    if model.is_empty() {
+        return None;
+    }
+    let base = extra_env
+        .get(&format!("AICHIP_{}_HOST", id.to_uppercase()))
+        .map(String::as_str)
+        .unwrap_or(default_base)
+        .trim_end_matches('/');
+    Some(json!({
+        (*id): {
+            // The OpenAI-compatible shim OpenCode uses for any endpoint that
+            // speaks the OpenAI wire format, which both of these do.
+            "npm": "@ai-sdk/openai-compatible",
+            "name": label,
+            "options": { "baseURL": format!("{base}/v1") },
+            // Only the model this run asked for. Enumerating everything the
+            // runtime has would make the config depend on what happened to be
+            // pulled at spawn time, and a run should describe itself.
+            "models": { model: { "name": model } },
+        }
+    }))
 }
 
 /// Permission rules derived from the run's mode and allow-list.
@@ -164,7 +221,7 @@ mod tests {
     use aichip_shared::ModelTier;
     use std::path::PathBuf;
 
-    fn spec() -> RunSpec {
+    pub(super) fn spec() -> RunSpec {
         RunSpec {
             cwd: PathBuf::from("/tmp/wt"),
             prompt: "do it".into(),
@@ -325,5 +382,77 @@ mod tests {
     #[test]
     fn no_wiring_means_no_mcp_key() {
         assert!(build(&spec(), None).get("mcp").is_none());
+    }
+}
+
+#[cfg(test)]
+mod local_provider_tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_local_model_declares_the_provider_that_serves_it() {
+        // Without this the id is one OpenCode has never heard of: a stock
+        // install fronts no local runtime, so the run is refused at spawn.
+        let v = local_provider("ollama/deepseek-r1:latest", &env(&[])).unwrap();
+        assert_eq!(
+            v["ollama"]["options"]["baseURL"],
+            "http://127.0.0.1:11434/v1"
+        );
+        assert_eq!(v["ollama"]["npm"], "@ai-sdk/openai-compatible");
+        // Only the model this run asked for, so the config describes the run
+        // rather than whatever happened to be pulled.
+        assert!(v["ollama"]["models"]["deepseek-r1:latest"].is_object());
+        assert_eq!(v["ollama"]["models"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lm_studio_gets_the_same_shape_on_its_own_port() {
+        let v = local_provider("lmstudio/qwen2.5-coder-7b", &env(&[])).unwrap();
+        assert_eq!(
+            v["lmstudio"]["options"]["baseURL"],
+            "http://127.0.0.1:1234/v1"
+        );
+    }
+
+    #[test]
+    fn a_configured_address_wins_over_the_default() {
+        let v = local_provider(
+            "ollama/x",
+            &env(&[("AICHIP_OLLAMA_HOST", "http://box.local:9999/")]),
+        )
+        .unwrap();
+        // Trailing slash tidied, so the /v1 join never doubles up.
+        assert_eq!(
+            v["ollama"]["options"]["baseURL"],
+            "http://box.local:9999/v1"
+        );
+    }
+
+    #[test]
+    fn a_hosted_model_mentions_no_local_server() {
+        // A run on Anthropic must not carry a provider block pointing at a
+        // machine it is not using.
+        assert!(local_provider("anthropic/claude-sonnet-4-5", &env(&[])).is_none());
+        assert!(local_provider("", &env(&[])).is_none());
+        // A prefix with nothing after it names no model.
+        assert!(local_provider("ollama/", &env(&[])).is_none());
+        // And a lookalike that is not the prefix.
+        assert!(local_provider("ollamaish/x", &env(&[])).is_none());
+    }
+
+    #[test]
+    fn the_provider_only_appears_when_it_is_used() {
+        let mut spec = super::tests::spec();
+        spec.model_id = "anthropic/claude-sonnet-4-5".into();
+        assert!(build(&spec, None).get("provider").is_none());
+        spec.model_id = "ollama/deepseek-r1:latest".into();
+        assert!(build(&spec, None).get("provider").is_some());
     }
 }
