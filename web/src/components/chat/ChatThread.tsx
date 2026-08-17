@@ -77,6 +77,9 @@ export function ChatThread({
   const [engine, setEngine] = useState<string | null>(null);
   // Seeded from the chat once it loads, then owned here — see the composer.
   const [tier, setTier] = useState<Tier>("medium");
+  // Empty means "resolve from the tier", which is what the server stores as
+  // NULL and what clearing the box returns to.
+  const [modelId, setModelId] = useState("");
   const [effort, setEffort] = useState<Effort | null>(null);
   // The agent library, fetched once. Both the `@` picker and the message
   // bubbles resolve names against this one list, so a chip is only ever drawn
@@ -169,6 +172,7 @@ export function ChatThread({
     if (!chatId || !chat || seededFor.current === chatId) return;
     seededFor.current = chatId;
     setTier(chat.modelTier ?? "medium");
+    setModelId(chat.modelId ?? "");
     setEffort(chat.effort);
     setPlanMode(chat.planMode ?? false);
   }, [chatId, chat]);
@@ -261,6 +265,7 @@ export function ChatThread({
         articleIds: pages,
         engine: engine ?? undefined,
         modelTier: tier,
+        modelId,
         effort,
         planMode: canPlan ? planMode : undefined,
       });
@@ -531,6 +536,8 @@ export function ChatThread({
                 onEngine={setEngine}
                 tier={tier}
                 onTier={setTier}
+                modelId={modelId}
+                onModelId={setModelId}
                 effort={effort}
                 onEffort={setEffort}
                 disabled={!!activeRunId}

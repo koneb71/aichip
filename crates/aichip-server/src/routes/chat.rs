@@ -40,7 +40,7 @@ async fn list_chats(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode,
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
          FROM chats c WHERE c.project_id=$1 ORDER BY c.updated_at DESC",
     )
@@ -55,6 +55,7 @@ async fn list_chats(
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<Option<String>, _>("model_tier"),
+                "modelId": r.get::<Option<String>, _>("model_id"),
                 "effort": r.get::<Option<String>, _>("effort"),
                 "planMode": r.get::<bool, _>("plan_mode"),
                 "messageCount": r.get::<i64, _>("message_count"),
@@ -92,7 +93,7 @@ async fn list_general(
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode,
+        "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
          FROM chats c WHERE c.workspace_id=$1 AND c.project_id IS NULL
          ORDER BY c.updated_at DESC",
@@ -108,6 +109,7 @@ async fn list_general(
                 "id": r.get::<Uuid, _>("id"),
                 "title": r.get::<String, _>("title"),
                 "modelTier": r.get::<Option<String>, _>("model_tier"),
+                "modelId": r.get::<Option<String>, _>("model_id"),
                 "effort": r.get::<Option<String>, _>("effort"),
                 "planMode": r.get::<bool, _>("plan_mode"),
                 "messageCount": r.get::<i64, _>("message_count"),
@@ -475,6 +477,13 @@ struct SendBody {
     /// Typed, so a client that invents a level is a 422 rather than a row the
     /// orchestrator has to shrug at when the turn actually runs.
     model_tier: Option<ModelTier>,
+    /// One conversation on one model, without moving a tier.
+    ///
+    /// Sticks to the chat like the tier and the effort beside it. An empty
+    /// string clears it back to "resolve from the tier", which is how the
+    /// picker expresses going back to the default — `None` cannot mean that,
+    /// because `None` is what a client sending only `content` sends.
+    model_id: Option<String>,
     effort: Option<ReasoningEffort>,
     /// Propose rather than act. Sticks to the chat like the two above — plan
     /// mode is a mode you are in, not a property of one sentence.
@@ -504,11 +513,19 @@ async fn send(
     }
     // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
     // client that only sends `content` does not silently reset the choice.
-    if body.model_tier.is_some() || body.effort.is_some() || body.plan_mode.is_some() {
+    if body.model_tier.is_some()
+        || body.effort.is_some()
+        || body.plan_mode.is_some()
+        || body.model_id.is_some()
+    {
         sqlx::query(
             "UPDATE chats SET model_tier = coalesce($2, model_tier),
                               effort = coalesce($3, effort),
-                              plan_mode = coalesce($4, plan_mode)
+                              plan_mode = coalesce($4, plan_mode),
+                              -- NULLIF so an empty string clears the override
+                              -- rather than saving a blank model id.
+                              model_id = CASE WHEN $5::text IS NULL THEN model_id
+                                              ELSE NULLIF($5, '') END
              WHERE id = $1",
         )
         .bind(chat_id)
@@ -519,6 +536,7 @@ async fn send(
         )
         .bind(body.effort.map(|e| e.as_str().to_string()))
         .bind(body.plan_mode)
+        .bind(body.model_id.as_deref().map(str::trim))
         .execute(&state.db.pool)
         .await
         .map_err(internal)?;

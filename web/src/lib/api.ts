@@ -794,6 +794,8 @@ export interface ChatSummary {
   title: string;
   messageCount: number;
   updatedAt: string;
+  /** One conversation on one model. null resolves from the tier. */
+  modelId?: string | null;
 }
 
 export interface FileEntry {
@@ -1429,6 +1431,8 @@ export interface Manager {
   enabled: boolean;
   engine: string | null;
   modelTier: string | null;
+  /** One conversation on one model. null means resolve from the tier. */
+  modelId?: string | null;
   effort: string | null;
   /** The standing thread — the manager's memory between passes. */
   chatId: string | null;
@@ -2621,6 +2625,9 @@ export const api = {
       effort?: Effort | null;
       /** Propose rather than act. Sticks to the chat, like the two above. */
       planMode?: boolean;
+      /** One conversation on one model, overriding the tier mapping. Empty
+       *  string clears it — undefined leaves it alone. */
+      modelId?: string;
     } = {},
   ) =>
     post(`/api/chats/${chatId}/messages`, {
@@ -2629,6 +2636,7 @@ export const api = {
       model_tier: opts.modelTier,
       effort: opts.effort ?? undefined,
       plan_mode: opts.planMode,
+      model_id: opts.modelId,
       attachment_ids: opts.attachmentIds ?? [],
       article_ids: opts.articleIds ?? [],
     }).then((r) => json<{ messageId: string; runId: string }>(r)),

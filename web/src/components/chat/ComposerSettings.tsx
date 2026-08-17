@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Effort, Tier } from "../../lib/api";
+import { Effort, LocalModel, Tier, api } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
 import { EnginePicker, useEngines } from "../../lib/engines";
 import { TierPicker } from "../TierPicker";
@@ -22,6 +22,8 @@ export function ComposerSettings({
   onEngine,
   tier,
   onTier,
+  modelId,
+  onModelId,
   effort,
   onEffort,
   disabled,
@@ -30,6 +32,9 @@ export function ComposerSettings({
   onEngine: (next: string | null) => void;
   tier: Tier;
   onTier: (next: Tier) => void;
+  /** One conversation on one model. Empty resolves from the tier. */
+  modelId: string;
+  onModelId: (next: string) => void;
   effort: Effort | null;
   onEffort: (next: Effort | null) => void;
   disabled?: boolean;
@@ -37,6 +42,12 @@ export function ComposerSettings({
   const [open, setOpen] = useState(false);
   const engines = useEngines();
   const tierModel = useTierModel();
+  // Suggestions only: any id the engine accepts is legitimate here, so this
+  // is a datalist rather than a select.
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
+  useEffect(() => {
+    api.localModels().then((r) => setLocalModels(r.models)).catch(() => {});
+  }, []);
   const manyEngines = !!engines && engines.length > 1;
 
   const summary = [
@@ -82,6 +93,34 @@ export function ComposerSettings({
               )}
               <Row label="Model">
                 <TierPicker value={tier} onChange={onTier} engine={engine ?? undefined} />
+                {/* Below the tier, not instead of it. The tier is the usual
+                    answer and stays the default; this is the escape hatch for
+                    "just this conversation, this model" — which used to mean
+                    redefining a tier for every card and chat that shares the
+                    engine. Empty goes back to the tier. */}
+                <label className="mt-2 block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+                    Or one specific model
+                  </span>
+                  <input
+                    value={modelId}
+                    list="composer-local-models"
+                    onChange={(e) => onModelId(e.target.value)}
+                    spellCheck={false}
+                    placeholder="leave empty to use the tier"
+                    className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[11px]"
+                  />
+                  <datalist id="composer-local-models">
+                    {localModels.map((m) => (
+                      <option key={m.id} value={m.id} />
+                    ))}
+                  </datalist>
+                  {modelId.trim() !== "" && (
+                    <span className="mt-1 block text-[10px] text-amber-700">
+                      This chat runs on {modelId.trim()}, ignoring the tier.
+                    </span>
+                  )}
+                </label>
               </Row>
               <Row label="Thinking">
                 <EffortPicker value={effort} onChange={onEffort} />

@@ -1,0 +1,16 @@
+-- One conversation on one model, without moving a tier.
+--
+-- A chat could already choose its engine and its *tier*, and the tier resolves
+-- through the per-engine mapping in settings. That left no way to say "this
+-- conversation, this model": the only route was to redefine what Easy means
+-- for that engine everywhere — on every card, every workflow step and every
+-- other chat.
+--
+-- It became visible with local models, which exist at the model level and
+-- nowhere else, but the gap was never about them: "just this chat on the big
+-- model" was equally unsayable.
+--
+-- NULL means "resolve from the tier", which is what every existing row does
+-- and what the picker returns to when you clear it. So this column changes
+-- nothing until somebody sets it.
+ALTER TABLE chats ADD COLUMN model_id TEXT;

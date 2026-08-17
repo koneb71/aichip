@@ -2466,7 +2466,8 @@ impl Orchestrator {
             // Lateral join rather than a scalar subquery: the turn needs the
             // message's id as well as its text, to look up its attachments.
             "SELECT r.engine, c.session_id, c.session_engine, c.model_tier AS chat_tier,
-                    c.effort AS chat_effort, c.plan_mode, p.path AS project_path,
+                    c.effort AS chat_effort, c.plan_mode, c.model_id AS chat_model,
+                    p.path AS project_path,
                     p.id AS project_id, p.kind AS project_kind,
                     m.id AS user_message_id, m.content AS user_message,
                     -- The manager's persona, joined here rather than fetched
@@ -2674,7 +2675,19 @@ impl Orchestrator {
                 tier,
             )
             .await;
-        let model_id = self.model_for(&engine_id, tier);
+        // A model named on the chat wins over the tier mapping.
+        //
+        // The mapping answers "what does Medium mean for this engine" and is
+        // shared by every card, workflow step and conversation. This answers
+        // "what does *this* conversation run on", which used to be sayable
+        // only by redefining the former for everyone. NULL still means
+        // resolve from the tier, so a chat nobody has touched behaves exactly
+        // as it did.
+        let model_id = row
+            .get::<Option<String>, _>("chat_model")
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| self.model_for(&engine_id, tier));
         sqlx::query("UPDATE runs SET model=$1, started_at=now() WHERE id=$2")
             .bind(&model_id)
             .bind(run_id)
