@@ -46,7 +46,16 @@ async fn get_models(State(state): State<AppState>) -> Json<Value> {
         .filter(|e| e.id() != "mock")
         .map(|e| {
             let current = mapping.for_engine(e.id());
-            let defaults = EngineTierMapping::defaults_for(e.id());
+            // What Reset actually goes back to, which is the mapping derived
+            // from this install's own models when there is one. The built-in
+            // constant is the fallback rather than the answer: it names
+            // Anthropic ids to a Google-only OpenCode, and nothing at all to
+            // a local runtime — and a "default" the engine cannot run makes
+            // the Reset button write a value the save then refuses.
+            let defaults = state
+                .orchestrator
+                .derived_defaults(e.id())
+                .unwrap_or_else(|| EngineTierMapping::defaults_for(e.id()));
             json!({
                 "id": e.id(),
                 "label": e.label(),

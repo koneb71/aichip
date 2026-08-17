@@ -65,7 +65,11 @@ pub fn build(spec: &RunSpec, instructions_path: Option<&Path>) -> Value {
 ///
 /// Both expose one at `/v1`, which is what makes a single provider shape work
 /// for the pair.
-const LOCAL: &[(&str, &str, &str)] = &[
+///
+/// Public because [`crate::local`] probes these same runtimes and must not
+/// keep a second copy of their addresses: a drifted port would make discovery
+/// find a model that the run it produced could not reach.
+pub const LOCAL: &[(&str, &str, &str)] = &[
     ("ollama", "http://127.0.0.1:11434", "Ollama (local)"),
     ("lmstudio", "http://127.0.0.1:1234", "LM Studio (local)"),
 ];

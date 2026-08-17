@@ -204,6 +204,13 @@ impl EngineTierMapping {
                 (ModelTier::Medium, "gpt-5-codex".to_string()),
                 (ModelTier::Complex, "gpt-5-codex".to_string()),
             ])),
+            // A local runtime has no defaults that could be written here and
+            // be true: which models exist is a fact about somebody's disk,
+            // not about aichip. So it states none, and the real answer comes
+            // from `pick_defaults` over what the install actually reported —
+            // see `Orchestrator::derived_defaults`, which is what the
+            // settings page shows as "default" rather than this.
+            "ollama" | "lmstudio" => TierMapping(BTreeMap::new()),
             // Claude Code and the mock engine both speak Claude model ids.
             _ => TierMapping::default(),
         }
@@ -275,7 +282,13 @@ impl<'de> Deserialize<'de> for EngineTierMapping {
 /// mistake, which is a Claude id pasted into the OpenCode field.
 pub fn is_known_model_for(engine: &str, id: &str) -> bool {
     match engine {
-        "opencode" => is_provider_model_shape(id),
+        // The local runtimes go through OpenCode and speak its id shape, one
+        // step narrower: the provider half is the runtime's own name, so
+        // `ollama/deepseek-r1:latest`. Validating only the shape is still
+        // right — what a machine has pulled changes without aichip hearing
+        // about it, and the adapter resolves an id it cannot serve against
+        // the catalog it just read rather than failing the save.
+        "opencode" | "ollama" | "lmstudio" => is_provider_model_shape(id),
         // Same reasoning as OpenCode's, one step further: OpenAI's ids are
         // bare names with no provider prefix and the catalog moves, so any
         // fixed list here would reject a model that works. Anything non-empty

@@ -3,9 +3,12 @@
 **A local-first multi-agent workflow platform for coding agents — no API keys.**
 
 aichip is a dashboard for running the coding-agent CLIs you already have installed.
-It spawns [Claude Code](https://code.claude.com) and [OpenCode](https://opencode.ai) as
-child processes on your own machine, under your own subscription login, and gives them a
-board, a queue, git worktrees, a diff to review, and a record of what everything cost.
+It spawns [Claude Code](https://code.claude.com), [OpenCode](https://opencode.ai) and
+[Codex](https://developers.openai.com/codex/cli) as child processes on your own machine,
+under your own subscription login, and gives them a board, a queue, git worktrees, a diff
+to review, and a record of what everything cost. Models served locally by
+[Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) are offered the same way,
+and cost nothing to run.
 
 It is for people who already work with one of these CLIs in a terminal and want more than
 one thing happening at a time — several cards in flight, each in its own worktree, with a
@@ -85,8 +88,8 @@ move between commits, and there is no migration story for anything but the datab
 - **Node and pnpm** to build the dashboard. The server serves `web/dist`, so a source
   checkout needs `pnpm build` once before `serve` has a UI to hand out.
 - **git** on `PATH`. It is not optional: worktrees are how a task stays reviewable.
-- **At least one agent CLI on `PATH`** — `claude` or `opencode` — already logged in.
-  `aichip doctor` tells you which ones it found.
+- **At least one agent CLI on `PATH`** — `claude`, `opencode` or `codex` — already logged
+  in. `aichip doctor` tells you which ones it found, and where to get the ones it didn't.
 
 Optional:
 
@@ -734,16 +737,16 @@ saying so would be the same thing wearing a different hat.
 
 ## Engines
 
-Two are supported. Which ones you're offered depends on what's installed — `aichip doctor`
-and `GET /api/engines` both answer by *running* each CLI.
+Which ones you're offered depends on what's installed — `aichip doctor` and
+`GET /api/engines` both answer by *running* each CLI, never by reading its config.
 
-| | Claude Code | OpenCode |
-|---|---|---|
-| Model ids | fixed catalog (`claude-opus-5`) | `provider/model`, from `opencode models` |
-| Ask permission mid-run | yes | **no** — headless it rejects every prompt |
-| Resume a session | yes | yes |
-| Rate-limit signal | structured, so the queue backs off precisely | best-effort text match |
-| Providers | your Claude login | whatever you've authenticated (`opencode providers list`) |
+| | Claude Code | OpenCode | Codex |
+|---|---|---|---|
+| Model ids | fixed catalog (`claude-opus-5`) | `provider/model`, from `opencode models` | OpenAI ids (`gpt-5-codex`) |
+| Ask permission mid-run | yes | **no** — headless it rejects every prompt | **no** |
+| Resume a session | yes | yes | yes |
+| Rate-limit signal | structured, so the queue backs off precisely | best-effort text match | best-effort text match |
+| Providers | your Claude login | whatever you've authenticated (`opencode providers list`) | your OpenAI login |
 
 Because OpenCode cannot stop and ask, starting a **Reviewed** card on it is refused with a
 `409` and a reason, at the click that caused it. Auto-edit works: aichip generates a
@@ -754,6 +757,33 @@ would be a privilege escalation performed on your behalf.
 Tier defaults for a multi-provider engine are derived at boot from the models that install
 can actually reach, rather than hard-coded: an `anthropic/…` default is wrong for someone
 whose only provider is Google, and they'd discover it when their first task failed.
+
+### Local models: Ollama and LM Studio
+
+Both appear in the engine picker alongside the others, and a run on either costs nothing
+and leaves the machine at no point.
+
+Under the hood they are not separate agents — they can't be, because an inference server
+serves a model and holds no tools. Picking **Ollama** or **LM Studio** runs the `opencode`
+binary with that runtime declared as its provider and the model resolved from what the
+runtime actually reports (`ollama list`, `lms ls --json`). So both need OpenCode installed
+as well; `doctor` says so when it's the missing piece, and distinguishes *not installed*
+from *installed, but its server isn't running*.
+
+Two things to know before you pick one:
+
+- **The model has to support tool calling.** A coding agent reads and edits files through
+  tools, so a chat-only or pure-reasoning model can't do the job — Ollama's `deepseek-r1`,
+  for instance, answers `does not support tools` and the run fails. aichip does not filter
+  these out, because older Ollama can't say which models are which and silently hiding a
+  model you can see in your own library is worse than a clear error.
+- **The context window has to fit the prompt.** aichip's chat prompt is around 13k tokens
+  before your message; a model loaded with an 8k window will refuse it. Raise it in
+  LM Studio, or `num_ctx` in Ollama.
+
+Discovery is separate from all of this: Settings → *Local model runtimes* asks both servers
+over HTTP so the model fields can offer what you have, and works whether or not OpenCode is
+installed.
 
 ### Scheduled runs never park
 
@@ -842,7 +872,7 @@ comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild
 ## Workspace layout
 
 - `crates/aichip-shared` — event types, model tiers, workflow YAML, the auth-env guard
-- `crates/aichip-engines` — engine adapter trait, Claude Code and OpenCode adapters, mock engine
+- `crates/aichip-engines` — engine adapter trait; Claude Code, OpenCode, Codex and local (Ollama / LM Studio) adapters, mock engine
 - `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler, apps, RAG, code map
 - `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy + preview proxy
 - `crates/aichip-cli` — the `aichip` binary (`serve`, `doctor`)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-aichip orchestrates official coding-agent CLIs (Claude Code, OpenCode) as child processes on the user's own machine under their own subscription login. It is **process orchestration, not API access**.
+aichip orchestrates official coding-agent CLIs (Claude Code, OpenCode, Codex — plus Ollama and LM Studio models driven through OpenCode) as child processes on the user's own machine under their own subscription login. It is **process orchestration, not API access**.
 
 ## Compliance invariants (contribution rules — non-negotiable)
 
@@ -52,7 +52,9 @@ Postgres: `aichip serve` boots and manages its own under `~/.aichip/pgdata`. To 
 Five crates plus a React dashboard:
 
 - **aichip-shared** — no dependencies on the others. Event types (`AichipEvent`, `EventEnvelope`), `ModelTier`/`EngineTierMapping`, `PermissionMode`/`RunStatus`, workflow YAML types + `interpolate`, `env_guard`, rate-limit parsing, effort.
-- **aichip-engines** — the `Engine` trait, `RunSpec`, `Capabilities`, and the Claude Code / OpenCode / mock adapters. Each adapter spawns its CLI, parses its stream format, and normalizes into `AichipEvent`.
+- **aichip-engines** — the `Engine` trait, `RunSpec`, `Capabilities`, and the Claude Code / OpenCode / Codex / Ollama / LM Studio / mock adapters. Each adapter spawns its CLI, parses its stream format, and normalizes into `AichipEvent`.
+
+  The last two are a different shape and the reason is written at the top of [crates/aichip-engines/src/local/mod.rs](crates/aichip-engines/src/local/mod.rs): a local runtime serves a model but holds no tools, so `LocalEngine` **delegates to the OpenCode binary** with the provider declared and the model resolved from what `ollama list` / `lms ls --json` actually report. Invariant 1 still holds — it spawns official binaries from `PATH` and reads their stdout. `aichip_core::local_models` is the older HTTP discovery used by the settings page; an adapter must not use it.
 - **aichip-core** — Postgres (`db`), the run orchestrator + state machine, worktree manager, queue backoff, cron scheduler, `EventBus`, `PermissionBroker`, org/team delegation, knowledge base, previews, S3 storage.
 - **aichip-server** — axum: `/api` REST routes, `/ws` event fan-out, `/mcp` (a hand-rolled MCP-over-HTTP endpoint the engines call back into), preview reverse proxy. All handlers take `AppState { db, bus, orchestrator, permissions, storage }`.
 - **aichip-cli** — the `aichip` binary: `serve` and `doctor`. Registers engines with the orchestrator at boot.

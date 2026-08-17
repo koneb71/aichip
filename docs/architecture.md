@@ -45,10 +45,18 @@ event stream), `ModelTier` / `TierChoice` / `EngineTierMapping`, `PermissionMode
 rate-limit parsing, reasoning effort, secret detection, the auto-tier router. No I/O, no
 database, no engine.
 
-**`aichip-engines`** — the `Engine` trait, `RunSpec`, `Capabilities`, `vet`, and the three
-adapters (`claude/`, `opencode/`, `mock/`). Each adapter spawns its CLI, parses that CLI's
-native stream format, and normalizes it into `AichipEvent`. Everything downstream consumes
-only `AichipEvent`, which is what lets a second engine exist at all.
+**`aichip-engines`** — the `Engine` trait, `RunSpec`, `Capabilities`, `vet`, and the
+adapters (`claude/`, `opencode/`, `codex/`, `local/`, `mock/`). Each adapter spawns its
+CLI, parses that CLI's native stream format, and normalizes it into `AichipEvent`.
+Everything downstream consumes only `AichipEvent`, which is what lets a second engine exist
+at all.
+
+`local/` is the odd one and worth reading before you copy it: Ollama and LM Studio serve a
+model but hold no tools, so `LocalEngine` **delegates to `OpenCodeEngine`** — it resolves a
+model from what the runtime's own CLI reports, declares that runtime as OpenCode's provider,
+and hands the run over. It is an engine because that is how a person thinks about the
+choice, and it keeps invariant 1 because the process it spawns is still an official agent
+binary from `PATH`.
 
 **`aichip-core`** — the substance. Postgres access and embedded migrations (`db`), the run
 orchestrator and state machine (`runs/`), the queue and its backoff (`queue/`), the worktree
@@ -489,7 +497,7 @@ name says what would break is a test the next person will not delete by accident
   that touches process spawning, environment, or engine detection is judged against them
   first.
 - Gate on a `Capabilities` flag, never on an engine id. If the capability you need does not
-  exist yet, add it — and answer for it in all three adapters, since there is no `Default`.
+  exist yet, add it — and answer for it in every adapter, since there is no `Default`.
 - Anything that must not happen goes in `denied_tools`. Naming it in `allowed_tools` grants
   nothing and forbids nothing.
 - Commits and pull requests in this repository carry no AI attribution of any kind — no

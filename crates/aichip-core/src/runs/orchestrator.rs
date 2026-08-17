@@ -11,7 +11,7 @@ use aichip_engines::{Engine, RunSpec};
 use aichip_shared::workflow::{SessionMode, StepOutputs, Workflow};
 use aichip_shared::{
     AichipEvent, EngineTierEffort, EngineTierMapping, EventEnvelope, McpWiring, ModelTier,
-    PermissionMode, ReasoningEffort, RunStatus, TierChoice,
+    PermissionMode, ReasoningEffort, RunStatus, TierChoice, TierMapping,
 };
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -182,6 +182,15 @@ pub struct Orchestrator {
     /// Tier → model routing, live rather than baked at boot: changing it in
     /// settings must affect the next run, not require a restart.
     tiers: Arc<std::sync::RwLock<EngineTierMapping>>,
+    /// What each engine *would* route to if the user set nothing, derived at
+    /// boot from the models that install actually reported.
+    ///
+    /// Kept apart from `tiers` because it answers a different question: that
+    /// one is "what runs now", this one is "what does Reset go back to". The
+    /// built-in constant cannot answer the second for an engine fronting many
+    /// providers — it names Anthropic ids to a Google-only install, and none
+    /// at all for a local runtime, whose models are a fact about a disk.
+    derived: Arc<std::sync::RwLock<EngineTierMapping>>,
     tier_efforts: Arc<std::sync::RwLock<EngineTierEffort>>,
     pub worktrees: Arc<WorktreeManager>,
     pub(crate) slots: Arc<crate::runs::slots::Slots>,
@@ -393,6 +402,9 @@ impl Orchestrator {
             engines: HashMap::new(),
             detected: HashMap::new(),
             tiers: Arc::new(std::sync::RwLock::new(EngineTierMapping::default())),
+            derived: Arc::new(std::sync::RwLock::new(
+                EngineTierMapping(Default::default()),
+            )),
             tier_efforts: Arc::new(std::sync::RwLock::new(EngineTierEffort::default())),
             worktrees,
             slots: Arc::new(crate::runs::slots::Slots::new(max_concurrent)),
@@ -1136,23 +1148,41 @@ impl Orchestrator {
         // guess — and for a multi-provider engine it's usually a wrong one.
         // The install itself knows better, so ask it.
         for engine in self.engines() {
-            if explicit.contains(engine.id()) {
-                continue;
-            }
             let Some(info) = self.detected.get(engine.id()) else {
                 continue;
             };
-            if let Some(picked) = aichip_shared::pick_defaults(&info.models) {
-                tracing::info!(
-                    engine = engine.id(),
-                    medium = %picked.model_for(ModelTier::Medium),
-                    "tier defaults derived from the models this install can reach"
-                );
+            let Some(picked) = aichip_shared::pick_defaults(&info.models) else {
+                continue;
+            };
+            tracing::info!(
+                engine = engine.id(),
+                medium = %picked.model_for(ModelTier::Medium),
+                "tier defaults derived from the models this install can reach"
+            );
+            // Recorded for every engine, applied only to the ones nobody has
+            // configured. Deriving it unconditionally is what lets the
+            // settings page say what Reset goes back to without undoing the
+            // user's own choice to get there.
+            self.derived
+                .write()
+                .unwrap()
+                .0
+                .insert(engine.id().to_string(), picked.clone());
+            if !explicit.contains(engine.id()) {
                 mapping.0.insert(engine.id().to_string(), picked);
             }
         }
         *self.tiers.write().unwrap() = mapping;
         Ok(())
+    }
+
+    /// What this engine routes to when the user has set nothing.
+    ///
+    /// `None` for an engine whose install said nothing about its models, in
+    /// which case [`EngineTierMapping::defaults_for`] is the only answer
+    /// there is.
+    pub fn derived_defaults(&self, engine: &str) -> Option<TierMapping> {
+        self.derived.read().unwrap().0.get(engine).cloned()
     }
 
     /// How hard each tier thinks, per engine. A snapshot, for the same reason

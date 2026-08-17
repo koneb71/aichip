@@ -1,23 +1,25 @@
 //! What local model runtimes on this machine have available.
 //!
-//! # This is not an engine, and the distinction is the whole point
+//! # This is discovery, not the adapter
 //!
 //! Ollama and LM Studio are **inference servers**: they serve a model over an
 //! HTTP API. They hold no tools, edit no files and run no commands, so a board
 //! card handed to one would produce prose *about* editing a file and no edited
-//! file. They cannot be `Engine` implementations, and the first compliance
-//! invariant says so in as many words — adapters spawn official **agent**
-//! binaries on `PATH` and read their **stdout**.
+//! file. What makes them usable is OpenCode, which is an agent and can front
+//! any OpenAI-compatible endpoint — and that pairing is a real engine, which
+//! lives in [`aichip_engines::local`] and is what a person picks in "Run on".
 //!
-//! What they *are* is providers that OpenCode already fronts. OpenCode is the
-//! agent; `ollama/qwen2.5-coder` is a model id it accepts, and
-//! [`aichip_shared::model_tier::is_provider_model_shape`] has always validated that
-//! shape. Running a local model through aichip works today and needed no code.
+//! This module is the older and smaller half: it answers *what has this
+//! machine got*, for the settings page and the model fields, without needing
+//! either runtime to be offerable as an engine. The adapter deliberately does
+//! **not** call into it — an adapter is held to the first compliance
+//! invariant, so it asks `ollama list` and `lms ls --json` rather than a
+//! socket. Two ways of asking the same question, and that is on purpose:
+//! discovery must keep working for a runtime that has no OpenCode to run it,
+//! which is precisely when it has no engine.
 //!
-//! What did not work was *finding out what you have*. You had to know the
-//! exact tag and type it, and a typo surfaced as a run that failed minutes
-//! later. This module asks the two runtimes what they have pulled, so the
-//! picker can offer it.
+//! Before either existed you had to know the exact tag and type it, and a
+//! typo surfaced as a run that failed minutes later.
 //!
 //! # Why this does not weaken the invariant
 //!
@@ -102,6 +104,22 @@ pub fn vet_host(url: &str) -> Result<String, String> {
 /// is a settings page that cannot render because it cannot read where to look
 /// for something optional.
 pub async fn hosts(db: &Db) -> Hosts {
+    let (ollama, lmstudio) = configured(db).await;
+    let d = Hosts::default();
+    Hosts {
+        ollama: ollama.unwrap_or(d.ollama),
+        lmstudio: lmstudio.unwrap_or(d.lmstudio),
+    }
+}
+
+/// What somebody actually set, with no defaults filled in.
+///
+/// The distinction matters to [`aichip_engines::local`] and nowhere else: an
+/// unset address means "work it out", and for LM Studio that is strictly
+/// better than the default, because `lms status` reports the port the server
+/// is really on — which people change in LM Studio's own window and never
+/// think to come and repeat here. Collapsing the two would throw that away.
+pub async fn configured(db: &Db) -> (Option<String>, Option<String>) {
     let read = |key: &'static str| async move {
         sqlx::query_scalar::<_, serde_json::Value>("SELECT value FROM settings WHERE key = $1")
             .bind(key)
@@ -112,12 +130,7 @@ pub async fn hosts(db: &Db) -> Hosts {
             .and_then(|v| serde_json::from_value::<String>(v).ok())
             .and_then(|v| vet_host(&v).ok())
     };
-    let (ollama, lmstudio) = tokio::join!(read(OLLAMA_KEY), read(LMSTUDIO_KEY));
-    let d = Hosts::default();
-    Hosts {
-        ollama: ollama.unwrap_or(d.ollama),
-        lmstudio: lmstudio.unwrap_or(d.lmstudio),
-    }
+    tokio::join!(read(OLLAMA_KEY), read(LMSTUDIO_KEY))
 }
 
 /// Store one or both. An empty string clears back to the default rather than

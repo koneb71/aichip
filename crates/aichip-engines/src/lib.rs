@@ -10,6 +10,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod local;
 pub mod mock;
 pub mod opencode;
 

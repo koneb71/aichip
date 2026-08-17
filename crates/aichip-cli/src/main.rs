@@ -3,6 +3,7 @@ use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
 use aichip_engines::codex::CodexEngine;
+use aichip_engines::local::LocalEngine;
 use aichip_engines::mock::MockEngine;
 use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::Engine;
@@ -69,16 +70,48 @@ async fn sweep_attachments(db: aichip_core::db::Db) {
     }
 }
 
+/// Where the local runtimes listen, when somebody has said.
+///
+/// `None` is not "the default" — see `aichip_core::local_models::configured`.
+#[derive(Default)]
+struct LocalHosts {
+    ollama: Option<String>,
+    lmstudio: Option<String>,
+}
+
 /// The engines aichip knows how to drive, in the order they're offered.
 ///
-/// One list, used by both `serve` and `doctor`, so adding a third adapter
+/// One list, used by both `serve` and `doctor`, so adding another adapter
 /// never means remembering to edit the doctor separately.
-fn real_engines() -> Vec<Arc<dyn Engine>> {
+///
+/// The last two are the same OpenCode binary pointed at a model on this
+/// machine — see `aichip_engines::local` for why that is an engine and not a
+/// setting. `doctor` runs without a database, so it passes no addresses and
+/// gets the stock ports; that costs nothing, because the only thing an
+/// address changes is where the probe looks.
+fn real_engines(local: LocalHosts) -> Vec<Arc<dyn Engine>> {
     vec![
         Arc::new(ClaudeEngine::default()) as Arc<dyn Engine>,
         Arc::new(OpenCodeEngine::default()) as Arc<dyn Engine>,
         Arc::new(CodexEngine::default()) as Arc<dyn Engine>,
+        Arc::new(LocalEngine::ollama(local.ollama)) as Arc<dyn Engine>,
+        Arc::new(LocalEngine::lmstudio(local.lmstudio)) as Arc<dyn Engine>,
     ]
+}
+
+/// Where to get an engine this machine hasn't got.
+///
+/// Beside the "not installed" line rather than in a wall of links at the end,
+/// because the person reading it has just been told about one specific thing.
+fn install_hint(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-code" => Some("https://code.claude.com"),
+        "opencode" => Some("https://opencode.ai"),
+        "codex" => Some("npm i -g @openai/codex — https://developers.openai.com/codex/cli"),
+        "ollama" => Some("https://ollama.com — needs OpenCode too, to drive it"),
+        "lmstudio" => Some("https://lmstudio.ai — needs OpenCode too, to drive it"),
+        _ => None,
+    }
 }
 
 /// Provider names and auth *type* — never a credential.
@@ -180,10 +213,14 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         max_concurrent(),
         Some(mcp_base),
     );
+    // Read before the engines are built rather than threaded to each spawn
+    // site: a local engine knows where its own runtime lives, which is the
+    // only place that fact was ever needed.
+    let (ollama, lmstudio) = aichip_core::local_models::configured(&db).await;
     // Register only what is actually installed, so an engine that isn't
     // present is simply *not offered* rather than accepted and then failing
     // at spawn time.
-    for engine in real_engines() {
+    for engine in real_engines(LocalHosts { ollama, lmstudio }) {
         let id = engine.id();
         match orchestrator.register_if_available(engine).await {
             Some(info) => tracing::info!(
@@ -426,7 +463,7 @@ async fn doctor() -> anyhow::Result<()> {
     }
 
     let mut found = 0;
-    for engine in real_engines() {
+    for engine in real_engines(LocalHosts::default()) {
         match engine.detect().await {
             Some(info) => {
                 found += 1;
@@ -443,8 +480,22 @@ async fn doctor() -> anyhow::Result<()> {
                     println!("  note: no rate-limit signal, so the queue can't back off for it");
                 }
             }
-            None => println!("· {}: not installed — it won't be offered", engine.label()),
+            None => {
+                print!("· {}: not installed — it won't be offered", engine.label());
+                match install_hint(engine.id()) {
+                    Some(where_from) => println!("\n    {where_from}"),
+                    None => println!(),
+                }
+            }
         }
+    }
+
+    // A local runtime is the one case where "not installed" can be wrong: the
+    // app is right there and its server is switched off, or OpenCode — which
+    // is what actually drives it — is the piece that's missing. `detect` can
+    // only say yes or no, so the difference is spelled out here.
+    for hint in aichip_engines::local::hints("opencode").await {
+        println!("\n! {hint}");
     }
 
     if found == 0 {
