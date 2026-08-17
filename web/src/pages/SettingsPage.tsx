@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, Effort, EffortSettings, EngineModels, LocalModel, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, Effort, EffortSettings, EngineModels, LocalHosts, LocalModel, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
 import { AttentionSettings } from "../components/AttentionSettings";
@@ -43,9 +43,28 @@ export default function SettingsPage() {
   // Probed once: a runtime started after this page opened is a refresh
   // away, and polling a port that is usually not there is noise.
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
+  const [localHosts, setLocalHosts] = useState<LocalHosts | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   useEffect(() => {
-    api.localModels().then((r) => setLocalModels(r.models)).catch(() => {});
+    api
+      .localModels()
+      .then((r) => {
+        setLocalModels(r.models);
+        setLocalHosts(r.hosts);
+      })
+      .catch(() => {});
   }, []);
+
+  const saveLocalHost = async (patch: Partial<LocalHosts>) => {
+    setLocalError(null);
+    try {
+      const r = await api.setLocalHosts(patch);
+      setLocalModels(r.models);
+      setLocalHosts(r.hosts);
+    } catch (e) {
+      setLocalError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [effortDraft, setEffortDraft] = useState<EffortDraft | null>(null);
@@ -227,6 +246,54 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Where to look for models this machine serves. Not engines — see
+          aichip_core::local_models — so it sits with the other settings
+          rather than beside the engine list, which would imply otherwise. */}
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold">Local model runtimes</h2>
+        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+          Ollama and LM Studio serve models on this machine. They are not engines — they hold
+          no tools — but an engine that fronts them, like OpenCode, can use their models, and
+          what they have pulled is offered in the model fields above. Leave a box empty for the
+          default port.
+        </p>
+        {localError && (
+          <div className="mt-2 max-w-lg rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+            {localError}
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap gap-4">
+          {(["ollama", "lmstudio"] as const).map((k) => (
+            <label key={k} className="block">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+                {k === "ollama" ? "Ollama" : "LM Studio"}
+              </span>
+              <input
+                defaultValue={localHosts?.[k] ?? ""}
+                key={localHosts?.[k] ?? k}
+                placeholder={k === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234"}
+                spellCheck={false}
+                // On blur rather than on every keystroke: each save probes the
+                // address, and probing a half-typed URL is noise.
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v !== (localHosts?.[k] ?? "")) void saveLocalHost({ [k]: v });
+                }}
+                className="w-64 rounded-lg border border-line bg-panel px-2.5 py-2 font-mono text-xs"
+              />
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] text-ink-dim">
+          {localModels.length > 0
+            ? `${localModels.length} model${localModels.length === 1 ? "" : "s"} found: ${localModels
+                .map((m) => m.id)
+                .slice(0, 4)
+                .join(", ")}${localModels.length > 4 ? "…" : ""}`
+            : "Nothing answering at those addresses — which is fine if you do not run either."}
+        </p>
+      </section>
 
       <PreviewSettings />
       <AttentionSettings />

@@ -20,7 +20,7 @@ pub fn router() -> Router<AppState> {
         // Beside the engines and deliberately not one of them: see
         // `aichip_core::local_models`. Ollama and LM Studio are providers
         // OpenCode fronts, not agents aichip can drive.
-        .route("/local-models", get(local_models))
+        .route("/local-models", get(local_models).put(set_local_hosts))
 }
 
 async fn list(State(state): State<AppState>) -> Json<Value> {
@@ -52,6 +52,36 @@ async fn list(State(state): State<AppState>) -> Json<Value> {
 /// Answers with an empty list rather than an error when nothing is running,
 /// which is the common case — a settings page must not look broken because a
 /// thing the user never installed is not listening.
-async fn local_models() -> Json<Value> {
-    Json(json!({ "models": aichip_core::local_models::discover().await }))
+async fn local_models(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "models": aichip_core::local_models::discover(&state.db).await,
+        // The addresses it looked at, so a page showing nothing can say where
+        // it looked rather than leaving somebody to guess.
+        "hosts": aichip_core::local_models::hosts(&state.db).await,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostsBody {
+    ollama: Option<String>,
+    lmstudio: Option<String>,
+}
+
+/// Point the probe somewhere else. An empty string resets to the default.
+async fn set_local_hosts(
+    State(state): State<AppState>,
+    Json(body): Json<HostsBody>,
+) -> Result<Json<Value>, super::ApiError> {
+    aichip_core::local_models::set_hosts(
+        &state.db,
+        body.ollama.as_deref(),
+        body.lmstudio.as_deref(),
+    )
+    .await
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({
+        "hosts": aichip_core::local_models::hosts(&state.db).await,
+        "models": aichip_core::local_models::discover(&state.db).await,
+    })))
 }

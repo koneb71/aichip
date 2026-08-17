@@ -31,9 +31,124 @@
 //! Nothing fails when neither is running, which is the common case: a refused
 //! connection is an empty list, not an error, and never a slow page — hence
 //! the short timeout.
+//!
+//! # Where the addresses come from
+//!
+//! Settings, with the stock ports as defaults, rather than environment
+//! variables. Somebody running Ollama on another port should be able to say so
+//! in the dashboard and be found on the next look — an env var means editing a
+//! shell profile and restarting the server to change where a *discovery probe*
+//! points, which is a lot of ceremony for an optional convenience.
 
+use crate::db::Db;
 use serde::Deserialize;
 use std::time::Duration;
+
+/// Where each runtime listens when nobody has said otherwise.
+///
+/// The stock ports, so the common case needs no configuration at all — and
+/// they are *defaults* rather than a hardcoding, because a person running
+/// Ollama on another port should not have to restart aichip with an
+/// environment variable to be found.
+pub const OLLAMA_DEFAULT: &str = "http://127.0.0.1:11434";
+pub const LMSTUDIO_DEFAULT: &str = "http://127.0.0.1:1234";
+
+const OLLAMA_KEY: &str = "ollama_host";
+const LMSTUDIO_KEY: &str = "lmstudio_host";
+
+/// Where to look, as configured.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hosts {
+    pub ollama: String,
+    pub lmstudio: String,
+}
+
+impl Default for Hosts {
+    fn default() -> Self {
+        Self {
+            ollama: OLLAMA_DEFAULT.to_string(),
+            lmstudio: LMSTUDIO_DEFAULT.to_string(),
+        }
+    }
+}
+
+/// What a person may put in the box.
+///
+/// An address here becomes a request the *server* makes, so the scheme is
+/// checked rather than assumed: without it, a value like `file:///etc/passwd`
+/// or a bare host would either fail obscurely at request time or reach
+/// somewhere nobody meant. aichip is a single-operator tool and this is the
+/// operator's own setting, so this is a guard against a typo rather than
+/// against an attacker — which is why it refuses with a sentence rather than
+/// silently correcting.
+pub fn vet_host(url: &str) -> Result<String, String> {
+    let url = url.trim().trim_end_matches('/');
+    if url.is_empty() {
+        return Err("give an address, or leave it empty to use the default".into());
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("{url} needs to start with http:// or https://"));
+    }
+    if url.contains(char::is_whitespace) {
+        return Err("an address cannot contain spaces".into());
+    }
+    Ok(url.to_string())
+}
+
+/// Read the configured addresses, falling back to the defaults.
+///
+/// Never fails: a database hiccup gives the defaults, because the alternative
+/// is a settings page that cannot render because it cannot read where to look
+/// for something optional.
+pub async fn hosts(db: &Db) -> Hosts {
+    let read = |key: &'static str| async move {
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT value FROM settings WHERE key = $1")
+            .bind(key)
+            .fetch_optional(&db.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value::<String>(v).ok())
+            .and_then(|v| vet_host(&v).ok())
+    };
+    let (ollama, lmstudio) = tokio::join!(read(OLLAMA_KEY), read(LMSTUDIO_KEY));
+    let d = Hosts::default();
+    Hosts {
+        ollama: ollama.unwrap_or(d.ollama),
+        lmstudio: lmstudio.unwrap_or(d.lmstudio),
+    }
+}
+
+/// Store one or both. An empty string clears back to the default rather than
+/// saving a blank, so "reset this" is a thing the box itself can express.
+pub async fn set_hosts(
+    db: &Db,
+    ollama: Option<&str>,
+    lmstudio: Option<&str>,
+) -> Result<(), String> {
+    for (key, value) in [(OLLAMA_KEY, ollama), (LMSTUDIO_KEY, lmstudio)] {
+        let Some(raw) = value else { continue };
+        if raw.trim().is_empty() {
+            let _ = sqlx::query("DELETE FROM settings WHERE key = $1")
+                .bind(key)
+                .execute(&db.pool)
+                .await;
+            continue;
+        }
+        let url = vet_host(raw)?;
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(key)
+        .bind(serde_json::json!(url))
+        .execute(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 /// A model one of the local runtimes has, named the way OpenCode wants it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -53,15 +168,6 @@ pub struct LocalModel {
 /// enough for a busy Ollama to reply and short enough that a settings page
 /// does not feel broken when neither is installed.
 const TIMEOUT: Duration = Duration::from_secs(2);
-
-fn base(var: &str, default: &str) -> String {
-    std::env::var(var)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| default.to_string())
-        .trim_end_matches('/')
-        .to_string()
-}
 
 #[derive(Deserialize)]
 struct OllamaTags {
@@ -148,9 +254,8 @@ async fn fetch(url: String) -> Option<String> {
 /// Both are probed concurrently: they are independent, and doing them in
 /// sequence would make the page wait twice for two things that are usually
 /// both absent.
-pub async fn discover() -> Vec<LocalModel> {
-    let ollama = base("OLLAMA_HOST", "http://127.0.0.1:11434");
-    let lmstudio = base("LMSTUDIO_HOST", "http://127.0.0.1:1234");
+pub async fn discover(db: &Db) -> Vec<LocalModel> {
+    let Hosts { ollama, lmstudio } = hosts(db).await;
     let (a, b) = tokio::join!(
         fetch(format!("{ollama}/api/tags")),
         fetch(format!("{lmstudio}/v1/models")),
@@ -209,6 +314,37 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "ollama/fine");
+    }
+
+    #[test]
+    fn an_address_has_to_be_one() {
+        // The value becomes a request the server makes, so a typo is caught
+        // in the box rather than at probe time.
+        assert!(
+            vet_host("127.0.0.1:11434").is_err(),
+            "a bare host is not a URL"
+        );
+        assert!(vet_host("file:///etc/passwd").is_err());
+        assert!(vet_host("http://host name").is_err());
+        assert!(vet_host("").is_err());
+        // Trailing slash is tidied rather than refused: people paste it.
+        assert_eq!(
+            vet_host("http://127.0.0.1:11434/").unwrap(),
+            "http://127.0.0.1:11434"
+        );
+        assert_eq!(
+            vet_host(" https://box.local:1234 ").unwrap(),
+            "https://box.local:1234"
+        );
+    }
+
+    #[test]
+    fn the_defaults_are_the_stock_ports_and_survive_their_own_check() {
+        // A default that its own validator rejects would make the common case
+        // the broken one.
+        let d = Hosts::default();
+        assert_eq!(vet_host(&d.ollama).unwrap(), OLLAMA_DEFAULT);
+        assert_eq!(vet_host(&d.lmstudio).unwrap(), LMSTUDIO_DEFAULT);
     }
 
     #[test]

@@ -46,6 +46,13 @@ export interface LocalModel {
   name: string;
 }
 
+/** Where the probe looks. Defaults to the stock ports; stored in settings so
+ *  a runtime on another port is a box to edit rather than a restart. */
+export interface LocalHosts {
+  ollama: string;
+  lmstudio: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -1686,7 +1693,14 @@ export const api = {
    *  into an OpenCode model field. Empty when neither is running, which is
    *  not an error. */
   localModels: () =>
-    fetch("/api/local-models").then((r) => json<{ models: LocalModel[] }>(r)),
+    fetch("/api/local-models").then((r) =>
+      json<{ models: LocalModel[]; hosts: LocalHosts }>(r),
+    ),
+  /** Point the probe somewhere else. An empty string resets to the default. */
+  setLocalHosts: (body: Partial<LocalHosts>) =>
+    put("/api/local-models", body).then((r) =>
+      json<{ models: LocalModel[]; hosts: LocalHosts }>(r),
+    ),
 
   skills: (workspaceId: string) =>
     fetch(`/api/skills?workspace_id=${workspaceId}`).then((r) =>
