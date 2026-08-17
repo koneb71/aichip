@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api, Effort, EffortSettings, EngineModels, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
+import { api, Effort, EffortSettings, EngineModels, LocalModel, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
 import { AttentionSettings } from "../components/AttentionSettings";
@@ -40,6 +40,12 @@ const asEffortDraft = (s: ModelSettings): EffortDraft =>
   Object.fromEntries(s.engines.map((e) => [e.id, { ...NO_EFFORTS, ...e.efforts }]));
 
 export default function SettingsPage() {
+  // Probed once: a runtime started after this page opened is a refresh
+  // away, and polling a port that is usually not there is noise.
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
+  useEffect(() => {
+    api.localModels().then((r) => setLocalModels(r.models)).catch(() => {});
+  }, []);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [effortDraft, setEffortDraft] = useState<EffortDraft | null>(null);
@@ -261,6 +267,7 @@ export default function SettingsPage() {
                     <div className="flex shrink-0 items-center gap-2">
                       <TierField
                         engine={engine}
+                        localModels={localModels}
                         value={draft?.[engine.id]?.[tier.key] ?? ""}
                         onChange={(v) =>
                           setDraft((d) =>
@@ -416,10 +423,14 @@ function TierField({
   engine,
   value,
   onChange,
+  localModels,
 }: {
   engine: EngineModels;
   value: string;
   onChange: (v: string) => void;
+  /** Models an on-machine runtime has pulled. Suggestions only — they are
+   *  ordinary provider/model ids for whichever engine fronts them. */
+  localModels: LocalModel[];
 }) {
   if (engine.fixedCatalog) {
     return (
@@ -453,12 +464,24 @@ function TierField({
         {engine.available.map((id) => (
           <option key={id} value={id} />
         ))}
+        {/* What Ollama and LM Studio have pulled, offered beside what the CLI
+            reported. They are not engines — they are providers this one
+            fronts — so they belong in the same list rather than a section of
+            their own. */}
+        {localModels.map((m) => (
+          <option key={m.id} value={m.id} label={`${m.provider} · on this machine`} />
+        ))}
       </datalist>
-      {!engine.available.includes(value) && !!engine.available.length && (
-        <span className="text-[10px] text-amber-700">
-          not in this install's model list
-        </span>
-      )}
+      {!engine.available.includes(value) &&
+        !!engine.available.length &&
+        // A local model is legitimately absent from the CLI's list, so
+        // warning about it would be telling the user off for the thing this
+        // feature exists to make easy.
+        !localModels.some((m) => m.id === value) && (
+          <span className="text-[10px] text-amber-700">
+            not in this install's model list
+          </span>
+        )}
     </div>
   );
 }

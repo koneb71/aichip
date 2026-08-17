@@ -7,6 +7,7 @@ pub mod fence;
 pub mod github;
 pub mod kb;
 pub mod leftovers;
+pub mod local_models;
 pub mod manager;
 pub mod mcp_servers;
 pub mod previews;

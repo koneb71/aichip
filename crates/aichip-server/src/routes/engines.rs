@@ -15,7 +15,12 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/engines", get(list))
+    Router::new()
+        .route("/engines", get(list))
+        // Beside the engines and deliberately not one of them: see
+        // `aichip_core::local_models`. Ollama and LM Studio are providers
+        // OpenCode fronts, not agents aichip can drive.
+        .route("/local-models", get(local_models))
 }
 
 async fn list(State(state): State<AppState>) -> Json<Value> {
@@ -40,4 +45,13 @@ async fn list(State(state): State<AppState>) -> Json<Value> {
         })
         .collect::<Vec<_>>();
     Json(json!({ "engines": engines }))
+}
+
+/// Models the local runtimes on this machine have pulled.
+///
+/// Answers with an empty list rather than an error when nothing is running,
+/// which is the common case — a settings page must not look broken because a
+/// thing the user never installed is not listening.
+async fn local_models() -> Json<Value> {
+    Json(json!({ "models": aichip_core::local_models::discover().await }))
 }

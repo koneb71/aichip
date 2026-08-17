@@ -35,6 +35,17 @@ export interface AttentionSettingsValue {
   warning: string | null;
 }
 
+/** A model an on-machine runtime has, named the way OpenCode wants it.
+ *
+ *  Not an engine: Ollama and LM Studio serve models over HTTP and hold no
+ *  tools, so they run *through* OpenCode rather than beside it. */
+export interface LocalModel {
+  provider: "ollama" | "lmstudio";
+  /** `provider/model`, ready to use as an OpenCode model id. */
+  id: string;
+  name: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -1670,6 +1681,12 @@ export const api = {
     post(`/api/projects/${projectId}/skills/install`, { reference }).then((r) =>
       json<SkillInstall>(r),
     ),
+
+  /** Models the local runtimes on this machine have pulled, ready to paste
+   *  into an OpenCode model field. Empty when neither is running, which is
+   *  not an error. */
+  localModels: () =>
+    fetch("/api/local-models").then((r) => json<{ models: LocalModel[] }>(r)),
 
   skills: (workspaceId: string) =>
     fetch(`/api/skills?workspace_id=${workspaceId}`).then((r) =>
