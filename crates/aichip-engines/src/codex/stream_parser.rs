@@ -1,28 +1,34 @@
 //! `codex exec --json` emits JSON Lines; this turns them into `AichipEvent`.
 //!
-//! ## Written against the documented shapes, not an observed run
+//! ## Now checked against a real transcript
 //!
-//! Every other adapter in this crate was built by running the real CLI and
-//! recording what came back — that is the repository's rule, and this file is
-//! the exception. Codex was not installed on the machine where it was written,
-//! so the event names here come from OpenAI's non-interactive documentation
-//! rather than from a transcript.
+//! This file was first written from OpenAI's documentation, without the binary
+//! — the exception to the repository's rule. It has since been run against
+//! `codex-cli 0.147.0`, and the fixtures in the tests below are those runs,
+//! copied verbatim. The envelope names it guessed turned out to be right; the
+//! two things it got wrong are fixed here and worth knowing:
 //!
-//! Two consequences, and both are designed for rather than hoped away:
+//! - **An `error` is an item, not only an event.** A run whose model id is
+//!   unknown emits
+//!   `{"type":"item.completed","item":{"type":"error","message":"…"}}` and
+//!   then *completes successfully*. Treating that as a failure would fail a
+//!   run that worked; dropping it, which is what happened before, threw away
+//!   the only explanation of one that did not. So it is remembered and used as
+//!   the reason **only when the process also exits non-zero**.
+//! - **A turn can contain several `agent_message` items.** Text is
+//!   accumulated, never replaced, or the card's summary shows the last
+//!   sentence of the answer instead of the answer.
 //!
-//! - **Unknown lines are ignored, never fatal.** If the real stream carries a
-//!   shape this does not know, the run keeps going and the text still lands —
-//!   the failure mode is a thinner event stream, not a dead run.
-//!   `parse_line` returns an empty vector for anything it cannot read,
-//!   including lines that are not JSON at all.
-//! - **Both event spellings are accepted.** The docs describe events as both
-//!   `thread.started`/`item.completed` and a JSON-RPC-ish
-//!   `{"method":"turn/started"}`. Rather than bet on one, the type is read
-//!   from `type` or `method` and `.`/`/` are treated as the same separator.
+//! Two properties are kept from the documentation-only era, because they cost
+//! nothing and the stream is still not fully specified:
 //!
-//! When somebody with `codex` installed runs it, the honest first step is to
-//! capture a real transcript into a fixture here and delete whichever half of
-//! this turned out to be wrong.
+//! - **Unknown lines are ignored, never fatal.** `parse_line` returns an empty
+//!   vector for anything it cannot read, including lines that are not JSON.
+//!   The failure mode is a thinner event stream, not a dead run.
+//! - **Both event spellings are accepted.** Observed output uses
+//!   `thread.started`/`item.completed`; the docs also describe a JSON-RPC-ish
+//!   `{"method":"turn/started"}`. The type is read from `type` or `method` and
+//!   `.`/`/` are treated as the same separator.
 
 use aichip_shared::{AichipEvent, Usage};
 use serde_json::Value;
@@ -39,6 +45,13 @@ pub struct StreamState {
     /// Set by an explicit failure event, so `finish` can report the reason
     /// rather than only the exit code.
     failure: Option<String>,
+    /// The last `error` *item*, which is not the same thing.
+    ///
+    /// Codex emits one for a merely degraded turn — an unknown model id, say —
+    /// and then finishes successfully. Promoting that to a failure would fail
+    /// working runs, so it is only ever used to explain a process that also
+    /// exited non-zero.
+    last_error: Option<String>,
 }
 
 impl StreamState {
@@ -49,6 +62,7 @@ impl StreamState {
             text: String::new(),
             usage: Usage::default(),
             failure: None,
+            last_error: None,
         }
     }
 
@@ -73,8 +87,11 @@ impl StreamState {
             }
         } else {
             AichipEvent::RunFailed {
+                // An error item is only an explanation once the process has
+                // actually failed — see `last_error`.
                 reason: self
                     .failure
+                    .or(self.last_error)
                     .unwrap_or_else(|| "codex exited without completing the turn".to_string()),
             }
         }
@@ -184,8 +201,18 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> Vec<AichipEvent> {
                         }
                     }
                 }
+                // An error item, which is a diagnostic and not necessarily
+                // the end: a run naming an unknown model emits one and then
+                // completes. Remembered rather than emitted, so `finish` can
+                // explain a non-zero exit without inventing a failure.
+                "error" => {
+                    if let Some(msg) = item_text(item) {
+                        tracing::warn!(codex_error = %msg, "codex reported an error item");
+                        state.last_error = Some(msg);
+                    }
+                }
                 "commandExecution" | "command_execution" | "fileChange" | "file_change"
-                | "toolCall" | "tool_call" | "mcpToolCall" => {
+                | "toolCall" | "tool_call" | "mcpToolCall" | "mcp_tool_call" => {
                     let tool_name = item
                         .get("name")
                         .or_else(|| item.get("tool"))
@@ -234,6 +261,126 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> Vec<AichipEvent> {
         _ => {}
     }
     out
+}
+
+#[cfg(test)]
+mod recorded {
+    //! Verbatim lines from `codex-cli 0.147.0` on 2026-08-17, trimmed only
+    //! where a value was long. These are the transcript this adapter was
+    //! missing for its whole existence.
+    use super::*;
+
+    /// `codex exec --json --skip-git-repo-check -s read-only "Reply with
+    /// exactly the word pineapple..."`
+    const SIMPLE: &[&str] = &[
+        r#"{"type":"thread.started","thread_id":"01a00ea5-3f26-7842-9bc8-0796b79dca5b"}"#,
+        r#"{"type":"turn.started"}"#,
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pineapple"}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":13397,"cached_input_tokens":4480,"cache_write_input_tokens":0,"output_tokens":6,"reasoning_output_tokens":0}}"#,
+    ];
+
+    /// The same, with a shell tool call — note two `agent_message` items in
+    /// one turn, which is why text accumulates.
+    const WITH_TOOL: &[&str] = &[
+        r#"{"type":"thread.started","thread_id":"01a00eae-1fa3-75a0-8d96-e71440cdf600"}"#,
+        r#"{"type":"turn.started"}"#,
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I am running under read-only sandbox mode."}}"#,
+        r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#,
+        r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"run1.jsonl\n","exit_code":0,"status":"completed"}}"#,
+        r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"ls output: run1.jsonl"}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":26160,"cached_input_tokens":22272,"cache_write_input_tokens":0,"output_tokens":102,"reasoning_output_tokens":0}}"#,
+    ];
+
+    /// `-m definitely-not-a-model-xyz`. The turn continued and the run
+    /// completed successfully after this line.
+    const UNKNOWN_MODEL: &str = r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `definitely-not-a-model-xyz` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}"#;
+
+    fn drive(lines: &[&str]) -> (Vec<AichipEvent>, StreamState) {
+        let mut state = StreamState::new(Some("gpt-5.5".into()));
+        let mut out = vec![];
+        for l in lines {
+            out.extend(parse_line(l, &mut state));
+        }
+        (out, state)
+    }
+
+    #[test]
+    fn a_real_run_yields_a_session_the_text_and_the_tokens() {
+        let (events, state) = drive(SIMPLE);
+        assert_eq!(
+            state.session_id.as_deref(),
+            Some("01a00ea5-3f26-7842-9bc8-0796b79dca5b"),
+            "the thread id is what a follow-up turn resumes with"
+        );
+        assert!(matches!(events[0], AichipEvent::RunStarted { .. }));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AichipEvent::AssistantText { text } if text == "pineapple")));
+        match state.finish(true) {
+            AichipEvent::RunCompleted {
+                usage,
+                result_text,
+                session_id,
+                ..
+            } => {
+                assert_eq!(result_text, "pineapple");
+                assert_eq!(usage.input_tokens, 13397);
+                assert_eq!(usage.output_tokens, 6);
+                assert_eq!(usage.cache_read_tokens, 4480);
+                assert!(!session_id.is_empty());
+            }
+            other => panic!("expected a completed run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_turn_with_several_messages_keeps_all_of_them() {
+        // Codex answers, runs a command, then answers again. Replacing rather
+        // than accumulating would put only the last sentence in the card.
+        let (events, state) = drive(WITH_TOOL);
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AichipEvent::ToolCall { .. })));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AichipEvent::ToolResult {
+                is_error: false,
+                ..
+            }
+        )));
+        match state.finish(true) {
+            AichipEvent::RunCompleted { result_text, .. } => {
+                assert!(result_text.contains("read-only sandbox mode"));
+                assert!(result_text.contains("ls output"));
+            }
+            other => panic!("expected a completed run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_error_item_does_not_fail_a_run_that_succeeded() {
+        // The regression this fixture exists for. Codex emits an error item
+        // for a merely degraded turn and then finishes; promoting it to a
+        // failure would fail working runs.
+        let (_, state) = drive(&[SIMPLE[0], UNKNOWN_MODEL, SIMPLE[2], SIMPLE[3]]);
+        assert!(matches!(
+            state.finish(true),
+            AichipEvent::RunCompleted { .. }
+        ));
+    }
+
+    #[test]
+    fn but_it_explains_one_that_did_fail() {
+        // Dropping it, which is what used to happen, left "codex exited
+        // without completing the turn" as the only thing a person was told.
+        let (_, state) = drive(&[SIMPLE[0], UNKNOWN_MODEL]);
+        match state.finish(false) {
+            AichipEvent::RunFailed { reason } => {
+                assert!(reason.contains("Model metadata"), "got: {reason}")
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

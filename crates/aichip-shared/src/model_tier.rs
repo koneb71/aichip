@@ -194,23 +194,19 @@ impl EngineTierMapping {
                     "anthropic/claude-sonnet-4-5".to_string(),
                 ),
             ])),
-            // Codex takes an OpenAI model id. Every tier maps to the same
-            // one, deliberately: OpenAI publishes a single coding model for
-            // the CLI rather than a fast/strong pair, so inventing a split
-            // here would mean guessing at ids that do not exist. A person who
-            // wants a different model per tier can still set one.
-            "codex" => TierMapping(BTreeMap::from([
-                (ModelTier::Easy, "gpt-5-codex".to_string()),
-                (ModelTier::Medium, "gpt-5-codex".to_string()),
-                (ModelTier::Complex, "gpt-5-codex".to_string()),
-            ])),
-            // A local runtime has no defaults that could be written here and
-            // be true: which models exist is a fact about somebody's disk,
-            // not about aichip. So it states none, and the real answer comes
-            // from `pick_defaults` over what the install actually reported —
-            // see `Orchestrator::derived_defaults`, which is what the
-            // settings page shows as "default" rather than this.
-            "ollama" | "lmstudio" => TierMapping(BTreeMap::new()),
+            // Three engines whose models are a fact about somebody's machine
+            // rather than about aichip, so this states none and
+            // `Orchestrator::derived_defaults` fills them in from what each
+            // install actually reported. That is also what the settings page
+            // shows as "default", so Reset goes somewhere real.
+            //
+            // For the local runtimes it is which models have been pulled or
+            // loaded. For Codex it is a correction: this used to name
+            // `gpt-5-codex` for every tier, and the CLI answers that with
+            // "Model metadata not found. Defaulting to fallback metadata; this
+            // can degrade performance" — the same warning it gives an id
+            // nobody ever published.
+            "codex" | "ollama" | "lmstudio" => TierMapping(BTreeMap::new()),
             // Claude Code and the mock engine both speak Claude model ids.
             _ => TierMapping::default(),
         }

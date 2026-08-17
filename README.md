@@ -747,6 +747,12 @@ Which ones you're offered depends on what's installed — `aichip doctor` and
 | Resume a session | yes | yes | yes |
 | Rate-limit signal | structured, so the queue backs off precisely | best-effort text match | best-effort text match |
 | Providers | your Claude login | whatever you've authenticated (`opencode providers list`) | your OpenAI login |
+| Tier defaults | fixed catalog | derived from `opencode models` | derived from `codex doctor` |
+
+Codex is driven through `codex exec --json`, and everything aichip needs to say about a
+run — the sandbox, the approval stance, the persona, aichip's own MCP endpoint — is passed
+as `-c key=value` overrides rather than written to `~/.codex/config.toml`, which the second
+compliance invariant forbids touching. Your own config still merges in underneath.
 
 Because OpenCode cannot stop and ask, starting a **Reviewed** card on it is refused with a
 `409` and a reason, at the click that caused it. Auto-edit works: aichip generates a

@@ -4,48 +4,60 @@
 //! the same shape the other two adapters consume. Spawned from `PATH`, stdout
 //! read, nothing else — the first compliance invariant, unchanged.
 //!
-//! ## Written without the binary, and marked as such
+//! ## Built from documentation once, then corrected against the binary
 //!
-//! Every other adapter here was built against a recorded transcript from the
-//! real CLI. This one was not: `codex` was not installed on the machine where
-//! it was written, so the flags and event names come from OpenAI's
-//! non-interactive documentation. [`stream_parser`] is deliberately forgiving
-//! about shapes it does not recognise for that reason.
+//! The first version of this file was written without `codex` installed, from
+//! OpenAI's non-interactive documentation. Almost none of it survived contact
+//! with `codex-cli 0.147.0`, and the corrections are worth knowing about
+//! because they were not small:
 //!
-//! Nothing about that is user-visible risk, because an engine only appears
-//! once `detect` finds it: a machine without `codex` behaves exactly as it did
-//! before. But the first person to run it should record a real transcript and
-//! correct whatever this got wrong.
+//! - **`--ask-for-approval` does not exist on `codex exec`.** It is a
+//!   top-level flag for the interactive TUI. Passing it made every run die at
+//!   argument parsing before a single token was spent, and the docs still
+//!   present it as an `exec` flag — so the binary, not the prose, is the
+//!   authority here. Approvals are configured instead, and `exec` already
+//!   defaults to never asking.
+//! - **`codex exec resume` takes a narrower flag set than `codex exec`**: no
+//!   `--sandbox`, no `--cd`, no `--add-dir`. Every exec-level flag has to come
+//!   *before* the `resume` keyword. The old argv put them after, so the resume
+//!   path had a second, independent parse failure.
+//! - **`gpt-5-codex` is not a model this CLI knows.** It answers with
+//!   "Model metadata … not found. Defaulting to fallback metadata; this can
+//!   degrade performance" — the same warning a wholly invented id gets. So
+//!   `detect` now reports what `codex doctor` says this install actually runs,
+//!   and the tier defaults are derived from that rather than hardcoded.
+//! - **openai/codex#15451, the hazard the old header warned about, was the
+//!   wrong issue.** It concerns `--output-schema`, which aichip never passes,
+//!   not `--json`, which it does; and it was closed as model behaviour rather
+//!   than fixed. The warning described a configuration aichip cannot enter, so
+//!   it is gone. What *is* worth watching once MCP is exercised in anger is
+//!   openai/codex#24536 — `codex exec` completing empty when MCP tools are
+//!   deferred behind tool search.
 //!
-//! ## The known hazard
+//! What was verified live, on this machine, against a real transcript:
+//! `--json` emits JSONL; `thread.started` carries the `thread_id` a later run
+//! resumes with; `developer_instructions` reaches the model *and* leaves
+//! Codex's own instructions intact; `model_reasoning_effort="xhigh"` measurably
+//! changes reasoning-token spend. The fixtures in [`stream_parser`] are those
+//! runs.
 //!
-//! openai/codex#15451 reports that `--json` is silently ignored while MCP
-//! servers are configured, yielding malformed output. aichip always hands an
-//! engine an MCP config — that is how permission prompts and the chat tools
-//! reach it — so that is precisely the configuration this runs in. If the
-//! issue is real and unfixed, the symptom is a run that produces no events and
-//! then completes: survivable, thanks to the parser's tolerance, but wrong.
-//! It is called out in `detect`'s note so it surfaces in `doctor` rather than
-//! being discovered on a paid run.
+//! ## Permissions are expressed as a sandbox, and denials win
 //!
-//! ## What is not wired yet: MCP
+//! Codex has no per-tool permission vocabulary, so `denied_tools` is
+//! translated into the sandbox mode by [`config::sandbox_mode`], where a
+//! denial beats `FullAuto` rather than the other way round. That ordering is
+//! load-bearing rather than tidy, and the reason is written where the code is.
 //!
-//! `RunSpec.mcp` is ignored here. Each adapter renders that wiring into its
-//! own config dialect, and doing so for Codex without the binary to check
-//! against would be the guess this file is already stretching. The concrete
-//! consequence: a **chat** run on Codex reaches none of aichip's board tools —
-//! no `create_task`, no `search_code` — so it can talk about the repository
-//! but not act on it. Board cards are unaffected, because they act through
-//! ordinary file edits rather than through MCP.
-//!
-//! Permission prompts are a separate matter and already handled honestly:
-//! `interactive_permissions: false` means `vet` refuses `Reviewed` at the
-//! click, so nothing silently depends on an MCP channel that is not there.
+//! `interactive_permissions: false` still holds: `codex exec` has no channel
+//! to ask a person mid-run, so `vet` refuses `Reviewed` at the click rather
+//! than silently widening it.
+
+pub mod config;
 
 pub mod stream_parser;
 
 use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
-use aichip_shared::{AichipEvent, PermissionMode, ReasoningEffort};
+use aichip_shared::AichipEvent;
 use async_trait::async_trait;
 use std::process::Stdio;
 use stream_parser::StreamState;
@@ -68,62 +80,94 @@ impl Default for CodexEngine {
 /// The argument vector for one run. Pure, so the flags are testable without
 /// the binary — which, for an adapter written from documentation, is the only
 /// part that can be tested at all.
-pub fn codex_args(spec: &RunSpec) -> Vec<String> {
+pub fn codex_args(spec: &RunSpec) -> anyhow::Result<Vec<String>> {
     let mut args: Vec<String> = vec!["exec".into()];
-
-    // Resume keeps a thread going rather than starting a new one, which is
-    // what makes a follow-up turn cheaper than a fresh run.
-    if let Some(id) = spec.resume_session_id.as_deref().filter(|s| !s.is_empty()) {
-        args.push("resume".into());
-        args.push(id.to_string());
-    }
 
     args.push("--json".into());
     // No console exists here. A prompt is not a slow answer, it is a process
     // that never returns — the hazard `connect.rs` documents for `gh`.
     args.push("--skip-git-repo-check".into());
 
-    if !spec.model_id.is_empty() {
+    if let Some(model) = model_arg(&spec.model_id) {
         args.push("--model".into());
-        args.push(spec.model_id.clone());
+        args.push(model);
     }
 
-    // Sandbox and approvals, from the permission mode. `Reviewed` is not
-    // offered — see `capabilities` — so only the two non-interactive stances
-    // are reachable here.
-    let (sandbox, approval) = match spec.permission_mode {
-        PermissionMode::FullAuto => ("danger-full-access", "never"),
-        // Anything else gets the containing sandbox. Writes stay inside the
-        // working directory, which for a board card is a worktree.
-        _ => ("workspace-write", "never"),
-    };
-    args.push("--sandbox".into());
-    args.push(sandbox.into());
-    args.push("--ask-for-approval".into());
-    args.push(approval.into());
-
-    if let Some(effort) = spec.effort {
+    // Sandbox, approvals, persona and MCP all travel as config overrides —
+    // see `config`. Doing it that way is what lets the resume path below use
+    // the identical set: `codex exec resume` accepts `-c` but rejects
+    // `--sandbox`.
+    for o in config::overrides(spec)? {
         args.push("-c".into());
-        args.push(format!(
-            "model_reasoning_effort=\"{}\"",
-            // Codex documents low/medium/high. aichip's scale goes further,
-            // and the two extra levels are mapped onto "high" rather than
-            // passed through: an unknown value here is a config error the CLI
-            // reports at spawn, which would turn "think harder" into a run
-            // that never started.
-            match effort {
-                ReasoningEffort::Low => "low",
-                ReasoningEffort::Medium => "medium",
-                ReasoningEffort::High | ReasoningEffort::XHigh | ReasoningEffort::Max => "high",
-            }
-        ));
+        args.push(o);
+    }
+
+    // Resume keeps a thread going rather than starting a new one, which is
+    // what makes a follow-up turn cheaper than a fresh run.
+    //
+    // It goes *after* every exec-level flag and before the prompt, because
+    // `resume` is a subcommand: clap stops accepting the parent's options once
+    // it has been seen. Putting it first — which is what this used to do —
+    // makes `--sandbox` an "unexpected argument" and the run never starts.
+    if let Some(id) = spec.resume_session_id.as_deref().filter(|s| !s.is_empty()) {
+        args.push("resume".into());
+        args.push(id.to_string());
     }
 
     // The prompt last and positional, so a prompt beginning with a dash is
     // read as the task rather than as a flag.
     args.push("--".into());
     args.push(spec.prompt.clone());
-    args
+    Ok(args)
+}
+
+/// The `--model` value, or `None` to let Codex use its own.
+///
+/// A model id that plainly belongs to another engine is dropped rather than
+/// passed on. It happens for one boring reason: `TierMapping::model_for` falls
+/// back to `claude-opus-5` for a tier it has no entry for, so an install whose
+/// Codex mapping was never derived would hand this `claude-opus-5`. Codex does
+/// not reject that — it warns that the model metadata is unknown and carries
+/// on with fallback metadata, which is a quietly degraded run. Saying nothing
+/// and letting Codex use the model it is configured for is strictly better
+/// than naming one it has never heard of.
+fn model_arg(model_id: &str) -> Option<String> {
+    let id = model_id.trim();
+    // `provider/model` is OpenCode's and the local runtimes' shape; `claude-*`
+    // is Claude Code's. Neither is ever a Codex model id.
+    if id.is_empty() || id.contains('/') || id.starts_with("claude-") {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+/// The model `codex doctor` says this install actually runs.
+///
+/// Reported as the engine's catalog so the tier defaults are derived from the
+/// machine rather than hardcoded — the same reasoning as OpenCode's
+/// `opencode models`, and the fix for a default that named a model this CLI
+/// does not know. One entry, because `doctor` reports the configured model
+/// rather than a catalog; a person who wants another one types it, which is
+/// what `fixed_model_catalog: false` means.
+fn doctor_model(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        // The real line is `      model                    gpt-5.5 · openai`.
+        let rest = line.trim().strip_prefix("model")?;
+        // The next character must be a space, or `model_reasoning_effort`
+        // would match on its own name.
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let id = rest.split_whitespace().next()?;
+        // A model id carries a version: `gpt-5.5` does, the word `provider`
+        // does not. Anything that isn't the shape is dropped rather than
+        // guessed at, which is the same rule `opencode::parse_models` follows.
+        (id.chars().any(|c| c.is_ascii_digit())
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-._".contains(c)))
+        .then(|| id.to_string())
+    })
 }
 
 #[async_trait]
@@ -149,11 +193,17 @@ impl Engine for CodexEngine {
             // absent is the *structured* one the queue can wait precisely on.
             structured_rate_limit: false,
             resume_sessions: true,
-            // `codex exec` has no flag that adds to its system prompt without
-            // replacing it. Instructions reach the model through the prompt
-            // itself, which the orchestrator already handles for engines that
-            // answer false here.
-            append_system_prompt: false,
+            // Via `developer_instructions`, and this used to say `false`.
+            // Verified additive rather than replacing: with it set, a run
+            // still knew its own sandbox mode and still drove its shell tool,
+            // so Codex's own instructions survive alongside aichip's. That is
+            // the distinction that matters — `base_instructions` would replace
+            // them, which is the trap `opencode::config` documents for
+            // `agent.prompt`. While this said false, every persona and every
+            // recalled memory silently vanished on a Codex run, because
+            // nothing downstream folds the text in for an engine that cannot
+            // append.
+            append_system_prompt: true,
             // Free-text model ids: Codex takes whatever `--model` is given and
             // the catalog moves faster than any list here could.
             fixed_model_catalog: false,
@@ -183,17 +233,32 @@ impl Engine for CodexEngine {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
+        // What this install is actually configured to run, from the CLI's own
+        // diagnosis. Reported so the tier defaults are derived from the
+        // machine rather than hardcoded — the old default named `gpt-5-codex`,
+        // which this version answers with "model metadata not found".
+        let models = Command::new(&self.binary)
+            .arg("doctor")
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| doctor_model(&String::from_utf8_lossy(&o.stdout)))
+            .map(|m| vec![m])
+            .unwrap_or_default();
+
         Some(EngineInfo {
             version,
             authenticated,
             providers: vec![],
-            models: vec![],
+            models,
         })
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
         let mut cmd = Command::new(&self.binary);
-        cmd.current_dir(&spec.cwd).args(codex_args(&spec));
+        cmd.current_dir(&spec.cwd).args(codex_args(&spec)?);
 
         // A child inherits this process's environment, so anything aichip
         // holds as its own secret is taken away explicitly.
@@ -287,7 +352,7 @@ impl ProcessHandle for CodexHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aichip_shared::ModelTier;
+    use aichip_shared::{ModelTier, PermissionMode};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -296,7 +361,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/wt"),
             prompt: "do the thing".into(),
             model_tier: ModelTier::Medium,
-            model_id: "gpt-5-codex".into(),
+            model_id: "gpt-5.5".into(),
             effort: None,
             resume_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
@@ -311,24 +376,32 @@ mod tests {
         }
     }
 
+    fn args_of(s: &RunSpec) -> Vec<String> {
+        codex_args(s).unwrap()
+    }
+
     #[test]
     fn the_prompt_is_positional_and_last() {
         // A prompt beginning with a dash must be read as the task, not as a
         // flag — which is what the `--` separator is for.
         let mut s = spec();
         s.prompt = "--version please".into();
-        let args = codex_args(&s);
+        let args = args_of(&s);
         assert_eq!(args.last().unwrap(), "--version please");
         assert_eq!(args[args.len() - 2], "--");
     }
 
     #[test]
-    fn it_always_asks_for_json_and_never_for_a_prompt() {
-        let args = codex_args(&spec());
+    fn it_asks_for_json_and_never_passes_a_flag_exec_does_not_have() {
+        // `--ask-for-approval` is a top-level flag for the interactive TUI.
+        // `codex exec` answers it with "unexpected argument", so every run
+        // this adapter started used to die at clap before spending a token.
+        // The stance is set as configuration instead.
+        let args = args_of(&spec());
         assert!(args.contains(&"--json".to_string()));
-        // There is no console. Approval must never be interactive.
-        let i = args.iter().position(|a| a == "--ask-for-approval").unwrap();
-        assert_eq!(args[i + 1], "never");
+        assert!(!args.contains(&"--ask-for-approval".to_string()));
+        assert!(!args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&r#"approval_policy="never""#.to_string()));
     }
 
     #[test]
@@ -336,9 +409,7 @@ mod tests {
         let sandbox_of = |mode| {
             let mut s = spec();
             s.permission_mode = mode;
-            let args = codex_args(&s);
-            let i = args.iter().position(|a| a == "--sandbox").unwrap();
-            args[i + 1].clone()
+            config::sandbox_mode(&s)
         };
         assert_eq!(sandbox_of(PermissionMode::FullAuto), "danger-full-access");
         assert_eq!(sandbox_of(PermissionMode::AutoEdit), "workspace-write");
@@ -348,13 +419,20 @@ mod tests {
     }
 
     #[test]
-    fn resuming_names_the_thread() {
+    fn every_exec_level_flag_comes_before_the_resume_keyword() {
+        // `resume` is a subcommand: once clap has seen it, the parent's
+        // options stop being accepted. The old argv put it first, so a
+        // resumed run died on `--sandbox` even after the approval flag went.
         let mut s = spec();
         s.resume_session_id = Some("th_9".into());
-        let args = codex_args(&s);
-        assert_eq!(args[0], "exec");
-        assert_eq!(args[1], "resume");
-        assert_eq!(args[2], "th_9");
+        let args = args_of(&s);
+        let resume = args.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(args[resume + 1], "th_9");
+        assert!(args.iter().position(|a| a == "--json").unwrap() < resume);
+        assert!(args.iter().position(|a| a == "--model").unwrap() < resume);
+        assert!(args.iter().rposition(|a| a == "-c").unwrap() < resume);
+        // And the prompt still trails the whole thing.
+        assert_eq!(args[resume + 2], "--");
     }
 
     #[test]
@@ -362,7 +440,46 @@ mod tests {
         // A blank column is "no session", not a thread called "".
         let mut s = spec();
         s.resume_session_id = Some(String::new());
-        assert!(!codex_args(&s).contains(&"resume".to_string()));
+        assert!(!args_of(&s).contains(&"resume".to_string()));
+    }
+
+    #[test]
+    fn a_model_belonging_to_another_engine_is_dropped_rather_than_passed_on() {
+        // `TierMapping::model_for` falls back to `claude-opus-5` for a tier it
+        // has no entry for. Codex does not reject that — it warns that the
+        // metadata is unknown and runs degraded, which is worse than silence.
+        assert_eq!(model_arg("gpt-5.5"), Some("gpt-5.5".to_string()));
+        assert_eq!(model_arg("claude-opus-5"), None);
+        assert_eq!(model_arg("anthropic/claude-sonnet-4-5"), None);
+        assert_eq!(model_arg("ollama/deepseek-r1:latest"), None);
+        assert_eq!(model_arg("  "), None);
+
+        let mut s = spec();
+        s.model_id = "claude-opus-5".into();
+        assert!(!args_of(&s).contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn the_install_default_is_read_out_of_doctor() {
+        // Verbatim from `codex doctor` on 2026-08-17.
+        let out = "  \u{2713} codex        codex-cli 0.147.0\n                         version                  0.147.0\n                         default model provider   openai\n                         rollout DB model providers openai=35\n                         model                    gpt-5.5 \u{b7} openai\n";
+        assert_eq!(doctor_model(out).as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn a_line_that_merely_starts_with_the_word_model_is_not_a_model() {
+        // Getting this wrong would report "provider" as the engine's catalog,
+        // and `pick_defaults` would route every tier to it.
+        assert_eq!(
+            doctor_model("      default model provider   openai\n"),
+            None
+        );
+        assert_eq!(doctor_model("      model_reasoning_effort   high\n"), None);
+        assert_eq!(
+            doctor_model("      model                    provider\n"),
+            None
+        );
+        assert_eq!(doctor_model(""), None);
     }
 
     #[test]
@@ -374,5 +491,21 @@ mod tests {
         assert!(!caps.interactive_permissions);
         assert!(crate::vet(&CodexEngine::default(), PermissionMode::Reviewed, false).is_err());
         assert!(crate::vet(&CodexEngine::default(), PermissionMode::AutoEdit, false).is_ok());
+        // And one it does have, now that it is wired: a persona reaches the
+        // model through `developer_instructions`.
+        assert!(caps.append_system_prompt);
+    }
+
+    #[test]
+    fn a_chat_run_on_codex_cannot_write_to_the_users_checkout() {
+        // The regression this whole file exists to prevent. Chat is dispatched
+        // FullAuto because its denials bound it, and it runs in the real
+        // checkout — so the denials have to survive the translation.
+        let mut s = spec();
+        s.permission_mode = PermissionMode::FullAuto;
+        s.denied_tools = vec!["Edit".into(), "Write".into(), "Bash".into()];
+        let args = args_of(&s);
+        assert!(args.contains(&r#"sandbox_mode="read-only""#.to_string()));
+        assert!(!args.iter().any(|a| a.contains("danger-full-access")));
     }
 }
