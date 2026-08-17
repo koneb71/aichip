@@ -285,15 +285,30 @@ pub fn is_known_model_for(engine: &str, id: &str) -> bool {
     }
 }
 
-/// `provider/model`: exactly one slash, both halves non-empty, no whitespace.
+/// `provider/model`: at least one slash, every segment non-empty, no
+/// whitespace.
+///
+/// **Two segments is a minimum, not a maximum**, and this used to demand
+/// exactly two — which quietly rejected ids that are entirely ordinary. A
+/// model can be namespaced by whoever published it, so LM Studio serves
+/// `google/gemma-4-e4b`, and routing providers put their own name in front of
+/// a full id, giving `openrouter/anthropic/claude-3.5-sonnet`. Both are three
+/// segments and both were refused, so the model could not be saved and, once
+/// discovery started offering them, could not be picked either.
 pub fn is_provider_model_shape(id: &str) -> bool {
     let mut parts = id.split('/');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(p), Some(m), None) => {
-            !p.is_empty() && !m.is_empty() && !id.chars().any(char::is_whitespace)
-        }
-        _ => false,
-    }
+    let Some(provider) = parts.next() else {
+        return false;
+    };
+    // `split_once` semantics: everything after the first slash is the model,
+    // and it may contain more of them.
+    let Some(rest) = id.split_once('/').map(|(_, r)| r) else {
+        return false;
+    };
+    !provider.is_empty()
+        && !rest.is_empty()
+        && !rest.split('/').any(str::is_empty)
+        && !id.chars().any(char::is_whitespace)
 }
 
 /// Choose a tier mapping from the models an install can actually reach.
@@ -491,9 +506,25 @@ mod per_engine_tests {
         ));
         // A local model no catalog would ever list.
         assert!(is_known_model_for("opencode", "ollama/qwen3-coder"));
-        assert!(!is_known_model_for("opencode", "too/many/slashes"));
+        // Three segments used to be refused here, and that was the bug: a
+        // model can be namespaced by whoever published it, and a routing
+        // provider puts its own name in front of a whole id. Both shapes are
+        // real and both were unsaveable.
+        assert!(is_known_model_for(
+            "opencode",
+            "lmstudio/google/gemma-4-e4b"
+        ));
+        assert!(is_known_model_for(
+            "opencode",
+            "openrouter/anthropic/claude-3.5-sonnet"
+        ));
+        // What must still be refused: an empty segment anywhere, or
+        // whitespace, neither of which addresses anything.
         assert!(!is_known_model_for("opencode", "has space/model"));
         assert!(!is_known_model_for("opencode", "/leading"));
+        assert!(!is_known_model_for("opencode", "trailing/"));
+        assert!(!is_known_model_for("opencode", "double//slash"));
+        assert!(!is_known_model_for("opencode", "noslash"));
     }
 
     #[test]

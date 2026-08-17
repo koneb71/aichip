@@ -217,18 +217,32 @@ pub fn parse_lmstudio(body: &str) -> Vec<LocalModel> {
 }
 
 /// Sorted, de-duplicated, and free of anything that would not survive being a
-/// model id.
+/// model id or could not do the job.
 ///
 /// Sorted because the picker shows it and a list that reorders between polls
-/// reads as though something changed. A name containing whitespace or a slash
-/// is dropped rather than escaped: `is_provider_model_shape` would reject it
-/// downstream anyway, and offering an id that cannot be saved is worse than
-/// omitting it.
+/// reads as though something changed.
+///
+/// **A slash in the name is kept.** It used to be dropped, on the reasoning
+/// that it would make a three-segment id — which it does, and which is fine:
+/// `lmstudio/google/gemma-4-e4b` is exactly how LM Studio serves a model its
+/// publisher namespaced, and `is_provider_model_shape` now says so. Dropping
+/// it meant a model visible in LM Studio was silently missing from aichip,
+/// with nothing to explain the gap.
+///
+/// **An embedding model is dropped**, because it cannot answer a prompt. Both
+/// runtimes serve them alongside chat models and name them plainly, so
+/// offering one is a trap that costs a failed run to discover. The test is on
+/// the name because neither `/v1/models` nor `/api/tags` says what a model is
+/// for — a heuristic, and a narrow one, rather than a guess about capability.
 fn tidy(provider: &'static str, names: Vec<String>) -> Vec<LocalModel> {
     let mut out: Vec<LocalModel> = names
         .into_iter()
         .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty() && !n.contains(char::is_whitespace) && !n.contains('/'))
+        .filter(|n| !n.is_empty() && !n.contains(char::is_whitespace))
+        .filter(|n| {
+            let low = n.to_lowercase();
+            !low.contains("embed") && !low.contains("reranker")
+        })
         .map(|name| LocalModel {
             provider,
             id: format!("{provider}/{name}"),
@@ -306,14 +320,33 @@ mod tests {
     }
 
     #[test]
+    fn a_namespaced_model_is_kept_whole() {
+        // Real: LM Studio serves `google/gemma-4-e4b`. Dropping it made a
+        // model plainly visible in LM Studio silently absent from aichip.
+        let out = parse_lmstudio(r#"{"data":[{"id":"google/gemma-4-e4b"}]}"#);
+        assert_eq!(out[0].id, "lmstudio/google/gemma-4-e4b");
+        assert!(aichip_shared::model_tier::is_provider_model_shape(
+            &out[0].id
+        ));
+    }
+
+    #[test]
     fn a_name_that_could_not_be_an_id_is_dropped_not_mangled() {
-        // A slash would make a three-part id, and whitespace fails the shape
-        // check. Offering something unsaveable is worse than omitting it.
-        let out = parse_ollama(
-            r#"{"models":[{"name":"has space"},{"name":"org/model"},{"name":"  "},{"name":"fine"}]}"#,
-        );
+        let out =
+            parse_ollama(r#"{"models":[{"name":"has space"},{"name":"  "},{"name":"fine"}]}"#);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "ollama/fine");
+    }
+
+    #[test]
+    fn an_embedding_model_is_not_offered_as_something_that_can_answer() {
+        // Both runtimes serve these beside chat models. Picking one costs a
+        // failed run to find out it cannot hold a conversation.
+        let out = parse_lmstudio(
+            r#"{"data":[{"id":"text-embedding-nomic-embed-text-v1.5"},{"id":"qwen3.5-9b"}]}"#,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "qwen3.5-9b");
     }
 
     #[test]
