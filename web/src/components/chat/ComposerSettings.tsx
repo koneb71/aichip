@@ -95,32 +95,61 @@ export function ComposerSettings({
                 <TierPicker value={tier} onChange={onTier} engine={engine ?? undefined} />
                 {/* Below the tier, not instead of it. The tier is the usual
                     answer and stays the default; this is the escape hatch for
-                    "just this conversation, this model" — which used to mean
-                    redefining a tier for every card and chat that shares the
-                    engine. Empty goes back to the tier. */}
-                <label className="mt-2 block">
+                    "just this conversation, this model".
+
+                    The models are listed as buttons rather than hidden in a
+                    datalist. A datalist shows nothing until you guess what to
+                    type, which meant somebody with LM Studio running still had
+                    no way to tell aichip could see it — the discovery worked
+                    and the person could not find it, which is the same as it
+                    not working. */}
+                <div className="mt-2">
                   <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
                     Or one specific model
                   </span>
                   <input
                     value={modelId}
-                    list="composer-local-models"
                     onChange={(e) => onModelId(e.target.value)}
                     spellCheck={false}
                     placeholder="leave empty to use the tier"
                     className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[11px]"
                   />
-                  <datalist id="composer-local-models">
-                    {localModels.map((m) => (
-                      <option key={m.id} value={m.id} />
-                    ))}
-                  </datalist>
+                  {localModels.length > 0 && (
+                    <div className="mt-1.5">
+                      <span className="text-[10px] text-ink-dim">
+                        On this machine — click to use:
+                      </span>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {localModels.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => onModelId(modelId === m.id ? "" : m.id)}
+                            title={m.id}
+                            className={`ring-focus max-w-full truncate rounded-lg border px-1.5 py-0.5 font-mono text-[10px] ${
+                              modelId === m.id
+                                ? "border-accent bg-accent/10 text-accent"
+                                : "border-line text-ink-dim hover:border-accent/50"
+                            }`}
+                          >
+                            {m.name}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Said once, here, because "why is Ollama not in Run on"
+                          is the question this layout provokes. */}
+                      <p className="mt-1 text-[10px] leading-relaxed text-ink-dim">
+                        Served by Ollama or LM Studio and run through OpenCode — pick that engine
+                        above.
+                      </p>
+                    </div>
+                  )}
                   {modelId.trim() !== "" && (
                     <span className="mt-1 block text-[10px] text-amber-700">
                       This chat runs on {modelId.trim()}, ignoring the tier.
                     </span>
                   )}
-                </label>
+                </div>
               </Row>
               <Row label="Thinking">
                 <EffortPicker value={effort} onChange={onEffort} />
