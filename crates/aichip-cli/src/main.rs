@@ -2,6 +2,7 @@ use aichip_core::runs::gate::{DbGate, DbWindow};
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
 use aichip_engines::claude::ClaudeEngine;
+use aichip_engines::codex::CodexEngine;
 use aichip_engines::mock::MockEngine;
 use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::Engine;
@@ -76,6 +77,7 @@ fn real_engines() -> Vec<Arc<dyn Engine>> {
     vec![
         Arc::new(ClaudeEngine::default()) as Arc<dyn Engine>,
         Arc::new(OpenCodeEngine::default()) as Arc<dyn Engine>,
+        Arc::new(CodexEngine::default()) as Arc<dyn Engine>,
     ]
 }
 

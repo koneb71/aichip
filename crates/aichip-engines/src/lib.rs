@@ -9,6 +9,7 @@
 //! 4. Never proxy, intercept, or replay the engine's network traffic.
 
 pub mod claude;
+pub mod codex;
 pub mod mock;
 pub mod opencode;
 

@@ -194,6 +194,16 @@ impl EngineTierMapping {
                     "anthropic/claude-sonnet-4-5".to_string(),
                 ),
             ])),
+            // Codex takes an OpenAI model id. Every tier maps to the same
+            // one, deliberately: OpenAI publishes a single coding model for
+            // the CLI rather than a fast/strong pair, so inventing a split
+            // here would mean guessing at ids that do not exist. A person who
+            // wants a different model per tier can still set one.
+            "codex" => TierMapping(BTreeMap::from([
+                (ModelTier::Easy, "gpt-5-codex".to_string()),
+                (ModelTier::Medium, "gpt-5-codex".to_string()),
+                (ModelTier::Complex, "gpt-5-codex".to_string()),
+            ])),
             // Claude Code and the mock engine both speak Claude model ids.
             _ => TierMapping::default(),
         }
@@ -205,6 +215,7 @@ impl Default for EngineTierMapping {
         Self(BTreeMap::from([
             ("claude-code".to_string(), Self::defaults_for("claude-code")),
             ("opencode".to_string(), Self::defaults_for("opencode")),
+            ("codex".to_string(), Self::defaults_for("codex")),
         ]))
     }
 }
@@ -250,6 +261,7 @@ impl<'de> Deserialize<'de> for EngineTierMapping {
         let mut map = BTreeMap::new();
         map.insert("claude-code".to_string(), flat);
         map.insert("opencode".to_string(), Self::defaults_for("opencode"));
+        map.insert("codex".to_string(), Self::defaults_for("codex"));
         Ok(Self(map))
     }
 }
@@ -264,6 +276,11 @@ impl<'de> Deserialize<'de> for EngineTierMapping {
 pub fn is_known_model_for(engine: &str, id: &str) -> bool {
     match engine {
         "opencode" => is_provider_model_shape(id),
+        // Same reasoning as OpenCode's, one step further: OpenAI's ids are
+        // bare names with no provider prefix and the catalog moves, so any
+        // fixed list here would reject a model that works. Anything non-empty
+        // is accepted and the CLI reports what it cannot reach.
+        "codex" => !id.trim().is_empty(),
         _ => is_known_model(id),
     }
 }

@@ -349,7 +349,7 @@ impl ProcessHandle for OpenCodeHandle {
     }
 }
 
-unsafe fn libc_kill(pid: i32, sig: i32) {
+pub(crate) unsafe fn libc_kill(pid: i32, sig: i32) {
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
