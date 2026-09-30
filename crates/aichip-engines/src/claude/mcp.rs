@@ -58,10 +58,27 @@ fn pairs(kv: &[(String, String)]) -> Value {
 /// Synchronous because `Engine::start` is, and this is a sub-kilobyte write
 /// happening once as a process is spawned — not worth making the whole trait
 /// async over.
+///
+/// Readable by the owner only. The file carries whatever the user gave their
+/// MCP servers — a header, an env value — and `fs::write` would have left it
+/// at the umask's 0644, readable by every account on the machine for as long
+/// as it sat there (until `leftovers::sweep` at the next boot).
 pub fn write(dir: &Path, run_key: &str, wiring: &McpWiring) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{run_key}.json"));
-    std::fs::write(&path, serde_json::to_vec_pretty(&config(wiring))?)?;
+    let bytes = serde_json::to_vec_pretty(&config(wiring))?;
+
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let mut file = open.open(&path)?;
+    // `mode` applies only when the file is created; a resumed run reopens its
+    // own, which an older build may have left at 0644. Tightened before a
+    // byte is written.
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    std::io::Write::write_all(&mut file, &bytes)?;
     Ok(path)
 }
 
@@ -128,5 +145,28 @@ mod tests {
     fn no_wiring_still_produces_a_valid_empty_config() {
         let c = config(&McpWiring::default());
         assert!(c["mcpServers"].as_object().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_config_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aichip-mcp-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file an older build left world-readable is tightened too.
+        std::fs::write(dir.join("run.json"), "{}").unwrap();
+        std::fs::set_permissions(dir.join("run.json"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+
+        let wiring = McpWiring {
+            aichip_url: None,
+            servers: vec![stdio("pw")],
+        };
+        let path = write(&dir, "run", &wiring).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"pw\""));
     }
 }
