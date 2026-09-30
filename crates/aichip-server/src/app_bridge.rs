@@ -88,9 +88,9 @@ pub async fn handle(
             .get(header::ORIGIN)
             .and_then(|v| v.to_str().ok())
         {
-            // Exactly this app's own origin. Port-agnostic for the same reason
-            // the dashboard's check is: a dev server serves the page from a
-            // different one.
+            // Exactly this app's own origin. Port-agnostic, because the slug
+            // in the hostname is what names an app — and a loopback page with
+            // no slug, a preview's, never classifies as one.
             if apps::host::classify(origin).map(|(_, l)| l) != Some(slug) {
                 return oops(StatusCode::FORBIDDEN, "this API is same-origin only");
             }

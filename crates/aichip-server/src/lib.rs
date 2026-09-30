@@ -141,24 +141,35 @@ pub(crate) fn bare_host(value: &str) -> &str {
     }
 }
 
-/// True when a page at this origin is allowed to talk to the dashboard.
+/// The `host[:port]` part of a `Host` or `Origin` value, lowercased.
+fn authority(value: &str) -> String {
+    let authority = value.rsplit_once("://").map_or(value, |(_, rest)| rest);
+    authority
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// True when a page at `origin` may talk to the server it reached as `host`.
 ///
-/// Port-agnostic, deliberately: `vite dev` serves the dashboard from :5173 and
-/// proxies `/api` and `/ws` through to this server, so the browser's origin is
-/// `http://localhost:5173` and not the port aichip is listening on. Requiring an
-/// exact match would break every dev checkout.
+/// Same-origin: the page must have been served by the very authority it is
+/// calling. A loopback host is not enough on its own, because loopback is
+/// where previews live — agent-written, unreviewed code published at
+/// `http://127.0.0.1:{port}` — and a page there matched the old
+/// port-agnostic rule and could open `/ws/terminal`, a shell on this machine.
 ///
-/// Being loose about the port costs nothing that matters. To serve a page from a
-/// loopback origin an attacker must already be running code on this machine, and
-/// at that point they can talk to this server directly without a browser.
-///
-/// An exact host match, never a suffix: when deployments arrive they get their own
-/// `<slug>.localhost` names, and a preview running code an agent wrote must not be
-/// able to call the dashboard's API from a page.
-fn origin_is_local(origin: &str) -> bool {
+/// The dev checkout still works, and not by exception: `vite dev` proxies
+/// `/api` and `/ws` without `changeOrigin`, so the request arrives with
+/// `Host: localhost:5173` and `Origin: http://localhost:5173` — the same
+/// authority. Comparing against the `Host` rather than the port this process
+/// bound also survives Docker publishing 4820 on some other host port.
+fn origin_may_call(origin: &str, host: &str) -> bool {
     // `Origin: null` is what a sandboxed iframe and some redirect chains send.
     // It is not a local page; it is the absence of one.
-    origin != "null" && LOCAL_HOSTS.contains(&bare_host(origin))
+    origin != "null"
+        && LOCAL_HOSTS.contains(&bare_host(origin))
+        && authority(origin) == authority(host)
 }
 
 /// Refuse callers that are not this machine's own dashboard.
@@ -197,7 +208,7 @@ async fn reject_non_local_callers(
         let host = str_of(axum::http::header::HOST).unwrap_or_default();
         (
             LOCAL_HOSTS.contains(&bare_host(host)),
-            str_of(axum::http::header::ORIGIN).is_none_or(origin_is_local),
+            str_of(axum::http::header::ORIGIN).is_none_or(|o| origin_may_call(o, host)),
         )
     };
 
@@ -339,19 +350,37 @@ mod tests {
     }
 
     #[test]
-    fn the_dev_server_and_the_dashboard_are_both_allowed() {
-        assert!(origin_is_local("http://localhost:4820"));
-        assert!(origin_is_local("http://localhost:5173"));
-        assert!(origin_is_local("http://127.0.0.1:4820"));
+    fn the_dashboard_and_the_dev_server_may_call_themselves() {
+        assert!(origin_may_call("http://localhost:4820", "localhost:4820"));
+        assert!(origin_may_call("http://127.0.0.1:4820", "127.0.0.1:4820"));
+        // `vite dev` forwards the browser's own Host, so its page and the
+        // request it proxies share an authority.
+        assert!(origin_may_call("http://localhost:5173", "localhost:5173"));
+        assert!(origin_may_call("http://[::1]:4820", "[::1]:4820"));
+    }
+
+    /// The hole this closes: a preview is agent-written code served from a
+    /// loopback port, and a loopback origin used to be all it took.
+    #[test]
+    fn a_preview_on_another_loopback_port_may_not() {
+        assert!(!origin_may_call("http://127.0.0.1:53817", "127.0.0.1:4820"));
+        assert!(!origin_may_call("http://localhost:5173", "localhost:4820"));
+        assert!(!origin_may_call("http://localhost:4820", "127.0.0.1:4820"));
     }
 
     #[test]
     fn everything_else_is_not() {
-        assert!(!origin_is_local("https://evil.example"));
-        assert!(!origin_is_local("null"));
+        assert!(!origin_may_call("https://evil.example", "localhost:4820"));
+        assert!(!origin_may_call("null", "localhost:4820"));
         // A suffix match would let a deployment's own page call the API.
-        assert!(!origin_is_local("http://my-preview.localhost:4820"));
+        assert!(!origin_may_call(
+            "http://my-preview.localhost:4820",
+            "my-preview.localhost:4820"
+        ));
         // And a lookalike registered on the public internet must not pass.
-        assert!(!origin_is_local("https://localhost.evil.example"));
+        assert!(!origin_may_call(
+            "https://localhost.evil.example",
+            "localhost.evil.example"
+        ));
     }
 }

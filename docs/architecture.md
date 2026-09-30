@@ -449,8 +449,10 @@ in both cases — it has to be lifted out explicitly, or every multi-agent view 
 the ability to say *who* acted.
 
 In development, `pnpm dev` serves the dashboard from :5173 and proxies `/api` and `/ws`
-through to :4820. That is also why the server's origin allow-list is port-agnostic — the
-browser's origin is the Vite port, not aichip's. `pnpm build` produces `web/dist`, which the
+through to :4820. The proxy deliberately leaves `changeOrigin` off: the server admits a page
+only when its `Origin` names the same authority as the request's `Host`, and forwarding the
+browser's own `Host` is what keeps the Vite page same-origin. A loopback origin alone is not
+enough — previews are served from loopback ports too. `pnpm build` produces `web/dist`, which the
 server serves as a fallback (`AICHIP_WEB_DIST` overrides the path).
 
 ### Why pure logic lives in `web/src/lib/*.ts`
