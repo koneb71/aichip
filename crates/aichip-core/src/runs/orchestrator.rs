@@ -374,6 +374,14 @@ impl CallerKind {
     }
 }
 
+/// A card was asked to start while a run of it is still live.
+///
+/// Its own type so a route can answer 409 — the person double-clicked, or the
+/// board is stale — rather than a 500 wrapping the same sentence.
+#[derive(Debug, thiserror::Error)]
+#[error("this card is already running — cancel it before starting it again")]
+pub struct AlreadyRunning;
+
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
@@ -503,6 +511,31 @@ impl Orchestrator {
     /// Create a run for a board task and put it on the queue. A task handed
     /// to a team runs as that team instead of a single agent.
     pub async fn enqueue_task(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        // One start of a card at a time. The checks below and the insert that
+        // acts on them used to be separate statements, so a double click — or
+        // a drag racing the Start button — passed both checks twice and put
+        // two runs, two agents, in the card's one worktree.
+        //
+        // `FOR NO KEY UPDATE`, not `FOR UPDATE`: the run row inserted below
+        // references this task, and its foreign-key check takes `KEY SHARE`,
+        // which this lock admits and `FOR UPDATE` would not — the team path
+        // inserts on its own connection and would wait on us forever.
+        let mut guard = self.db.pool.begin().await?;
+        sqlx::query("SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(task_id)
+            .fetch_one(&mut *guard)
+            .await?;
+        let running: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1
+                               AND status NOT IN ('completed','failed','canceled'))",
+        )
+        .bind(task_id)
+        .fetch_one(&mut *guard)
+        .await?;
+        if running {
+            return Err(AlreadyRunning.into());
+        }
+
         // The last line of defence against two agents in one checkout.
         //
         // A sub-ticket's work is already running under a step of its epic's run,
@@ -555,12 +588,17 @@ impl Orchestrator {
             .await?
             .get("team_id");
         if let Some(team_id) = assigned_team {
-            return self.enqueue_task_for_team(task_id, team_id).await;
+            let run_id = self.enqueue_task_for_team(task_id, team_id).await?;
+            guard.commit().await?;
+            return Ok(run_id);
         }
 
         // The bound agent's engine wins over the card's: an agent that names
         // one has been deliberately configured for it, while a card's is the
         // machine default nobody chose.
+        //
+        // The run and its queue row commit together. Apart, a crash between
+        // them left a run reading `queued` that nothing would ever dispatch.
         let row = sqlx::query(
             "INSERT INTO runs (task_id, status, trigger, engine, plan_approval)
              SELECT t.id, 'queued', 'manual', COALESCE(a.engine, t.engine), t.plan_first
@@ -569,13 +607,14 @@ impl Orchestrator {
              RETURNING id",
         )
         .bind(task_id)
-        .fetch_one(&self.db.pool)
+        .fetch_one(&mut *guard)
         .await?;
         let run_id: Uuid = row.get("id");
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 10)")
             .bind(run_id)
-            .execute(&self.db.pool)
+            .execute(&mut *guard)
             .await?;
+        guard.commit().await?;
         Ok(run_id)
     }
 
@@ -1042,6 +1081,20 @@ impl Orchestrator {
             "INSERT INTO queue (run_id, priority, not_before)
              SELECT r.id, 5, now() + interval '5 minutes' FROM runs r
               WHERE r.status = 'rate_limited'
+                AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.run_id = r.id)
+             ON CONFLICT (run_id) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        // The same promise for runs that never started: `queued` means
+        // something will dispatch it. Every path that writes `queued` also
+        // writes the queue row, but not always in one transaction — a plan
+        // approval, a team start — and a crash between the two left a card
+        // that read "queued" forever.
+        sqlx::query(
+            "INSERT INTO queue (run_id, priority)
+             SELECT r.id, 10 FROM runs r
+              WHERE r.status = 'queued'
                 AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.run_id = r.id)
              ON CONFLICT (run_id) DO NOTHING",
         )

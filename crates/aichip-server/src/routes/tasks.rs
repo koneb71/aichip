@@ -359,7 +359,7 @@ async fn create(
             .orchestrator
             .enqueue_task(task_id)
             .await
-            .map_err(internal)?;
+            .map_err(start_refused)?;
         sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
             .bind(task_id)
             .execute(&state.db.pool)
@@ -381,7 +381,7 @@ async fn start(
         .orchestrator
         .enqueue_task(id)
         .await
-        .map_err(internal)?;
+        .map_err(start_refused)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -875,7 +875,7 @@ pub(crate) async fn move_task(
                 .orchestrator
                 .enqueue_task(id)
                 .await
-                .map_err(internal)?,
+                .map_err(start_refused)?,
         );
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
@@ -1430,6 +1430,16 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 }
 
 /// True when the task's latest run is still live.
+/// `enqueue_task`'s refusal as the status it means: a card that is already
+/// running is a conflict the person can act on, not a server error.
+fn start_refused(e: anyhow::Error) -> ApiError {
+    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() {
+        (StatusCode::CONFLICT, e.to_string())
+    } else {
+        internal(e)
+    }
+}
+
 async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
     let row =
         sqlx::query("SELECT status FROM runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1")
@@ -1592,7 +1602,7 @@ async fn retry(
         .orchestrator
         .enqueue_task(id)
         .await
-        .map_err(internal)?;
+        .map_err(start_refused)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
