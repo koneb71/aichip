@@ -69,7 +69,7 @@ pub async fn reconcile(db: &Db, worktrees: &WorktreeManager) -> anyhow::Result<S
             continue;
         }
         let base: String = p.get("default_branch");
-        let held = match manager::inventory(repo, &base).await {
+        let held = match manager::inventory(worktrees, repo, &base).await {
             Ok(h) => h,
             Err(e) => {
                 tracing::warn!(repo = %repo.display(), error = %e, "could not inventory worktrees");
