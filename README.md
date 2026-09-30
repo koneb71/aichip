@@ -840,7 +840,8 @@ docker compose --profile app up -d --build
 ```
 
 That runs everything — dashboard, orchestrator, and the agents — in containers, reachable
-at `http://localhost:4820`.
+at `http://localhost:4820`. Every port the compose file publishes — aichip, Postgres, MinIO
+— is bound to `127.0.0.1` on the host; from another machine, use an SSH tunnel.
 
 **Know what you're trading.** The token is a real credential sitting in a file, valid
 until you revoke it, rather than a keychain entry scoped to your machine. aichip itself
