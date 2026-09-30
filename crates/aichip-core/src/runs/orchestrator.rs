@@ -1477,27 +1477,30 @@ impl Orchestrator {
     /// Dispatcher: task runs and chat runs share the streaming machinery but
     /// build their RunSpec differently.
     async fn execute(self: &Arc<Self>, run_id: Uuid) -> anyhow::Result<()> {
-        let row = sqlx::query(
-            "SELECT status, chat_id, workflow_id, team_id, comment_id, kb_brief, research_id
-             FROM runs WHERE id=$1",
+        // The guard this never had, and then the race in the guard. `execute`
+        // reads only the columns that decide *which kind* of run it is, so a
+        // queue row that outlived its run — cancelled, already finished, or
+        // claimed twice — dispatched a second engine against it and was
+        // charged for. A plain read fixed that, but left a window: a cancel
+        // landing between the read and the first status write was written,
+        // then overwritten with `starting` — and the CLI was spawned only for
+        // the in-memory cancel flag to kill it.
+        //
+        // So the check *is* the write: claimed in one statement, and a run no
+        // longer waiting to start is dropped on the floor here, which is the
+        // correct response to a row that should not exist.
+        let Some(row) = sqlx::query(
+            "UPDATE runs SET status='starting'
+              WHERE id=$1 AND status IN ('queued','rate_limited')
+              RETURNING chat_id, workflow_id, team_id, comment_id, kb_brief, research_id",
         )
         .bind(run_id)
-        .fetch_one(&self.db.pool)
-        .await?;
-        // The guard this never had. `execute` reads only the columns that
-        // decide *which kind* of run it is, so a queue row that outlived its
-        // run — cancelled, already finished, or claimed twice — dispatched a
-        // second engine against it and was charged for. Anything not still
-        // waiting to start is dropped on the floor here, which is the correct
-        // response to a row that should not exist.
-        let status: String = row.get("status");
-        match RunStatus::parse(&status) {
-            Some(s) if s.is_dispatchable() => {}
-            _ => {
-                tracing::warn!(%run_id, %status, "dropped a queued run that is no longer waiting");
-                return Ok(());
-            }
-        }
+        .fetch_optional(&self.db.pool)
+        .await?
+        else {
+            tracing::warn!(%run_id, "dropped a queued run that is no longer waiting");
+            return Ok(());
+        };
         match (
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
@@ -3476,6 +3479,12 @@ this workflow manually."
         run_id: Uuid,
         outcome: &StreamOutcome,
     ) -> anyhow::Result<()> {
+        // Stopped by a person is not a planning failure, and must not read as
+        // "produced no plan".
+        if outcome.status == RunStatus::Canceled {
+            self.finish(run_id, RunStatus::Canceled, None).await?;
+            return Ok(());
+        }
         // A plan that never arrived is a failed run, not an empty approval
         // prompt — there is nothing for anyone to say yes to.
         if outcome.status != RunStatus::Completed || outcome.output.trim().is_empty() {
@@ -3806,8 +3815,19 @@ this workflow manually."
         caller: CallerKind,
     ) -> anyhow::Result<StreamOutcome> {
         let finalize = caller.finalizes();
+        // The status write is the gate the spawn passes through, not a note
+        // made after it. A run that ended while this step was being prepared
+        // — cancelled before any process existed to interrupt — starts
+        // nothing, rather than spawning a CLI only to kill it.
+        if !self.set_status(run_id, RunStatus::Running).await? {
+            return Ok(StreamOutcome {
+                status: RunStatus::Canceled,
+                reason: None,
+                output: String::new(),
+                session_id: None,
+            });
+        }
         let mut proc = engine.start(spec)?;
-        self.set_status(run_id, RunStatus::Running).await?;
 
         // Registered under the run, with a per-step slot so a fan-out's
         // steps don't clobber each other. A cancel that arrived while this
@@ -4023,13 +4043,29 @@ this workflow manually."
         Ok(())
     }
 
-    pub(crate) async fn set_status(&self, run_id: Uuid, status: RunStatus) -> anyhow::Result<()> {
-        sqlx::query("UPDATE runs SET status=$1 WHERE id=$2")
-            .bind(status.as_str())
-            .bind(run_id)
-            .execute(&self.db.pool)
-            .await?;
-        Ok(())
+    /// Move a live run to `status`. Returns false, writing nothing, when the
+    /// run has already ended.
+    ///
+    /// Ended is final. The cancel route closes out a run that has no process
+    /// yet, and the executor preparing it writes `starting` and `running` a
+    /// moment later; unguarded, those writes flipped a run the person had just
+    /// stopped back to live, until the cancel flag caught up with it.
+    pub(crate) async fn set_status(&self, run_id: Uuid, status: RunStatus) -> anyhow::Result<bool> {
+        let moved = sqlx::query(
+            "UPDATE runs SET status=$1
+              WHERE id=$2 AND status NOT IN ('completed','failed','canceled')",
+        )
+        .bind(status.as_str())
+        .bind(run_id)
+        .execute(&self.db.pool)
+        .await?;
+        Ok(moved.rows_affected() > 0)
+    }
+
+    /// Close out a run that has no process to interrupt — the other half of
+    /// [`Self::cancel`], through the same door every other ending uses.
+    pub async fn cancel_idle(&self, run_id: Uuid) -> anyhow::Result<()> {
+        self.finish(run_id, RunStatus::Canceled, None).await
     }
 
     pub(crate) async fn finish(
@@ -4055,15 +4091,27 @@ this workflow manually."
         // may already have written the true one — "nobody answered the request
         // to allow Bash". Safe only because `unpark` clears the column, so a
         // run that parked and then finished cleanly reports nothing.
+        //
+        // And only a live run: the first ending wins. A cancel that closed the
+        // run out is not rewritten as `failed` by the executor tripping over
+        // the run it was preparing — and whatever follows settles steps and
+        // announces by the status the run actually has.
         sqlx::query(
             "UPDATE runs SET status=$1, error_reason=COALESCE($2, error_reason),
-             finished_at=now() WHERE id=$3",
+             finished_at=now() WHERE id=$3 AND status NOT IN ('completed','failed','canceled')",
         )
         .bind(status.as_str())
         .bind(reason)
         .bind(run_id)
         .execute(&mut *tx)
         .await?;
+        let status = sqlx::query_scalar::<_, String>("SELECT status FROM runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .as_deref()
+            .and_then(RunStatus::parse)
+            .unwrap_or(status);
         // Nothing waiting to be dispatched can outlive the run it belongs to.
         // A run reaches here from a cancel, a crash in `execute`, a failed
         // dispatch or a plain ending, and any of those can happen while a

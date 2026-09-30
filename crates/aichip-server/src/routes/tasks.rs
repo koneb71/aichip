@@ -618,29 +618,11 @@ pub(crate) async fn cancel_run(
     let interrupted = state.orchestrator.cancel(id);
 
     // Nothing was executing: close it out directly, or the run would sit
-    // "queued" forever with a cancel nobody ever reads.
+    // "queued" forever with a cancel nobody ever reads. Through `finish`, like
+    // every other ending, so its steps settle the same way and an executor
+    // that was mid-preparation finds the run ended and starts nothing.
     if !interrupted {
-        sqlx::query("DELETE FROM queue WHERE run_id=$1")
-            .bind(id)
-            .execute(&state.db.pool)
-            .await
-            .map_err(internal)?;
-        sqlx::query(
-            "UPDATE runs SET status='canceled', finished_at=now()
-             WHERE id=$1 AND status NOT IN ('completed','failed','canceled')",
-        )
-        .bind(id)
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?;
-        sqlx::query(
-            "UPDATE steps SET status='skipped', finished_at=now()
-             WHERE run_id=$1 AND status IN ('queued','running')",
-        )
-        .bind(id)
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?;
+        state.orchestrator.cancel_idle(id).await.map_err(internal)?;
     }
 
     Ok(Json(json!({
