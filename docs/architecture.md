@@ -443,7 +443,10 @@ growth).
 
 It talks to the server two ways. `web/src/lib/api.ts` is the REST client for `/api`;
 `web/src/lib/ws.ts` is the socket, whose `useRunStream` hook opens
-`/ws?run_id=…&after_seq=-1` and merges the replayed frames with the live tail. Replay frames
+`/ws?run_id=…&after_seq=…` and merges the replayed frames with the live tail. It reconnects
+with backoff and resumes from `SeqLedger.floor` — the highest seq below which nothing is
+missing, not the highest seen, because concurrent steps publish out of order. The server
+recovers from a lagged broadcast ring the same way: by replaying from the log. Replay frames
 nest the payload under `event` while live frames are flat, and `step_id` sits on the envelope
 in both cases — it has to be lifted out explicitly, or every multi-agent view silently loses
 the ability to say *who* acted.
