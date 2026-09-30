@@ -7,6 +7,7 @@ use aichip_engines::local::LocalEngine;
 use aichip_engines::mock::MockEngine;
 use aichip_engines::opencode::OpenCodeEngine;
 use aichip_engines::Engine;
+use aichip_shared::env_guard;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -346,7 +347,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     aichip_core::attention::set_dashboard_url(format!("http://{}:{port}", displayable(bind)));
 
     if !headless {
-        let _ = tokio::process::Command::new("open")
+        let _ = env_guard::command("open")
             .arg(format!("http://127.0.0.1:{port}"))
             .spawn();
     }
@@ -517,11 +518,7 @@ async fn doctor() -> anyhow::Result<()> {
 }
 
 async fn run_version(bin: &str, args: &[&str]) -> Option<String> {
-    let out = tokio::process::Command::new(bin)
-        .args(args)
-        .output()
-        .await
-        .ok()?;
+    let out = env_guard::command(bin).args(args).output().await.ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())

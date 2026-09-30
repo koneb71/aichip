@@ -3,8 +3,8 @@
 //! so agent runs never dirty the main checkout. All git invocations use
 //! explicit arg vectors (never shell strings).
 
+use aichip_shared::env_guard;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use uuid::Uuid;
 
 pub struct WorktreeManager {
@@ -1006,7 +1006,7 @@ pub async fn stash(repo: &Path, message: &str) -> anyhow::Result<()> {
 }
 
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = Command::new("git")
+    let out = env_guard::command("git")
         .current_dir(cwd)
         .args(args)
         .output()

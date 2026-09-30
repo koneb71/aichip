@@ -27,6 +27,24 @@
 /// the environment on purpose.
 pub const AICHIP_OWN_SECRETS: &[&str] = &["AICHIP_S3_ACCESS_KEY", "AICHIP_S3_SECRET_KEY"];
 
+/// A child process, minus the secrets aichip itself holds.
+///
+/// **The only way anything in this workspace starts a process.** Stripping
+/// [`AICHIP_OWN_SECRETS`] used to be something each spawn site remembered, and
+/// seven did; the rest — git, whose repository hooks inherit the environment,
+/// docker, every engine's `--version` probe, and the MCP "test" button, which
+/// runs somebody's `npx` package — handed the object-storage keys to whatever
+/// they started. Now there is nothing to remember. `Command::new` is refused by
+/// `clippy.toml` and by the test below, which reads the workspace's source.
+#[allow(clippy::disallowed_methods)]
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    for key in AICHIP_OWN_SECRETS {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
 /// Fragments that make a name look like a secret regardless of vendor.
 const SECRET_SUBSTRINGS: &[&str] = &[
     "API_KEY",
@@ -166,6 +184,53 @@ mod tests {
 #[cfg(test)]
 mod own_secret_tests {
     use super::*;
+
+    #[test]
+    fn a_command_does_not_inherit_what_aichip_owns() {
+        let cmd = command("true");
+        for key in AICHIP_OWN_SECRETS {
+            let removed = cmd
+                .as_std()
+                .get_envs()
+                .any(|(k, v)| k == std::ffi::OsStr::new(key) && v.is_none());
+            assert!(removed, "{key} is inherited by a child");
+        }
+    }
+
+    /// The rule above only holds if nothing goes around it. This is the check
+    /// that runs everywhere `cargo test` does — clippy's `disallowed-methods`
+    /// says the same thing in an editor, but CI does not block on clippy yet.
+    #[test]
+    fn nothing_in_the_workspace_spawns_a_process_any_other_way() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/");
+        let mut offenders = vec![];
+        let mut stack = vec![crates.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") || path.ends_with("env_guard.rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap();
+                for (n, line) in source.lines().enumerate() {
+                    let code = line.split("//").next().unwrap_or("");
+                    if code.contains("Command::new(") {
+                        offenders.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "spawn through aichip_shared::env_guard::command instead: {offenders:#?}"
+        );
+    }
 
     /// Whatever aichip decides to own, it must also recognise as a secret —
     /// otherwise a future addition could be passed through `extra_env` and

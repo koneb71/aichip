@@ -17,6 +17,7 @@ pub mod pr;
 pub mod publish;
 pub mod repo;
 
+use aichip_shared::env_guard;
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Stdio;
@@ -85,7 +86,7 @@ fn classify_gh_failure(output: &str) -> GhError {
 /// people press twice. The environment is built by the same function, so the
 /// credential rules cannot hold for one shape and quietly not the other.
 pub(crate) fn spawn_gh(args: &[&str]) -> std::io::Result<tokio::process::Child> {
-    let mut cmd = Command::new(GH);
+    let mut cmd = env_guard::command(GH);
     prepare(&mut cmd, args, None);
     cmd.kill_on_drop(true).spawn()
 }
@@ -111,11 +112,6 @@ fn prepare(cmd: &mut Command, args: &[&str], cwd: Option<&Path>) {
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    // A spawned child never inherits aichip's own secrets. Same rule the
-    // engines apply, applied to the fourth CLI.
-    for key in aichip_shared::env_guard::AICHIP_OWN_SECRETS {
-        cmd.env_remove(key);
-    }
 }
 
 /// Run `gh` once and return its stdout.
@@ -127,7 +123,7 @@ fn prepare(cmd: &mut Command, args: &[&str], cwd: Option<&Path>) {
 /// to stderr. The environment comes from [`prepare`], which is where the
 /// credential rules are written down.
 pub(crate) async fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, GhError> {
-    let mut cmd = Command::new(GH);
+    let mut cmd = env_guard::command(GH);
     prepare(&mut cmd, args, cwd);
 
     let out = match cmd.output().await {

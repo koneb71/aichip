@@ -12,7 +12,7 @@ Stated at the top of [crates/aichip-engines/src/lib.rs](crates/aichip-engines/sr
 
 1. Adapters spawn official binaries found on `PATH` and read their stdout. Nothing else — no HTTP control API, no proxying of engine traffic.
 2. Never read, store, extract, or forward credentials. Never touch `~/.claude` or any engine's config/credential files. `aichip doctor` decides "is this CLI logged in?" by *running* it.
-3. Never set authentication environment variables on a spawned process. The single source of truth for "is this an auth secret" is [crates/aichip-shared/src/env_guard.rs](crates/aichip-shared/src/env_guard.rs) — use `is_auth_env` / `auth_env_refusal`, never a hand-rolled prefix list. `AICHIP_OWN_SECRETS` are stripped from every child (a spawned CLI inherits the server's environment).
+3. Never set authentication environment variables on a spawned process. The single source of truth for "is this an auth secret" is [crates/aichip-shared/src/env_guard.rs](crates/aichip-shared/src/env_guard.rs) — use `is_auth_env` / `auth_env_refusal`, never a hand-rolled prefix list. `AICHIP_OWN_SECRETS` are stripped from every child (a spawned CLI inherits the server's environment) — which is why every process starts through `env_guard::command`, never `Command::new`. `clippy.toml` and a source-scanning test in `env_guard.rs` both refuse the latter.
 4. Never proxy, intercept, or replay engine network traffic.
 
 ## Git conventions

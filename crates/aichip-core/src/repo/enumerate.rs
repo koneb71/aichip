@@ -11,6 +11,7 @@
 //! A project with no repository falls back to the walk, bounded by the same
 //! skip list the file browser uses.
 
+use aichip_shared::env_guard;
 use std::path::Path;
 
 /// Never useful to index and large enough that walking them hurts. The same
@@ -89,7 +90,7 @@ pub async fn files(root: &Path, vcs_is_git: bool) -> anyhow::Result<Vec<String>>
 /// --exclude-standard` so a file that exists but has never been committed is
 /// still indexed — someone mid-feature should find their own new code.
 async fn tracked(root: &Path) -> anyhow::Result<Vec<String>> {
-    let out = tokio::process::Command::new("git")
+    let out = env_guard::command("git")
         .current_dir(root)
         .args([
             "ls-files",

@@ -6,8 +6,8 @@
 //! preview would give a branch under review the ability to start privileged
 //! containers on the host, which is a host compromise, not a preview.
 
+use aichip_shared::env_guard;
 use std::path::Path;
-use tokio::process::Command;
 
 const DOCKER: &str = "docker";
 
@@ -20,7 +20,7 @@ pub const OWNER_LABEL: &str = "com.aichip.preview";
 /// Checked by running it, for the same reason engine detection is: a socket
 /// that exists proves nothing about a daemon that will answer.
 pub async fn detect() -> Option<Result<String, String>> {
-    let out = Command::new(DOCKER)
+    let out = env_guard::command(DOCKER)
         .args(["version", "--format", "{{.Server.Version}}"])
         .output()
         .await
@@ -47,7 +47,7 @@ pub async fn build(
     // past the last twenty lines the card has room for.
     log: &Path,
 ) -> Result<(), String> {
-    let mut cmd = Command::new(DOCKER);
+    let mut cmd = env_guard::command(DOCKER);
     cmd.arg("build")
         // The branch is the build context and nothing else is.
         .args(["-t", tag])
@@ -123,7 +123,7 @@ pub async fn run(
     host_port: u16,
     container_port: u16,
 ) -> Result<String, String> {
-    let out = Command::new(DOCKER)
+    let out = env_guard::command(DOCKER)
         .args(["run", "--detach"])
         .args(["--name", name])
         .args(["--label", &format!("{OWNER_LABEL}=1")])
@@ -146,7 +146,7 @@ pub async fn run(
 /// Is this container still up? Anything other than a clear yes is a no —
 /// a container that exited two seconds after starting is not a preview.
 pub async fn is_running(container: &str) -> bool {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["inspect", "-f", "{{.State.Running}}", container])
         .output()
         .await
@@ -157,7 +157,7 @@ pub async fn is_running(container: &str) -> bool {
 /// The tail of a container's own output. What you want when a preview builds
 /// fine and then serves nothing.
 pub async fn logs(container: &str, lines: u32) -> String {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["logs", "--tail", &lines.to_string(), container])
         .output()
         .await
@@ -172,7 +172,7 @@ pub async fn logs(container: &str, lines: u32) -> String {
 /// Stop and remove. Best effort by design: a container the user already
 /// removed by hand must not leave the row stuck at "running" forever.
 pub async fn remove(container: &str) {
-    let _ = Command::new(DOCKER)
+    let _ = env_guard::command(DOCKER)
         .args(["rm", "--force", "--volumes", container])
         .output()
         .await;
@@ -194,7 +194,7 @@ pub async fn compose_up(
     project: &str,
     log: &Path,
 ) -> Result<(), String> {
-    let out = Command::new(DOCKER)
+    let out = env_guard::command(DOCKER)
         .args(["compose", "-f"])
         .arg(file)
         .arg("--project-directory")
@@ -222,7 +222,7 @@ pub async fn compose_up(
 
 /// Every service's output in a stack, prefixed with which service said it.
 pub async fn compose_logs(project: &str, lines: u32) -> String {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args([
             "compose",
             "-p",
@@ -247,7 +247,7 @@ pub async fn compose_logs(project: &str, lines: u32) -> String {
 /// needed — which matters for a stack nothing in the database claims any more,
 /// where the rewritten file may already be gone.
 pub async fn compose_down_project(project: &str) {
-    let _ = Command::new(DOCKER)
+    let _ = env_guard::command(DOCKER)
         .args([
             "compose",
             "-p",
@@ -267,7 +267,7 @@ pub async fn compose_down_project(project: &str) {
 /// and would declare a perfectly healthy stack dead. That is not hypothetical —
 /// it is what the first version of this did.
 pub async fn compose_running(project: &str) -> bool {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["compose", "-p", project, "ps", "--status", "running", "-q"])
         .output()
         .await
@@ -280,7 +280,7 @@ pub async fn compose_running(project: &str) -> bool {
 /// `--volumes` is safe *because* of the project namespace: it removes only
 /// volumes compose created under this preview's name, never the user's.
 pub async fn compose_down(file: &Path, project_dir: &Path, project: &str) {
-    let _ = Command::new(DOCKER)
+    let _ = env_guard::command(DOCKER)
         .args(["compose", "-f"])
         .arg(file)
         .arg("--project-directory")
@@ -294,7 +294,7 @@ pub async fn compose_down(file: &Path, project_dir: &Path, project: &str) {
 /// Does this image still exist? Waking a preview depends on the answer, and
 /// a `docker rmi` run by the user is not something aichip is told about.
 pub async fn image_exists(tag: &str) -> bool {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["image", "inspect", tag])
         .output()
         .await
@@ -308,7 +308,7 @@ pub async fn image_exists(tag: &str) -> bool {
 /// deduplicated, and a number aichip computed itself would be confidently wrong
 /// in a way the user could not check.
 pub async fn image_disk_bytes() -> u64 {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args([
             "images",
             "--filter",
@@ -355,7 +355,7 @@ fn parse_size(text: &str) -> Option<u64> {
 /// see `compose::namespace_built_images`. The label is on them too, but a label
 /// is a claim about an image and the name is the image.
 pub async fn images_for(prefix: &str) -> Vec<String> {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
         .output()
         .await
@@ -372,7 +372,7 @@ pub async fn images_for(prefix: &str) -> Vec<String> {
 }
 
 pub async fn remove_image(tag: &str) {
-    let _ = Command::new(DOCKER)
+    let _ = env_guard::command(DOCKER)
         .args(["rmi", "--force", tag])
         .output()
         .await;
@@ -384,7 +384,7 @@ pub async fn remove_image(tag: &str) {
 /// them at all. Found by project-name prefix instead — which is safe for the
 /// same reason the label is: nothing the user starts is called this.
 pub async fn list_owned_stacks() -> Vec<String> {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args(["compose", "ls", "--all", "--format", "json"])
         .output()
         .await
@@ -404,7 +404,7 @@ pub async fn list_owned_stacks() -> Vec<String> {
 /// reconciliation that answers "what is actually running", and asking the
 /// database that question is how orphans survive a restart.
 pub async fn list_owned() -> Vec<String> {
-    Command::new(DOCKER)
+    env_guard::command(DOCKER)
         .args([
             "ps",
             "--all",
