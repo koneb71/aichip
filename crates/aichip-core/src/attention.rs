@@ -12,6 +12,7 @@
 //! from GitHub URLs and by agents building apps — putting a shell command on a
 //! row an agent can write would hand an agent a shell.
 
+use aichip_shared::env_guard;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::time::Duration;
@@ -340,12 +341,6 @@ async fn run_hook(cfg: &Attention, event: Event, ctx: &Ctx) {
     for (k, v) in payload(event, ctx) {
         cmd.env(k, v);
     }
-    // A spawned child never inherits aichip's own secrets. Same rule the
-    // engines and `gh` get; `env_clear()` is equally deliberately absent,
-    // because the hook needs PATH, HOME, and on Linux the session bus.
-    for key in aichip_shared::env_guard::AICHIP_OWN_SECRETS {
-        cmd.env_remove(key);
-    }
 
     let child = match cmd.spawn() {
         Ok(c) => c,
@@ -378,7 +373,7 @@ async fn run_hook(cfg: &Attention, event: Event, ctx: &Ctx) {
 fn shell(command: &str) -> Command {
     #[cfg(unix)]
     {
-        let mut c = Command::new("sh");
+        let mut c = env_guard::command("sh");
         c.arg("-c").arg(command);
         c
     }
@@ -388,7 +383,7 @@ fn shell(command: &str) -> Command {
         // assumes, so a command containing quotes comes out mangled. `raw_arg`
         // passes the text through untouched, which is what `cmd /C` wants.
         use std::os::windows::process::CommandExt;
-        let mut c = Command::new("cmd");
+        let mut c = env_guard::command("cmd");
         c.arg("/C");
         c.as_std_mut().raw_arg(command);
         c

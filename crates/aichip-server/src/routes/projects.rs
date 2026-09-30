@@ -462,6 +462,7 @@ async fn held_for(
         return Ok(vec![]);
     }
     manager::inventory(
+        &state.orchestrator.worktrees,
         std::path::Path::new(&row.get::<String, _>("path")),
         &row.get::<String, _>("default_branch"),
     )

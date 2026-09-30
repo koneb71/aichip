@@ -45,10 +45,10 @@ pub mod probe;
 
 use crate::opencode::{config, OpenCodeEngine};
 use crate::{Capabilities, Engine, EngineInfo, EngineProcess, RunSpec};
+use aichip_shared::env_guard;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
@@ -173,7 +173,7 @@ impl LocalEngine {
         for path in self.runtime.candidates() {
             // Cheapest thing that proves the file is there and runnable. Both
             // CLIs answer `--help` without touching their server.
-            if Command::new(&path)
+            if env_guard::command(&path)
                 .arg("--help")
                 .output()
                 .await
@@ -250,7 +250,7 @@ impl Engine for LocalEngine {
     async fn detect(&self) -> Option<EngineInfo> {
         // Without OpenCode there is nothing to offer, however many models are
         // loaded — the runtime alone cannot edit a file.
-        Command::new(&self.runner.binary)
+        env_guard::command(&self.runner.binary)
             .arg("--version")
             .output()
             .await
@@ -261,7 +261,7 @@ impl Engine for LocalEngine {
         let run = |args: Vec<&'static str>| {
             let bin = bin.clone();
             async move {
-                let out = Command::new(&bin).args(&args).output().await.ok()?;
+                let out = env_guard::command(&bin).args(&args).output().await.ok()?;
                 out.status
                     .success()
                     .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -340,7 +340,7 @@ impl Engine for LocalEngine {
 /// a "you have not started the server" problem without reading the source.
 pub async fn hints(opencode_binary: &str) -> Vec<String> {
     let mut out = vec![];
-    let have_opencode = Command::new(opencode_binary)
+    let have_opencode = env_guard::command(opencode_binary)
         .arg("--version")
         .output()
         .await

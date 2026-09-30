@@ -14,6 +14,7 @@ pub mod tools;
 use crate::{
     Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, ProviderInfo, RunSpec,
 };
+use aichip_shared::env_guard;
 use aichip_shared::{AichipEvent, PermissionMode, ReasoningEffort};
 use async_trait::async_trait;
 use std::ffi::OsString;
@@ -21,7 +22,6 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use stream_parser::StreamState;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 /// Claude's effort vocabulary → OpenCode's `--variant`.
@@ -133,7 +133,7 @@ impl Engine for OpenCodeEngine {
     }
 
     async fn detect(&self) -> Option<EngineInfo> {
-        let version = Command::new(&self.binary)
+        let version = env_guard::command(&self.binary)
             .arg("--version")
             .output()
             .await
@@ -143,7 +143,7 @@ impl Engine for OpenCodeEngine {
 
         // Names and auth *types* only. This runs the binary rather than
         // reading `auth.json`, which is the whole point.
-        let providers = Command::new(&self.binary)
+        let providers = env_guard::command(&self.binary)
             .args(["providers", "list"])
             .output()
             .await
@@ -155,7 +155,7 @@ impl Engine for OpenCodeEngine {
         // `opencode models` lists only what the user's configured providers
         // expose, which is the difference between offering a real catalog and
         // offering a list they'd have to discover was wrong.
-        let models = Command::new(&self.binary)
+        let models = env_guard::command(&self.binary)
             .arg("models")
             .output()
             .await
@@ -183,7 +183,7 @@ impl Engine for OpenCodeEngine {
         };
         let cfg = config::build(&spec, instructions.as_deref());
 
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = env_guard::command(&self.binary);
         cmd.current_dir(&spec.cwd).args(opencode_args(&spec));
 
         // OpenCode resolves its working directory as `PWD ?? cwd()`, and
@@ -193,13 +193,6 @@ impl Engine for OpenCodeEngine {
         cmd.env("PWD", &spec.cwd);
         // The binary self-updates; pin behaviour for the length of a run.
         cmd.env("OPENCODE_DISABLE_AUTOUPDATE", "1");
-
-        // A child inherits this process's environment. The loop below only
-        // vets what we *set*, so anything aichip holds as its own secret has
-        // to be taken away explicitly or it arrives having passed no check.
-        for key in aichip_shared::AICHIP_OWN_SECRETS {
-            cmd.env_remove(key);
-        }
 
         for (k, v) in &spec.extra_env {
             if aichip_shared::is_auth_env(k) {

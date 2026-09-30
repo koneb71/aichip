@@ -443,14 +443,19 @@ growth).
 
 It talks to the server two ways. `web/src/lib/api.ts` is the REST client for `/api`;
 `web/src/lib/ws.ts` is the socket, whose `useRunStream` hook opens
-`/ws?run_id=…&after_seq=-1` and merges the replayed frames with the live tail. Replay frames
+`/ws?run_id=…&after_seq=…` and merges the replayed frames with the live tail. It reconnects
+with backoff and resumes from `SeqLedger.floor` — the highest seq below which nothing is
+missing, not the highest seen, because concurrent steps publish out of order. The server
+recovers from a lagged broadcast ring the same way: by replaying from the log. Replay frames
 nest the payload under `event` while live frames are flat, and `step_id` sits on the envelope
 in both cases — it has to be lifted out explicitly, or every multi-agent view silently loses
 the ability to say *who* acted.
 
 In development, `pnpm dev` serves the dashboard from :5173 and proxies `/api` and `/ws`
-through to :4820. That is also why the server's origin allow-list is port-agnostic — the
-browser's origin is the Vite port, not aichip's. `pnpm build` produces `web/dist`, which the
+through to :4820. The proxy deliberately leaves `changeOrigin` off: the server admits a page
+only when its `Origin` names the same authority as the request's `Host`, and forwarding the
+browser's own `Host` is what keeps the Vite page same-origin. A loopback origin alone is not
+enough — previews are served from loopback ports too. `pnpm build` produces `web/dist`, which the
 server serves as a fallback (`AICHIP_WEB_DIST` overrides the path).
 
 ### Why pure logic lives in `web/src/lib/*.ts`

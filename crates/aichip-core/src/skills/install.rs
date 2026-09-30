@@ -40,8 +40,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use aichip_shared::env_guard;
 use sqlx::Row;
-use tokio::process::Command;
 use uuid::Uuid;
 
 use super::registry::{self, LockEntry};
@@ -127,7 +127,7 @@ pub async fn install(db: &Db, project_id: Uuid, reference: &str) -> anyhow::Resu
 
 /// Spawn the installer. Never `-g`; never a shell string.
 async fn run_installer(root: &Path, reference: &str) -> anyhow::Result<()> {
-    let mut cmd = Command::new("npx");
+    let mut cmd = env_guard::command("npx");
     cmd.args([
         // Pinned to the package name rather than a version: this is somebody
         // else's release train and following it is the point.
@@ -150,11 +150,6 @@ async fn run_installer(root: &Path, reference: &str) -> anyhow::Result<()> {
     .env("NO_COLOR", "1")
     .env("CI", "1")
     .kill_on_drop(true);
-    // A spawned child never inherits aichip's own secrets — the same rule the
-    // engines and `gh` apply, applied to the fifth CLI.
-    for key in aichip_shared::env_guard::AICHIP_OWN_SECRETS {
-        cmd.env_remove(key);
-    }
 
     let out = match cmd.output().await {
         Ok(out) => out,

@@ -8,6 +8,7 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_core::mcp_servers::{check_env, slug_name};
+use aichip_shared::env_guard;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
@@ -268,7 +269,7 @@ async fn probe_stdio(
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     check_env(&env)?;
-    let mut child = tokio::process::Command::new(&command)
+    let mut child = env_guard::command(&command)
         .args(&args)
         .envs(
             env.as_object()

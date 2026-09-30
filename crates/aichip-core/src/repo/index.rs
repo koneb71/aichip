@@ -12,6 +12,7 @@
 //! into one "indexing" state would make the UI claim the index is incomplete
 //! long after the part that answers most questions is finished.
 
+use aichip_shared::env_guard;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -64,7 +65,7 @@ async fn project_root(db: &Db, project_id: Uuid) -> anyhow::Result<(PathBuf, boo
 
 /// The commit the working tree is on, or `None` before the first one.
 pub async fn head_sha(root: &Path) -> Option<String> {
-    let out = tokio::process::Command::new("git")
+    let out = env_guard::command("git")
         .current_dir(root)
         .args(["rev-parse", "HEAD"])
         .output()

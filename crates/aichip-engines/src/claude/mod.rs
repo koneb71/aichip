@@ -5,18 +5,15 @@ pub mod mcp;
 pub mod stream_parser;
 
 use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
+use aichip_shared::env_guard;
 use aichip_shared::{AichipEvent, PermissionMode};
 use async_trait::async_trait;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::mpsc;
-
-/// Env keys the adapter refuses to pass through — auth must only ever come
-/// from the user's own CLI login (compliance invariant #3).
-pub const FORBIDDEN_ENV_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_OAUTH"];
 
 /// Build the argv for a run, minus the binary itself.
 ///
@@ -132,7 +129,7 @@ impl Engine for ClaudeEngine {
     }
 
     async fn detect(&self) -> Option<EngineInfo> {
-        let version = Command::new(&self.binary)
+        let version = env_guard::command(&self.binary)
             .arg("--version")
             .output()
             .await
@@ -159,16 +156,9 @@ impl Engine for ClaudeEngine {
             Some(mcp::write(&mcp::config_dir(), &spec.run_key, &spec.mcp)?)
         };
 
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = env_guard::command(&self.binary);
         cmd.current_dir(&spec.cwd)
             .args(claude_args(&spec, mcp_config));
-
-        // A child inherits this process's environment. The loop below only
-        // vets what we *set*, so anything aichip holds as its own secret has
-        // to be taken away explicitly or it arrives having passed no check.
-        for key in aichip_shared::AICHIP_OWN_SECRETS {
-            cmd.env_remove(key);
-        }
 
         for (k, v) in &spec.extra_env {
             if aichip_shared::is_auth_env(k) {

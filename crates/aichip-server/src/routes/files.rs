@@ -432,6 +432,16 @@ async fn write_in(
 /// The permission copy is not decoration: without it, saving a shell script or
 /// a git hook silently strips its executable bit, and the failure shows up
 /// somewhere else entirely.
+///
+/// The temp file is the one path in a save that `resolve_for_write` never
+/// sees, so it has to be safe by construction. It used to be a predictable
+/// `.{name}.aichip-tmp` opened with `File::create`, which follows symlinks: an
+/// agent could plant that name in its worktree pointing at the main repo's
+/// `.git/hooks/post-merge`, and the next person to save `name` wrote their
+/// bytes — and the exec bit — into a hook the squash-merge then ran. Now the
+/// name is unguessable and the open is `create_new` (`O_EXCL`), which refuses
+/// anything already there, a symlink included; the mode is set on the open
+/// handle, never by path.
 async fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
@@ -439,24 +449,31 @@ async fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let tmp = dir.join(format!(".{name}.aichip-tmp"));
+    let tmp = dir.join(format!(".{name}.{}.aichip-tmp", Uuid::new_v4().simple()));
 
     let mode = tokio::fs::metadata(path)
         .await
         .ok()
         .map(|m| m.permissions());
 
+    // Opened outside the cleanup block: if this fails, whatever is at `tmp`
+    // is not ours, and removing it is not ours to do either.
+    let mut f = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .await?;
+
     let result = async {
-        let mut f = tokio::fs::File::create(&tmp).await?;
         {
             use tokio::io::AsyncWriteExt;
             f.write_all(bytes).await?;
+            if let Some(mode) = mode {
+                f.set_permissions(mode).await?;
+            }
             f.sync_all().await?;
         }
         drop(f);
-        if let Some(mode) = mode {
-            tokio::fs::set_permissions(&tmp, mode).await?;
-        }
         tokio::fs::rename(&tmp, path).await
     }
     .await;
@@ -692,7 +709,8 @@ async fn search(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_hash, relative, resolve, resolve_for_write, safe_file_name, score_path, WriteTarget,
+        content_hash, relative, resolve, resolve_for_write, safe_file_name, score_path,
+        write_atomically, WriteTarget,
     };
     use std::path::Path;
 
@@ -703,6 +721,51 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
         root
+    }
+
+    /// The temp file of an old save had a predictable name and was opened
+    /// following symlinks, so a link planted under that name redirected a
+    /// person's save — bytes and exec bit — to wherever it pointed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_planted_temp_name_cannot_redirect_a_save() {
+        let root = scratch("planted-tmp");
+        let hook = root.join("post-merge");
+        std::fs::write(&hook, "untouched").unwrap();
+        std::os::unix::fs::symlink(&hook, root.join("src/.main.rs.aichip-tmp")).unwrap();
+
+        write_atomically(&root.join("src/main.rs"), b"saved")
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&hook).unwrap(), "untouched");
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/main.rs")).unwrap(),
+            "saved"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_save_keeps_the_exec_bit_and_leaves_no_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("exec-bit");
+        let script = root.join("src/run.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        write_atomically(&script, b"#!/bin/sh\necho hi\n")
+            .await
+            .unwrap();
+
+        let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+        let leftovers: Vec<_> = std::fs::read_dir(root.join("src"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".aichip-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     /// aichip runs `git checkout` and `git merge` in these repos during

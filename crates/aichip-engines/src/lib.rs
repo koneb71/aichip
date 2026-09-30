@@ -111,7 +111,7 @@ pub struct RunSpec {
     /// allowed-tools list and headless auto-deny instead).
     pub permission_prompt_tool: bool,
     /// Non-auth environment (e.g. AICHIP_RUN_ID for hooks). Adapters must
-    /// refuse auth-related keys; see `claude::FORBIDDEN_ENV_PREFIXES`.
+    /// refuse auth-related keys via `aichip_shared::is_auth_env`.
     pub extra_env: HashMap<String, String>,
 }
 

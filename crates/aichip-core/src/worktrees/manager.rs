@@ -3,8 +3,8 @@
 //! so agent runs never dirty the main checkout. All git invocations use
 //! explicit arg vectors (never shell strings).
 
+use aichip_shared::env_guard;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use uuid::Uuid;
 
 pub struct WorktreeManager {
@@ -43,6 +43,10 @@ fn parse_numstat(line: &str) -> Option<FileStat> {
     })
 }
 
+/// Every branch aichip creates starts with this, and nothing else it deletes
+/// may be missing it.
+pub const BRANCH_PREFIX: &str = "aichip/";
+
 impl WorktreeManager {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
@@ -56,6 +60,29 @@ impl WorktreeManager {
     /// runs must pass.
     pub fn manages(&self, path: &Path) -> bool {
         path.starts_with(&self.root)
+    }
+
+    /// True when this worktree is one aichip made: under its root, on its
+    /// branch prefix. Both, because either alone can be true of a person's
+    /// own worktree by coincidence, and the answer decides what gets deleted.
+    ///
+    /// Compared canonically as well as literally. git reports the path it
+    /// resolved, and on macOS a root under `/var` comes back as `/private/var`
+    /// — the literal comparison alone silently matches nothing.
+    fn owns(&self, path: &Path, branch: &str) -> bool {
+        if !branch.starts_with(BRANCH_PREFIX) {
+            return false;
+        }
+        if self.manages(path) {
+            return true;
+        }
+        match (
+            std::fs::canonicalize(&self.root),
+            std::fs::canonicalize(path),
+        ) {
+            (Ok(root), Ok(path)) => path.starts_with(root),
+            _ => false,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -82,7 +109,7 @@ impl WorktreeManager {
         let project_hash = short_hash(&repo.to_string_lossy());
         let path = self.root.join(project_hash).join(task_id.to_string());
         tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        let branch = format!("aichip/{slug}-{}", &task_id.to_string()[..8]);
+        let branch = format!("{BRANCH_PREFIX}{slug}-{}", &task_id.to_string()[..8]);
 
         // A repository added before we checked for commits — or one the user
         // init'd themselves — has an unborn HEAD and nothing to branch from.
@@ -715,15 +742,25 @@ async fn has_landed(repo: &Path, base: &str, branch: &str) -> bool {
     }
 }
 
-/// Every worktree this repository is holding, with the two facts that decide
-/// whether it may go.
+/// Every worktree **aichip made** in this repository, with the two facts that
+/// decide whether it may go.
 ///
 /// Deliberately read from git rather than from the database. A row can be
 /// deleted while its directory survives — a bake-off variant whose run
 /// cascaded away with its card, a workflow fan-out worktree whose id was never
 /// persisted at all — and those are exactly the ones nothing would otherwise
 /// ever look at again.
-pub async fn inventory(repo: &Path, base_branch: &str) -> anyhow::Result<Vec<Held>> {
+///
+/// Ownership is filtered here, not left to callers, because every caller
+/// feeds the result to a delete. It used to list *all* of a repository's
+/// worktrees, and the boot sweep removed any that were clean and "landed" —
+/// which a person's own `git worktree add ../hotfix -b hotfix` is, the moment
+/// it has no commits of its own — along with `branch -D` on their branch.
+pub async fn inventory(
+    manager: &WorktreeManager,
+    repo: &Path,
+    base_branch: &str,
+) -> anyhow::Result<Vec<Held>> {
     let listed = git(repo, &["worktree", "list", "--porcelain"]).await?;
     let base = resolve_base(repo, base_branch).await?;
 
@@ -736,6 +773,9 @@ pub async fn inventory(repo: &Path, base_branch: &str) -> anyhow::Result<Vec<Hel
     // the repository itself appeared in the list.
     for (path, branch) in parse_worktree_list(&listed).into_iter().skip(1) {
         let Some(branch) = branch else { continue };
+        if !manager.owns(&path, &branch) {
+            continue;
+        }
         let dirty = git(&path, &["status", "--porcelain"])
             .await
             .map(|s| !s.trim().is_empty())
@@ -966,7 +1006,7 @@ pub async fn stash(repo: &Path, message: &str) -> anyhow::Result<()> {
 }
 
 async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = Command::new("git")
+    let out = env_guard::command("git")
         .current_dir(cwd)
         .args(args)
         .output()
@@ -1408,7 +1448,7 @@ mod tests {
             .await
             .unwrap();
 
-        let held = inventory(repo_dir.path(), "main").await.unwrap();
+        let held = inventory(&mgr, repo_dir.path(), "main").await.unwrap();
         assert_eq!(
             held.len(),
             3,
@@ -1441,6 +1481,50 @@ mod tests {
             Some("it has uncommitted changes in it")
         );
         assert!(by("landed").bytes > 0, "a size worth showing");
+    }
+
+    /// A person's own worktrees are never aichip's to reclaim, however clean
+    /// and "landed" they look. Before ownership was checked, both of these
+    /// were listed, and the boot sweep removed them with `branch -D`.
+    #[tokio::test]
+    async fn inventory_never_lists_a_worktree_aichip_did_not_make() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+
+        // `git worktree add ../hotfix -b hotfix`: no commits of its own, so
+        // `git cherry` reports nothing unlanded.
+        let hotfix = elsewhere.path().join("hotfix");
+        git(
+            repo_dir.path(),
+            &["worktree", "add", hotfix.to_str().unwrap(), "-b", "hotfix"],
+        )
+        .await
+        .unwrap();
+        // Even on a branch that happens to look like ours, outside our root.
+        let lookalike = elsewhere.path().join("lookalike");
+        git(
+            repo_dir.path(),
+            &[
+                "worktree",
+                "add",
+                lookalike.to_str().unwrap(),
+                "-b",
+                "aichip/lookalike",
+            ],
+        )
+        .await
+        .unwrap();
+        let ours = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "ours")
+            .await
+            .unwrap();
+
+        let held = inventory(&mgr, repo_dir.path(), "main").await.unwrap();
+        let branches: Vec<_> = held.iter().map(|h| h.branch.as_str()).collect();
+        assert_eq!(branches, vec![ours.branch.as_str()], "{held:?}");
     }
 
     #[test]

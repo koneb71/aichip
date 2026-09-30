@@ -21,6 +21,9 @@ export default defineConfig({
     },
   },
   server: {
+    // No `changeOrigin`. The server admits a page only when its Origin matches
+    // the request's Host, and forwarding the browser's own Host is what keeps
+    // this page same-origin with the requests it proxies.
     proxy: {
       "/api": "http://127.0.0.1:4820",
       "/ws": { target: "ws://127.0.0.1:4820", ws: true },

@@ -57,12 +57,12 @@ pub mod config;
 pub mod stream_parser;
 
 use crate::{Capabilities, Engine, EngineInfo, EngineProcess, ProcessHandle, RunSpec};
+use aichip_shared::env_guard;
 use aichip_shared::AichipEvent;
 use async_trait::async_trait;
 use std::process::Stdio;
 use stream_parser::StreamState;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 pub struct CodexEngine {
@@ -211,7 +211,7 @@ impl Engine for CodexEngine {
     }
 
     async fn detect(&self) -> Option<EngineInfo> {
-        let out = Command::new(&self.binary)
+        let out = env_guard::command(&self.binary)
             .arg("--version")
             .stdin(Stdio::null())
             .output()
@@ -225,7 +225,7 @@ impl Engine for CodexEngine {
         // "Is it logged in?" is answered by running the binary, never by
         // reading its config — the second invariant. `codex login status`
         // exits non-zero when there is no usable session.
-        let authenticated = Command::new(&self.binary)
+        let authenticated = env_guard::command(&self.binary)
             .args(["login", "status"])
             .stdin(Stdio::null())
             .output()
@@ -237,7 +237,7 @@ impl Engine for CodexEngine {
         // diagnosis. Reported so the tier defaults are derived from the
         // machine rather than hardcoded — the old default named `gpt-5-codex`,
         // which this version answers with "model metadata not found".
-        let models = Command::new(&self.binary)
+        let models = env_guard::command(&self.binary)
             .arg("doctor")
             .stdin(Stdio::null())
             .output()
@@ -257,14 +257,9 @@ impl Engine for CodexEngine {
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = env_guard::command(&self.binary);
         cmd.current_dir(&spec.cwd).args(codex_args(&spec)?);
 
-        // A child inherits this process's environment, so anything aichip
-        // holds as its own secret is taken away explicitly.
-        for key in aichip_shared::AICHIP_OWN_SECRETS {
-            cmd.env_remove(key);
-        }
         for (k, v) in &spec.extra_env {
             if aichip_shared::is_auth_env(k) {
                 anyhow::bail!("{}", aichip_shared::auth_env_refusal(k));

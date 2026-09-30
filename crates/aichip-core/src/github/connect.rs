@@ -31,11 +31,12 @@
 //! connection personal — which is the honest place to point someone who wants
 //! that, rather than a switch here that could not deliver it.
 
+use aichip_shared::env_guard;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use uuid::Uuid;
 
 /// A device flow waiting for the person to finish it in their browser.
@@ -133,7 +134,7 @@ pub async fn start(extra: &[String]) -> anyhow::Result<Started> {
     // still running and waiting. Routing it through the runner would mean
     // waiting for a process that does not exit until the login finishes — the
     // code would arrive only after it was no longer any use.
-    let mut cmd = Command::new("gh");
+    let mut cmd = env_guard::command("gh");
     cmd.args(["auth", "login", "--web", "--hostname", "github.com"]);
     if !allowed.is_empty() {
         cmd.args(["--scopes", &allowed.join(",")]);
