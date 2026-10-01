@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_core::runs::follow_up::{FollowUp, FollowUpRefusal};
 use aichip_core::runs::mentions;
 use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
@@ -1069,11 +1070,12 @@ async fn post_comment(
     // acting on review feedback needs a run that can actually edit, in the
     // worktree the diff came from.
     if body.fix.unwrap_or(false) {
+        // The note is kept either way; a refusal says why nothing acted on it.
         let run_id = state
             .orchestrator
-            .enqueue_review_fix(comment_id)
+            .enqueue_follow_up(task_id, FollowUp::ReviewNote { comment_id })
             .await
-            .map_err(internal)?;
+            .map_err(start_refused)?;
         return Ok(Json(
             json!({ "id": comment_id, "runIds": [run_id], "fixRunId": run_id }),
         ));
@@ -1430,10 +1432,11 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 }
 
 /// True when the task's latest run is still live.
-/// `enqueue_task`'s refusal as the status it means: a card that is already
-/// running is a conflict the person can act on, not a server error.
+/// A refusal to start work on a card, as the status it means: a card that is
+/// already running, or a follow-up with nothing to follow up on, is a conflict
+/// the person can act on, not a server error.
 fn start_refused(e: anyhow::Error) -> ApiError {
-    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() {
+    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() || e.is::<FollowUpRefusal>() {
         (StatusCode::CONFLICT, e.to_string())
     } else {
         internal(e)
