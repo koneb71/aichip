@@ -25,6 +25,14 @@ const PROJECT_JOIN: &str = "
     LEFT JOIN chats     c ON c.id = r.chat_id
     LEFT JOIN projects  p ON p.id = COALESCE(r.project_id, t.project_id, w.project_id, c.project_id)";
 
+/// The routine behind a run: one it fired directly (a chat pass, a manager
+/// pass), or the card it filed.
+const ROUTINE_NAME: &str = "
+    COALESCE((SELECT ro.name FROM routine_runs rr JOIN routines ro ON ro.id = rr.routine_id
+               WHERE rr.run_id = r.id OR (r.task_id IS NOT NULL AND rr.task_id = r.task_id)
+               ORDER BY rr.fired_at DESC LIMIT 1),
+             'not from a routine')";
+
 /// Which aichip feature produced this run.
 ///
 /// Derived, never stored. Every one of these is already distinguishable from
@@ -97,6 +105,11 @@ pub enum Dimension {
     Model,
     Tier,
     Pattern,
+    /// Who did the work. Not one expression over `runs`: a team run is
+    /// several agents' work, so its share comes from each step's own cost.
+    Agent,
+    /// Which routine fired the run, for runs a routine started.
+    Routine,
 }
 
 impl Dimension {
@@ -109,6 +122,9 @@ impl Dimension {
             // The tier actually used, not the one the card asked for.
             Self::Tier => "COALESCE(r.tier_override, t.model_tier, 'unknown')",
             Self::Pattern => PATTERN_CASE,
+            // Unused: `by` answers `Agent` with `by_agent`.
+            Self::Agent => "NULL",
+            Self::Routine => ROUTINE_NAME,
         }
     }
 
@@ -119,6 +135,8 @@ impl Dimension {
             "model" => Some(Self::Model),
             "tier" => Some(Self::Tier),
             "pattern" => Some(Self::Pattern),
+            "agent" => Some(Self::Agent),
+            "routine" => Some(Self::Routine),
             _ => None,
         }
     }
@@ -200,6 +218,9 @@ pub async fn by(
     days: i32,
     dim: Dimension,
 ) -> anyhow::Result<Vec<Slice>> {
+    if dim == Dimension::Agent {
+        return by_agent(db, ws, days).await;
+    }
     let sql = format!(
         "SELECT {} AS key,
                 COALESCE(SUM(r.cost_usd), 0)              AS cost,
@@ -214,6 +235,63 @@ pub async fn by(
            AND ($1::uuid IS NULL OR p.workspace_id = $1)
          GROUP BY 1 ORDER BY cost DESC NULLS LAST LIMIT 20",
         dim.sql()
+    );
+    let rows = sqlx::query(&sql)
+        .bind(ws)
+        .bind(days)
+        .fetch_all(&db.pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| Slice {
+            key: r.get("key"),
+            cost_usd: r.get("cost"),
+            runs: r.get("runs"),
+            input_tokens: r.get("input"),
+            output_tokens: r.get("output"),
+            cache_read_tokens: r.get("cache_read"),
+            cache_creation_tokens: r.get("cache_creation"),
+            median_usd: r.get("median"),
+        })
+        .collect())
+}
+
+/// Spend by agent, measured rather than shared out.
+///
+/// A run an agent did alone is all theirs. A team run is not one agent's, and
+/// splitting its total evenly across the steps — what the activity panel did —
+/// charged a specialist who answered in thirty seconds the same as one who
+/// ground for twenty minutes. Each step records its own cost (migration
+/// 0038), so a teammate is charged for their steps. A workflow's steps carry
+/// no assignee and are left out rather than guessed at.
+async fn by_agent(db: &Db, ws: Option<Uuid>, days: i32) -> anyhow::Result<Vec<Slice>> {
+    let sql = format!(
+        "WITH work AS (
+             SELECT a.name AS key, r.cost_usd AS cost, r.input_tokens AS input,
+                    r.output_tokens AS output, r.cache_read_tokens AS cache_read,
+                    r.cache_creation_tokens AS cache_creation
+               FROM runs r {PROJECT_JOIN}
+               JOIN agents a ON a.id = COALESCE(r.agent_id, t.agent_id)
+              WHERE r.team_id IS NULL AND r.workflow_id IS NULL
+                AND r.created_at > now() - make_interval(days => $2)
+                AND ($1::uuid IS NULL OR p.workspace_id = $1)
+             UNION ALL
+             SELECT s.assignee, s.cost_usd, s.input_tokens, s.output_tokens,
+                    s.cache_read_tokens, s.cache_creation_tokens
+               FROM steps s JOIN runs r ON r.id = s.run_id {PROJECT_JOIN}
+              WHERE s.assignee IS NOT NULL
+                AND r.created_at > now() - make_interval(days => $2)
+                AND ($1::uuid IS NULL OR p.workspace_id = $1)
+         )
+         SELECT key,
+                COALESCE(SUM(cost), 0)                     AS cost,
+                COUNT(*)                                   AS runs,
+                COALESCE(SUM(input), 0)::bigint            AS input,
+                COALESCE(SUM(output), 0)::bigint           AS output,
+                COALESCE(SUM(cache_read), 0)::bigint       AS cache_read,
+                COALESCE(SUM(cache_creation), 0)::bigint   AS cache_creation,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY cost) AS median
+           FROM work GROUP BY 1 ORDER BY cost DESC NULLS LAST LIMIT 20"
     );
     let rows = sqlx::query(&sql)
         .bind(ws)

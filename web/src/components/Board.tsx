@@ -281,10 +281,12 @@ function TaskCard({
         )}
         {task.agentName && (
           <span
-            className="rounded-full px-2 py-0.5 text-white"
+            className={`rounded-full px-2 py-0.5 text-white ${task.agentStatus === "paused" ? "opacity-60" : ""}`}
             style={{ background: task.agentColor ?? "#9ca3af" }}
+            title={task.agentStatus === "paused" ? `${task.agentName} is paused — this card will not start` : undefined}
           >
             {task.agentName}
+            {task.agentStatus === "paused" && " · paused"}
           </span>
         )}
         {task.teamName && (

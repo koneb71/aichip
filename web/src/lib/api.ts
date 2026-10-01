@@ -211,6 +211,8 @@ export interface Task {
   blockedBy: { id: string; title: string; boardColumn: Task["boardColumn"] }[];
   /** Start by itself once every blocker has landed. */
   startWhenUnblocked: boolean;
+  /** The assignee's status: a paused one keeps the card but starts nothing. */
+  agentStatus: Agent["status"] | null;
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */
@@ -648,6 +650,10 @@ export interface Agent {
   /** null = inherit whatever the card says. */
   engine: string | null;
   builtin: boolean;
+  /** Paused keeps its cards and starts nothing; retired takes no new work. */
+  status: "active" | "paused" | "retired" | "pending_approval";
+  pauseReason: string | null;
+  pausedAt: string | null;
 }
 
 export interface AgentDraft {
@@ -1023,7 +1029,7 @@ export interface SpendTotals {
 }
 
 /** Which ways the spend can be sliced. Mirrors the server's dimension list. */
-export type SpendDimension = "project" | "engine" | "model" | "tier" | "pattern";
+export type SpendDimension = "project" | "engine" | "model" | "tier" | "pattern" | "agent" | "routine";
 
 export interface Spend {
   days: number;
@@ -2402,10 +2408,23 @@ export const api = {
   },
 
   // agents
+  /** The agents you can hand work to — every picker's list. A retired agent
+   *  is left out: it takes no new work, and its history names it already. */
   agents: (workspaceId: string) =>
+    fetch(`/api/agents?workspace_id=${workspaceId}`)
+      .then((r) => json<{ agents: Agent[] }>(r))
+      .then((r) => ({ agents: r.agents.filter((a) => a.status !== "retired") })),
+  /** Every agent, retired ones included — for the Agents page. */
+  allAgents: (workspaceId: string) =>
     fetch(`/api/agents?workspace_id=${workspaceId}`).then((r) =>
       json<{ agents: Agent[] }>(r),
     ),
+  pauseAgent: (id: string, body: { reason?: string; stop_now?: boolean }) =>
+    post(`/api/agents/${id}/pause`, body).then((r) => json<{ paused: boolean; stopped: number }>(r)),
+  resumeAgent: (id: string) =>
+    post(`/api/agents/${id}/resume`).then((r) => json<{ resumed: boolean }>(r)),
+  retireAgent: (id: string) =>
+    post(`/api/agents/${id}/retire`).then((r) => json<{ retired: boolean; stopped: number }>(r)),
   createAgent: (body: Record<string, unknown>) =>
     post("/api/agents", body).then((r) => json<Agent>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>

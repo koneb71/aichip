@@ -19,6 +19,8 @@ import { useWorkspace } from "../../lib/workspace";
 const DIMENSIONS: { id: SpendDimension; label: string; note?: string }[] = [
   { id: "pattern", label: "By feature", note: "Which part of aichip spent it" },
   { id: "project", label: "By project" },
+  { id: "agent", label: "By agent", note: "A team run is charged step by step" },
+  { id: "routine", label: "By routine", note: "What your schedules cost" },
   { id: "tier", label: "By tier", note: "The tier a run actually used" },
   { id: "model", label: "By model" },
   { id: "engine", label: "By engine" },

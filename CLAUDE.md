@@ -68,6 +68,10 @@ The orchestrator persists **every** event envelope to the `events` table *before
 
 Engine differences are declared in `Capabilities` (interactive permissions, structured rate limit, session resume, append-system-prompt, fixed model catalog). There is deliberately no `Default` impl — a new adapter must answer for itself. Gate behavior on the capability, never on the engine id. OpenCode's `interactive_permissions: false` is why starting a Reviewed card on it is refused with a `409` **at the click**, rather than silently downgraded to Auto-edit — a silent downgrade would be privilege escalation.
 
+### Agent status
+
+An agent is `active`, `paused`, `retired` or `pending_approval` (`aichip_core::agents`). Every function that inserts a run asks `agents::assert_can_run` (or its team / workflow-step form) **before** the insert; a source-scanning test fails the build for one that does not, unless it is on the short list of runs with no agent. A team run and a workflow ask again at each assignment, so a pause stops the agent's *next* piece of work wherever it was coming from. A paused agent can still be assigned cards; a retired one cannot, and is hidden from every picker. Deleting an agent that anything references retires it instead.
+
 ### Permissions
 
 `RunSpec.allowed_tools` is an *auto-approval* list, not a restriction — Claude Code will still reach for `Bash` even if only `Read` was "allowed". Anything that must not happen goes in `denied_tools`, which adapters apply last. This is why chat runs (which execute in the user's **real checkout**, not a worktree) carry both `CHAT_ALLOWED_TOOLS` and `CHAT_DENIED_TOOLS` in [crates/aichip-core/src/runs/orchestrator.rs](crates/aichip-core/src/runs/orchestrator.rs) — never add Bash/Edit/Write there. Plan-first passes deny the mutating tools for the same reason.

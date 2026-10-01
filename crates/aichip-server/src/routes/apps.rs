@@ -373,7 +373,7 @@ async fn change(
         .orchestrator
         .enqueue_task(task_id)
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(task_id)
         .execute(&state.db.pool)

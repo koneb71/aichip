@@ -583,11 +583,17 @@ impl Orchestrator {
             );
         }
 
-        let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
+        let assigned = sqlx::query("SELECT agent_id, team_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
-            .await?
-            .get("team_id");
+            .await?;
+        let assigned_team: Option<Uuid> = assigned.get("team_id");
+        // A paused or retired assignee starts nothing, on any door. A team's
+        // own check is in `enqueue_task_for_team`.
+        if assigned_team.is_none() {
+            let agent: Option<Uuid> = assigned.get("agent_id");
+            crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
+        }
         if let Some(team_id) = assigned_team {
             let run_id = self.enqueue_task_for_team(task_id, team_id).await?;
             guard.commit().await?;
@@ -629,13 +635,16 @@ impl Orchestrator {
         let prior = sqlx::query(
             "SELECT r.task_id, r.engine, r.agent_id, r.tier_override, r.variant_label,
                     r.worktree_path, r.error_reason,
-                    COALESCE(r.prompt_override, t.prompt) AS prompt
+                    COALESCE(r.prompt_override, t.prompt) AS prompt,
+                    COALESCE(r.agent_id, t.agent_id) AS runs_as
              FROM runs r JOIN tasks t ON t.id = r.task_id
              WHERE r.id = $1",
         )
         .bind(prior_run_id)
         .fetch_one(&self.db.pool)
         .await?;
+        let runs_as: Option<Uuid> = prior.get("runs_as");
+        crate::agents::assert_can_run(&self.db, runs_as.as_slice()).await?;
 
         let prompt = crate::runs::resume::continuation_prompt(
             &prior.get::<String, _>("prompt"),
@@ -796,6 +805,7 @@ impl Orchestrator {
         agent_id: Uuid,
         engine: &str,
     ) -> anyhow::Result<Uuid> {
+        crate::agents::assert_can_run(&self.db, &[agent_id]).await?;
         let row = sqlx::query(
             "INSERT INTO runs (comment_id, agent_id, status, trigger, engine)
              VALUES ($1, $2, 'queued', 'comment', $3) RETURNING id",
@@ -826,11 +836,18 @@ impl Orchestrator {
         if variants.len() < 2 {
             anyhow::bail!("a bake-off needs at least two variants to compare");
         }
-        let engine: String = sqlx::query("SELECT engine FROM tasks WHERE id = $1")
+        let card = sqlx::query("SELECT engine, agent_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
-            .await?
-            .get("engine");
+            .await?;
+        let engine: String = card.get("engine");
+        // A variant without its own agent runs as the card's.
+        let card_agent: Option<Uuid> = card.get("agent_id");
+        let agents: Vec<Uuid> = variants
+            .iter()
+            .filter_map(|v| v.agent_id.or(card_agent))
+            .collect();
+        crate::agents::assert_can_run(&self.db, &agents).await?;
 
         let mut ids = vec![];
         for variant in variants {
@@ -939,14 +956,31 @@ impl Orchestrator {
         // reads it too. Recording it here means the activity list shows the
         // truth for the window between queued and running, rather than
         // whatever literal happened to be in this INSERT.
-        let engine =
-            sqlx::query_scalar::<_, String>("SELECT source_yaml FROM workflows WHERE id = $1")
-                .bind(workflow_id)
-                .fetch_optional(&self.db.pool)
-                .await?
-                .and_then(|yaml| Workflow::from_yaml(&yaml).ok())
-                .map(|w| w.defaults.engine)
-                .unwrap_or_else(|| self.default_engine());
+        let found = sqlx::query(
+            "SELECT w.source_yaml, p.workspace_id FROM workflows w
+               JOIN projects p ON p.id = w.project_id WHERE w.id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        let workflow = found
+            .as_ref()
+            .and_then(|r| Workflow::from_yaml(&r.get::<String, _>("source_yaml")).ok());
+        let engine = workflow
+            .as_ref()
+            .map(|w| w.defaults.engine.clone())
+            .unwrap_or_else(|| self.default_engine());
+        // Every step's agent, asked now rather than at its step: a pipeline
+        // that would stop at stage three is better refused at the click. Each
+        // step asks again when it starts (`load_agent`), for a pause between.
+        if let (Some(row), Some(workflow)) = (&found, &workflow) {
+            let names: Vec<String> = workflow
+                .steps
+                .iter()
+                .filter_map(|s| s.agent.clone())
+                .collect();
+            crate::agents::assert_steps_can_run(&self.db, row.get("workspace_id"), &names).await?;
+        }
 
         let row = sqlx::query(
             "INSERT INTO runs (workflow_id, status, trigger, engine)
@@ -3991,6 +4025,11 @@ this workflow manually."
         .bind(name)
         .fetch_optional(&self.db.pool)
         .await?;
+        // A workflow outlives the click that started it; an agent paused
+        // since then does not take its next step.
+        if let Some(r) = &row {
+            crate::agents::assert_can_run(&self.db, &[r.get("id")]).await?;
+        }
         Ok(row.map(|r| BoundAgent {
             id: r.get("id"),
             system_prompt: r.get("system_prompt"),

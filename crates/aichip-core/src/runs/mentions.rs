@@ -283,10 +283,13 @@ pub async fn resolve_all(
     workspace_id: Uuid,
     content: &str,
 ) -> anyhow::Result<(Vec<(Uuid, String)>, Vec<(Uuid, String)>)> {
-    let agents = sqlx::query("SELECT id, name FROM agents WHERE workspace_id=$1")
-        .bind(workspace_id)
-        .fetch_all(&db.pool)
-        .await?;
+    // A retired agent is gone from every picker, so it does not answer to
+    // its name either.
+    let agents =
+        sqlx::query("SELECT id, name FROM agents WHERE workspace_id=$1 AND status <> 'retired'")
+            .bind(workspace_id)
+            .fetch_all(&db.pool)
+            .await?;
     // Disabled skills are not offered and do not resolve: a mention of one is
     // the same as a mention of something that is not there, which is what "off"
     // has to mean for turning it off to be a diagnosis.

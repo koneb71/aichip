@@ -199,35 +199,11 @@ async fn activity(
     .await
     .map_err(internal)?;
 
-    // Who is spending it. Cost is recorded per run, not per step, so a run's
-    // total is split evenly across the steps that carry an assignee. That is
-    // an approximation — a specialist who ground for 20 minutes is charged
-    // the same as one who answered in 30 seconds — but attributing the whole
-    // run to every step would overstate each of them by the step count, and
-    // showing nothing at all is what we're fixing.
-    let by_agent = sqlx::query(
-        "SELECT s.assignee AS name,
-                SUM(COALESCE(r.cost_usd, 0) / owners.n) AS cost,
-                COUNT(*) AS steps
-         FROM steps s
-         JOIN runs r ON r.id = s.run_id
-         JOIN (SELECT run_id, COUNT(*)::float8 AS n FROM steps
-               WHERE assignee IS NOT NULL GROUP BY run_id) owners
-             ON owners.run_id = s.run_id
-         LEFT JOIN tasks t ON t.id = r.task_id
-         LEFT JOIN workflows w ON w.id = r.workflow_id
-         LEFT JOIN chats c ON c.id = r.chat_id
-         LEFT JOIN projects p ON p.id = COALESCE(
-             r.project_id, t.project_id, w.project_id, c.project_id)
-         WHERE s.assignee IS NOT NULL
-           AND r.created_at > now() - interval '14 days'
-           AND ($1::uuid IS NULL OR p.workspace_id = $1)
-         GROUP BY 1 ORDER BY cost DESC NULLS LAST LIMIT 8",
-    )
-    .bind(ws)
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(internal)?;
+    // Who is spending it — measured per agent, a team run charged step by
+    // step. See `spend::by_agent`.
+    let by_agent = aichip_core::spend::by(&state.db, ws, 14, aichip_core::spend::Dimension::Agent)
+        .await
+        .map_err(internal)?;
 
     let today: f64 = daily
         .last()
@@ -262,10 +238,10 @@ async fn activity(
                 "cost": r.get::<Option<f64>, _>("cost").unwrap_or(0.0),
                 "runs": r.get::<i64, _>("runs"),
             })).collect::<Vec<_>>(),
-            "byAgent": by_agent.iter().map(|r| json!({
-                "name": r.get::<String, _>("name"),
-                "cost": r.get::<Option<f64>, _>("cost").unwrap_or(0.0),
-                "steps": r.get::<i64, _>("steps"),
+            "byAgent": by_agent.iter().take(8).map(|a| json!({
+                "name": a.key,
+                "cost": a.cost_usd,
+                "steps": a.runs,
             })).collect::<Vec<_>>(),
         },
     })))

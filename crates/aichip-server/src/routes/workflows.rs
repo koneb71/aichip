@@ -221,7 +221,7 @@ async fn run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json
         .orchestrator
         .enqueue_workflow(id, "manual")
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(json!({ "runId": run_id })))
 }
 
@@ -414,7 +414,7 @@ async fn run_team(
         .orchestrator
         .enqueue_workflow(workflow_id, "team")
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(
         json!({ "runId": run_id, "workflowId": workflow_id, "steps": wf.steps.len() }),
     ))

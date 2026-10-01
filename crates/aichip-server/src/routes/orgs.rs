@@ -72,7 +72,7 @@ async fn run_org(
         .orchestrator
         .enqueue_org_run(team_id, body.project_id, body.goal.trim(), body.review_plan)
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(json!({ "runId": run_id })))
 }
 

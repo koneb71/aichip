@@ -106,7 +106,7 @@ async fn search(
 
     let agents = sqlx::query(
         "SELECT id, name, description FROM agents
-         WHERE workspace_id=$1 AND (name ILIKE $2 ESCAPE '\\' OR description ILIKE $2 ESCAPE '\\')
+         WHERE workspace_id=$1 AND status <> 'retired' AND (name ILIKE $2 ESCAPE '\\' OR description ILIKE $2 ESCAPE '\\')
          ORDER BY name LIMIT $3",
     )
     .bind(sq.workspace_id)

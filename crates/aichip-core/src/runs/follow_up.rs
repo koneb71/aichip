@@ -84,7 +84,7 @@ impl Orchestrator {
         // so a card bound to an OpenCode agent was fixed by Claude Code.
         let card = sqlx::query(
             "SELECT t.prompt, t.board_column, t.worktree_path, p.default_branch,
-                    COALESCE(a.engine, t.engine) AS engine
+                    t.agent_id, COALESCE(a.engine, t.engine) AS engine
                FROM tasks t
                JOIN projects p ON p.id = t.project_id
                LEFT JOIN agents a ON a.id = t.agent_id
@@ -108,6 +108,8 @@ impl Orchestrator {
         if card.get::<String, _>("board_column") == "done" {
             return Err(FollowUpRefusal::Done.into());
         }
+        let agent: Option<Uuid> = card.get("agent_id");
+        crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
         let worktree: Option<String> = card.get("worktree_path");
         if !worktree
             .as_deref()

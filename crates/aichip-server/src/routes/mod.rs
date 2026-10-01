@@ -38,6 +38,20 @@ use serde_json::{json, Value};
 
 pub type ApiError = (StatusCode, String);
 
+/// A run a door refused for a reason the person can act on — the card is
+/// already running, a follow-up has nothing to act on, the agent is paused —
+/// is a 409 that says so. Anything else is a fault.
+pub fn run_refused(e: anyhow::Error) -> ApiError {
+    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>()
+        || e.is::<aichip_core::runs::follow_up::FollowUpRefusal>()
+        || e.is::<aichip_core::agents::Unavailable>()
+    {
+        (axum::http::StatusCode::CONFLICT, e.to_string())
+    } else {
+        internal(e)
+    }
+}
+
 pub fn internal(e: impl std::fmt::Display) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }

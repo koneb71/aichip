@@ -1,6 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
-use aichip_core::runs::follow_up::{FollowUp, FollowUpRefusal};
+use aichip_core::runs::follow_up::FollowUp;
 use aichip_core::runs::mentions;
 use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
@@ -88,7 +88,7 @@ async fn list(
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 t.start_when_unblocked,
-                a.name AS agent_name, a.color AS agent_color,
+                a.name AS agent_name, a.color AS agent_color, a.status AS agent_status,
                 t.skill_id, sk.name AS skill_name,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 t.parent_id, parent.title AS parent_title,
@@ -287,6 +287,7 @@ async fn list(
                 "engine": r.get::<String, _>("engine"),
                 "planFirst": r.get::<bool, _>("plan_first"),
                 "startWhenUnblocked": r.get::<bool, _>("start_when_unblocked"),
+                "agentStatus": r.get::<Option<String>, _>("agent_status"),
             })
         })
         .collect();
@@ -346,6 +347,9 @@ async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(agent_id) = body.agent_id {
+        assignable(&state, agent_id).await?;
+    }
     let tier = body.model_tier.as_str();
     // Store NULL when the caller didn't choose, so the card inherits whatever
     // the default is *when it runs* rather than freezing today's value.
@@ -864,6 +868,7 @@ pub(crate) async fn move_task(
 
     if let Some(Some(agent_id)) = agent_id {
         require_same_workspace(&state, id, "agents", agent_id).await?;
+        assignable(&state, agent_id).await?;
     }
     if let Some(Some(team_id)) = team_id {
         require_same_workspace(&state, id, "teams", team_id).await?;
@@ -934,6 +939,14 @@ pub(crate) async fn move_task(
         );
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
+}
+
+/// Refuse a retired agent as an assignee. A paused one is fine — handing it
+/// work for when it is resumed is half of what pausing is for.
+async fn assignable(state: &AppState, agent_id: Uuid) -> Result<(), ApiError> {
+    aichip_core::agents::assert_assignable(&state.db, agent_id)
+        .await
+        .map_err(start_refused)
 }
 
 /// Refuse an assignee from another workspace.
@@ -1071,7 +1084,7 @@ async fn post_comment(
         "SELECT a.id, a.name FROM agents a
          JOIN projects p ON p.workspace_id = a.workspace_id
          JOIN tasks t ON t.project_id = p.id
-         WHERE t.id = $1",
+         WHERE t.id = $1 AND a.status <> 'retired'",
     )
     .bind(task_id)
     .fetch_all(&state.db.pool)
@@ -1141,13 +1154,21 @@ async fn post_comment(
     let engine = body.engine.as_deref().unwrap_or(&default_engine);
     let mut run_ids: Vec<Uuid> = vec![];
     for agent_id in mentioned_agents(content, &agents).into_iter().take(3) {
-        run_ids.push(
-            state
-                .orchestrator
-                .enqueue_comment_reply(comment_id, agent_id, engine)
-                .await
-                .map_err(internal)?,
-        );
+        match state
+            .orchestrator
+            .enqueue_comment_reply(comment_id, agent_id, engine)
+            .await
+        {
+            Ok(run_id) => run_ids.push(run_id),
+            // The comment is posted and the other agents still answer; the
+            // thread says why this one does not.
+            Err(e) if e.is::<aichip_core::agents::Unavailable>() => {
+                aichip_core::runs::report::post_system(&state.db, task_id, None, &e.to_string())
+                    .await
+                    .map_err(internal)?;
+            }
+            Err(e) => return Err(start_refused(e)),
+        }
     }
     Ok(Json(json!({ "id": comment_id, "runIds": run_ids })))
 }
@@ -1188,7 +1209,10 @@ async fn start_bakeoff(
         .orchestrator
         .enqueue_bakeoff(task_id, &variants)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|e| match e.is::<aichip_core::agents::Unavailable>() {
+            true => (StatusCode::CONFLICT, e.to_string()),
+            false => (StatusCode::BAD_REQUEST, e.to_string()),
+        })?;
     Ok(Json(json!({ "runIds": run_ids })))
 }
 
@@ -1727,11 +1751,7 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 /// already running, or a follow-up with nothing to follow up on, is a conflict
 /// the person can act on, not a server error.
 fn start_refused(e: anyhow::Error) -> ApiError {
-    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() || e.is::<FollowUpRefusal>() {
-        (StatusCode::CONFLICT, e.to_string())
-    } else {
-        internal(e)
-    }
+    super::run_refused(e)
 }
 
 /// Is *any* run of this card still live — not just the newest one?
@@ -2013,7 +2033,7 @@ async fn resume_run(
         .orchestrator
         .resume_run(run_id, &session)
         .await
-        .map_err(internal)?;
+        .map_err(start_refused)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(task_id)
         .execute(&state.db.pool)

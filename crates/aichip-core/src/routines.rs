@@ -106,6 +106,10 @@ async fn dispatch(
     if orchestrator.engine(&engine).is_none() {
         anyhow::bail!("{engine} isn't installed on this machine");
     }
+    // The routine's own agent — a manager pass wears it — sits this one out
+    // while paused. Recorded on the pass like any other refusal.
+    let agent: Option<Uuid> = r.get("agent_id");
+    crate::agents::assert_can_run(db, agent.as_slice()).await?;
     // Stored as choice text ("auto" included) — the same column format the
     // chats and tasks tables use, so it binds straight through.
     let tier: Option<TierChoice> = r

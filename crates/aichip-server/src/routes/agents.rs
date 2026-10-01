@@ -17,6 +17,9 @@ pub fn router() -> Router<AppState> {
         .route("/agents", get(list).post(create))
         .route("/agents/generate", post(generate))
         .route("/agents/{id}", patch(update).delete(remove))
+        .route("/agents/{id}/pause", post(pause))
+        .route("/agents/{id}/resume", post(resume))
+        .route("/agents/{id}/retire", post(retire))
         .route("/agents/{id}/memories", get(memories))
         .route("/agent-memories/{id}", axum::routing::delete(forget))
 }
@@ -75,6 +78,10 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "engine": r.get::<Option<String>, _>("engine"),
         "effort": r.get::<Option<String>, _>("effort"),
         "builtin": r.get::<bool, _>("builtin"),
+        // active | paused | retired | pending_approval — see `aichip_core::agents`.
+        "status": r.get::<String, _>("status"),
+        "pauseReason": r.get::<Option<String>, _>("pause_reason"),
+        "pausedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("paused_at"),
     })
 }
 
@@ -247,16 +254,84 @@ async fn update(
     Ok(Json(agent_json(&row)))
 }
 
+/// Delete an agent nothing refers to; retire one that something does.
+///
+/// An agent named by a card, a run or a routine could never be deleted —
+/// those rows keep who did the work, and the delete failed on their foreign
+/// keys with a 500. Retiring is what deleting such an agent can honestly mean:
+/// no new work, gone from the pickers, and the history still says who did it.
+/// Asked of the database rather than by listing the tables that point here,
+/// so a table added later cannot bring the 500 back.
 async fn remove(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    sqlx::query("DELETE FROM agents WHERE id=$1")
+    let deleted = sqlx::query("DELETE FROM agents WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
+        .await;
+    match deleted {
+        Ok(_) => Ok(Json(json!({ "deleted": true }))),
+        Err(sqlx::Error::Database(e)) if e.is_foreign_key_violation() => {
+            let stopped = state
+                .orchestrator
+                .retire_agent(id)
+                .await
+                .map_err(internal)?;
+            Ok(Json(
+                json!({ "deleted": false, "retired": true, "stopped": stopped }),
+            ))
+        }
+        Err(e) => Err(internal(e)),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PauseBody {
+    /// Shown wherever the pause refuses something, so the refusal explains
+    /// itself: "Ada is paused (over budget)".
+    reason: Option<String>,
+    /// Also stop what the agent is doing now, not only what it would start.
+    stop_now: bool,
+}
+
+async fn pause(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<PauseBody>>,
+) -> Result<Json<Value>, ApiError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let stopped = state
+        .orchestrator
+        .pause_agent(id, body.reason.as_deref(), body.stop_now)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({ "paused": true, "stopped": stopped })))
+}
+
+async fn resume(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .resume_agent(id)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(json!({ "resumed": true })))
+}
+
+async fn retire(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let stopped = state
+        .orchestrator
+        .retire_agent(id)
         .await
         .map_err(internal)?;
-    Ok(Json(json!({ "deleted": true })))
+    Ok(Json(json!({ "retired": true, "stopped": stopped })))
 }
 
 #[derive(Deserialize)]

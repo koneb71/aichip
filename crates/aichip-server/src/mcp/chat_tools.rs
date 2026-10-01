@@ -583,7 +583,8 @@ async fn call_tool(
         }
         "list_agents" => {
             let rows = sqlx::query(
-                "SELECT name, description, model_tier FROM agents WHERE workspace_id=$1
+                "SELECT name, description, model_tier, status FROM agents
+                  WHERE workspace_id=$1 AND status <> 'retired'
                  ORDER BY name ASC",
             )
             .bind(workspace_id)
@@ -595,6 +596,9 @@ async fn call_tool(
                     "name": r.get::<String, _>("name"),
                     "description": r.get::<String, _>("description"),
                     "model_tier": r.get::<String, _>("model_tier"),
+                    // A paused agent can be given a card, but it will not
+                    // start until a person resumes it.
+                    "paused": r.get::<String, _>("status") != "active",
                 })).collect::<Vec<_>>()
             }))
         }
@@ -923,7 +927,8 @@ async fn resolve_agent(
         // into a hard error. `agents_ws_name` is unique per workspace, and two
         // names differing only in case would be a library nobody could use.
         let row = sqlx::query(
-            "SELECT id, name FROM agents WHERE workspace_id=$1 AND lower(name)=lower($2)",
+            "SELECT id, name FROM agents
+              WHERE workspace_id=$1 AND lower(name)=lower($2) AND status <> 'retired'",
         )
         .bind(workspace_id)
         .bind(name)
@@ -933,16 +938,18 @@ async fn resolve_agent(
         return match row {
             Some(r) => Ok((Some(r.get("id")), Some(r.get("name")))),
             None => {
-                let known =
-                    sqlx::query("SELECT name FROM agents WHERE workspace_id=$1 ORDER BY name")
-                        .bind(workspace_id)
-                        .fetch_all(&state.db.pool)
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .iter()
-                        .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                let known = sqlx::query(
+                    "SELECT name FROM agents WHERE workspace_id=$1 AND status <> 'retired'
+                          ORDER BY name",
+                )
+                .bind(workspace_id)
+                .fetch_all(&state.db.pool)
+                .await
+                .map_err(|e| e.to_string())?
+                .iter()
+                .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
+                .collect::<Vec<_>>()
+                .join(", ");
                 Err(if known.is_empty() {
                     format!("no agent named \"{name}\" — this workspace has no agents yet")
                 } else {
