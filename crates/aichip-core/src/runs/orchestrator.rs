@@ -2005,6 +2005,23 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
 
+            // "A run finished" has been offered in the attention settings all
+            // along and never sent: nothing fired it. Off by default there, so
+            // this reaches only the people who turned it on.
+            let ctx = crate::attention::Ctx {
+                title: format!(
+                    "aichip: \"{}\" {}",
+                    run.get::<String, _>("title"),
+                    if in_place {
+                        "is done"
+                    } else {
+                        "is ready for review"
+                    }
+                ),
+                ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+            };
+            crate::attention::fire(&self.db, crate::attention::Event::Finished, ctx).await;
+
             // The work joins the agent's memory. Best-effort: a failed memory
             // write must not fail a completed run.
             if let Some(agent_id) = bound_agent {
