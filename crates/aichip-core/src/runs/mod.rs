@@ -9,6 +9,7 @@ pub mod orchestrator;
 pub mod org;
 pub mod permissions;
 pub mod questions;
+pub mod report;
 pub mod research;
 pub mod resume;
 pub mod slots;

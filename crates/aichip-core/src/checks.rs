@@ -480,6 +480,7 @@ impl crate::runs::orchestrator::Orchestrator {
         config: Config,
         title: String,
         chat_id: Option<Uuid>,
+        summarize: bool,
     ) {
         let summary = match execute(&self.db, check_run_id, &dir, &config).await {
             Ok(summary) => summary,
@@ -504,20 +505,48 @@ impl crate::runs::orchestrator::Orchestrator {
         if summary.status == "canceled" {
             return;
         }
+        // The card's thread says how the work it just reported fared.
+        let line = summary.line();
+        let mut said = line[..1].to_uppercase();
+        said.push_str(&line[1..]);
+        said.push('.');
+        if let Err(e) =
+            crate::runs::report::post_system(&self.db, task_id, Some(run_id), &said).await
+        {
+            tracing::warn!(%task_id, error = %e, "could not note the checks on the card");
+        }
         self.announce_ready(run_id, &title, chat_id, false, Some(&summary))
             .await;
 
-        if summary.status != "failed" || config.auto_fix_attempts == 0 {
-            return;
+        let fixing = summary.status == "failed"
+            && self
+                .fix_failing_checks(task_id, check_run_id, &config)
+                .await;
+        // A fix run reports for itself; otherwise the silent run is asked what
+        // it did — after the fix decision, since a queued summary would
+        // otherwise be the live run that refuses the fix.
+        if summarize && !fixing {
+            self.ask_for_summary(task_id, run_id).await;
         }
-        // Bounded: counted from the last run that was not itself a checks fix,
-        // so a person's own run or review note resets it, and an agent that
-        // cannot make the tests pass stops trying after the number set.
+    }
+
+    /// Start the bounded auto-fix for failing checks. True when a fix run was
+    /// queued.
+    async fn fix_failing_checks(&self, task_id: Uuid, check_run_id: Uuid, config: &Config) -> bool {
+        if config.auto_fix_attempts == 0 {
+            return false;
+        }
+        // Bounded: counted from the last run that was not itself a checks fix
+        // or a summary pass, so a person's own run or review note resets it,
+        // and an agent that cannot make the tests pass stops trying after the
+        // number set. A summary pass is aichip asking, not a person, and must
+        // not reset the count.
         let attempts: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM runs
               WHERE task_id = $1 AND trigger = 'checks'
                 AND created_at > COALESCE(
-                      (SELECT max(created_at) FROM runs WHERE task_id = $1 AND trigger <> 'checks'),
+                      (SELECT max(created_at) FROM runs
+                        WHERE task_id = $1 AND trigger NOT IN ('checks', 'summary')),
                       '-infinity')",
         )
         .bind(task_id)
@@ -526,16 +555,20 @@ impl crate::runs::orchestrator::Orchestrator {
         .unwrap_or(i64::MAX);
         if attempts >= config.auto_fix_attempts as i64 {
             tracing::info!(%task_id, attempts, "checks still fail; leaving it for a person");
-            return;
+            return false;
         }
-        if let Err(e) = self
+        match self
             .enqueue_follow_up(
                 task_id,
                 crate::runs::follow_up::FollowUp::FailingChecks { check_run_id },
             )
             .await
         {
-            tracing::warn!(%task_id, error = %e, "could not start a fix for the failing checks");
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(%task_id, error = %e, "could not start a fix for the failing checks");
+                false
+            }
         }
     }
 }

@@ -27,6 +27,9 @@ pub enum FollowUp {
     FailingChecks { check_run_id: Uuid },
     /// The base branch, brought into the card's branch, conflicted here.
     MergeConflict { files: Vec<String>, base: String },
+    /// A completed run that said nothing. One read-only pass, continuing its
+    /// session where the engine can, writes the card's report.
+    Summarize { run_id: Uuid },
 }
 
 impl FollowUp {
@@ -36,6 +39,7 @@ impl FollowUp {
             Self::ReviewNote { .. } => "review",
             Self::FailingChecks { .. } => "checks",
             Self::MergeConflict { .. } => "conflict",
+            Self::Summarize { .. } => "summary",
         }
     }
 
@@ -59,6 +63,8 @@ pub enum FollowUpRefusal {
     ForeignChecks,
     #[error("those checks did not fail, so there is nothing to fix")]
     NothingFailed,
+    #[error("that run does not belong to this card")]
+    ForeignRun,
 }
 
 impl Orchestrator {
@@ -77,9 +83,11 @@ impl Orchestrator {
         // other start of the card — the old review fix used the card's alone,
         // so a card bound to an OpenCode agent was fixed by Claude Code.
         let card = sqlx::query(
-            "SELECT t.prompt, t.board_column, t.worktree_path,
+            "SELECT t.prompt, t.board_column, t.worktree_path, p.default_branch,
                     COALESCE(a.engine, t.engine) AS engine
-               FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
+               FROM tasks t
+               JOIN projects p ON p.id = t.project_id
+               LEFT JOIN agents a ON a.id = t.agent_id
               WHERE t.id = $1
                 FOR NO KEY UPDATE OF t",
         )
@@ -101,11 +109,16 @@ impl Orchestrator {
             return Err(FollowUpRefusal::Done.into());
         }
         let worktree: Option<String> = card.get("worktree_path");
-        if !worktree.is_some_and(|w| std::path::Path::new(&w).is_dir()) {
+        if !worktree
+            .as_deref()
+            .is_some_and(|w| std::path::Path::new(w).is_dir())
+        {
             return Err(FollowUpRefusal::NoWorktree.into());
         }
 
         let task_prompt: String = card.get("prompt");
+        let engine_id: String = card.get("engine");
+        let mut session: Option<(String, String)> = None;
         let (prompt, review_comment_id) = match &follow_up {
             FollowUp::ReviewNote { comment_id } => {
                 let note = sqlx::query(
@@ -147,17 +160,64 @@ impl Orchestrator {
             FollowUp::MergeConflict { files, base } => {
                 (conflict_prompt(&task_prompt, files, base), None)
             }
+            FollowUp::Summarize { run_id } => {
+                let prior = sqlx::query(
+                    "SELECT task_id, session_id, session_engine FROM runs WHERE id = $1",
+                )
+                .bind(run_id)
+                .fetch_one(&mut *guard)
+                .await?;
+                if prior.get::<Option<Uuid>, _>("task_id") != Some(task_id) {
+                    return Err(FollowUpRefusal::ForeignRun.into());
+                }
+                // Continuing the run's own session is what makes the summary
+                // worth having — it remembers what it did. Only for an engine
+                // that can resume, and only a session that engine minted.
+                let can_resume = self
+                    .engine(&engine_id)
+                    .is_some_and(|e| e.capabilities().resume_sessions);
+                if let (true, Some(sid), Some(minted_by)) = (
+                    can_resume,
+                    prior.get::<Option<String>, _>("session_id"),
+                    prior.get::<Option<String>, _>("session_engine"),
+                ) {
+                    if minted_by == engine_id {
+                        session = Some((sid, minted_by));
+                    }
+                }
+                // Without the session, the changed files are the evidence.
+                let files: Vec<String> = match worktree.as_deref() {
+                    Some(dir) => self
+                        .worktrees
+                        .diff_stat(
+                            std::path::Path::new(dir),
+                            &card.get::<String, _>("default_branch"),
+                        )
+                        .await
+                        .map(|stats| stats.into_iter().map(|f| f.path).collect())
+                        .unwrap_or_default(),
+                    None => vec![],
+                };
+                (
+                    summary_prompt(&task_prompt, &files, session.is_some()),
+                    None,
+                )
+            }
         };
 
+        let (session_id, session_engine) = session.unzip();
         let run_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO runs (task_id, review_comment_id, prompt_override, status, trigger, engine)
-             VALUES ($1, $2, $3, 'queued', $4, $5) RETURNING id",
+            "INSERT INTO runs (task_id, review_comment_id, prompt_override, status, trigger, engine,
+                               session_id, session_engine)
+             VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7) RETURNING id",
         )
         .bind(task_id)
         .bind(review_comment_id)
         .bind(&prompt)
         .bind(follow_up.trigger())
-        .bind(card.get::<String, _>("engine"))
+        .bind(&engine_id)
+        .bind(session_id)
+        .bind(session_engine)
         .fetch_one(&mut *guard)
         .await?;
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, $2)")
@@ -305,6 +365,39 @@ pub(crate) fn conflict_prompt(task_prompt: &str, files: &[String], base: &str) -
     prompt
 }
 
+/// Ask a run that finished without a word to say what it did.
+///
+/// Read-only by construction — the run is dispatched with the planning pass's
+/// denied tools — and worded so the answer is the report itself, written for
+/// the person about to review the diff.
+pub(crate) fn summary_prompt(task_prompt: &str, files: &[String], resumed: bool) -> String {
+    let mut prompt = String::from(if resumed {
+        "You just finished working on this task but did not say what you did. "
+    } else {
+        "Work was just finished on this task, but no account of it was left. "
+    });
+    prompt.push_str(
+        "Write the report a person reviewing the change needs: what changed and why, \
+         anything left unfinished or uncertain, and what to check first. Do not edit \
+         anything; answer in a few short paragraphs or a list.\n",
+    );
+    if !files.is_empty() {
+        let listed: Vec<String> = files.iter().take(40).map(|f| format!("- {f}")).collect();
+        prompt.push_str(&format!(
+            "\nFiles the change touches:\n{}\n",
+            listed.join("\n")
+        ));
+        if files.len() > 40 {
+            prompt.push_str(&format!("…and {} more.\n", files.len() - 40));
+        }
+    }
+    prompt.push_str(&format!(
+        "\nThe task was:\n{}\n",
+        clip_chars(task_prompt, 800)
+    ));
+    prompt
+}
+
 /// The last `max` characters, marking that the start was dropped.
 fn clip_tail(s: &str, max: usize) -> String {
     let count = s.chars().count();
@@ -365,6 +458,17 @@ mod tests {
         assert!(prompt.contains("- src/a.rs") && prompt.contains("- README.md"));
         assert!(prompt.contains("do not run git commit, git merge --abort"));
         assert!(prompt.contains("Add CSV export"));
+    }
+
+    #[test]
+    fn a_summary_brief_is_read_only_and_names_the_files() {
+        let prompt = summary_prompt("Add CSV export", &["src/export.rs".into()], true);
+        assert!(prompt.contains("You just finished"));
+        assert!(prompt.contains("Do not edit anything"));
+        assert!(prompt.contains("- src/export.rs"));
+        let fresh = summary_prompt("Add CSV export", &[], false);
+        assert!(fresh.contains("no account of it was left"));
+        assert!(!fresh.contains("Files the change touches"));
     }
 
     #[test]

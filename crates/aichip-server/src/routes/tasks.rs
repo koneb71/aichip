@@ -1376,7 +1376,11 @@ async fn task_runs(
                 r.session_engine, r.resumed_from, r.rate_limit_attempts,
                 r.variant_label, r.review_comment_id, r.plan_approval,
                 COALESCE(r.worktree_path, t.worktree_path) AS worktree,
-                p.path AS project_path, p.vcs, a.name AS agent_name
+                p.path AS project_path, p.vcs, a.name AS agent_name,
+                -- What the run said it did, as posted on this card.
+                (SELECT left(c.content, 600) FROM task_comments c
+                  WHERE c.run_id = r.id AND c.task_id = r.task_id AND c.author = 'agent'
+                  ORDER BY c.created_at LIMIT 1) AS report
            FROM runs r
            JOIN tasks t ON t.id = r.task_id
            JOIN projects p ON p.id = t.project_id
@@ -1429,6 +1433,7 @@ async fn task_runs(
                 "rateLimitAttempts": r.get::<i32, _>("rate_limit_attempts"),
                 "reviewCommentId": r.get::<Option<Uuid>, _>("review_comment_id"),
                 "resumeCommand": resume_command,
+                "report": r.get::<Option<String>, _>("report"),
             })
         })
         .collect();

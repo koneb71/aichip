@@ -770,7 +770,8 @@ export const MAX_ATTACHMENTS = 10;
 
 export interface TaskComment {
   id: string;
-  author: "user" | "agent";
+  /** `system` is aichip itself — how a card's checks went, say. */
+  author: "user" | "agent" | "system";
   agentId: string | null;
   agentName: string | null;
   agentColor: string | null;
@@ -1147,6 +1148,8 @@ export interface TaskRun {
   /** `cd … && …` to continue this session in your own terminal. Null when the
    *  engine offers none, the directory is gone, or the card is busy. */
   resumeCommand: string | null;
+  /** The start of what the run posted on the card when it finished. */
+  report: string | null;
 }
 
 export interface BakeoffVariant {

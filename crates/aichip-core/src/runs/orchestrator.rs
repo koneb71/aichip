@@ -32,6 +32,7 @@ use crate::runs::memory;
 use crate::runs::mentions;
 use crate::runs::task_plan;
 use crate::runs::usage_tally::{UsageDelta, UsageTally};
+use crate::runs::{follow_up, report};
 use crate::worktrees::manager::WorktreeManager;
 
 /// Tools a chat run may use: read-only inspection of the checkout plus
@@ -1901,6 +1902,9 @@ impl Orchestrator {
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         // Kept for the checks that may run in it once the work is done.
         let work_dir = cwd.clone();
+        // A summary pass explains work already done; it may read the
+        // worktree but not change it, exactly like a planning pass.
+        let read_only = planning || run.get::<String, _>("trigger") == "summary";
         let spec = RunSpec {
             cwd,
             prompt,
@@ -1911,13 +1915,13 @@ impl Orchestrator {
             // Planning is read-only whatever the card says. A plan you are
             // going to be asked to approve is worthless if the work already
             // happened while it was being written — and with nothing to
-            // approve, nothing can prompt either.
-            permission_mode: if planning {
+            // approve, nothing can prompt either. A summary pass is the same.
+            permission_mode: if read_only {
                 PermissionMode::AutoEdit
             } else {
                 permission_mode
             },
-            allowed_tools: if planning {
+            allowed_tools: if read_only {
                 task_plan::PLANNING_TOOLS
                     .iter()
                     .map(|t| t.to_string())
@@ -1925,7 +1929,7 @@ impl Orchestrator {
             } else {
                 allowed_tools
             },
-            denied_tools: if planning {
+            denied_tools: if read_only {
                 task_plan::PLANNING_DENIED
                     .iter()
                     .map(|t| t.to_string())
@@ -1944,7 +1948,7 @@ impl Orchestrator {
             run_key: run_id.to_string(),
             extra_read_dirs,
             // Nothing to approve during planning, so nothing to ask about.
-            permission_prompt_tool: !planning,
+            permission_prompt_tool: !read_only,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
                 // Permission prompts block the MCP tools/call until the user
@@ -1997,26 +2001,52 @@ impl Orchestrator {
         // every ending goes through — including the ones that never reach this
         // function at all.
         if outcome.status == RunStatus::Completed {
-            // Review exists to gate a diff onto the base branch. An in-place
-            // run already wrote to the user's folder and produced no diff, so
-            // parking it in review would offer a review that cannot happen.
-            let column = if in_place { "done" } else { "review" };
-            sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
-                .bind(task_id)
-                .bind(column)
-                .execute(&self.db.pool)
-                .await?;
+            let trigger: String = run.get("trigger");
+            // A summary pass only explains work that was already announced
+            // and changed nothing, so the card stays where it is and nothing
+            // is checked or announced again.
+            let summarizing = trigger == "summary";
+            if !summarizing {
+                // Review exists to gate a diff onto the base branch. An
+                // in-place run already wrote to the user's folder and produced
+                // no diff, so parking it in review would offer a review that
+                // cannot happen.
+                let column = if in_place { "done" } else { "review" };
+                sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
+                    .bind(task_id)
+                    .bind(column)
+                    .execute(&self.db.pool)
+                    .await?;
+            }
 
-            // The project's checks run before anyone is told the card is
-            // ready, so the news can say whether the work passes. Unasked only
-            // after a Full Auto run — see `checks` for why — and never for an
-            // in-place project (no worktree), an app (it lands by itself) or a
-            // bake-off variant (its own worktree, compared by a person).
+            // What the run did goes on the card, where a person reading it
+            // looks — not only into the agent's memory. Best-effort: a report
+            // that failed to write must not fail a completed run.
+            if let Err(e) = report::post(
+                &self.db,
+                task_id,
+                run_id,
+                bound_agent,
+                &trigger,
+                variant.as_deref(),
+                &outcome.output,
+            )
+            .await
+            {
+                tracing::warn!(%run_id, error = %e, "could not post the run's report");
+            }
+            // A run that said nothing gets one read-only pass to explain
+            // itself — one, because a summary pass never asks for another.
+            // Not for a bake-off variant (the card's worktree is not the one
+            // it worked in) or an in-place card (there is no worktree).
+            let summarize =
+                outcome.output.trim().is_empty() && !summarizing && !in_place && variant.is_none();
+
             // A conflict the agent was asked to resolve is concluded here, so
             // the card's branch carries the merge before anything checks it.
             // Markers left behind keep it open — and Merge refuses — which is
             // the point: the resolution is not done.
-            if run.get::<String, _>("trigger") == "conflict" {
+            if trigger == "conflict" {
                 if let Some(branch) = run.get::<Option<String>, _>("branch") {
                     let wt = crate::worktrees::manager::Worktree {
                         path: work_dir.clone(),
@@ -2032,9 +2062,15 @@ impl Orchestrator {
                 }
             }
 
+            // The project's checks run before anyone is told the card is
+            // ready, so the news can say whether the work passes. Unasked only
+            // after a Full Auto run — see `checks` for why — and never for an
+            // in-place project (no worktree), an app (it lands by itself) or a
+            // bake-off variant (its own worktree, compared by a person).
             let title: String = run.get("title");
             let chat_id: Option<Uuid> = run.get("task_chat_id");
-            let auto_checks = if !in_place
+            let auto_checks = if !summarizing
+                && !in_place
                 && run.get::<Option<String>, _>("variant_label").is_none()
                 && run.get::<String, _>("project_kind") == "repo"
                 && permission_mode == PermissionMode::FullAuto
@@ -2062,13 +2098,18 @@ impl Orchestrator {
                             config,
                             title,
                             chat_id,
+                            summarize,
                         )
                         .await
                     });
                 }
+                None if summarizing => {}
                 None => {
                     self.announce_ready(run_id, &title, chat_id, in_place, None)
-                        .await
+                        .await;
+                    if summarize {
+                        self.ask_for_summary(task_id, run_id).await;
+                    }
                 }
             }
 
@@ -2140,6 +2181,18 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// Queue the one read-only pass that asks a silent run what it did.
+    /// Best-effort: the card already says "(no summary)", and a refusal —
+    /// a person started another run first, say — leaves it at that.
+    pub(crate) async fn ask_for_summary(&self, task_id: Uuid, run_id: Uuid) {
+        if let Err(e) = self
+            .enqueue_follow_up(task_id, follow_up::FollowUp::Summarize { run_id })
+            .await
+        {
+            tracing::info!(%run_id, error = %e, "no summary pass for a silent run");
+        }
     }
 
     /// Tell whoever is listening that a card's work is ready: the attention
@@ -3120,6 +3173,7 @@ impl Orchestrator {
             for (author, name, content) in thread.iter().rev() {
                 let who = match author.as_str() {
                     "agent" => name.clone().unwrap_or_else(|| "agent".into()),
+                    "system" => "aichip".into(),
                     _ => "user".into(),
                 };
                 prompt.push_str(&format!("[{who}] {content}\n"));

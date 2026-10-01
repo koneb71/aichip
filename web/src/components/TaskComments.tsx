@@ -230,6 +230,19 @@ export function TaskComments({ taskId }: { taskId: string }) {
 }
 
 function CommentRow({ comment }: { comment: TaskComment }) {
+  // aichip's own line — how the checks went — is neither side of the
+  // conversation, so it sits between them, small.
+  if (comment.author === "system") {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="self-center px-2 text-center text-[11px] text-ink-dim"
+      >
+        {comment.content}
+      </motion.div>
+    );
+  }
   if (comment.author === "user") {
     return (
       <motion.div

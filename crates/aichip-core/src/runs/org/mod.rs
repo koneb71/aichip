@@ -1386,6 +1386,11 @@ impl Orchestrator {
         .execute(&self.db.pool)
         .await?;
         log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
+        if outcome.status == RunStatus::Completed {
+            if let Err(e) = epic::note_result(&self.db, step_id, &outcome.output).await {
+                tracing::warn!(%step_id, error = %e, "could not post the assignment's report");
+            }
+        }
 
         Ok(outcome)
     }
