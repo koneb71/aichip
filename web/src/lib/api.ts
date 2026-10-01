@@ -2339,6 +2339,16 @@ export const api = {
     }).then((r) => json<{ checkRunId: string }>(r)),
   fixChecks: (taskId: string) =>
     post(`/api/tasks/${taskId}/checks/fix`).then((r) => json<{ runId: string }>(r)),
+  /** How the card's branch stands against the base. Nulls when it has no worktree. */
+  baseStatus: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/base`).then((r) =>
+      json<{ base?: string; behind: number | null; merging: string[] | null }>(r),
+    ),
+  /** Bring the base into the card's branch; a conflict starts an agent run to resolve it. */
+  updateFromBase: (taskId: string) =>
+    post(`/api/tasks/${taskId}/update-from-base`).then((r) =>
+      json<{ outcome: "up_to_date" | "merged" | "conflicted"; files?: string[]; runId?: string }>(r),
+    ),
   taskRuns: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/runs`).then((r) => json<{ runs: TaskRun[] }>(r)),
   bakeoff: (taskId: string) =>

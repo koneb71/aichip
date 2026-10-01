@@ -23,6 +23,8 @@ import { EffortPicker } from "./EffortPicker";
 import { PullRequestPanel } from "./PullRequestPanel";
 import { RunHistory } from "./RunHistory";
 import { ChecksPanel } from "./ChecksPanel";
+import { BaseStatus } from "./BaseStatus";
+import { parseMergeRefusal } from "../lib/mergeRefusal";
 import { RunError } from "./ui/RunError";
 import { springy } from "../lib/motion";
 
@@ -69,6 +71,9 @@ export function TaskDrawer({
   // request per drawer open for a question nobody asked.
   const [blocked, setBlocked] = useState<CheckoutState | null>(null);
   const [resolving, setResolving] = useState<"stash" | "commit" | null>(null);
+  // Merge was refused because the branch conflicts with the base — the cue to
+  // offer bringing the base in and having the conflict resolved here.
+  const [conflicted, setConflicted] = useState(false);
   const [serverPending, setServerPending] = useState<PendingPermission[]>([]);
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -312,8 +317,11 @@ export function TaskDrawer({
     } catch (e) {
       // Inline, like every other failure in this drawer. A native alert()
       // loses the drawer's context and can't be copied out of easily.
-      const text = String(e).replace(/^Error:\s*/, "");
+      const raw = String(e).replace(/^Error:\s*/, "");
+      const refusal = parseMergeRefusal(raw);
+      const text = refusal?.error ?? raw;
       setError(`Merge failed. ${text}`);
+      setConflicted(refusal?.kind === "conflict" || refusal?.kind === "markers");
       // The one refusal with something to do about it. The guard names the
       // files in prose; fetching them as data is what lets the buttons below
       // exist, and it asks the same endpoint the guard reads so the list
@@ -698,6 +706,22 @@ export function TaskDrawer({
           {busy === "delete" ? "Deleting…" : "Delete"}
         </button>
       </div>
+
+      {task.boardColumn === "review" && (
+        <div className="border-b border-line px-5 py-2 empty:hidden">
+          <BaseStatus
+            taskId={task.id}
+            busy={running}
+            refreshKey={`${task.runId}:${task.runStatus}`}
+            conflicted={conflicted}
+            onChanged={() => {
+              setConflicted(false);
+              setError(null);
+              onChanged();
+            }}
+          />
+        </div>
+      )}
 
       {/* Before the pull request: whether the work passes is the first thing
           to know about a diff you are deciding whether to land. */}
