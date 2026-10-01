@@ -278,7 +278,15 @@ export interface Task {
    *  and whether the worktree still exists — are decided on the click, and
    *  come back as a 409 saying which. */
   runResumable?: boolean;
+  /** The latest run's dollars. */
   costUsd: number | null;
+  /** Every run of the card, and their dollars together — retries and
+   *  follow-ups cost money too. Absent from older servers. */
+  runCount?: number;
+  totalCostUsd?: number | null;
+  /** The newest run of this project's own checks on the card — counts only.
+   *  Not `prChecks`, which is GitHub's CI. */
+  localChecks?: LocalChecksSummary | null;
   model: string | null;
   /** Which CLI this card runs on. */
   engine: string;
@@ -1065,6 +1073,82 @@ export interface ModelSettings {
 }
 
 /** One attempt in a bake-off, with the diff that decides it. */
+export type CheckStatus = "queued" | "running" | "passed" | "failed" | "error" | "canceled";
+
+export interface LocalChecksSummary {
+  status: CheckStatus;
+  passed: number;
+  total: number;
+}
+
+/** One configured command. */
+export interface CheckCommand {
+  name: string;
+  command: string;
+}
+
+export interface ProjectChecks {
+  commands: CheckCommand[];
+  timeoutSecs: number;
+  autoFixAttempts: number;
+}
+
+export interface CheckResult {
+  name: string;
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  ms: number;
+  outputTail: string;
+}
+
+export interface CheckRun {
+  id: string;
+  runId: string | null;
+  status: CheckStatus;
+  startedBy: "auto" | "person";
+  results: CheckResult[];
+  /** Paths the checks themselves left changed in the worktree. */
+  dirtied: string[];
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+/** One run of a card, as its history shows it. */
+export interface TaskRun {
+  runId: string;
+  /** manual | resume | review | bakeoff | schedule | … — why this run exists. */
+  trigger: string;
+  status: string;
+  engine: string;
+  model: string | null;
+  tierResolved: string | null;
+  agentName: string | null;
+  variantLabel: string | null;
+  planFirst: boolean;
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** The engine never sent its final count; these are the running tally. */
+  tokensProvisional: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  seconds: number | null;
+  error: string | null;
+  sessionId: string | null;
+  resumedFrom: string | null;
+  rateLimitAttempts: number;
+  /** The review note a follow-up acted on. */
+  reviewCommentId: string | null;
+  /** `cd … && …` to continue this session in your own terminal. Null when the
+   *  engine offers none, the directory is gone, or the card is busy. */
+  resumeCommand: string | null;
+}
+
 export interface BakeoffVariant {
   runId: string;
   label: string;
@@ -2230,6 +2314,43 @@ export const api = {
     post(`/api/tasks/${taskId}/bakeoff`, { variants }).then((r) =>
       json<{ runIds: string[] }>(r),
     ),
+  projectChecks: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/checks`).then((r) => json<ProjectChecks>(r)),
+  /** Stores commands this machine will run — hence the write header. */
+  saveProjectChecks: (projectId: string, v: ProjectChecks) =>
+    fetch(`/api/projects/${projectId}/checks`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+      body: JSON.stringify({
+        commands: v.commands,
+        timeout_secs: v.timeoutSecs,
+        auto_fix_attempts: v.autoFixAttempts,
+      }),
+    }).then((r) => json<ProjectChecks>(r)),
+  taskChecks: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/checks`).then((r) =>
+      json<{ configured: boolean; latest: CheckRun | null }>(r),
+    ),
+  /** A person running the checks is the consent; the header proves a person's page sent it. */
+  runChecks: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/checks`, {
+      method: "POST",
+      headers: { "X-Aichip-Write": "1" },
+    }).then((r) => json<{ checkRunId: string }>(r)),
+  fixChecks: (taskId: string) =>
+    post(`/api/tasks/${taskId}/checks/fix`).then((r) => json<{ runId: string }>(r)),
+  /** How the card's branch stands against the base. Nulls when it has no worktree. */
+  baseStatus: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/base`).then((r) =>
+      json<{ base?: string; behind: number | null; merging: string[] | null }>(r),
+    ),
+  /** Bring the base into the card's branch; a conflict starts an agent run to resolve it. */
+  updateFromBase: (taskId: string) =>
+    post(`/api/tasks/${taskId}/update-from-base`).then((r) =>
+      json<{ outcome: "up_to_date" | "merged" | "conflicted"; files?: string[]; runId?: string }>(r),
+    ),
+  taskRuns: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/runs`).then((r) => json<{ runs: TaskRun[] }>(r)),
   bakeoff: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/bakeoff`).then((r) =>
       json<{ variants: BakeoffVariant[] }>(r),

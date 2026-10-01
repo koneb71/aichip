@@ -259,6 +259,12 @@ impl Engine for OpenCodeEngine {
 
         Ok(EngineProcess::new(rx, Box::new(OpenCodeHandle { pid })))
     }
+
+    /// Not offered until the TUI's session flag is checked against an
+    /// `opencode` binary.
+    fn interactive_resume_argv(&self, _session_id: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// `Google  api` → `ProviderInfo { name: "Google", auth: "api" }`.

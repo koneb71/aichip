@@ -180,7 +180,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
               "inputSchema": obj(json!({ "task_id": { "type": "string" } }), vec!["task_id"]) },
             { "name": "list_tasks", "description": "List this project's tasks with status.",
               "inputSchema": obj(json!({}), vec![]) },
-            { "name": "get_task_status", "description": "Status, cost, and latest run of one task.",
+            { "name": "get_task_status", "description": "Status, cost, latest run, and whether the work passes the project's checks, for one task.",
               "inputSchema": obj(json!({ "task_id": { "type": "string" } }), vec!["task_id"]) },
             { "name": "list_agents", "description": "List available agents in this workspace.",
               "inputSchema": obj(json!({}), vec![]) },
@@ -544,10 +544,13 @@ async fn call_tool(
             let task_id = parse_task_id(&args)?;
             ensure_task_in_project(state, task_id, project_id).await?;
             let row = sqlx::query(
-                "SELECT t.title, t.board_column, r.status, r.cost_usd, r.error_reason
+                "SELECT t.title, t.board_column, r.status, r.cost_usd, r.error_reason,
+                        ck.status AS checks_status, ck.results AS checks_results
                  FROM tasks t
                  LEFT JOIN LATERAL (SELECT * FROM runs WHERE task_id=t.id
                                     ORDER BY created_at DESC LIMIT 1) r ON TRUE
+                 LEFT JOIN LATERAL (SELECT status, results FROM check_runs WHERE task_id=t.id
+                                    ORDER BY created_at DESC LIMIT 1) ck ON TRUE
                  WHERE t.id=$1",
             )
             .bind(task_id)
@@ -560,6 +563,22 @@ async fn call_tool(
                 "run_status": row.get::<Option<String>, _>("status"),
                 "cost_usd": row.get::<Option<f64>, _>("cost_usd"),
                 "error": row.get::<Option<String>, _>("error_reason"),
+                // Whether the work passes the project's own checks — what a
+                // manager deciding "land it or send it back" needs most. Names
+                // and verdicts only; the logs are for the person's drawer.
+                "checks": row.get::<Option<String>, _>("checks_status").map(|status| {
+                    let results: Vec<aichip_core::checks::CheckResult> = row
+                        .get::<Option<serde_json::Value>, _>("checks_results")
+                        .and_then(|v| serde_json::from_value(v).ok())
+                        .unwrap_or_default();
+                    json!({
+                        "status": status,
+                        "results": results.iter().map(|r| json!({
+                            "name": r.name,
+                            "passed": r.passed(),
+                        })).collect::<Vec<_>>(),
+                    })
+                }),
             }))
         }
         "list_agents" => {

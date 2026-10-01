@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod chat_plan;
 pub mod context;
+pub mod follow_up;
 pub mod gate;
 pub mod memory;
 pub mod mentions;

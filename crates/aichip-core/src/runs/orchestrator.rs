@@ -929,49 +929,6 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Act on a review note left against a line of the diff.
-    ///
-    /// A task run rather than a comment reply, and that distinction is the
-    /// whole feature: comment replies are read-only by design, so the only
-    /// way to act on review feedback was to re-run the entire task. This
-    /// reuses the task's existing worktree, so the fix lands on the same
-    /// branch and shows up in the same diff you were reading.
-    pub async fn enqueue_review_fix(&self, comment_id: Uuid) -> anyhow::Result<Uuid> {
-        let c = sqlx::query(
-            "SELECT c.task_id, c.content, c.file_path, c.line, c.hunk, t.engine, t.prompt
-             FROM task_comments c JOIN tasks t ON t.id = c.task_id WHERE c.id = $1",
-        )
-        .bind(comment_id)
-        .fetch_one(&self.db.pool)
-        .await?;
-
-        let prompt = review_fix_prompt(
-            &c.get::<String, _>("prompt"),
-            c.get::<Option<String>, _>("file_path").as_deref(),
-            c.get::<Option<i32>, _>("line"),
-            c.get::<Option<String>, _>("hunk").as_deref(),
-            &c.get::<String, _>("content"),
-        );
-
-        let row = sqlx::query(
-            "INSERT INTO runs (task_id, comment_id, prompt_override, status, trigger, engine)
-             VALUES ($1, $2, $3, 'queued', 'review', $4) RETURNING id",
-        )
-        .bind(c.get::<Uuid, _>("task_id"))
-        .bind(comment_id)
-        .bind(&prompt)
-        .bind(c.get::<String, _>("engine"))
-        .fetch_one(&self.db.pool)
-        .await?;
-        let run_id: Uuid = row.get("id");
-        // Above a normal task run: someone is sitting there reading the diff.
-        sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, 14)")
-            .bind(run_id)
-            .execute(&self.db.pool)
-            .await?;
-        Ok(run_id)
-    }
-
     /// Queue a workflow execution. `trigger` distinguishes manual runs from
     /// scheduled ones for the activity view.
     pub async fn enqueue_workflow(&self, workflow_id: Uuid, trigger: &str) -> anyhow::Result<Uuid> {
@@ -1545,7 +1502,7 @@ impl Orchestrator {
         let Some(row) = sqlx::query(
             "UPDATE runs SET status='starting'
               WHERE id=$1 AND status IN ('queued','rate_limited')
-              RETURNING chat_id, workflow_id, team_id, comment_id, kb_brief, research_id",
+              RETURNING task_id, chat_id, workflow_id, team_id, comment_id, kb_brief, research_id",
         )
         .bind(run_id)
         .fetch_optional(&self.db.pool)
@@ -1563,7 +1520,12 @@ impl Orchestrator {
             (Some(chat_id), _, _, _) => self.execute_chat_run(run_id, chat_id).await,
             (_, Some(workflow_id), _, _) => self.execute_workflow_run(run_id, workflow_id).await,
             (_, _, Some(team_id), _) => self.execute_org_run(run_id, team_id).await,
-            (_, _, _, Some(comment_id)) => self.execute_comment_run(run_id, comment_id).await,
+            // A comment *reply* is the only run with a comment and no card of
+            // its own. A run that has a card is work on that card — rows written
+            // before 0071 carried both, and this arm used to claim them and fail.
+            (_, _, _, Some(comment_id)) if row.get::<Option<Uuid>, _>("task_id").is_none() => {
+                self.execute_comment_run(run_id, comment_id).await
+            }
             // Before the kb arm: the two columns are disjoint today, but if
             // any future path ever stamps KB columns onto a research run, the
             // more specific kind must win rather than lean on an invariant
@@ -1587,12 +1549,12 @@ impl Orchestrator {
                     COALESCE(r.prompt_override, t.prompt) AS prompt,
                     t.model_tier, r.tier_override,
                     COALESCE(r.agent_id, t.agent_id) AS agent_id,
-                    r.variant_label, r.worktree_path AS run_worktree,
+                    r.variant_label, r.worktree_path AS run_worktree, r.review_comment_id, r.trigger,
                     t.permission_mode, t.effort AS task_effort,
                     t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     r.plan_approval, r.plan_approved_at,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
-                    p.vcs,
+                    p.vcs, p.kind AS project_kind,
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
                     a.effort AS agent_effort,
                     a.allowed_tools AS agent_tools, a.permission_preset AS agent_preset,
@@ -1880,12 +1842,17 @@ impl Orchestrator {
         // Knowledge-base articles tagged onto the card. This is what makes
         // tagging one worth doing: the agent is handed the runbook rather than
         // left to infer it from the code.
-        let articles = crate::kb::for_run(&self.db, Some(task_id), None)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(%run_id, error = %e, "could not load tagged articles");
-                vec![]
-            });
+        // A follow-up acting on a note also reads what the note was sent with.
+        let articles = crate::kb::for_run(
+            &self.db,
+            Some(task_id),
+            run.get::<Option<Uuid>, _>("review_comment_id"),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(%run_id, error = %e, "could not load tagged articles");
+            vec![]
+        });
         let prompt = crate::kb::augment_prompt(&prompt, &articles);
 
         // A bound agent carries its memory into the run: what it did on this
@@ -1932,6 +1899,8 @@ impl Orchestrator {
         };
 
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
+        // Kept for the checks that may run in it once the work is done.
+        let work_dir = cwd.clone();
         let spec = RunSpec {
             cwd,
             prompt,
@@ -2038,6 +2007,71 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
 
+            // The project's checks run before anyone is told the card is
+            // ready, so the news can say whether the work passes. Unasked only
+            // after a Full Auto run — see `checks` for why — and never for an
+            // in-place project (no worktree), an app (it lands by itself) or a
+            // bake-off variant (its own worktree, compared by a person).
+            // A conflict the agent was asked to resolve is concluded here, so
+            // the card's branch carries the merge before anything checks it.
+            // Markers left behind keep it open — and Merge refuses — which is
+            // the point: the resolution is not done.
+            if run.get::<String, _>("trigger") == "conflict" {
+                if let Some(branch) = run.get::<Option<String>, _>("branch") {
+                    let wt = crate::worktrees::manager::Worktree {
+                        path: work_dir.clone(),
+                        branch,
+                    };
+                    let message = format!(
+                        "aichip: resolve conflicts in {}",
+                        run.get::<String, _>("title")
+                    );
+                    if let Err(e) = self.worktrees.conclude_merge(&wt, &message).await {
+                        tracing::warn!(%run_id, error = %e, "the conflict is not resolved yet");
+                    }
+                }
+            }
+
+            let title: String = run.get("title");
+            let chat_id: Option<Uuid> = run.get("task_chat_id");
+            let auto_checks = if !in_place
+                && run.get::<Option<String>, _>("variant_label").is_none()
+                && run.get::<String, _>("project_kind") == "repo"
+                && permission_mode == PermissionMode::FullAuto
+            {
+                crate::checks::config(&self.db, project_id)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(%run_id, error = %e, "could not read this project's checks");
+                        None
+                    })
+            } else {
+                None
+            };
+            match auto_checks {
+                Some(config) => {
+                    let check_run_id =
+                        crate::checks::begin(&self.db, task_id, Some(run_id), "auto").await?;
+                    let this = self.clone();
+                    tokio::spawn(async move {
+                        this.settle_checks(
+                            task_id,
+                            run_id,
+                            check_run_id,
+                            work_dir,
+                            config,
+                            title,
+                            chat_id,
+                        )
+                        .await
+                    });
+                }
+                None => {
+                    self.announce_ready(run_id, &title, chat_id, in_place, None)
+                        .await
+                }
+            }
+
             // The work joins the agent's memory. Best-effort: a failed memory
             // write must not fail a completed run.
             if let Some(agent_id) = bound_agent {
@@ -2086,9 +2120,8 @@ impl Orchestrator {
             if outcome.status.is_terminal() {
                 let title: String = run.get("title");
                 let note = match outcome.status {
-                    RunStatus::Completed => {
-                        format!("Task \"{title}\" completed — ready for review on the board.")
-                    }
+                    // Said by `announce_ready`, after any checks have run.
+                    RunStatus::Completed => return Ok(()),
                     RunStatus::Canceled => format!("Task \"{title}\" was canceled."),
                     _ => format!(
                         "Task \"{title}\" failed: {}",
@@ -2107,6 +2140,55 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// Tell whoever is listening that a card's work is ready: the attention
+    /// hook's "a run finished", and the chat the card came from.
+    ///
+    /// One place, called either straight away or once checks have settled, so
+    /// the message can carry their result — "ready for review" about a diff
+    /// whose tests fail is not the same news.
+    pub(crate) async fn announce_ready(
+        &self,
+        run_id: Uuid,
+        title: &str,
+        chat_id: Option<Uuid>,
+        in_place: bool,
+        checks: Option<&crate::checks::Summary>,
+    ) {
+        let checked = checks
+            .map(|c| format!(" — {}", c.line()))
+            .unwrap_or_default();
+        // "A run finished" has been offered in the attention settings all
+        // along and never sent: nothing fired it. Off by default there, so
+        // this reaches only the people who turned it on.
+        let ctx = crate::attention::Ctx {
+            title: format!(
+                "aichip: \"{title}\" {}{checked}",
+                if in_place {
+                    "is done"
+                } else {
+                    "is ready for review"
+                }
+            ),
+            ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+        };
+        crate::attention::fire(&self.db, crate::attention::Event::Finished, ctx).await;
+
+        // A task spawned from chat reports back into that chat.
+        if let Some(chat_id) = chat_id {
+            let note =
+                format!("Task \"{title}\" completed — ready for review on the board{checked}.");
+            let _ = sqlx::query(
+                "INSERT INTO chat_messages (chat_id, role, content, run_id)
+                 VALUES ($1, 'system', $2, $3)",
+            )
+            .bind(chat_id)
+            .bind(note)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await;
+        }
     }
 
     /// Queue a run that writes documentation instead of code.
@@ -4309,52 +4391,6 @@ pub(crate) async fn next_seq(db: &Db, run_id: Uuid) -> anyhow::Result<i64> {
     Ok(row.get("next"))
 }
 
-/// Write a per-run MCP config pointing the engine at one of aichip's MCP
-/// endpoints. Lives under ~/.aichip/mcp/, keyed by run id.
-/// Turn a review note into a brief for the agent.
-///
-/// Pure so the shape can be tested without a database. Three things have to
-/// survive into the prompt: where the note points, what the code looked like
-/// when it was written, and a scope limit — a review note is not licence to
-/// keep working on the task.
-fn review_fix_prompt(
-    task_prompt: &str,
-    file_path: Option<&str>,
-    line: Option<i32>,
-    hunk: Option<&str>,
-    note: &str,
-) -> String {
-    let mut prompt =
-        String::from("You are acting on review feedback for work you already did.\n\n");
-    match (file_path, line) {
-        (Some(path), Some(line)) => prompt.push_str(&format!(
-            "The reviewer commented on {path}, around line {line}.\n"
-        )),
-        (Some(path), None) => prompt.push_str(&format!("The reviewer commented on {path}.\n")),
-        _ => prompt.push_str("The reviewer commented on the change as a whole.\n"),
-    }
-    if let Some(hunk) = hunk.filter(|h| !h.trim().is_empty()) {
-        // Line numbers drift the moment you edit; the snapshot is what
-        // actually identifies the code being talked about.
-        prompt.push_str(&format!(
-            "\nThe code as it stood when they wrote the note:\n```diff\n{}\n```\n",
-            clip_chars(hunk, 2000),
-        ));
-    }
-    prompt.push_str(&format!("\nTheir note:\n{note}\n"));
-    prompt.push_str(&format!(
-        "\nFor context, the original task was:\n{}\n",
-        clip_chars(task_prompt, 800),
-    ));
-    prompt.push_str(
-        "\nMake exactly this change and stop. Do not refactor beyond it, do not \
-         revisit other review notes, and do not continue the original task. If \
-         the note is a question rather than a request, answer it without editing \
-         anything. Finish with one short line saying what you changed.",
-    );
-    prompt
-}
-
 /// Truncate on a character boundary, marking that something was dropped.
 pub(crate) fn clip_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -4516,45 +4552,6 @@ mod tests {
         let r = resolve_step_permission(PermissionMode::Reviewed, false);
         assert_eq!(r.mode, PermissionMode::Reviewed);
         assert!(!r.downgraded);
-    }
-
-    #[test]
-    fn a_review_note_becomes_a_scoped_brief() {
-        let prompt = review_fix_prompt(
-            "Build the leads finder",
-            Some("backend/app/routes.py"),
-            Some(42),
-            Some("- return None\n+ return leads"),
-            "This swallows the error; raise instead.",
-        );
-        assert!(prompt.contains("backend/app/routes.py"));
-        assert!(prompt.contains("line 42"));
-        assert!(prompt.contains("return leads"), "the hunk grounds the note");
-        assert!(prompt.contains("raise instead"));
-        // The scope limit is the point: a review note must not restart the task.
-        assert!(prompt.contains("do not continue the original task"));
-    }
-
-    #[test]
-    fn a_note_without_an_anchor_still_works() {
-        // Card-level review feedback has no file or line.
-        let prompt = review_fix_prompt("Do the thing", None, None, None, "Rename the module.");
-        assert!(prompt.contains("the change as a whole"));
-        assert!(prompt.contains("Rename the module."));
-        assert!(!prompt.contains("```diff"), "no hunk, no empty code fence");
-    }
-
-    #[test]
-    fn a_huge_hunk_cannot_crowd_out_the_note() {
-        let prompt = review_fix_prompt(
-            &"task ".repeat(1000),
-            Some("a.rs"),
-            Some(1),
-            Some(&"x".repeat(50_000)),
-            "Fix it.",
-        );
-        assert!(prompt.chars().count() < 4000);
-        assert!(prompt.contains("Fix it."));
     }
 
     /// Clipping by chars, not bytes — a a multi-byte boundary would panic.

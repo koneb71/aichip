@@ -161,6 +161,15 @@ pub trait Engine: Send + Sync {
     async fn detect(&self) -> Option<EngineInfo>;
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess>;
+
+    /// What a person types to pick this session back up in their own
+    /// terminal, run from the directory the session ran in. `None` when this
+    /// engine can't, or when nobody has checked the command against the
+    /// binary — a wrong command shown with a Copy button is worse than none.
+    ///
+    /// No default, for the reason `Capabilities` has none: every adapter has
+    /// to answer for itself.
+    fn interactive_resume_argv(&self, session_id: &str) -> Option<Vec<String>>;
 }
 
 /// Refuse a run the engine cannot honour, with a reason a person can act on.
@@ -221,6 +230,9 @@ mod tests {
         }
         fn start(&self, _spec: RunSpec) -> anyhow::Result<EngineProcess> {
             anyhow::bail!("not a real engine")
+        }
+        fn interactive_resume_argv(&self, _session_id: &str) -> Option<Vec<String>> {
+            None
         }
     }
 

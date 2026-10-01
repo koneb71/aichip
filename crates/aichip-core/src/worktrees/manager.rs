@@ -139,10 +139,10 @@ impl WorktreeManager {
     }
 
     /// Unified diff of everything the agent changed (committed + uncommitted)
-    /// relative to the base branch.
+    /// since the card's branch left the base — see `diff_base`.
     pub async fn diff(&self, worktree: &Path, base_branch: &str) -> anyhow::Result<String> {
-        git(worktree, &["add", "-N", "."]).await?; // make untracked files diffable
-        let base = resolve_base(worktree, base_branch).await?;
+        intend_to_add(worktree).await?;
+        let base = diff_base(worktree, base_branch).await?;
         git(worktree, &["diff", &base]).await
     }
 
@@ -161,8 +161,8 @@ impl WorktreeManager {
         worktree: &Path,
         base_branch: &str,
     ) -> anyhow::Result<Vec<FileStat>> {
-        git(worktree, &["add", "-N", "."]).await?;
-        let base = resolve_base(worktree, base_branch).await?;
+        intend_to_add(worktree).await?;
+        let base = diff_base(worktree, base_branch).await?;
         let out = git(worktree, &["diff", "--numstat", &base]).await?;
         Ok(out.lines().filter_map(parse_numstat).collect())
     }
@@ -175,8 +175,8 @@ impl WorktreeManager {
         base_branch: &str,
         path: &str,
     ) -> anyhow::Result<String> {
-        git(worktree, &["add", "-N", "."]).await?;
-        let base = resolve_base(worktree, base_branch).await?;
+        intend_to_add(worktree).await?;
+        let base = diff_base(worktree, base_branch).await?;
         git(worktree, &["diff", &base, "--", path]).await
     }
 
@@ -191,6 +191,15 @@ impl WorktreeManager {
     ) -> anyhow::Result<()> {
         // Commit any uncommitted agent work in the worktree first.
         commit_worktree(worktree, message).await?;
+
+        // Conflict markers committed into the branch — by an agent resolving
+        // a conflict that ran `git commit` itself, or by hand — would land on
+        // the base as text. `commit_worktree` catches the ones still unmerged;
+        // this catches the ones that are not.
+        let marked = conflict_markers(&self.diff(&worktree.path, base_branch).await?);
+        if !marked.is_empty() {
+            return Err(MergeRefusal::Markers { files: marked }.into());
+        }
 
         // Everything below this line runs in the **user's own checkout**, so
         // it has to find one it is allowed to move.
@@ -211,13 +220,16 @@ impl WorktreeManager {
         // untracked build output permanently unmergeable.
         let dirty = git(repo, &["status", "--porcelain", "--untracked-files=no"]).await?;
         if !dirty.trim().is_empty() {
-            anyhow::bail!(
-                "your checkout at {} has uncommitted changes, and merging would \
-                 check out {base_branch} over them and fold them into this card's \
-                 commit — commit or stash them and merge again:\n{}",
-                repo.display(),
-                describe_dirty(&dirty)
-            );
+            return Err(MergeRefusal::Dirty {
+                message: format!(
+                    "your checkout at {} has uncommitted changes, and merging would \
+                     check out {base_branch} over them and fold them into this card's \
+                     commit — commit or stash them and merge again:\n{}",
+                    repo.display(),
+                    describe_dirty(&dirty)
+                ),
+            }
+            .into());
         }
 
         // Where the person was standing, so we can put them back.
@@ -262,14 +274,89 @@ impl WorktreeManager {
                 restore_checkout(repo, was_on.as_deref(), &base, true).await;
                 // The recovery is named in the error, not just performed, so a
                 // person who goes to look at their repository knows what was
-                // already done on their behalf.
-                anyhow::bail!(
-                    "{e}\n\nYour checkout was put back on {} and the half-finished merge \
-                     was cleared, so nothing is left staged. Resolve the conflict on the \
-                     branch itself and merge again.",
-                    was_on.as_deref().unwrap_or(&base)
-                )
+                // already done on their behalf. The files, parsed out of git's
+                // own report, are what lets the dashboard offer to bring the
+                // base into the branch and have the conflict resolved there.
+                let detail = e.to_string();
+                Err(MergeRefusal::Conflict {
+                    files: conflicted_in(&detail),
+                    message: format!(
+                        "{detail}\n\nYour checkout was put back on {} and the half-finished \
+                         merge was cleared, so nothing is left staged. Bring {base} into the \
+                         card's branch to resolve the conflict there, then merge again.",
+                        was_on.as_deref().unwrap_or(&base)
+                    ),
+                }
+                .into())
             }
+        }
+    }
+
+    /// Bring the base branch into the card's branch, inside the card's own
+    /// worktree.
+    ///
+    /// This is the way out of a merge conflict that `squash_merge` refuses: the
+    /// conflict is met on the card's branch, where an agent can resolve it and
+    /// a person can read the resolution in the same diff, instead of in the
+    /// person's checkout. It decides no question of "whose history wins" —
+    /// the rule `pull_ff` keeps — because the branch is aichip's own
+    /// (`aichip/…`) and is squashed onto the base when it lands.
+    ///
+    /// A conflicted merge is left in progress, on purpose: the conflict markers
+    /// are the brief. `commit_worktree` refuses to commit while any remain.
+    pub async fn update_from_base(
+        &self,
+        worktree: &Worktree,
+        base_branch: &str,
+        message: &str,
+    ) -> anyhow::Result<BaseUpdate> {
+        if merging(&worktree.path).await {
+            return Ok(BaseUpdate::Conflicted {
+                files: unmerged_files(&worktree.path).await?,
+            });
+        }
+        commit_worktree(worktree, message).await?;
+        let base = resolve_base(&worktree.path, base_branch).await?;
+        if behind(&worktree.path, &base).await? == 0 {
+            return Ok(BaseUpdate::UpToDate);
+        }
+        match git(&worktree.path, &["merge", "--no-edit", &base]).await {
+            Ok(_) => Ok(BaseUpdate::Merged),
+            Err(e) => {
+                let files = unmerged_files(&worktree.path).await?;
+                if files.is_empty() {
+                    // Failed for some other reason; leave nothing half-done.
+                    let _ = git(&worktree.path, &["merge", "--abort"]).await;
+                    return Err(e);
+                }
+                Ok(BaseUpdate::Conflicted { files })
+            }
+        }
+    }
+
+    /// Commits on the base branch that the card's branch does not have yet.
+    pub async fn behind_base(&self, worktree: &Path, base_branch: &str) -> anyhow::Result<u32> {
+        let base = resolve_base(worktree, base_branch).await?;
+        behind(worktree, &base).await
+    }
+
+    /// Finish a merge an agent resolved: commit it, unless markers remain.
+    /// `Ok(false)` when there was no merge in progress.
+    pub async fn conclude_merge(&self, worktree: &Worktree, message: &str) -> anyhow::Result<bool> {
+        if !merging(&worktree.path).await {
+            return Ok(false);
+        }
+        commit_worktree(worktree, message).await?;
+        Ok(true)
+    }
+
+    /// Is a merge of the base into this worktree's branch still in progress,
+    /// and in which files?
+    pub async fn merge_in_progress(&self, worktree: &Path) -> Option<Vec<String>> {
+        if merging(worktree).await {
+            Some(unmerged_files(worktree).await.unwrap_or_default())
+        } else {
+            None
         }
     }
 
@@ -619,12 +706,186 @@ pub async fn commit_all(path: &Path, message: &str) -> anyhow::Result<bool> {
 /// Only ever touches aichip's own worktree, never the user's checkout, and is
 /// idempotent — a clean worktree commits nothing.
 async fn commit_worktree(worktree: &Worktree, message: &str) -> anyhow::Result<()> {
+    // Mid-merge, `add -A` would mark every conflicted file resolved with its
+    // markers still in it, and the commit would carry them onward to Merge or
+    // Push. And when the resolution leaves the tree identical to HEAD there is
+    // nothing for `status` to report, so the merge would never be concluded
+    // at all. So: refuse while markers remain, and otherwise always commit.
+    if merging(&worktree.path).await {
+        let marked =
+            files_with_markers(&worktree.path, &unmerged_files(&worktree.path).await?).await;
+        if !marked.is_empty() {
+            return Err(MergeRefusal::Markers { files: marked }.into());
+        }
+        git(&worktree.path, &["add", "-A"]).await?;
+        git(&worktree.path, &["commit", "--no-edit"]).await?;
+        return Ok(());
+    }
     git(&worktree.path, &["add", "-A"]).await?;
     let status = git(&worktree.path, &["status", "--porcelain"]).await?;
     if !status.trim().is_empty() {
         git(&worktree.path, &["commit", "-m", message]).await?;
     }
     Ok(())
+}
+
+/// Why a card could not land, as something the dashboard can act on.
+#[derive(Debug, thiserror::Error)]
+pub enum MergeRefusal {
+    /// The person's own checkout has uncommitted changes in the way.
+    #[error("{message}")]
+    Dirty { message: String },
+    /// The card's branch conflicts with the base.
+    #[error("{message}")]
+    Conflict { message: String, files: Vec<String> },
+    /// Conflict markers are still in the card's work.
+    #[error(
+        "conflict markers are still in {} — resolve them before this card can land",
+        files.join(", ")
+    )]
+    Markers { files: Vec<String> },
+}
+
+impl MergeRefusal {
+    /// The word the dashboard switches on.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Dirty { .. } => "dirty",
+            Self::Conflict { .. } => "conflict",
+            Self::Markers { .. } => "markers",
+        }
+    }
+
+    pub fn files(&self) -> &[String] {
+        match self {
+            Self::Dirty { .. } => &[],
+            Self::Conflict { files, .. } | Self::Markers { files } => files,
+        }
+    }
+}
+
+/// What bringing the base into a card's branch did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseUpdate {
+    UpToDate,
+    Merged,
+    /// Left in progress in the worktree, with these files conflicted.
+    Conflicted {
+        files: Vec<String>,
+    },
+}
+
+/// Where a card's diff is measured from.
+///
+/// The point its branch left the base — not the base's tip. Diffing against
+/// the tip meant that as soon as anyone landed anything else, every open
+/// card's diff showed those commits *reversed*, as if this agent had undone
+/// them. Mid-merge it is the commit being merged in, so the diff shows the
+/// card's work against the base it is about to sit on.
+async fn diff_base(worktree: &Path, base_branch: &str) -> anyhow::Result<String> {
+    if merging(worktree).await {
+        return Ok("MERGE_HEAD".to_string());
+    }
+    let base = resolve_base(worktree, base_branch).await?;
+    Ok(match git(worktree, &["merge-base", &base, "HEAD"]).await {
+        Ok(fork) if !fork.trim().is_empty() => fork.trim().to_string(),
+        _ => base,
+    })
+}
+
+/// `add -N .`, so untracked files show in a diff. Skipped mid-merge: it can
+/// replace a conflicted file's unmerged index entries, quietly erasing the
+/// record of which files are still in conflict.
+async fn intend_to_add(worktree: &Path) -> anyhow::Result<()> {
+    if merging(worktree).await {
+        return Ok(());
+    }
+    git(worktree, &["add", "-N", "."]).await.map(|_| ())
+}
+
+async fn merging(dir: &Path) -> bool {
+    git(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        .await
+        .is_ok()
+}
+
+async fn unmerged_files(dir: &Path) -> anyhow::Result<Vec<String>> {
+    let out = git(
+        dir,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--name-only",
+            "--diff-filter=U",
+        ],
+    )
+    .await?;
+    let mut files: Vec<String> = out.lines().map(str::to_string).collect();
+    files.dedup();
+    Ok(files)
+}
+
+async fn behind(dir: &Path, base: &str) -> anyhow::Result<u32> {
+    let out = git(dir, &["rev-list", "--count", &format!("HEAD..{base}")]).await?;
+    Ok(out.trim().parse().unwrap_or(0))
+}
+
+/// The files among `files` that still hold a conflict marker.
+async fn files_with_markers(dir: &Path, files: &[String]) -> Vec<String> {
+    let mut marked = vec![];
+    for f in files {
+        // A file the resolution deleted has no markers to hold.
+        if let Ok(text) = tokio::fs::read_to_string(dir.join(f)).await {
+            if has_conflict_marker(&text) {
+                marked.push(f.clone());
+            }
+        }
+    }
+    marked
+}
+
+/// Does this text hold a conflict marker? `<<<<<<<` and `>>>>>>>` only:
+/// `=======` alone is a Markdown heading underline, and treating it as a
+/// marker would refuse every README with a setext heading.
+fn has_conflict_marker(text: &str) -> bool {
+    text.lines().any(is_marker_line)
+}
+
+fn is_marker_line(line: &str) -> bool {
+    ["<<<<<<<", ">>>>>>>"].iter().any(|m| {
+        line.strip_prefix(m)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
+/// Files a unified diff *adds* conflict markers to.
+pub fn conflict_markers(diff: &str) -> Vec<String> {
+    let mut file = String::new();
+    let mut marked: Vec<String> = vec![];
+    for line in diff.lines() {
+        if let Some(path) = line.strip_prefix("+++ ") {
+            file = path.strip_prefix("b/").unwrap_or(path).to_string();
+        } else if let Some(added) = line.strip_prefix('+') {
+            if is_marker_line(added) && marked.last() != Some(&file) {
+                marked.push(file.clone());
+            }
+        }
+    }
+    marked
+}
+
+/// The files git names in "CONFLICT (…): Merge conflict in <file>" lines.
+fn conflicted_in(git_output: &str) -> Vec<String> {
+    let mut files: Vec<String> = git_output
+        .lines()
+        .filter_map(|line| line.split_once("Merge conflict in ").map(|(_, f)| f))
+        // `git()` joins stderr and stdout with " — " on one line.
+        .map(|f| f.split(" — ").next().unwrap_or(f).trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect();
+    files.dedup();
+    files
 }
 
 /// A remote's URL, or `None` when there is no such remote.
@@ -860,6 +1121,28 @@ pub struct DirtyFile {
 /// meant was to squint at an error string. Same query, same flags — the two
 /// must agree, or the dashboard would offer to resolve a set the merge does not
 /// care about.
+/// Every path `git status` reports as changed, untracked ones included.
+///
+/// For noticing what a command left behind in a worktree, so unlike
+/// `checkout_status` it counts untracked files: build output that is not
+/// ignored is exactly what a later `add -A` would sweep into a card's diff.
+/// Ignored files are not listed, so a `target/` or `node_modules/` that the
+/// project ignores costs nothing here.
+pub async fn changed_paths(dir: &Path) -> anyhow::Result<std::collections::BTreeSet<String>> {
+    let out = git(
+        dir,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+        ],
+    )
+    .await?;
+    Ok(parse_porcelain(&out).into_iter().map(|f| f.path).collect())
+}
+
 pub async fn checkout_status(repo: &Path) -> anyhow::Result<(Option<String>, Vec<DirtyFile>)> {
     let out = git(
         repo,
@@ -1066,6 +1349,199 @@ mod tests {
         ] {
             git(dir, &args).await.unwrap();
         }
+    }
+
+    /// Commit `content` to `file` on the repo's own `main`.
+    async fn commit_on_main(repo: &Path, file: &str, content: &str) {
+        tokio::fs::write(repo.join(file), content).await.unwrap();
+        git(repo, &["add", "-A"]).await.unwrap();
+        git(repo, &["commit", "-m", &format!("main: {file}")])
+            .await
+            .unwrap();
+    }
+
+    /// The bug: diffing against the base's *tip* showed every commit landed
+    /// since the card branched as if the agent had deleted it.
+    #[tokio::test]
+    async fn a_cards_diff_does_not_show_later_base_commits_reversed() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("card.txt"), "mine\n")
+            .await
+            .unwrap();
+        commit_on_main(repo_dir.path(), "landed-elsewhere.txt", "theirs\n").await;
+
+        let diff = mgr.diff(&wt.path, "main").await.unwrap();
+        assert!(diff.contains("card.txt"), "{diff}");
+        assert!(!diff.contains("landed-elsewhere.txt"), "{diff}");
+        assert_eq!(mgr.behind_base(&wt.path, "main").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn bringing_the_base_in_cleanly_merges_and_catches_up() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.update_from_base(&wt, "main", "card").await.unwrap(),
+            BaseUpdate::UpToDate
+        );
+
+        tokio::fs::write(wt.path.join("card.txt"), "mine\n")
+            .await
+            .unwrap();
+        commit_on_main(repo_dir.path(), "other.txt", "theirs\n").await;
+        assert_eq!(
+            mgr.update_from_base(&wt, "main", "card").await.unwrap(),
+            BaseUpdate::Merged
+        );
+        assert_eq!(mgr.behind_base(&wt.path, "main").await.unwrap(), 0);
+        let diff = mgr.diff(&wt.path, "main").await.unwrap();
+        assert!(
+            diff.contains("card.txt") && !diff.contains("other.txt"),
+            "{diff}"
+        );
+        // And it still lands.
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "card")
+            .await
+            .unwrap();
+        assert!(repo_dir.path().join("card.txt").exists());
+    }
+
+    /// The whole path: conflict met on the card's branch, markers refused,
+    /// resolution concluded, card lands.
+    #[tokio::test]
+    async fn a_conflict_waits_in_the_worktree_until_its_markers_are_gone() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        commit_on_main(repo_dir.path(), "shared.txt", "original\n").await;
+        let mgr = WorktreeManager::new(root.path());
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(wt.path.join("shared.txt"), "the card's version\n")
+            .await
+            .unwrap();
+        commit_on_main(repo_dir.path(), "shared.txt", "main's version\n").await;
+
+        // Landing directly is refused as a conflict, naming the file.
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "card")
+            .await
+            .unwrap_err();
+        let refusal = err.downcast_ref::<MergeRefusal>().expect("a typed refusal");
+        assert_eq!(refusal.kind(), "conflict");
+        assert_eq!(refusal.files(), ["shared.txt"]);
+
+        // Brought into the card's branch, it waits there with markers.
+        let update = mgr.update_from_base(&wt, "main", "card").await.unwrap();
+        assert_eq!(
+            update,
+            BaseUpdate::Conflicted {
+                files: vec!["shared.txt".into()]
+            }
+        );
+        // Looking at the diff must not erase which files are in conflict.
+        mgr.diff(&wt.path, "main").await.unwrap();
+        assert_eq!(
+            mgr.merge_in_progress(&wt.path).await,
+            Some(vec!["shared.txt".to_string()])
+        );
+
+        // Neither landing nor concluding gets past the markers.
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "card")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<MergeRefusal>().map(|r| r.kind()),
+            Some("markers")
+        );
+        assert!(mgr.conclude_merge(&wt, "card").await.is_err());
+
+        // Resolved — here, to exactly what HEAD already had, the case where
+        // `git status` reports nothing and the merge used to stay open.
+        tokio::fs::write(wt.path.join("shared.txt"), "the card's version\n")
+            .await
+            .unwrap();
+        assert!(mgr.conclude_merge(&wt, "card").await.unwrap());
+        assert_eq!(mgr.merge_in_progress(&wt.path).await, None);
+
+        mgr.squash_merge(repo_dir.path(), &wt, "main", "card")
+            .await
+            .unwrap();
+        let landed = tokio::fs::read_to_string(repo_dir.path().join("shared.txt"))
+            .await
+            .unwrap();
+        assert_eq!(landed, "the card's version\n");
+    }
+
+    /// Markers an agent committed itself are caught at landing too.
+    #[tokio::test]
+    async fn committed_conflict_markers_never_land() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+        let wt = mgr
+            .create(repo_dir.path(), "main", Uuid::new_v4(), "card")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            wt.path.join("oops.txt"),
+            "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> main\n",
+        )
+        .await
+        .unwrap();
+        git(&wt.path, &["add", "-A"]).await.unwrap();
+        git(&wt.path, &["commit", "-m", "agent committed it"])
+            .await
+            .unwrap();
+
+        let err = mgr
+            .squash_merge(repo_dir.path(), &wt, "main", "card")
+            .await
+            .unwrap_err();
+        let refusal = err.downcast_ref::<MergeRefusal>().unwrap();
+        assert_eq!(refusal.kind(), "markers");
+        assert_eq!(refusal.files(), ["oops.txt"]);
+        assert!(!repo_dir.path().join("oops.txt").exists());
+    }
+
+    #[test]
+    fn a_markdown_underline_is_not_a_conflict_marker() {
+        assert!(!has_conflict_marker("Title\n=======\n\nText"));
+        assert!(has_conflict_marker("a\n<<<<<<< HEAD\nb"));
+        assert!(has_conflict_marker(">>>>>>>\n"));
+        assert!(!has_conflict_marker("<<<<<<<<< not quite"));
+        assert_eq!(
+            conflict_markers("+++ b/x.rs\n+fine\n+++ b/y.md\n+<<<<<<< ours\n+>>>>>>> theirs\n"),
+            vec!["y.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn conflicted_files_are_read_out_of_gits_report() {
+        let out = "git merge --squash aichip/x failed: Auto-merging a.rs\n\
+                   CONFLICT (content): Merge conflict in a.rs\n\
+                   CONFLICT (content): Merge conflict in dir/b c.txt — Automatic merge failed";
+        assert_eq!(
+            conflicted_in(out),
+            vec!["a.rs".to_string(), "dir/b c.txt".to_string()]
+        );
     }
 
     #[tokio::test]

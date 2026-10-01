@@ -1,5 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
+use aichip_core::runs::follow_up::{FollowUp, FollowUpRefusal};
 use aichip_core::runs::mentions;
 use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
@@ -33,6 +34,9 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
+        .route("/tasks/{id}/runs", get(task_runs))
+        .route("/tasks/{id}/base", get(base_status))
+        .route("/tasks/{id}/update-from-base", post(update_from_base))
         .route("/runs/{id}/keep", post(keep_variant))
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
@@ -140,6 +144,8 @@ async fn list(
                  AND (p.vcs <> 'git'
                       OR COALESCE(r.worktree_path, t.worktree_path) IS NOT NULL)) AS run_resumable,
                 r.cost_usd, r.model,
+                spent.run_count, spent.total_cost,
+                ck.status AS checks_status, ck.passed AS checks_passed, ck.total AS checks_total,
                 r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
          FROM tasks t
@@ -157,6 +163,25 @@ async fn list(
          LEFT JOIN LATERAL (
              SELECT * FROM runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
          ) r ON TRUE
+         -- Every attempt, not just the newest: a retry or a follow-up costs
+         -- money too, and a card that showed only its last run's dollars
+         -- understated itself by everything before it.
+         LEFT JOIN LATERAL (
+             SELECT count(*) AS run_count, SUM(cost_usd) AS total_cost
+               FROM runs WHERE task_id = t.id
+         ) spent ON TRUE
+         -- The newest check run, as counts only: its output can be tens of
+         -- kilobytes per command, and this list is fetched every few seconds.
+         LEFT JOIN LATERAL (
+             SELECT c.status,
+                    (SELECT count(*) FROM jsonb_array_elements(c.results) e
+                      WHERE e->>'exitCode' = '0' AND e->>'timedOut' = 'false') AS passed,
+                    GREATEST(jsonb_array_length(c.results),
+                             COALESCE((SELECT jsonb_array_length(commands) FROM project_checks
+                                        WHERE project_id = t.project_id), 0)) AS total
+               FROM check_runs c WHERE c.task_id = t.id
+              ORDER BY c.created_at DESC LIMIT 1
+         ) ck ON TRUE
          WHERE ($1::uuid IS NULL OR p.workspace_id = $1)
            AND ($2::uuid IS NULL OR t.project_id = $2)
          ORDER BY t.position, t.created_at",
@@ -237,6 +262,14 @@ async fn list(
                 // produced no row — so this is an Option, not a bool.
                 "runResumable": r.get::<Option<bool>, _>("run_resumable").unwrap_or(false),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                "runCount": r.get::<i64, _>("run_count"),
+                // Named apart from `prChecks`, which is GitHub's CI.
+                "localChecks": r.get::<Option<String>, _>("checks_status").map(|status| json!({
+                    "status": status,
+                    "passed": r.get::<Option<i64>, _>("checks_passed").unwrap_or(0),
+                    "total": r.get::<Option<i32>, _>("checks_total").unwrap_or(0),
+                })),
+                "totalCostUsd": r.get::<Option<f64>, _>("total_cost"),
                 // Enough for the chip. Anything more — how fresh it is, why
                 // the button is refused — is the drawer's own fetch, because
                 // this list refreshes every couple of seconds.
@@ -502,6 +535,18 @@ async fn merge(
     else {
         return Err((StatusCode::BAD_REQUEST, "task has no worktree yet".into()));
     };
+    // Landing commits whatever is in the worktree and then deletes it. With a
+    // run still writing there — a follow-up, a resume, an epic's step — that
+    // squash-merged half a change and pulled the directory out from under the
+    // agent mid-edit.
+    if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "an agent is still working on this card — wait for it to finish or cancel it, \
+             then merge"
+                .into(),
+        ));
+    }
     let wt = aichip_core::worktrees::manager::Worktree {
         path: worktree.into(),
         branch,
@@ -517,10 +562,15 @@ async fn merge(
             &format!("aichip: {title}"),
         )
         .await
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+        .map_err(merge_refused)?;
     sqlx::query("UPDATE tasks SET board_column='done' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    // Checks still waiting or going would run against a worktree about to be
+    // deleted, and report on code that has already landed.
+    aichip_core::checks::cancel_for_task(&state.db, id)
         .await
         .map_err(internal)?;
 
@@ -1069,11 +1119,12 @@ async fn post_comment(
     // acting on review feedback needs a run that can actually edit, in the
     // worktree the diff came from.
     if body.fix.unwrap_or(false) {
+        // The note is kept either way; a refusal says why nothing acted on it.
         let run_id = state
             .orchestrator
-            .enqueue_review_fix(comment_id)
+            .enqueue_follow_up(task_id, FollowUp::ReviewNote { comment_id })
             .await
-            .map_err(internal)?;
+            .map_err(start_refused)?;
         return Ok(Json(
             json!({ "id": comment_id, "runIds": [run_id], "fixRunId": run_id }),
         ));
@@ -1201,6 +1252,219 @@ async fn bakeoff(
     Ok(Json(json!({ "variants": variants })))
 }
 
+/// A refused merge as a JSON 409 the dashboard can act on: `kind` says which
+/// refusal, `files` which files, and `error` keeps the sentence it always had,
+/// so a client that only reads the text still reads the same words.
+fn merge_refused(e: anyhow::Error) -> ApiError {
+    use aichip_core::worktrees::manager::MergeRefusal;
+    match e.downcast_ref::<MergeRefusal>() {
+        Some(r) => (
+            StatusCode::CONFLICT,
+            json!({ "kind": r.kind(), "error": r.to_string(), "files": r.files() }).to_string(),
+        ),
+        None => (StatusCode::CONFLICT, e.to_string()),
+    }
+}
+
+/// The card's worktree and branch, or the reason there are none.
+async fn card_worktree(
+    state: &AppState,
+    id: Uuid,
+) -> Result<(aichip_core::worktrees::manager::Worktree, String, String), ApiError> {
+    let row = sqlx::query(
+        "SELECT t.title, t.worktree_path, t.branch, p.default_branch
+           FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+    let (Some(path), Some(branch)): (Option<String>, Option<String>) =
+        (row.get("worktree_path"), row.get("branch"))
+    else {
+        return Err((StatusCode::CONFLICT, "this card has no worktree".into()));
+    };
+    if !std::path::Path::new(&path).is_dir() {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card's worktree is gone from disk".into(),
+        ));
+    }
+    Ok((
+        aichip_core::worktrees::manager::Worktree {
+            path: path.into(),
+            branch,
+        },
+        row.get("default_branch"),
+        row.get("title"),
+    ))
+}
+
+/// How the card's branch stands against the base: how far behind, and
+/// whether a merge of the base is waiting to be resolved in it.
+async fn base_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let Ok((wt, base, _)) = card_worktree(&state, id).await else {
+        return Ok(Json(json!({ "behind": null, "merging": null })));
+    };
+    let worktrees = &state.orchestrator.worktrees;
+    Ok(Json(json!({
+        "base": base,
+        "behind": worktrees.behind_base(&wt.path, &base).await.ok(),
+        "merging": worktrees.merge_in_progress(&wt.path).await,
+    })))
+}
+
+/// Bring the base into the card's branch; on conflict, have an agent resolve
+/// it in the worktree. The way out of a merge that was refused as a conflict.
+async fn update_from_base(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "an agent is still working on this card — wait for it to finish first".into(),
+        ));
+    }
+    let (wt, base, title) = card_worktree(&state, id).await?;
+    let update = state
+        .orchestrator
+        .worktrees
+        .update_from_base(&wt, &base, &format!("aichip: {title}"))
+        .await
+        .map_err(merge_refused)?;
+    use aichip_core::worktrees::manager::BaseUpdate;
+    Ok(Json(match update {
+        BaseUpdate::UpToDate => json!({ "outcome": "up_to_date" }),
+        BaseUpdate::Merged => json!({ "outcome": "merged" }),
+        BaseUpdate::Conflicted { files } => {
+            let run_id = state
+                .orchestrator
+                .enqueue_follow_up(
+                    id,
+                    FollowUp::MergeConflict {
+                        files: files.clone(),
+                        base,
+                    },
+                )
+                .await
+                .map_err(start_refused)?;
+            json!({ "outcome": "conflicted", "files": files, "runId": run_id })
+        }
+    }))
+}
+
+/// Every run of a card, newest first: the history behind the one run the
+/// board shows.
+///
+/// Everything here was already stored — tokens, durations, sessions, what a
+/// run resumed — and only the newest run's status and dollars ever reached a
+/// screen. Earlier attempts, and the reasons they failed, were invisible.
+async fn task_runs(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT r.id, r.trigger, r.status, r.engine, r.model, r.tier_resolved,
+                r.cost_usd, r.input_tokens, r.output_tokens, r.cache_read_tokens,
+                r.cache_creation_tokens, r.tokens_provisional, r.created_at,
+                r.started_at, r.finished_at, r.error_reason, r.session_id,
+                r.session_engine, r.resumed_from, r.rate_limit_attempts,
+                r.variant_label, r.review_comment_id, r.plan_approval,
+                COALESCE(r.worktree_path, t.worktree_path) AS worktree,
+                p.path AS project_path, p.vcs, a.name AS agent_name
+           FROM runs r
+           JOIN tasks t ON t.id = r.task_id
+           JOIN projects p ON p.id = t.project_id
+           LEFT JOIN agents a ON a.id = r.agent_id
+          WHERE r.task_id = $1
+          ORDER BY r.created_at DESC",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // A terminal command is offered only while nothing is running on the card:
+    // a person resuming a session the board is also driving would be two
+    // writers in one worktree, the thing the rest of aichip refuses.
+    let quiet = !any_run_is_live(&state, task_id).await?;
+
+    let runs: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let started = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at");
+            let finished = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at");
+            let resume_command = quiet.then(|| resume_command(&state, r)).flatten();
+            json!({
+                "runId": r.get::<Uuid, _>("id"),
+                "trigger": r.get::<String, _>("trigger"),
+                "status": r.get::<String, _>("status"),
+                "engine": r.get::<String, _>("engine"),
+                "model": r.get::<Option<String>, _>("model"),
+                "tierResolved": r.get::<Option<String>, _>("tier_resolved"),
+                "agentName": r.get::<Option<String>, _>("agent_name"),
+                "variantLabel": r.get::<Option<String>, _>("variant_label"),
+                "planFirst": r.get::<bool, _>("plan_approval"),
+                "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                "inputTokens": r.get::<i64, _>("input_tokens"),
+                "outputTokens": r.get::<i64, _>("output_tokens"),
+                "cacheReadTokens": r.get::<i64, _>("cache_read_tokens"),
+                "cacheCreationTokens": r.get::<i64, _>("cache_creation_tokens"),
+                "tokensProvisional": r.get::<bool, _>("tokens_provisional"),
+                "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "startedAt": started,
+                "finishedAt": finished,
+                "seconds": match (started, finished) {
+                    (Some(a), Some(b)) => Some((b - a).num_seconds()),
+                    _ => None,
+                },
+                "error": r.get::<Option<String>, _>("error_reason"),
+                "sessionId": r.get::<Option<String>, _>("session_id"),
+                "resumedFrom": r.get::<Option<Uuid>, _>("resumed_from"),
+                "rateLimitAttempts": r.get::<i32, _>("rate_limit_attempts"),
+                "reviewCommentId": r.get::<Option<Uuid>, _>("review_comment_id"),
+                "resumeCommand": resume_command,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "runs": runs })))
+}
+
+/// `cd <dir> && <engine's resume argv>`, when there is a session, an engine
+/// that says how, and a directory still on disk to run it in.
+///
+/// The directory matters as much as the id: a CLI finds its sessions per
+/// working directory, so the command has to start where the run did — the
+/// run's worktree, or the project itself when it edits in place.
+fn resume_command(state: &AppState, r: &sqlx::postgres::PgRow) -> Option<String> {
+    let session = r.get::<Option<String>, _>("session_id")?;
+    let engine_id = r.get::<Option<String>, _>("session_engine")?;
+    let argv = state
+        .orchestrator
+        .engine(&engine_id)?
+        .interactive_resume_argv(&session)?;
+    let dir = if r.get::<String, _>("vcs") == "git" {
+        r.get::<Option<String>, _>("worktree")?
+    } else {
+        r.get::<String, _>("project_path")
+    };
+    std::path::Path::new(&dir)
+        .is_dir()
+        .then(|| shell_line(&dir, &argv))
+}
+
+/// One line a POSIX shell runs as written: every word single-quoted.
+fn shell_line(dir: &str, argv: &[String]) -> String {
+    let quote = |w: &str| format!("'{}'", w.replace('\'', "'\\''"));
+    let command: Vec<String> = argv.iter().map(|w| quote(w)).collect();
+    format!("cd {} && {}", quote(dir), command.join(" "))
+}
+
 /// Adopt a variant's work as the task's and discard the rest.
 async fn keep_variant(
     State(state): State<AppState>,
@@ -1324,8 +1588,27 @@ async fn remove_blocker(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentioned_agents, MoveTask};
+    use super::{mentioned_agents, shell_line, MoveTask};
     use uuid::Uuid;
+
+    /// The resume command is pasted into a shell, so a worktree path with a
+    /// space — or a quote — must arrive as one word, not as two commands.
+    #[test]
+    fn a_resume_command_survives_awkward_paths() {
+        let argv = [
+            "claude".to_string(),
+            "--resume".to_string(),
+            "abc-123".to_string(),
+        ];
+        assert_eq!(
+            shell_line("/home/me/my repo", &argv),
+            "cd '/home/me/my repo' && 'claude' '--resume' 'abc-123'"
+        );
+        assert_eq!(
+            shell_line("/tmp/it's", &argv[..1]),
+            "cd '/tmp/it'\\''s' && 'claude'"
+        );
+    }
 
     /// The distinction the whole reassignment feature rests on. If an absent
     /// field deserialized the same as an explicit null, then dragging a card
@@ -1430,14 +1713,31 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 }
 
 /// True when the task's latest run is still live.
-/// `enqueue_task`'s refusal as the status it means: a card that is already
-/// running is a conflict the person can act on, not a server error.
+/// A refusal to start work on a card, as the status it means: a card that is
+/// already running, or a follow-up with nothing to follow up on, is a conflict
+/// the person can act on, not a server error.
 fn start_refused(e: anyhow::Error) -> ApiError {
-    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() {
+    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() || e.is::<FollowUpRefusal>() {
         (StatusCode::CONFLICT, e.to_string())
     } else {
         internal(e)
     }
+}
+
+/// Is *any* run of this card still live — not just the newest one?
+///
+/// `run_is_active` reads the latest run only, which is the right question for
+/// "what is this card doing"; it is the wrong one before touching the worktree,
+/// where an older run still writing there matters just as much.
+async fn any_run_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1
+                           AND status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(task_id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)
 }
 
 async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {

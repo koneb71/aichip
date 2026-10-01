@@ -82,6 +82,11 @@ impl Engine for MockEngine {
         });
         Ok(EngineProcess::new(rx, Box::new(MockHandle)))
     }
+
+    /// A recorded transcript has no session to go back to.
+    fn interactive_resume_argv(&self, _session_id: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 struct MockHandle;

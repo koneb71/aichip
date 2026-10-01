@@ -5,6 +5,7 @@ import { useTierModel } from "../lib/models";
 import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
 import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
+import { checksChip } from "../lib/checks";
 import { springy } from "../lib/motion";
 import { isWorking, needsYou, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
 import { RunError } from "./ui/RunError";
@@ -282,6 +283,21 @@ function TaskCard({
           </span>
         )}
         {(() => {
+          const chip = checksChip(task.localChecks);
+          if (!chip) return null;
+          const tone = {
+            good: "bg-tier-easy-soft text-tier-easy",
+            bad: "bg-red-50 text-danger",
+            busy: "bg-panel-2 text-ink-dim",
+            warn: "bg-amber-50 text-amber-700",
+          }[chip.tone];
+          return (
+            <span className={`rounded-full px-2 py-0.5 tabular-nums ${tone}`} title={chip.title}>
+              {chip.label}
+            </span>
+          );
+        })()}
+        {(() => {
           const pr = prOnCard(task);
           return pr ? (
             <span
@@ -292,7 +308,12 @@ function TaskCard({
             </span>
           ) : null;
         })()}
-        {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
+        {/* Every run's dollars, not only the newest — a retry costs money too. */}
+        {(task.totalCostUsd ?? task.costUsd) != null && (
+          <span title={(task.runCount ?? 0) > 1 ? `over ${task.runCount} runs` : undefined}>
+            ${(task.totalCostUsd ?? task.costUsd)!.toFixed(3)}
+          </span>
+        )}
       </div>
     </motion.button>
   );

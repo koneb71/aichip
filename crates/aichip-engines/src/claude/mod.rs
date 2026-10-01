@@ -228,6 +228,17 @@ impl Engine for ClaudeEngine {
 
         Ok(EngineProcess::new(rx, Box::new(ClaudeHandle { child })))
     }
+
+    /// `claude --resume <id>`, checked against `claude --help` (2.1.x). The
+    /// session is found per working directory, which is why the dashboard
+    /// prints it after a `cd` into the run's worktree.
+    fn interactive_resume_argv(&self, session_id: &str) -> Option<Vec<String>> {
+        Some(vec![
+            "claude".to_string(),
+            "--resume".to_string(),
+            session_id.to_string(),
+        ])
+    }
 }
 
 struct ClaudeHandle {
