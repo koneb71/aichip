@@ -284,6 +284,9 @@ export interface Task {
    *  follow-ups cost money too. Absent from older servers. */
   runCount?: number;
   totalCostUsd?: number | null;
+  /** The newest run of this project's own checks on the card — counts only.
+   *  Not `prChecks`, which is GitHub's CI. */
+  localChecks?: LocalChecksSummary | null;
   model: string | null;
   /** Which CLI this card runs on. */
   engine: string;
@@ -1070,6 +1073,48 @@ export interface ModelSettings {
 }
 
 /** One attempt in a bake-off, with the diff that decides it. */
+export type CheckStatus = "queued" | "running" | "passed" | "failed" | "error" | "canceled";
+
+export interface LocalChecksSummary {
+  status: CheckStatus;
+  passed: number;
+  total: number;
+}
+
+/** One configured command. */
+export interface CheckCommand {
+  name: string;
+  command: string;
+}
+
+export interface ProjectChecks {
+  commands: CheckCommand[];
+  timeoutSecs: number;
+  autoFixAttempts: number;
+}
+
+export interface CheckResult {
+  name: string;
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  ms: number;
+  outputTail: string;
+}
+
+export interface CheckRun {
+  id: string;
+  runId: string | null;
+  status: CheckStatus;
+  startedBy: "auto" | "person";
+  results: CheckResult[];
+  /** Paths the checks themselves left changed in the worktree. */
+  dirtied: string[];
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 /** One run of a card, as its history shows it. */
 export interface TaskRun {
   runId: string;
@@ -2269,6 +2314,31 @@ export const api = {
     post(`/api/tasks/${taskId}/bakeoff`, { variants }).then((r) =>
       json<{ runIds: string[] }>(r),
     ),
+  projectChecks: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/checks`).then((r) => json<ProjectChecks>(r)),
+  /** Stores commands this machine will run — hence the write header. */
+  saveProjectChecks: (projectId: string, v: ProjectChecks) =>
+    fetch(`/api/projects/${projectId}/checks`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+      body: JSON.stringify({
+        commands: v.commands,
+        timeout_secs: v.timeoutSecs,
+        auto_fix_attempts: v.autoFixAttempts,
+      }),
+    }).then((r) => json<ProjectChecks>(r)),
+  taskChecks: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/checks`).then((r) =>
+      json<{ configured: boolean; latest: CheckRun | null }>(r),
+    ),
+  /** A person running the checks is the consent; the header proves a person's page sent it. */
+  runChecks: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/checks`, {
+      method: "POST",
+      headers: { "X-Aichip-Write": "1" },
+    }).then((r) => json<{ checkRunId: string }>(r)),
+  fixChecks: (taskId: string) =>
+    post(`/api/tasks/${taskId}/checks/fix`).then((r) => json<{ runId: string }>(r)),
   taskRuns: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/runs`).then((r) => json<{ runs: TaskRun[] }>(r)),
   bakeoff: (taskId: string) =>

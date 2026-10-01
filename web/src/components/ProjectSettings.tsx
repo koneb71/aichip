@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { api, Effort, Project, TierChoice } from "../lib/api";
 import { EnginePicker } from "../lib/engines";
 import { TIERS } from "./TierPicker";
+import { ChecksSettings } from "./ChecksSettings";
 
 /**
  * Everything about a project that is not a card.
@@ -153,6 +154,12 @@ export function ProjectSettings({
             </select>
           </div>
         </Field>
+
+        {project.kind === "repo" && project.vcs === "git" && (
+          <Field label="Checks">
+            <ChecksSettings projectId={project.id} fullAuto={project.fullAutoOptIn} />
+          </Field>
+        )}
 
         {error && (
           <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">

@@ -22,6 +22,7 @@ import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 import { PullRequestPanel } from "./PullRequestPanel";
 import { RunHistory } from "./RunHistory";
+import { ChecksPanel } from "./ChecksPanel";
 import { RunError } from "./ui/RunError";
 import { springy } from "../lib/motion";
 
@@ -280,7 +281,26 @@ export function TaskDrawer({
   };
 
   const loadDiff = async () => setDiff((await api.diff(task.id)).diff);
-  const merge = async () => {
+  // Failing checks warn, they do not block: the person may know the failure
+  // is old, flaky, or not this card's — but they should know it is there.
+  const merge = () => {
+    const c = task.localChecks;
+    if (c?.status === "failed") {
+      setConfirm({
+        title: "This card's checks fail",
+        body: `${c.total - c.passed} of ${c.total} of this project's checks fail on this card. Merging lands it anyway.`,
+        cta: "Merge anyway",
+        go: () => {
+          setConfirm(null);
+          doMerge();
+        },
+      });
+    } else {
+      doMerge();
+    }
+  };
+
+  const doMerge = async () => {
     if (merging) return;
     setMerging(true);
     setError(null);
@@ -678,6 +698,19 @@ export function TaskDrawer({
           {busy === "delete" ? "Deleting…" : "Delete"}
         </button>
       </div>
+
+      {/* Before the pull request: whether the work passes is the first thing
+          to know about a diff you are deciding whether to land. */}
+      {(task.boardColumn === "review" || (task.localChecks && task.boardColumn !== "done")) && (
+        <div className="border-b border-line px-5 py-2">
+          <ChecksPanel
+            taskId={task.id}
+            busy={running}
+            refreshKey={`${task.runId}:${task.runStatus}:${task.localChecks?.status ?? ""}`}
+            onChanged={onChanged}
+          />
+        </div>
+      )}
 
       {/* Below the row rather than in it: the status line wants the full
           width, and a card keeps its pull request after it leaves review. */}
