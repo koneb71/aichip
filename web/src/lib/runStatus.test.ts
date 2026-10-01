@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWorking, needsYou, statusLabel, stopReason } from "./runStatus";
+import { isWorking, needsYou, statusLabel, stopReason, unblocked } from "./runStatus";
 
 describe("stopReason", () => {
   it("explains a failure in red", () => {
@@ -54,5 +54,22 @@ describe("the two parked states are told apart", () => {
     // The board called both "approval" and rendered one of them as idle.
     expect(statusLabel("waiting_permission")).toBe("needs your answer");
     expect(statusLabel("awaiting_approval")).toBe("needs your approval");
+  });
+});
+
+describe("unblocked", () => {
+  const card = (boardColumn: string, ...blockers: string[]) => ({
+    boardColumn,
+    blockedBy: blockers.map((c) => ({ boardColumn: c })),
+  });
+  it("is a backlog card whose blockers have all landed", () => {
+    expect(unblocked(card("backlog", "done", "done"))).toBe(true);
+  });
+  it("is not a card still waiting on one", () => {
+    expect(unblocked(card("backlog", "done", "review"))).toBe(false);
+  });
+  it("is not a card that never waited, or already started", () => {
+    expect(unblocked(card("backlog"))).toBe(false);
+    expect(unblocked(card("running", "done"))).toBe(false);
   });
 });

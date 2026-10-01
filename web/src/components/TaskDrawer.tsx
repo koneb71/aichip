@@ -1513,6 +1513,16 @@ function Blockers({
     }
   };
 
+  const setAutoStart = async (on: boolean) => {
+    setError(null);
+    try {
+      await api.moveTask(task.id, { start_when_unblocked: on });
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
+
   if (blockers.length === 0 && candidates.length === 0) return null;
 
   return (
@@ -1576,6 +1586,20 @@ function Blockers({
           })}
         </AnimatePresence>
       </div>
+
+      {/* Only while something still blocks it: once they have all landed,
+          starting is a click away and there is nothing left to wait for. */}
+      {blockers.some((b) => b.boardColumn !== "done") && task.boardColumn === "backlog" && (
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
+          <input
+            type="checkbox"
+            checked={task.startWhenUnblocked}
+            onChange={(e) => setAutoStart(e.target.checked)}
+            className="accent-accent"
+          />
+          Start by itself when {blockers.length === 1 ? "it lands" : "they have all landed"}
+        </label>
+      )}
 
       {adding && (
         <select

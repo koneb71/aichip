@@ -87,6 +87,7 @@ async fn list(
                   WHERE d.task_id = t.id) AS blocked_by,
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
+                t.start_when_unblocked,
                 a.name AS agent_name, a.color AS agent_color,
                 t.skill_id, sk.name AS skill_name,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
@@ -285,6 +286,7 @@ async fn list(
                 "tierReason": r.get::<Option<String>, _>("tier_reason"),
                 "engine": r.get::<String, _>("engine"),
                 "planFirst": r.get::<bool, _>("plan_first"),
+                "startWhenUnblocked": r.get::<bool, _>("start_when_unblocked"),
             })
         })
         .collect();
@@ -335,6 +337,9 @@ struct CreateTask {
     /// create. Defaulted so existing clients keep working.
     #[serde(default)]
     attachment_ids: Vec<Uuid>,
+    /// Start by itself once every card blocking it has landed.
+    #[serde(default)]
+    start_when_unblocked: bool,
 }
 
 async fn create(
@@ -352,8 +357,8 @@ async fn create(
             .to_string()
     });
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -366,6 +371,7 @@ async fn create(
     .bind(body.team_id)
     .bind(body.plan_first)
     .bind(body.effort.map(|e| e.as_str().to_string()))
+    .bind(body.start_when_unblocked)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -459,27 +465,13 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
             ),
         ));
     }
-    let row = sqlx::query(
-        "SELECT COALESCE(a.engine, t.engine) AS engine,
-                COALESCE(a.permission_preset, t.permission_mode) AS mode
-         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?
-    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
-
-    let mode = match row.get::<Option<String>, _>("mode") {
-        Some(m) => serde_json::from_value(Value::String(m)).unwrap_or_default(),
-        None => state.orchestrator.default_permission_mode().await,
-    };
-    match state
-        .orchestrator
-        .vet_engine(&row.get::<String, _>("engine"), mode)
-    {
-        Some(reason) => Err((StatusCode::CONFLICT, reason)),
-        None => Ok(()),
+    match state.orchestrator.vet_card(task_id).await {
+        Ok(Some(reason)) => Err((StatusCode::CONFLICT, reason)),
+        Ok(None) => Ok(()),
+        Err(e) if matches!(e.downcast_ref(), Some(sqlx::Error::RowNotFound)) => {
+            Err((StatusCode::NOT_FOUND, "no such task".to_string()))
+        }
+        Err(e) => Err(internal(e)),
     }
 }
 
@@ -573,6 +565,9 @@ async fn merge(
     aichip_core::checks::cancel_for_task(&state.db, id)
         .await
         .map_err(internal)?;
+    // The work is on the base branch now, so a card waiting on it can branch
+    // from there and find it.
+    state.orchestrator.landed(id).await;
 
     // The card has landed, so the checkout it was built in is finished with.
     //
@@ -747,6 +742,10 @@ pub(crate) struct MoveTask {
     /// rather than stored — a card with nothing to ask for cannot run.
     #[serde(default)]
     prompt: Option<String>,
+    /// Start by itself once every card blocking it has landed. Absent leaves
+    /// it alone.
+    #[serde(default)]
+    start_when_unblocked: Option<bool>,
 }
 
 impl MoveTask {
@@ -893,7 +892,8 @@ pub(crate) async fn move_task(
                           model_tier = coalesce($10, model_tier),
                           effort = CASE WHEN $11 THEN $12 ELSE effort END,
                           skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END,
-                          prompt = coalesce($15, prompt)
+                          prompt = coalesce($15, prompt),
+                          start_when_unblocked = coalesce($16, start_when_unblocked)
          WHERE id = $1",
     )
     .bind(id)
@@ -911,9 +911,14 @@ pub(crate) async fn move_task(
     .bind(body.skill_id.is_some())
     .bind(body.skill_id.flatten())
     .bind(body.prompt.as_deref().map(str::trim))
+    .bind(body.start_when_unblocked)
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    // Filing a card in done is how a person says its work landed by hand.
+    if body.board_column.as_deref() == Some("done") {
+        state.orchestrator.landed(id).await;
+    }
 
     // Dropping into "running" from backlog means "go": start a run unless one
     // is already active or the task already did its work. The vet already

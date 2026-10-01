@@ -762,6 +762,8 @@ impl Orchestrator {
             .bind(task_id)
             .execute(&self.db.pool)
             .await?;
+            // A no-op unless that was 'done'.
+            self.landed(task_id).await;
         }
         Ok(())
     }
@@ -1107,6 +1109,40 @@ impl Orchestrator {
                 }
             }
         }
+    }
+
+    /// Would this card's engine refuse the mode the card would run in? The
+    /// card's own answer to [`Self::vet_engine`]: the bound agent's engine and
+    /// preset win over the card's, and a card with no mode takes the
+    /// machine's default — exactly what the run would get.
+    pub async fn vet_card(&self, task_id: Uuid) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT COALESCE(a.engine, t.engine) AS engine,
+                    COALESCE(a.permission_preset, t.permission_mode) AS mode
+             FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let mode = match row.get::<Option<String>, _>("mode") {
+            Some(m) => serde_json::from_value(serde_json::Value::String(m)).unwrap_or_default(),
+            None => self.default_permission_mode().await,
+        };
+        Ok(self.vet_engine(&row.get::<String, _>("engine"), mode))
+    }
+
+    /// Start a card the way the Start button does — vetted, queued, moved to
+    /// In Progress — for a start nobody clicked.
+    pub async fn start_card(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        if let Some(reason) = self.vet_card(task_id).await? {
+            anyhow::bail!(reason);
+        }
+        let run_id = self.enqueue_task(task_id).await?;
+        sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+            .bind(task_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
     }
 
     /// Would this engine refuse this mode? Checked before a run is queued so
@@ -2017,6 +2053,9 @@ impl Orchestrator {
                     .bind(column)
                     .execute(&self.db.pool)
                     .await?;
+                if in_place {
+                    self.landed(task_id).await;
+                }
             }
 
             // What the run did goes on the card, where a person reading it
@@ -2155,6 +2194,8 @@ impl Orchestrator {
         {
             tracing::warn!(%run_id, error = %e, "an app's change did not land");
         }
+        // A no-op unless the build just landed it.
+        self.landed(task_id).await;
 
         // A task spawned from chat reports back into that chat.
         if let Some(chat_id) = run.get::<Option<Uuid>, _>("task_chat_id") {

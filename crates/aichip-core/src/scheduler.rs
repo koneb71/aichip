@@ -105,6 +105,10 @@ impl Scheduler {
     }
 
     async fn tick(&self) -> anyhow::Result<()> {
+        // First, and its failure never holds back a workflow or a routine.
+        if let Err(e) = self.orchestrator.settle_landings().await {
+            tracing::warn!(error = %e, "could not settle card landings");
+        }
         self.tick_workflows().await?;
         self.tick_routines().await
     }

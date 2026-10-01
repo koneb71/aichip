@@ -140,6 +140,8 @@ A **follow-up** (`runs/follow_up.rs`) is a run that goes back into a card's exis
 
 **Merge conflicts** are met on the card's branch, never the person's checkout: "Update from main" runs `update_from_base`, which merges the base into the card's `aichip/…` branch inside its worktree and, on conflict, leaves the merge in progress for a `conflict` follow-up. `commit_worktree` refuses while conflict markers remain (and concludes the merge unconditionally once they're gone), and `squash_merge` refuses any diff that adds them — so markers can never land. A card's diff is measured from `merge-base`, not the base's tip.
 
+**Landing** (`aichip_core::landing`): a card blocked by another waits for it to reach *done*. Six things write `done` and share no code path, so the seam is `tasks.landed_at`, set once by whichever notices first. A writer of done calls `orchestrator.landed(task_id)` (a no-op if the card is not done or already landed); `settle_landings` sweeps every scheduler tick for the ones that do not. A dependent with `start_when_unblocked` starts through `start_card` — the Start button's vet and door — and every other dependent gets a note and an `unblocked` attention event.
+
 Attachments live under `~/.aichip/attachments/` and are granted via `--add-dir`, deliberately never copied into a worktree (an agent running `git add -A` would commit them).
 
 ## Testing

@@ -19,7 +19,8 @@ export type AttentionEvent =
   | "rate_limited"
   | "over_budget"
   | "finished"
-  | "routine";
+  | "routine"
+  | "unblocked";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -208,6 +209,8 @@ export interface Task {
   /** Cards this one waits for. Unresolved until the blocker is done —
    *  landed — because a dependent run branches from main. */
   blockedBy: { id: string; title: string; boardColumn: Task["boardColumn"] }[];
+  /** Start by itself once every blocker has landed. */
+  startWhenUnblocked: boolean;
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */
@@ -1979,6 +1982,8 @@ export const api = {
       skill_id?: string | null;
       /** The card's brief. Omit to leave it; empty is refused server-side. */
       prompt?: string;
+      /** Start by itself once every blocker has landed. */
+      start_when_unblocked?: boolean;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
