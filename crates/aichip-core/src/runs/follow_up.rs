@@ -25,6 +25,8 @@ pub enum FollowUp {
     ReviewNote { comment_id: Uuid },
     /// A check run on the card's worktree that did not pass.
     FailingChecks { check_run_id: Uuid },
+    /// The base branch, brought into the card's branch, conflicted here.
+    MergeConflict { files: Vec<String>, base: String },
 }
 
 impl FollowUp {
@@ -33,6 +35,7 @@ impl FollowUp {
         match self {
             Self::ReviewNote { .. } => "review",
             Self::FailingChecks { .. } => "checks",
+            Self::MergeConflict { .. } => "conflict",
         }
     }
 
@@ -140,6 +143,9 @@ impl Orchestrator {
                     return Err(FollowUpRefusal::NothingFailed.into());
                 }
                 (checks_fix_prompt(&task_prompt, &results), None)
+            }
+            FollowUp::MergeConflict { files, base } => {
+                (conflict_prompt(&task_prompt, files, base), None)
             }
         };
 
@@ -267,6 +273,38 @@ pub(crate) fn checks_fix_prompt(task_prompt: &str, results: &[CheckResult]) -> S
     prompt
 }
 
+/// Brief an agent to resolve a merge conflict left in its worktree.
+///
+/// The markers in the files are the real brief; this says where they are and
+/// fences off the git commands that would undo or bypass the merge. aichip
+/// concludes the merge itself once no marker is left, and refuses to while
+/// one is — so the agent's whole job is the edit.
+pub(crate) fn conflict_prompt(task_prompt: &str, files: &[String], base: &str) -> String {
+    let listed: Vec<String> = files.iter().take(30).map(|f| format!("- {f}")).collect();
+    let mut prompt = format!(
+        "{base} has moved on since you started, and bringing it into this branch \
+         conflicted. The merge is in progress in your working directory, with \
+         conflict markers in:\n{}\n",
+        listed.join("\n")
+    );
+    if files.len() > 30 {
+        prompt.push_str(&format!("…and {} more.\n", files.len() - 30));
+    }
+    prompt.push_str(&format!(
+        "\nFor context, your task was:\n{}\n",
+        clip_chars(task_prompt, 800),
+    ));
+    prompt.push_str(
+        "\nResolve every conflict so both sides' intent survives: keep what the base \
+         branch changed and what your work changed, reconciling them where they \
+         overlap. Remove every conflict marker. Edit the files only — do not run \
+         git commit, git merge --abort, git reset, git checkout or git stash; the \
+         merge is concluded for you when no markers are left. Finish with one line \
+         per file saying how you resolved it.",
+    );
+    prompt
+}
+
 /// The last `max` characters, marking that the start was dropped.
 fn clip_tail(s: &str, max: usize) -> String {
     let count = s.chars().count();
@@ -314,6 +352,19 @@ mod tests {
         );
         // The rule that matters most: deleting the test is not a fix.
         assert!(prompt.contains("do not delete, skip or loosen tests"));
+    }
+
+    #[test]
+    fn a_conflict_brief_names_the_files_and_fences_off_git() {
+        let prompt = conflict_prompt(
+            "Add CSV export",
+            &["src/a.rs".into(), "README.md".into()],
+            "main",
+        );
+        assert!(prompt.contains("main has moved on"));
+        assert!(prompt.contains("- src/a.rs") && prompt.contains("- README.md"));
+        assert!(prompt.contains("do not run git commit, git merge --abort"));
+        assert!(prompt.contains("Add CSV export"));
     }
 
     #[test]

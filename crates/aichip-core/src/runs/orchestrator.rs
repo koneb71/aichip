@@ -1549,7 +1549,7 @@ impl Orchestrator {
                     COALESCE(r.prompt_override, t.prompt) AS prompt,
                     t.model_tier, r.tier_override,
                     COALESCE(r.agent_id, t.agent_id) AS agent_id,
-                    r.variant_label, r.worktree_path AS run_worktree, r.review_comment_id,
+                    r.variant_label, r.worktree_path AS run_worktree, r.review_comment_id, r.trigger,
                     t.permission_mode, t.effort AS task_effort,
                     t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     r.plan_approval, r.plan_approved_at,
@@ -2012,6 +2012,26 @@ impl Orchestrator {
             // after a Full Auto run — see `checks` for why — and never for an
             // in-place project (no worktree), an app (it lands by itself) or a
             // bake-off variant (its own worktree, compared by a person).
+            // A conflict the agent was asked to resolve is concluded here, so
+            // the card's branch carries the merge before anything checks it.
+            // Markers left behind keep it open — and Merge refuses — which is
+            // the point: the resolution is not done.
+            if run.get::<String, _>("trigger") == "conflict" {
+                if let Some(branch) = run.get::<Option<String>, _>("branch") {
+                    let wt = crate::worktrees::manager::Worktree {
+                        path: work_dir.clone(),
+                        branch,
+                    };
+                    let message = format!(
+                        "aichip: resolve conflicts in {}",
+                        run.get::<String, _>("title")
+                    );
+                    if let Err(e) = self.worktrees.conclude_merge(&wt, &message).await {
+                        tracing::warn!(%run_id, error = %e, "the conflict is not resolved yet");
+                    }
+                }
+            }
+
             let title: String = run.get("title");
             let chat_id: Option<Uuid> = run.get("task_chat_id");
             let auto_checks = if !in_place

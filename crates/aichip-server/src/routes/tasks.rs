@@ -35,6 +35,8 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
         .route("/tasks/{id}/runs", get(task_runs))
+        .route("/tasks/{id}/base", get(base_status))
+        .route("/tasks/{id}/update-from-base", post(update_from_base))
         .route("/runs/{id}/keep", post(keep_variant))
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
@@ -560,7 +562,7 @@ async fn merge(
             &format!("aichip: {title}"),
         )
         .await
-        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+        .map_err(merge_refused)?;
     sqlx::query("UPDATE tasks SET board_column='done' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -1248,6 +1250,112 @@ async fn bakeoff(
         }));
     }
     Ok(Json(json!({ "variants": variants })))
+}
+
+/// A refused merge as a JSON 409 the dashboard can act on: `kind` says which
+/// refusal, `files` which files, and `error` keeps the sentence it always had,
+/// so a client that only reads the text still reads the same words.
+fn merge_refused(e: anyhow::Error) -> ApiError {
+    use aichip_core::worktrees::manager::MergeRefusal;
+    match e.downcast_ref::<MergeRefusal>() {
+        Some(r) => (
+            StatusCode::CONFLICT,
+            json!({ "kind": r.kind(), "error": r.to_string(), "files": r.files() }).to_string(),
+        ),
+        None => (StatusCode::CONFLICT, e.to_string()),
+    }
+}
+
+/// The card's worktree and branch, or the reason there are none.
+async fn card_worktree(
+    state: &AppState,
+    id: Uuid,
+) -> Result<(aichip_core::worktrees::manager::Worktree, String, String), ApiError> {
+    let row = sqlx::query(
+        "SELECT t.title, t.worktree_path, t.branch, p.default_branch
+           FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
+    let (Some(path), Some(branch)): (Option<String>, Option<String>) =
+        (row.get("worktree_path"), row.get("branch"))
+    else {
+        return Err((StatusCode::CONFLICT, "this card has no worktree".into()));
+    };
+    if !std::path::Path::new(&path).is_dir() {
+        return Err((
+            StatusCode::CONFLICT,
+            "this card's worktree is gone from disk".into(),
+        ));
+    }
+    Ok((
+        aichip_core::worktrees::manager::Worktree {
+            path: path.into(),
+            branch,
+        },
+        row.get("default_branch"),
+        row.get("title"),
+    ))
+}
+
+/// How the card's branch stands against the base: how far behind, and
+/// whether a merge of the base is waiting to be resolved in it.
+async fn base_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let Ok((wt, base, _)) = card_worktree(&state, id).await else {
+        return Ok(Json(json!({ "behind": null, "merging": null })));
+    };
+    let worktrees = &state.orchestrator.worktrees;
+    Ok(Json(json!({
+        "base": base,
+        "behind": worktrees.behind_base(&wt.path, &base).await.ok(),
+        "merging": worktrees.merge_in_progress(&wt.path).await,
+    })))
+}
+
+/// Bring the base into the card's branch; on conflict, have an agent resolve
+/// it in the worktree. The way out of a merge that was refused as a conflict.
+async fn update_from_base(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "an agent is still working on this card — wait for it to finish first".into(),
+        ));
+    }
+    let (wt, base, title) = card_worktree(&state, id).await?;
+    let update = state
+        .orchestrator
+        .worktrees
+        .update_from_base(&wt, &base, &format!("aichip: {title}"))
+        .await
+        .map_err(merge_refused)?;
+    use aichip_core::worktrees::manager::BaseUpdate;
+    Ok(Json(match update {
+        BaseUpdate::UpToDate => json!({ "outcome": "up_to_date" }),
+        BaseUpdate::Merged => json!({ "outcome": "merged" }),
+        BaseUpdate::Conflicted { files } => {
+            let run_id = state
+                .orchestrator
+                .enqueue_follow_up(
+                    id,
+                    FollowUp::MergeConflict {
+                        files: files.clone(),
+                        base,
+                    },
+                )
+                .await
+                .map_err(start_refused)?;
+            json!({ "outcome": "conflicted", "files": files, "runId": run_id })
+        }
+    }))
 }
 
 /// Every run of a card, newest first: the history behind the one run the
