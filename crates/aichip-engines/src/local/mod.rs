@@ -328,6 +328,11 @@ impl Engine for LocalEngine {
         spec.extra_env.insert(self.runtime.host_env(), self.host());
         self.runner.start(spec)
     }
+
+    /// The session belongs to the OpenCode runner, which offers none yet.
+    fn interactive_resume_argv(&self, session_id: &str) -> Option<Vec<String>> {
+        self.runner.interactive_resume_argv(session_id)
+    }
 }
 
 /// What to tell somebody whose local runtime is installed but not offered.

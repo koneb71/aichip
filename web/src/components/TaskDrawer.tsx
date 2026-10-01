@@ -21,6 +21,7 @@ import { PreviewPanel } from "./PreviewPanel";
 import { CardTierPicker } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 import { PullRequestPanel } from "./PullRequestPanel";
+import { RunHistory } from "./RunHistory";
 import { RunError } from "./ui/RunError";
 import { springy } from "../lib/motion";
 
@@ -48,7 +49,12 @@ export function TaskDrawer({
 }) {
   const tierModel = useTierModel();
   const engines = useEngines();
-  const events = useRunStream(task.runId);
+  // An earlier run picked from History, replayed in the Activity tab. Null is
+  // "the card's newest run", which is what everything live — Cancel, the
+  // permission prompts, the plan panel — stays bound to regardless.
+  const [viewing, setViewing] = useState<string | null>(null);
+  useEffect(() => setViewing(null), [task.id, task.runId]);
+  const events = useRunStream(viewing ?? task.runId);
   const [diff, setDiff] = useState<string | null>(null);
   // The bake-off panel: same brief, several attempts, compare and keep one.
   const [bakeoff, setBakeoff] = useState(false);
@@ -69,7 +75,7 @@ export function TaskDrawer({
   // A live run opens on its transcript, not on an empty comment thread —
   // landing on "No comments yet" while an agent is mid-Bash is how the card
   // ends up looking like nothing is happening at all.
-  const [panel, setPanel] = useState<"comments" | "activity">(
+  const [panel, setPanel] = useState<"comments" | "activity" | "history">(
     isActive(task.runStatus) ? "activity" : "comments",
   );
   const att = useAttachments(task.projectId);
@@ -344,7 +350,13 @@ export function TaskDrawer({
               {tierModel(shownTier)}
             </span>
             {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
-            {task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>}
+            {(task.runCount ?? 0) > 1 && task.totalCostUsd != null ? (
+              <span title={`Latest run $${(task.costUsd ?? 0).toFixed(3)}`}>
+                ${task.totalCostUsd.toFixed(3)} over {task.runCount} runs
+              </span>
+            ) : (
+              task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>
+            )}
           </div>
           {/* Why aichip picked this tier. Shown whenever aichip did the
               picking, because a choice made on someone's behalf that they
@@ -366,7 +378,7 @@ export function TaskDrawer({
           })()}
           {/* What it is doing, right in the header — visible without opening
               a tab or scrolling a transcript. */}
-          <ActivityLine events={events} live={running} className="mt-1" />
+          <ActivityLine events={viewing ? [] : events} live={running && !viewing} className="mt-1" />
         </div>
         <button onClick={onClose} className="text-ink-dim hover:text-ink">
           ✕
@@ -795,7 +807,7 @@ export function TaskDrawer({
       </motion.div>
 
       <div className="flex gap-1 border-b border-line px-5 py-2">
-        {(["comments", "activity"] as const).map((p) => (
+        {(["comments", "activity", "history"] as const).map((p) => (
           <button
             key={p}
             onClick={() => setPanel(p)}
@@ -803,7 +815,10 @@ export function TaskDrawer({
               panel === p ? "bg-panel-2 font-medium text-ink" : "text-ink-dim"
             }`}
           >
-            {p === "activity" ? "Activity" : "Comments"}
+            {p === "activity" ? "Activity" : p === "history" ? "History" : "Comments"}
+            {p === "history" && (task.runCount ?? 0) > 1 && (
+              <span className="ml-1 text-ink-dim">{task.runCount}</span>
+            )}
             {p === "activity" && running && (
               <motion.span
                 className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-tier-medium align-middle"
@@ -833,8 +848,29 @@ export function TaskDrawer({
           />
         ) : panel === "comments" ? (
           <TaskComments taskId={task.id} />
+        ) : panel === "history" ? (
+          <RunHistory
+            taskId={task.id}
+            latestRunId={task.runId}
+            latestStatus={task.runStatus}
+            viewing={viewing}
+            onView={(id) => {
+              setViewing(id === task.runId ? null : id);
+              setPanel("activity");
+            }}
+          />
         ) : (
-          <RunStream events={events} empty="Nothing yet." />
+          <>
+            {viewing && (
+              <div className="mb-3 flex items-center justify-between rounded-md bg-panel-2 px-3 py-2 text-[11px] text-ink-dim">
+                <span>Showing an earlier run of this card.</span>
+                <button onClick={() => setViewing(null)} className="text-ink hover:underline">
+                  Back to the latest
+                </button>
+              </div>
+            )}
+            <RunStream events={events} empty="Nothing yet." />
+          </>
         )}
       </div>
     </motion.aside>

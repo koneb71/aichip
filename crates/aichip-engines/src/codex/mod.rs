@@ -320,6 +320,12 @@ impl Engine for CodexEngine {
 
         Ok(EngineProcess::new(rx, Box::new(CodexHandle { pid })))
     }
+
+    /// Not offered until the interactive resume command is checked against a
+    /// `codex` binary — the `exec` flags this adapter uses taught that lesson.
+    fn interactive_resume_argv(&self, _session_id: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 struct CodexHandle {

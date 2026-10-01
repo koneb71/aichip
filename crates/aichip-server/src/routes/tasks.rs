@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/attachments/claim", post(attach_to_task))
         .route("/tasks/{id}/start", post(start))
         .route("/tasks/{id}/bakeoff", get(bakeoff).post(start_bakeoff))
+        .route("/tasks/{id}/runs", get(task_runs))
         .route("/runs/{id}/keep", post(keep_variant))
         .route("/tasks/{id}/diff", get(diff))
         .route("/tasks/{id}/merge", post(merge))
@@ -141,6 +142,7 @@ async fn list(
                  AND (p.vcs <> 'git'
                       OR COALESCE(r.worktree_path, t.worktree_path) IS NOT NULL)) AS run_resumable,
                 r.cost_usd, r.model,
+                spent.run_count, spent.total_cost,
                 r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
          FROM tasks t
@@ -158,6 +160,13 @@ async fn list(
          LEFT JOIN LATERAL (
              SELECT * FROM runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
          ) r ON TRUE
+         -- Every attempt, not just the newest: a retry or a follow-up costs
+         -- money too, and a card that showed only its last run's dollars
+         -- understated itself by everything before it.
+         LEFT JOIN LATERAL (
+             SELECT count(*) AS run_count, SUM(cost_usd) AS total_cost
+               FROM runs WHERE task_id = t.id
+         ) spent ON TRUE
          WHERE ($1::uuid IS NULL OR p.workspace_id = $1)
            AND ($2::uuid IS NULL OR t.project_id = $2)
          ORDER BY t.position, t.created_at",
@@ -238,6 +247,8 @@ async fn list(
                 // produced no row — so this is an Option, not a bool.
                 "runResumable": r.get::<Option<bool>, _>("run_resumable").unwrap_or(false),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                "runCount": r.get::<i64, _>("run_count"),
+                "totalCostUsd": r.get::<Option<f64>, _>("total_cost"),
                 // Enough for the chip. Anything more — how fresh it is, why
                 // the button is refused — is the drawer's own fetch, because
                 // this list refreshes every couple of seconds.
@@ -1215,6 +1226,113 @@ async fn bakeoff(
     Ok(Json(json!({ "variants": variants })))
 }
 
+/// Every run of a card, newest first: the history behind the one run the
+/// board shows.
+///
+/// Everything here was already stored — tokens, durations, sessions, what a
+/// run resumed — and only the newest run's status and dollars ever reached a
+/// screen. Earlier attempts, and the reasons they failed, were invisible.
+async fn task_runs(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT r.id, r.trigger, r.status, r.engine, r.model, r.tier_resolved,
+                r.cost_usd, r.input_tokens, r.output_tokens, r.cache_read_tokens,
+                r.cache_creation_tokens, r.tokens_provisional, r.created_at,
+                r.started_at, r.finished_at, r.error_reason, r.session_id,
+                r.session_engine, r.resumed_from, r.rate_limit_attempts,
+                r.variant_label, r.review_comment_id, r.plan_approval,
+                COALESCE(r.worktree_path, t.worktree_path) AS worktree,
+                p.path AS project_path, p.vcs, a.name AS agent_name
+           FROM runs r
+           JOIN tasks t ON t.id = r.task_id
+           JOIN projects p ON p.id = t.project_id
+           LEFT JOIN agents a ON a.id = r.agent_id
+          WHERE r.task_id = $1
+          ORDER BY r.created_at DESC",
+    )
+    .bind(task_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(internal)?;
+
+    // A terminal command is offered only while nothing is running on the card:
+    // a person resuming a session the board is also driving would be two
+    // writers in one worktree, the thing the rest of aichip refuses.
+    let quiet = !any_run_is_live(&state, task_id).await?;
+
+    let runs: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let started = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at");
+            let finished = r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at");
+            let resume_command = quiet.then(|| resume_command(&state, r)).flatten();
+            json!({
+                "runId": r.get::<Uuid, _>("id"),
+                "trigger": r.get::<String, _>("trigger"),
+                "status": r.get::<String, _>("status"),
+                "engine": r.get::<String, _>("engine"),
+                "model": r.get::<Option<String>, _>("model"),
+                "tierResolved": r.get::<Option<String>, _>("tier_resolved"),
+                "agentName": r.get::<Option<String>, _>("agent_name"),
+                "variantLabel": r.get::<Option<String>, _>("variant_label"),
+                "planFirst": r.get::<bool, _>("plan_approval"),
+                "costUsd": r.get::<Option<f64>, _>("cost_usd"),
+                "inputTokens": r.get::<i64, _>("input_tokens"),
+                "outputTokens": r.get::<i64, _>("output_tokens"),
+                "cacheReadTokens": r.get::<i64, _>("cache_read_tokens"),
+                "cacheCreationTokens": r.get::<i64, _>("cache_creation_tokens"),
+                "tokensProvisional": r.get::<bool, _>("tokens_provisional"),
+                "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "startedAt": started,
+                "finishedAt": finished,
+                "seconds": match (started, finished) {
+                    (Some(a), Some(b)) => Some((b - a).num_seconds()),
+                    _ => None,
+                },
+                "error": r.get::<Option<String>, _>("error_reason"),
+                "sessionId": r.get::<Option<String>, _>("session_id"),
+                "resumedFrom": r.get::<Option<Uuid>, _>("resumed_from"),
+                "rateLimitAttempts": r.get::<i32, _>("rate_limit_attempts"),
+                "reviewCommentId": r.get::<Option<Uuid>, _>("review_comment_id"),
+                "resumeCommand": resume_command,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "runs": runs })))
+}
+
+/// `cd <dir> && <engine's resume argv>`, when there is a session, an engine
+/// that says how, and a directory still on disk to run it in.
+///
+/// The directory matters as much as the id: a CLI finds its sessions per
+/// working directory, so the command has to start where the run did — the
+/// run's worktree, or the project itself when it edits in place.
+fn resume_command(state: &AppState, r: &sqlx::postgres::PgRow) -> Option<String> {
+    let session = r.get::<Option<String>, _>("session_id")?;
+    let engine_id = r.get::<Option<String>, _>("session_engine")?;
+    let argv = state
+        .orchestrator
+        .engine(&engine_id)?
+        .interactive_resume_argv(&session)?;
+    let dir = if r.get::<String, _>("vcs") == "git" {
+        r.get::<Option<String>, _>("worktree")?
+    } else {
+        r.get::<String, _>("project_path")
+    };
+    std::path::Path::new(&dir)
+        .is_dir()
+        .then(|| shell_line(&dir, &argv))
+}
+
+/// One line a POSIX shell runs as written: every word single-quoted.
+fn shell_line(dir: &str, argv: &[String]) -> String {
+    let quote = |w: &str| format!("'{}'", w.replace('\'', "'\\''"));
+    let command: Vec<String> = argv.iter().map(|w| quote(w)).collect();
+    format!("cd {} && {}", quote(dir), command.join(" "))
+}
+
 /// Adopt a variant's work as the task's and discard the rest.
 async fn keep_variant(
     State(state): State<AppState>,
@@ -1338,8 +1456,27 @@ async fn remove_blocker(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentioned_agents, MoveTask};
+    use super::{mentioned_agents, shell_line, MoveTask};
     use uuid::Uuid;
+
+    /// The resume command is pasted into a shell, so a worktree path with a
+    /// space — or a quote — must arrive as one word, not as two commands.
+    #[test]
+    fn a_resume_command_survives_awkward_paths() {
+        let argv = [
+            "claude".to_string(),
+            "--resume".to_string(),
+            "abc-123".to_string(),
+        ];
+        assert_eq!(
+            shell_line("/home/me/my repo", &argv),
+            "cd '/home/me/my repo' && 'claude' '--resume' 'abc-123'"
+        );
+        assert_eq!(
+            shell_line("/tmp/it's", &argv[..1]),
+            "cd '/tmp/it'\\''s' && 'claude'"
+        );
+    }
 
     /// The distinction the whole reassignment feature rests on. If an absent
     /// field deserialized the same as an explicit null, then dragging a card

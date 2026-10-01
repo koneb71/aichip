@@ -278,7 +278,12 @@ export interface Task {
    *  and whether the worktree still exists — are decided on the click, and
    *  come back as a 409 saying which. */
   runResumable?: boolean;
+  /** The latest run's dollars. */
   costUsd: number | null;
+  /** Every run of the card, and their dollars together — retries and
+   *  follow-ups cost money too. Absent from older servers. */
+  runCount?: number;
+  totalCostUsd?: number | null;
   model: string | null;
   /** Which CLI this card runs on. */
   engine: string;
@@ -1065,6 +1070,40 @@ export interface ModelSettings {
 }
 
 /** One attempt in a bake-off, with the diff that decides it. */
+/** One run of a card, as its history shows it. */
+export interface TaskRun {
+  runId: string;
+  /** manual | resume | review | bakeoff | schedule | … — why this run exists. */
+  trigger: string;
+  status: string;
+  engine: string;
+  model: string | null;
+  tierResolved: string | null;
+  agentName: string | null;
+  variantLabel: string | null;
+  planFirst: boolean;
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** The engine never sent its final count; these are the running tally. */
+  tokensProvisional: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  seconds: number | null;
+  error: string | null;
+  sessionId: string | null;
+  resumedFrom: string | null;
+  rateLimitAttempts: number;
+  /** The review note a follow-up acted on. */
+  reviewCommentId: string | null;
+  /** `cd … && …` to continue this session in your own terminal. Null when the
+   *  engine offers none, the directory is gone, or the card is busy. */
+  resumeCommand: string | null;
+}
+
 export interface BakeoffVariant {
   runId: string;
   label: string;
@@ -2230,6 +2269,8 @@ export const api = {
     post(`/api/tasks/${taskId}/bakeoff`, { variants }).then((r) =>
       json<{ runIds: string[] }>(r),
     ),
+  taskRuns: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/runs`).then((r) => json<{ runs: TaskRun[] }>(r)),
   bakeoff: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/bakeoff`).then((r) =>
       json<{ variants: BakeoffVariant[] }>(r),
