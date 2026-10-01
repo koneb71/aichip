@@ -503,6 +503,18 @@ async fn merge(
     else {
         return Err((StatusCode::BAD_REQUEST, "task has no worktree yet".into()));
     };
+    // Landing commits whatever is in the worktree and then deletes it. With a
+    // run still writing there — a follow-up, a resume, an epic's step — that
+    // squash-merged half a change and pulled the directory out from under the
+    // agent mid-edit.
+    if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "an agent is still working on this card — wait for it to finish or cancel it, \
+             then merge"
+                .into(),
+        ));
+    }
     let wt = aichip_core::worktrees::manager::Worktree {
         path: worktree.into(),
         branch,
@@ -1441,6 +1453,22 @@ fn start_refused(e: anyhow::Error) -> ApiError {
     } else {
         internal(e)
     }
+}
+
+/// Is *any* run of this card still live — not just the newest one?
+///
+/// `run_is_active` reads the latest run only, which is the right question for
+/// "what is this card doing"; it is the wrong one before touching the worktree,
+/// where an older run still writing there matters just as much.
+async fn any_run_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1
+                           AND status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(task_id)
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)
 }
 
 async fn run_is_active(state: &AppState, task_id: Uuid) -> Result<bool, ApiError> {
