@@ -1554,7 +1554,7 @@ impl Orchestrator {
                     t.title, t.worktree_path, t.branch, t.chat_id AS task_chat_id,
                     r.plan_approval, r.plan_approved_at,
                     p.id AS project_id, p.path AS project_path, p.default_branch, p.full_auto_opt_in,
-                    p.vcs,
+                    p.vcs, p.kind AS project_kind,
                     a.system_prompt AS agent_prompt, a.model_tier AS agent_tier,
                     a.effort AS agent_effort,
                     a.allowed_tools AS agent_tools, a.permission_preset AS agent_preset,
@@ -1899,6 +1899,8 @@ impl Orchestrator {
         };
 
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
+        // Kept for the checks that may run in it once the work is done.
+        let work_dir = cwd.clone();
         let spec = RunSpec {
             cwd,
             prompt,
@@ -2005,22 +2007,50 @@ impl Orchestrator {
                 .execute(&self.db.pool)
                 .await?;
 
-            // "A run finished" has been offered in the attention settings all
-            // along and never sent: nothing fired it. Off by default there, so
-            // this reaches only the people who turned it on.
-            let ctx = crate::attention::Ctx {
-                title: format!(
-                    "aichip: \"{}\" {}",
-                    run.get::<String, _>("title"),
-                    if in_place {
-                        "is done"
-                    } else {
-                        "is ready for review"
-                    }
-                ),
-                ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+            // The project's checks run before anyone is told the card is
+            // ready, so the news can say whether the work passes. Unasked only
+            // after a Full Auto run — see `checks` for why — and never for an
+            // in-place project (no worktree), an app (it lands by itself) or a
+            // bake-off variant (its own worktree, compared by a person).
+            let title: String = run.get("title");
+            let chat_id: Option<Uuid> = run.get("task_chat_id");
+            let auto_checks = if !in_place
+                && run.get::<Option<String>, _>("variant_label").is_none()
+                && run.get::<String, _>("project_kind") == "repo"
+                && permission_mode == PermissionMode::FullAuto
+            {
+                crate::checks::config(&self.db, project_id)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(%run_id, error = %e, "could not read this project's checks");
+                        None
+                    })
+            } else {
+                None
             };
-            crate::attention::fire(&self.db, crate::attention::Event::Finished, ctx).await;
+            match auto_checks {
+                Some(config) => {
+                    let check_run_id =
+                        crate::checks::begin(&self.db, task_id, Some(run_id), "auto").await?;
+                    let this = self.clone();
+                    tokio::spawn(async move {
+                        this.settle_checks(
+                            task_id,
+                            run_id,
+                            check_run_id,
+                            work_dir,
+                            config,
+                            title,
+                            chat_id,
+                        )
+                        .await
+                    });
+                }
+                None => {
+                    self.announce_ready(run_id, &title, chat_id, in_place, None)
+                        .await
+                }
+            }
 
             // The work joins the agent's memory. Best-effort: a failed memory
             // write must not fail a completed run.
@@ -2070,9 +2100,8 @@ impl Orchestrator {
             if outcome.status.is_terminal() {
                 let title: String = run.get("title");
                 let note = match outcome.status {
-                    RunStatus::Completed => {
-                        format!("Task \"{title}\" completed — ready for review on the board.")
-                    }
+                    // Said by `announce_ready`, after any checks have run.
+                    RunStatus::Completed => return Ok(()),
                     RunStatus::Canceled => format!("Task \"{title}\" was canceled."),
                     _ => format!(
                         "Task \"{title}\" failed: {}",
@@ -2091,6 +2120,55 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// Tell whoever is listening that a card's work is ready: the attention
+    /// hook's "a run finished", and the chat the card came from.
+    ///
+    /// One place, called either straight away or once checks have settled, so
+    /// the message can carry their result — "ready for review" about a diff
+    /// whose tests fail is not the same news.
+    pub(crate) async fn announce_ready(
+        &self,
+        run_id: Uuid,
+        title: &str,
+        chat_id: Option<Uuid>,
+        in_place: bool,
+        checks: Option<&crate::checks::Summary>,
+    ) {
+        let checked = checks
+            .map(|c| format!(" — {}", c.line()))
+            .unwrap_or_default();
+        // "A run finished" has been offered in the attention settings all
+        // along and never sent: nothing fired it. Off by default there, so
+        // this reaches only the people who turned it on.
+        let ctx = crate::attention::Ctx {
+            title: format!(
+                "aichip: \"{title}\" {}{checked}",
+                if in_place {
+                    "is done"
+                } else {
+                    "is ready for review"
+                }
+            ),
+            ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+        };
+        crate::attention::fire(&self.db, crate::attention::Event::Finished, ctx).await;
+
+        // A task spawned from chat reports back into that chat.
+        if let Some(chat_id) = chat_id {
+            let note =
+                format!("Task \"{title}\" completed — ready for review on the board{checked}.");
+            let _ = sqlx::query(
+                "INSERT INTO chat_messages (chat_id, role, content, run_id)
+                 VALUES ($1, 'system', $2, $3)",
+            )
+            .bind(chat_id)
+            .bind(note)
+            .bind(run_id)
+            .execute(&self.db.pool)
+            .await;
+        }
     }
 
     /// Queue a run that writes documentation instead of code.

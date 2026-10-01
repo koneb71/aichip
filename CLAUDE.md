@@ -129,6 +129,15 @@ The write path carries its own gates (no `.git`, a root allow-list, a content
 hash, and a header no cross-origin request can set); they are documented at the
 top of [crates/aichip-server/src/routes/files.rs](crates/aichip-server/src/routes/files.rs).
 
+### Checks and follow-ups
+
+A **follow-up** (`runs/follow_up.rs`) is a run that goes back into a card's existing worktree to act on something said about its diff — a review note, failing checks — so the fix lands in the same diff. It records its note in `runs.review_comment_id`, never `comment_id`, which every reader takes to mean "a comment reply".
+
+**Checks** (`aichip_core::checks`) are a project's own test/lint commands, run in a card's worktree after an agent finishes. Two rules that are easy to break:
+
+- **Only `routes/checks.rs` writes `project_checks`.** It holds shell commands this machine runs; a test fails if any other file writes it. Never put a check command on a row an agent, an importer or an app build can write.
+- **Checks start unasked only after a Full Auto run.** They execute code the agent may have edited, so after any other mode a person clicks "Run checks" — that click is the consent. The same goes for the bounded auto-fix.
+
 Attachments live under `~/.aichip/attachments/` and are granted via `--add-dir`, deliberately never copied into a worktree (an agent running `git add -A` would commit them).
 
 ## Testing

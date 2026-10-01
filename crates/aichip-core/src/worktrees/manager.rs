@@ -860,6 +860,28 @@ pub struct DirtyFile {
 /// meant was to squint at an error string. Same query, same flags — the two
 /// must agree, or the dashboard would offer to resolve a set the merge does not
 /// care about.
+/// Every path `git status` reports as changed, untracked ones included.
+///
+/// For noticing what a command left behind in a worktree, so unlike
+/// `checkout_status` it counts untracked files: build output that is not
+/// ignored is exactly what a later `add -A` would sweep into a card's diff.
+/// Ignored files are not listed, so a `target/` or `node_modules/` that the
+/// project ignores costs nothing here.
+pub async fn changed_paths(dir: &Path) -> anyhow::Result<std::collections::BTreeSet<String>> {
+    let out = git(
+        dir,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+        ],
+    )
+    .await?;
+    Ok(parse_porcelain(&out).into_iter().map(|f| f.path).collect())
+}
+
 pub async fn checkout_status(repo: &Path) -> anyhow::Result<(Option<String>, Vec<DirtyFile>)> {
     let out = git(
         repo,

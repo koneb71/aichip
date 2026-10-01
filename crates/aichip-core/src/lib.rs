@@ -2,6 +2,7 @@ pub mod apps;
 pub mod attention;
 pub mod brain;
 pub mod bus;
+pub mod checks;
 pub mod db;
 pub mod fence;
 pub mod github;

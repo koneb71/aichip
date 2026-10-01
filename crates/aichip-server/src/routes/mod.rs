@@ -3,6 +3,7 @@ pub mod agents;
 pub mod apps;
 pub mod attachments;
 pub mod chat;
+pub mod checks;
 pub mod engines;
 pub mod files;
 pub mod fs;
@@ -48,6 +49,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(projects::router())
         .merge(apps::router())
         .merge(tasks::router())
+        .merge(checks::router())
         .merge(agents::router())
         .merge(skills::router())
         .merge(teams::router())

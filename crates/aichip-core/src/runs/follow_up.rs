@@ -13,6 +13,7 @@
 //! resumed. A follow-up now records its note in `review_comment_id`, and
 //! nothing reads that as anything else.
 
+use crate::checks::CheckResult;
 use crate::runs::orchestrator::{clip_chars, AlreadyRunning, Orchestrator};
 use sqlx::Row;
 use uuid::Uuid;
@@ -22,6 +23,8 @@ use uuid::Uuid;
 pub enum FollowUp {
     /// A person's note on the diff, anchored to a line or to the whole change.
     ReviewNote { comment_id: Uuid },
+    /// A check run on the card's worktree that did not pass.
+    FailingChecks { check_run_id: Uuid },
 }
 
 impl FollowUp {
@@ -29,6 +32,7 @@ impl FollowUp {
     fn trigger(&self) -> &'static str {
         match self {
             Self::ReviewNote { .. } => "review",
+            Self::FailingChecks { .. } => "checks",
         }
     }
 
@@ -48,6 +52,10 @@ pub enum FollowUpRefusal {
     Done,
     #[error("that note does not belong to this card")]
     ForeignNote,
+    #[error("those checks do not belong to this card")]
+    ForeignChecks,
+    #[error("those checks did not fail, so there is nothing to fix")]
+    NothingFailed,
 }
 
 impl Orchestrator {
@@ -116,6 +124,23 @@ impl Orchestrator {
                 );
                 (prompt, Some(*comment_id))
             }
+            FollowUp::FailingChecks { check_run_id } => {
+                let checks =
+                    sqlx::query("SELECT task_id, status, results FROM check_runs WHERE id = $1")
+                        .bind(check_run_id)
+                        .fetch_one(&mut *guard)
+                        .await?;
+                if checks.get::<Uuid, _>("task_id") != task_id {
+                    return Err(FollowUpRefusal::ForeignChecks.into());
+                }
+                let results: Vec<CheckResult> = serde_json::from_value(checks.get("results"))?;
+                if checks.get::<String, _>("status") != "failed"
+                    || results.iter().all(CheckResult::passed)
+                {
+                    return Err(FollowUpRefusal::NothingFailed.into());
+                }
+                (checks_fix_prompt(&task_prompt, &results), None)
+            }
         };
 
         let run_id: Uuid = sqlx::query_scalar(
@@ -183,9 +208,124 @@ pub(crate) fn review_fix_prompt(
     prompt
 }
 
+/// Turn failing checks into a brief for the agent.
+///
+/// The output is the evidence, so it is kept — but from its end, where a test
+/// runner puts the failures and the summary, and bounded per check so one
+/// enormous log cannot crowd out the rest. The rules at the bottom are the
+/// point: the way to make a red check green that an agent reaches for first is
+/// to delete the test, and that is not a fix.
+pub(crate) fn checks_fix_prompt(task_prompt: &str, results: &[CheckResult]) -> String {
+    let failing: Vec<&CheckResult> = results.iter().filter(|r| !r.passed()).collect();
+    let mut prompt = String::from(
+        "The checks configured for this project failed on the work you already did. \
+         Make them pass.\n",
+    );
+    for r in failing.iter().take(5) {
+        let how = if r.timed_out {
+            "it did not finish within its time limit".to_string()
+        } else {
+            match r.exit_code {
+                Some(code) => format!("it exited with status {code}"),
+                None => "it could not run".to_string(),
+            }
+        };
+        prompt.push_str(&format!(
+            "\n### {}\nCommand: `{}` — {how}.\nThe end of its output:\n```\n{}\n```\n",
+            r.name,
+            r.command,
+            clip_tail(&r.output_tail, 3000),
+        ));
+    }
+    if failing.len() > 5 {
+        prompt.push_str(&format!(
+            "\n…and {} more failing checks.\n",
+            failing.len() - 5
+        ));
+    }
+    let passing: Vec<&str> = results
+        .iter()
+        .filter(|r| r.passed())
+        .map(|r| r.name.as_str())
+        .collect();
+    if !passing.is_empty() {
+        prompt.push_str(&format!(
+            "\nThese passed and must keep passing: {}.\n",
+            passing.join(", ")
+        ));
+    }
+    prompt.push_str(&format!(
+        "\nFor context, the original task was:\n{}\n",
+        clip_chars(task_prompt, 800),
+    ));
+    prompt.push_str(
+        "\nFix the code, not the checks: do not delete, skip or loosen tests, and do not \
+         change how the checks are run. If a failure has nothing to do with your change, \
+         say so in one line and stop without editing. Finish with one short line saying \
+         what you changed.",
+    );
+    prompt
+}
+
+/// The last `max` characters, marking that the start was dropped.
+fn clip_tail(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    "…\n".to_string() + &s.chars().skip(count - max).collect::<String>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result(name: &str, exit: Option<i32>, timed_out: bool, output: &str) -> CheckResult {
+        CheckResult {
+            name: name.into(),
+            command: format!("run {name}"),
+            exit_code: exit,
+            timed_out,
+            ms: 10,
+            output_tail: output.into(),
+        }
+    }
+
+    #[test]
+    fn failing_checks_become_a_brief_with_their_evidence() {
+        let prompt = checks_fix_prompt(
+            "Add CSV export",
+            &[
+                result("tests", Some(101), false, "test export::csv ... FAILED"),
+                result("lint", Some(0), false, "ok"),
+                result("e2e", None, true, "waiting…"),
+            ],
+        );
+        assert!(prompt.contains("### tests") && prompt.contains("status 101"));
+        assert!(
+            prompt.contains("export::csv ... FAILED"),
+            "the output is the evidence"
+        );
+        assert!(prompt.contains("did not finish within its time limit"));
+        assert!(prompt.contains("must keep passing: lint"));
+        assert!(
+            !prompt.contains("### lint"),
+            "a passing check is not a failure"
+        );
+        // The rule that matters most: deleting the test is not a fix.
+        assert!(prompt.contains("do not delete, skip or loosen tests"));
+    }
+
+    #[test]
+    fn a_huge_log_keeps_its_end() {
+        let log = format!("{}\nFINAL: 1 failed", "noise\n".repeat(10_000));
+        let prompt = checks_fix_prompt("t", &[result("tests", Some(1), false, &log)]);
+        assert!(
+            prompt.contains("FINAL: 1 failed"),
+            "the summary is at the end"
+        );
+        assert!(prompt.chars().count() < 5000);
+    }
 
     #[test]
     fn a_review_note_becomes_a_scoped_brief() {

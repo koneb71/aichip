@@ -277,6 +277,11 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     }
 
     let orphans = orchestrator.recover_orphans().await?;
+    match aichip_core::checks::recover_interrupted(&db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(n, "marked checks interrupted by the last shutdown"),
+        Err(e) => tracing::warn!(error = %e, "could not settle interrupted checks"),
+    }
     if orphans > 0 {
         tracing::warn!(
             orphans,

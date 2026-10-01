@@ -143,6 +143,7 @@ async fn list(
                       OR COALESCE(r.worktree_path, t.worktree_path) IS NOT NULL)) AS run_resumable,
                 r.cost_usd, r.model,
                 spent.run_count, spent.total_cost,
+                ck.status AS checks_status, ck.passed AS checks_passed, ck.total AS checks_total,
                 r.tier_resolved, r.tier_reason,
                 r.team_id AS run_team_id
          FROM tasks t
@@ -167,6 +168,18 @@ async fn list(
              SELECT count(*) AS run_count, SUM(cost_usd) AS total_cost
                FROM runs WHERE task_id = t.id
          ) spent ON TRUE
+         -- The newest check run, as counts only: its output can be tens of
+         -- kilobytes per command, and this list is fetched every few seconds.
+         LEFT JOIN LATERAL (
+             SELECT c.status,
+                    (SELECT count(*) FROM jsonb_array_elements(c.results) e
+                      WHERE e->>'exitCode' = '0' AND e->>'timedOut' = 'false') AS passed,
+                    GREATEST(jsonb_array_length(c.results),
+                             COALESCE((SELECT jsonb_array_length(commands) FROM project_checks
+                                        WHERE project_id = t.project_id), 0)) AS total
+               FROM check_runs c WHERE c.task_id = t.id
+              ORDER BY c.created_at DESC LIMIT 1
+         ) ck ON TRUE
          WHERE ($1::uuid IS NULL OR p.workspace_id = $1)
            AND ($2::uuid IS NULL OR t.project_id = $2)
          ORDER BY t.position, t.created_at",
@@ -248,6 +261,12 @@ async fn list(
                 "runResumable": r.get::<Option<bool>, _>("run_resumable").unwrap_or(false),
                 "costUsd": r.get::<Option<f64>, _>("cost_usd"),
                 "runCount": r.get::<i64, _>("run_count"),
+                // Named apart from `prChecks`, which is GitHub's CI.
+                "localChecks": r.get::<Option<String>, _>("checks_status").map(|status| json!({
+                    "status": status,
+                    "passed": r.get::<Option<i64>, _>("checks_passed").unwrap_or(0),
+                    "total": r.get::<Option<i32>, _>("checks_total").unwrap_or(0),
+                })),
                 "totalCostUsd": r.get::<Option<f64>, _>("total_cost"),
                 // Enough for the chip. Anything more — how fresh it is, why
                 // the button is refused — is the drawer's own fetch, because
@@ -545,6 +564,11 @@ async fn merge(
     sqlx::query("UPDATE tasks SET board_column='done' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    // Checks still waiting or going would run against a worktree about to be
+    // deleted, and report on code that has already landed.
+    aichip_core::checks::cancel_for_task(&state.db, id)
         .await
         .map_err(internal)?;
 
