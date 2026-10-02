@@ -16,6 +16,9 @@ You need:
 - Node 22 and pnpm 10, if you are touching the dashboard. CI pins those two.
 - On Debian or Ubuntu, `pkg-config` and `libssl-dev` for the Rust build.
 
+`./scripts/setup.sh` installs all of that on macOS (with Homebrew) or Linux (apt, dnf, pacman
+or zypper), skipping whatever is already there; `--dry-run` shows what it would do first.
+
 You do **not** need a Postgres. `eren serve` downloads, initialises and manages a private one
 under `~/.eren/pgdata` on first run. If you would rather point it at your own, `docker compose
 up -d` and, for Eren, export `DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip` —

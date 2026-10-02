@@ -106,6 +106,12 @@ compatibility promise yet.
   `cursor-agent`, `qwen` or `amp` — already logged in. `eren doctor` tells you which ones it
   found, and where to get the ones it didn't. Ollama and LM Studio need OpenCode as well.
 
+**`./scripts/setup.sh` installs all of the above** on macOS (with Homebrew) or Linux (apt,
+dnf, pacman or zypper): git, Rust, the build tools, Node 22, pnpm 10 and — if no agent CLI
+is on `PATH` yet — Claude Code. Anything already present at a good enough version is left
+alone, so it is safe to run again. `--dry-run` prints what it would do, `--yes` stops it
+asking, and `--with-optional` adds `gh`. It never logs a CLI in; run it once yourself.
+
 Optional:
 
 - **`gh`**, for cloning from GitHub, importing issues as cards, publishing a folder as a
@@ -124,6 +130,7 @@ dependency; no content leaves the machine in either direction.
 ## Quick start
 
 ```bash
+./scripts/setup.sh                # installs the requirements, skipping what you have
 cargo run -p eren-cli -- doctor   # checks git, gh, and every agent CLI it can find
 cd web && pnpm install && pnpm build && cd ..
 cargo run -p eren-cli -- serve    # the dashboard on http://127.0.0.1:4820
