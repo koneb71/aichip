@@ -5,6 +5,8 @@ import { useWorkspace } from "../lib/workspace";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { ChatThread } from "../components/chat/ChatThread";
 import { SpaceDocs } from "../components/chat/SpaceDocs";
+import { Button, IconButton } from "../components/ui/Button";
+import { Pencil, X } from "lucide-react";
 
 /**
  * Chat as a page: the conversation list on the left, one thread full-width.
@@ -179,7 +181,7 @@ export default function ChatPage() {
       <select
         value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
+        className="w-full rounded-lg border border-border bg-panel px-2 py-1.5 text-sm"
         title="General is not connected to any project. A space is a folder of documents; a project is a repository."
       >
         <option value={GENERAL}>General — no project</option>
@@ -207,13 +209,15 @@ export default function ChatPage() {
         )}
       </select>
       {spaceDraft === null ? (
-        <button
+        <Button
+          variant="ghost"
+          size="md"
           onClick={() => setSpaceDraft("")}
-          className="rounded-lg border border-dashed border-line px-2 py-1.5 text-sm text-ink-dim hover:border-ink-dim hover:text-ink"
+          className="border border-dashed border-border"
           title="A space is a folder of documents this chat can read — no repository, no board"
         >
           + New space
-        </button>
+        </Button>
       ) : (
         <input
           autoFocus
@@ -228,15 +232,12 @@ export default function ChatPage() {
           className="rounded-lg border border-accent bg-panel px-2 py-1.5 text-sm outline-none"
         />
       )}
-      <button
-        onClick={startNewChat}
-        className="rounded-lg border border-line px-2 py-1.5 text-sm text-ink-dim hover:bg-panel-2 hover:text-ink"
-      >
+      <Button variant="secondary" size="md" onClick={startNewChat}>
         + New conversation
-      </button>
+      </Button>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && (
-          <div className="px-2 py-2 text-xs text-ink-dim">No conversations yet.</div>
+          <div className="px-2 py-2 text-xs text-fg-muted">No conversations yet.</div>
         )}
         {chats.map((c) => (
           <div
@@ -271,26 +272,28 @@ export default function ChatPage() {
                 title="Double-click to rename"
               >
                 {c.title}
-                <span className="ml-1.5 text-[10px] text-ink-dim">{c.messageCount}</span>
+                <span className="ml-1.5 text-[10px] text-fg-muted">{c.messageCount}</span>
               </button>
             )}
-            <button
+            <IconButton
+              size="xs"
+              label="Rename"
               onClick={() => {
                 setRenaming(c.id);
                 setRenameDraft(c.title);
               }}
-              title="Rename"
-              className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-ink group-hover:opacity-100"
+              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
             >
-              ✎
-            </button>
-            <button
+              <Pencil className="size-3" aria-hidden />
+            </IconButton>
+            <IconButton
+              size="xs"
+              label="Delete conversation"
               onClick={() => removeChat(c.id)}
-              title="Delete conversation"
-              className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
             >
-              ✕
-            </button>
+              <X className="size-3" aria-hidden />
+            </IconButton>
           </div>
         ))}
       </div>
@@ -303,7 +306,7 @@ export default function ChatPage() {
       {error && (
         <button
           onClick={() => setError(null)}
-          className="mx-4 mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-left text-xs text-danger"
+          className="mx-4 mt-2 rounded-lg bg-danger-subtle px-3 py-1.5 text-left text-xs text-danger-fg"
           title="Dismiss"
         >
           {error}
@@ -326,12 +329,12 @@ export default function ChatPage() {
       <div className="flex h-full min-h-0 flex-col">
         <button
           onClick={() => setRailOpen((o) => !o)}
-          className="border-b border-line px-4 py-2 text-left text-sm font-medium"
+          className="border-b border-border px-4 py-2 text-left text-sm font-medium"
         >
           {chats.find((c) => c.id === chatId)?.title ?? "Conversations"}{" "}
-          <span className="text-[10px] text-ink-dim">{railOpen ? "▴" : "▾"}</span>
+          <span className="text-[10px] text-fg-muted">{railOpen ? "▴" : "▾"}</span>
         </button>
-        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-line">{rail}</div>}
+        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-border">{rail}</div>}
         {thread}
       </div>
     );
@@ -339,7 +342,7 @@ export default function ChatPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)]">
-      <div className="min-h-0 overflow-hidden border-r border-line bg-panel">{rail}</div>
+      <div className="min-h-0 overflow-hidden border-r border-border bg-panel">{rail}</div>
       {thread}
     </div>
   );

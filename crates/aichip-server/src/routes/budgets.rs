@@ -18,8 +18,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-const WRITE_HEADER: &str = "x-aichip-write";
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/budgets", get(list).post(create))
@@ -66,14 +64,7 @@ async fn estimate(
 }
 
 fn require_write_header(headers: &HeaderMap) -> Result<(), ApiError> {
-    if headers.contains_key(WRITE_HEADER) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            format!("changing a budget needs the {WRITE_HEADER} header"),
-        ))
-    }
+    super::require_write(headers, "this changes a budget")
 }
 
 /// Every policy with where it stands this window, and the engines a dollar
@@ -146,7 +137,7 @@ async fn scope_label(
 }
 
 #[derive(Deserialize)]
-struct Body {
+pub(crate) struct Body {
     name: String,
     scope_kind: String,
     scope_id: Option<Uuid>,
@@ -275,7 +266,7 @@ async fn create(
 
 /// The whole policy, replaced — a budget is small enough that partial edits
 /// would only add ways to leave it half-changed.
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
@@ -283,6 +274,12 @@ async fn update(
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
     let v = validate(&state, body).await?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::BudgetPolicy,
+        &id.to_string(),
+    )
+    .await;
     let changed = sqlx::query(
         "UPDATE budget_policies SET
             name = $2, scope_kind = $3, scope_id = $4, window_kind = $5, cap_usd = $6,
@@ -322,6 +319,12 @@ async fn remove(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::BudgetPolicy,
+        &id.to_string(),
+    )
+    .await;
     budgets::release_held(&state.db, id)
         .await
         .map_err(internal)?;

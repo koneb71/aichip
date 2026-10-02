@@ -3,8 +3,10 @@
 **A local-first multi-agent workflow platform for coding agents — no API keys.**
 
 aichip is a dashboard for running the coding-agent CLIs you already have installed.
-It spawns [Claude Code](https://code.claude.com), [OpenCode](https://opencode.ai) and
-[Codex](https://developers.openai.com/codex/cli) as child processes on your own machine,
+It spawns [Claude Code](https://code.claude.com), [OpenCode](https://opencode.ai),
+[Codex](https://developers.openai.com/codex/cli), [Gemini CLI](https://github.com/google-gemini/gemini-cli),
+[Cursor CLI](https://cursor.com/cli), [Qwen Code](https://github.com/QwenLM/qwen-code) and
+[Amp](https://ampcode.com) as child processes on your own machine,
 under your own subscription login, and gives them a board, a queue, git worktrees, a diff
 to review, and a record of what everything cost. Models served locally by
 [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) are offered the same way,
@@ -88,7 +90,8 @@ move between commits, and there is no migration story for anything but the datab
 - **Node and pnpm** to build the dashboard. The server serves `web/dist`, so a source
   checkout needs `pnpm build` once before `serve` has a UI to hand out.
 - **git** on `PATH`. It is not optional: worktrees are how a task stays reviewable.
-- **At least one agent CLI on `PATH`** — `claude`, `opencode` or `codex` — already logged
+- **At least one agent CLI on `PATH`** — `claude`, `opencode`, `codex`, `gemini`,
+  `cursor-agent`, `qwen` or `amp` — already logged
   in. `aichip doctor` tells you which ones it found, and where to get the ones it didn't.
 
 Optional:
@@ -754,6 +757,28 @@ run — the sandbox, the approval stance, the persona, aichip's own MCP endpoint
 as `-c key=value` overrides rather than written to `~/.codex/config.toml`, which the second
 compliance invariant forbids touching. Your own config still merges in underneath.
 
+### Gemini CLI, Cursor CLI, Qwen Code and Amp
+
+| | Gemini CLI | Cursor CLI | Qwen Code | Amp |
+|---|---|---|---|---|
+| Binary | `gemini` | `cursor-agent` | `qwen` | `amp` |
+| Model ids | aliases (`pro`, `flash`, `flash-lite`) or full ids | your account's (`auto` by default) | whatever your provider serves | none — a tier picks a mode (`low` · `medium` · `high`) |
+| Ask permission mid-run | **no** | **no** | **no** | **no** |
+| Auto-edit | yes | **no** — `--force` allows commands too | yes | **no** — it never asks about anything |
+| Read-only passes (plans, summaries) | yes (`default` mode denies) | yes (`--mode ask`) | yes (`default` mode, tools excluded) | **refused** — it has no read-only mode |
+| aichip's tools (assistant, manager, team) | **no** | **no** | yes (`--mcp-config`) | **no** (not yet verified) |
+| Persona | folded into the prompt | folded into the prompt | `--append-system-prompt` | folded into the prompt |
+| Cost | tokens only | tokens only | tokens only | tokens only |
+
+What none of them can do is refused at the click with a reason rather than quietly widened:
+Auto-edit on Cursor or Amp, and the assistant, a project manager or a team on an engine that
+can't be handed aichip's tools for one run. Those tools could only reach Gemini or Cursor
+through a config file in the run's folder, which would land in the diff — so they don't.
+
+These four adapters were written from each CLI's own source or documentation and tested
+against recorded-shape fixtures and stand-in binaries, **not yet against the real CLIs**.
+Their fixture folders say so and say how to re-record them.
+
 Because OpenCode cannot stop and ask, starting a **Reviewed** card on it is refused with a
 `409` and a reason, at the click that caused it. Auto-edit works: aichip generates a
 permission allow-list from the run's tools instead of answering prompts one at a time. That
@@ -879,7 +904,7 @@ comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild
 ## Workspace layout
 
 - `crates/aichip-shared` — event types, model tiers, workflow YAML, the auth-env guard
-- `crates/aichip-engines` — engine adapter trait; Claude Code, OpenCode, Codex and local (Ollama / LM Studio) adapters, mock engine
+- `crates/aichip-engines` — engine adapter trait; Claude Code, OpenCode, Codex, Gemini CLI, Cursor CLI, Qwen Code, Amp and local (Ollama / LM Studio) adapters, mock engine
 - `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler, apps, RAG, code map
 - `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy + preview proxy
 - `crates/aichip-cli` — the `aichip` binary (`serve`, `doctor`)

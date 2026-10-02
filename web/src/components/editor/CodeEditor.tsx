@@ -4,6 +4,7 @@ import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
 import "monaco-editor/esm/vs/language/json/monaco.contribution";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import { MONACO_COLORS, MONACO_THEME_NAME } from "../../theme/editorThemes";
 
 /**
  * Monaco, self-hosted and loaded only when someone opens a file.
@@ -43,32 +44,19 @@ self.MonacoEnvironment = {
   },
 };
 
-/** The light theme, for anything that embeds the editor in the app's own
- *  chrome. */
-monaco.editor.defineTheme("aichip", {
+// Both themes, registered once. The colours live in `theme/editorThemes`, the
+// one place raw hex is allowed, and mirror the app's tokens for each theme so
+// the editor sits flush with the chrome around it.
+monaco.editor.defineTheme(MONACO_THEME_NAME.light, {
   base: "vs",
   inherit: true,
-  colors: {
-    "editor.background": "#ffffff",
-    "editorLineNumber.foreground": "#9ca3af",
-    "editorLineNumber.activeForeground": "#4b5563",
-    "editor.lineHighlightBackground": "#f6f6f7",
-    "editorIndentGuide.background1": "#ececee",
-  },
+  colors: MONACO_COLORS.light,
   rules: [],
 });
-
-/** The IDE theme: vs-dark tuned to the Files tab's shell, which paints the
- *  editor-adjacent chrome in the same palette. */
-monaco.editor.defineTheme("aichip-dark", {
+monaco.editor.defineTheme(MONACO_THEME_NAME.dark, {
   base: "vs-dark",
   inherit: true,
-  colors: {
-    "editor.background": "#1e1e1e",
-    "editorLineNumber.foreground": "#6e7681",
-    "editorLineNumber.activeForeground": "#cccccc",
-    "editor.lineHighlightBackground": "#2a2d2e",
-  },
+  colors: MONACO_COLORS.dark,
   rules: [],
 });
 
@@ -87,7 +75,7 @@ export default function CodeEditor({
   /** Identity for the model, so undo history and cursor survive a round trip. */
   path: string;
   readOnly?: boolean;
-  /** The Files tab's IDE shell is dark; everything else is light. */
+  /** Follows the app's theme; the caller reads it from `useTheme`. */
   dark?: boolean;
   onChange: (next: string) => void;
   onSave: () => void;
@@ -113,7 +101,7 @@ export default function CodeEditor({
   useEffect(() => {
     if (!host.current) return;
     const instance = monaco.editor.create(host.current, {
-      theme: dark ? "aichip-dark" : "aichip",
+      theme: MONACO_THEME_NAME[dark ? "dark" : "light"],
       automaticLayout: false,
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
@@ -181,6 +169,12 @@ export default function CodeEditor({
   useEffect(() => {
     editor.current?.updateOptions({ readOnly: !!readOnly });
   }, [readOnly]);
+
+  // The app's theme can flip while a file is open. Monaco's theme is global to
+  // the page, which is fine: this is the only editor on it.
+  useEffect(() => {
+    monaco.editor.setTheme(MONACO_THEME_NAME[dark ? "dark" : "light"]);
+  }, [dark]);
 
   return <div ref={host} className="h-full w-full" />;
 }

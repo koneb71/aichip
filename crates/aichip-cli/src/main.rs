@@ -1,11 +1,15 @@
 use aichip_core::runs::gate::{DbGate, DbWindow};
 use aichip_core::runs::permissions::PermissionBroker;
 use aichip_core::{Db, EventBus, Orchestrator, WorktreeManager};
+use aichip_engines::amp::AmpEngine;
 use aichip_engines::claude::ClaudeEngine;
 use aichip_engines::codex::CodexEngine;
+use aichip_engines::cursor::CursorEngine;
+use aichip_engines::gemini::GeminiEngine;
 use aichip_engines::local::LocalEngine;
 use aichip_engines::mock::MockEngine;
 use aichip_engines::opencode::OpenCodeEngine;
+use aichip_engines::qwen::QwenEngine;
 use aichip_engines::Engine;
 use aichip_shared::env_guard;
 use clap::{Parser, Subcommand};
@@ -95,6 +99,10 @@ fn real_engines(local: LocalHosts) -> Vec<Arc<dyn Engine>> {
         Arc::new(ClaudeEngine::default()) as Arc<dyn Engine>,
         Arc::new(OpenCodeEngine::default()) as Arc<dyn Engine>,
         Arc::new(CodexEngine::default()) as Arc<dyn Engine>,
+        Arc::new(GeminiEngine::default()) as Arc<dyn Engine>,
+        Arc::new(CursorEngine::default()) as Arc<dyn Engine>,
+        Arc::new(QwenEngine::default()) as Arc<dyn Engine>,
+        Arc::new(AmpEngine::default()) as Arc<dyn Engine>,
         Arc::new(LocalEngine::ollama(local.ollama)) as Arc<dyn Engine>,
         Arc::new(LocalEngine::lmstudio(local.lmstudio)) as Arc<dyn Engine>,
     ]
@@ -109,6 +117,14 @@ fn install_hint(id: &str) -> Option<&'static str> {
         "claude-code" => Some("https://code.claude.com"),
         "opencode" => Some("https://opencode.ai"),
         "codex" => Some("npm i -g @openai/codex — https://developers.openai.com/codex/cli"),
+        "gemini" => {
+            Some("npm i -g @google/gemini-cli — https://github.com/google-gemini/gemini-cli")
+        }
+        "cursor" => Some("curl https://cursor.com/install -fsS | bash — https://cursor.com/cli"),
+        "qwen" => Some("npm i -g @qwen-code/qwen-code — https://github.com/QwenLM/qwen-code"),
+        "amp" => {
+            Some("npm i -g @sourcegraph/amp — https://ampcode.com (headless runs need AMP_API_KEY)")
+        }
         "ollama" => Some("https://ollama.com — needs OpenCode too, to drive it"),
         "lmstudio" => Some("https://lmstudio.ai — needs OpenCode too, to drive it"),
         _ => None,
@@ -320,11 +336,15 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // orchestrator's slots so a run waiting on a person stops occupying one.
     let permissions = {
         let cancel_orchestrator = orchestrator.clone();
+        let seen_orchestrator = orchestrator.clone();
         PermissionBroker::new(
             bus.clone(),
-            Arc::new(DbGate::new(db.clone(), move |run_id| {
-                cancel_orchestrator.cancel(run_id);
-            })),
+            Arc::new(
+                DbGate::new(db.clone(), move |run_id| {
+                    cancel_orchestrator.cancel(run_id);
+                })
+                .on_unpark(move |run_id| seen_orchestrator.mark_seen(run_id)),
+            ),
             orchestrator.slots(),
             // Asked per prompt, so it can never disagree with the engine
             // timeout the orchestrator derives from the same setting.
@@ -480,10 +500,19 @@ async fn doctor() -> anyhow::Result<()> {
                 }
                 let caps = engine.capabilities();
                 if !caps.interactive_permissions {
-                    println!("  note: can't ask permission mid-run — use Auto-edit or Don't-ask");
+                    if caps.auto_edit {
+                        println!(
+                            "  note: can't ask permission mid-run — use Auto-edit or Don't-ask"
+                        );
+                    } else {
+                        println!("  note: can't ask permission mid-run and has no edit-only mode — use Full Auto");
+                    }
                 }
                 if !caps.structured_rate_limit {
                     println!("  note: no rate-limit signal, so the queue can't back off for it");
+                }
+                if !caps.mcp_tools {
+                    println!("  note: can't carry aichip's tools — not offered for chat, managers or teams");
                 }
             }
             None => {

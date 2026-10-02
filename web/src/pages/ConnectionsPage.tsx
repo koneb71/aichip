@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { api, GitHubConnect, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Dialog } from "../components/ui/Dialog";
 
 /**
  * MCP servers the user connects.
@@ -84,7 +85,7 @@ function GitHubCard() {
   const problem = account?.problem;
 
   return (
-    <div className="mt-6 max-w-4xl rounded-xl border border-line bg-panel p-4">
+    <div className="mt-6 max-w-4xl rounded-xl border border-border bg-panel p-4">
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-sm font-semibold">GitHub</span>
         {state.usable ? (
@@ -92,13 +93,13 @@ function GitHubCard() {
             ✓ {account?.login} on {account?.host}
           </span>
         ) : (
-          <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-ink-dim">
+          <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-fg-muted">
             {state.installed ? "not logged in" : "gh not installed"}
           </span>
         )}
       </div>
 
-      <p className="mt-1.5 max-w-xl text-xs text-ink-dim">
+      <p className="mt-1.5 max-w-xl text-xs text-fg-muted">
         {state.usable
           ? "Clone a repo, open a pull request from a finished task, and pull issues in as cards. aichip runs your own gh CLI and never sees a token."
           : state.installed
@@ -131,10 +132,10 @@ function GitHubCard() {
           {/* Said before the button, not after. What a sign-in will be able to
               reach is the thing worth knowing while you can still decline. */}
           {scopes && (
-            <div className="mb-2 rounded-lg border border-line bg-panel-2 p-2.5 text-[11px] leading-relaxed text-ink-dim">
+            <div className="mb-2 rounded-lg border border-border bg-panel-2 p-2.5 text-[11px] leading-relaxed text-fg-muted">
               <div>
                 Signs in as you.{" "}
-                <span className="text-ink">
+                <span className="text-fg">
                   Organisations are a separate choice on GitHub's own page
                 </span>{" "}
                 — it lists each one with its own Grant button, and granting none
@@ -175,19 +176,15 @@ function GitHubCard() {
               ))}
             </div>
           )}
-          <button
-            onClick={connect}
-            disabled={busy}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
+          <Button variant="primary" size="sm" onClick={connect} disabled={busy}>
             {busy ? "Starting…" : "Connect GitHub"}
-          </button>
+          </Button>
         </div>
       )}
 
       {flow && (
-        <div className="mt-2 rounded-xl border border-line bg-panel-2 p-3">
-          <div className="text-xs text-ink-dim">
+        <div className="mt-2 rounded-xl border border-border bg-panel-2 p-3">
+          <div className="text-xs text-fg-muted">
             Enter this code on GitHub. aichip never sees the token — GitHub
             gives it straight to your <code className="text-[11px]">gh</code>.
           </div>
@@ -195,34 +192,36 @@ function GitHubCard() {
             <code className="rounded-md bg-panel px-2.5 py-1.5 font-mono text-sm tracking-widest">
               {flow.code}
             </code>
-            <button
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={() => {
                 navigator.clipboard?.writeText(flow.code);
                 setCopied(true);
               }}
-              className="rounded-lg border border-line px-2 py-1 text-[11px] hover:bg-line/40"
             >
               {copied ? "copied" : "copy"}
-            </button>
+            </Button>
             <a
               href={flow.url}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
+              className={buttonClasses({ variant: "primary", size: "xs" })}
             >
               Open GitHub
             </a>
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => {
                 api.cancelGitHubConnect(flow.id);
                 setFlow(null);
               }}
-              className="text-[11px] text-ink-dim hover:text-ink"
             >
               cancel
-            </button>
+            </Button>
           </div>
-          <div className="mt-1.5 text-[11px] text-ink-dim">
+          <div className="mt-1.5 text-[11px] text-fg-muted">
             Waiting for you to finish in the browser… GitHub will list your
             organisations separately — skip them to keep this personal.
           </div>
@@ -250,14 +249,14 @@ export default function ConnectionsPage() {
         title="Connections"
         subtitle="MCP servers give your agents tools beyond reading, writing, and running commands. Connect one here, then switch it on for the agents that should have it."
         actions={
-          <motion.button
-            {...tappable}
+          <Button
+            variant="primary"
+            size="md"
             onClick={() => setEditing("new")}
-            className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+            icon={<Icon name="plus" size={15} strokeWidth={2.5} />}
           >
-            <Icon name="plus" size={15} strokeWidth={2.5} />
             Connect a server
-          </motion.button>
+          </Button>
         }
       />
 
@@ -268,25 +267,25 @@ export default function ConnectionsPage() {
           <ServerCard key={s.id} server={s} onEdit={() => setEditing(s)} onChanged={load} />
         ))}
         {servers.length === 0 && (
-          <div className="rounded-xl border border-dashed border-line p-8 text-center">
-            <div className="text-sm text-ink-dim">Nothing connected yet.</div>
-            <div className="mx-auto mt-3 max-w-md text-left text-xs text-ink-dim">
+          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+            <div className="text-sm text-fg-muted">Nothing connected yet.</div>
+            <div className="mx-auto mt-3 max-w-md text-left text-xs text-fg-muted">
               A few that work well:
               <ul className="mt-2 space-y-1.5">
                 <li>
-                  <span className="font-medium text-ink">Playwright</span> —{" "}
+                  <span className="font-medium text-fg">Playwright</span> —{" "}
                   <code className="rounded bg-panel-2 px-1">
                     npx -y @playwright/mcp
                   </code>{" "}
                   lets a QA agent actually open the page it's testing.
                 </li>
                 <li>
-                  <span className="font-medium text-ink">Postgres</span> — a read-only
+                  <span className="font-medium text-fg">Postgres</span> — a read-only
                   connection so an agent designs against the real schema instead of
                   guessing from migrations.
                 </li>
                 <li>
-                  <span className="font-medium text-ink">Your issue tracker</span> — so
+                  <span className="font-medium text-fg">Your issue tracker</span> — so
                   a task can read the ticket it's implementing.
                 </li>
               </ul>
@@ -295,19 +294,17 @@ export default function ConnectionsPage() {
         )}
       </div>
 
-      <AnimatePresence>
-        {editing && (
-          <ServerEditor
-            workspaceId={active?.id ?? ""}
-            server={editing === "new" ? null : editing}
-            onClose={() => setEditing(null)}
-            onSaved={() => {
-              setEditing(null);
-              load();
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {editing && (
+        <ServerEditor
+          workspaceId={active?.id ?? ""}
+          server={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
     </Page>
   );
 }
@@ -339,54 +336,48 @@ function ServerCard({
   return (
     <motion.div
       layout
-      className="card-shadow rounded-xl border border-line bg-panel p-4"
+      className="card-shadow rounded-xl border border-border bg-panel p-4"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold">{server.name}</span>
-            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-ink-dim">
+            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-fg-muted">
               {server.transport}
             </span>
             {!server.enabled && (
-              <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-ink-dim">
+              <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-fg-muted">
                 off
               </span>
             )}
           </div>
-          <div className="mt-1 truncate font-mono text-xs text-ink-dim">
+          <div className="mt-1 truncate font-mono text-xs text-fg-muted">
             {server.transport === "stdio"
               ? [server.command, ...server.args].join(" ")
               : server.url}
           </div>
-          <div className="mt-1 text-[11px] text-ink-dim">
+          <div className="mt-1 text-[11px] text-fg-muted">
             Tools appear to agents as{" "}
             <code className="rounded bg-panel-2 px-1">{server.toolPrefix}__*</code>
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <button
-            onClick={runTest}
-            disabled={testing}
-            className="rounded-lg border border-line px-3 py-1 text-xs hover:bg-panel-2 disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={runTest} disabled={testing}>
             {testing ? "Connecting…" : "Test"}
-          </button>
-          <button
-            onClick={onEdit}
-            className="rounded-lg border border-line px-3 py-1 text-xs hover:bg-panel-2"
-          >
+          </Button>
+          <Button variant="secondary" size="sm" onClick={onEdit}>
             Edit
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
             onClick={async () => {
               await api.deleteMcpServer(server.id);
               onChanged();
             }}
-            className="rounded-lg border border-line px-3 py-1 text-xs text-ink-dim hover:border-danger hover:text-danger"
           >
             Remove
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -395,7 +386,7 @@ function ServerCard({
           className={`mt-3 rounded-lg px-3 py-2 text-xs ${
             test.ok
               ? "bg-tier-easy-soft text-tier-easy"
-              : "bg-red-50 text-danger"
+              : "bg-danger-subtle text-danger-fg"
           }`}
         >
           {test.ok ? (
@@ -470,39 +461,36 @@ function ServerEditor({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={server ? `Edit ${server.name}` : "Connect an MCP server"}
+      width={512}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="md" onClick={save} disabled={busy || !name.trim()}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
     >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 20, scale: 0.98 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-6"
-      >
-        <div className="text-base font-semibold">
-          {server ? `Edit ${server.name}` : "Connect an MCP server"}
-        </div>
-
-        <label className="mt-4 block text-xs font-medium text-ink-dim">Name</label>
+        <label className="block text-xs font-medium text-fg-muted">Name</label>
         <input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="playwright"
-          className="mt-1 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
         />
-        <div className="mt-1 text-[11px] text-ink-dim">
+        <div className="mt-1 text-[11px] text-fg-muted">
           Becomes the tool prefix agents see. Spaces and punctuation become
           underscores.
         </div>
 
-        <label className="mt-4 block text-xs font-medium text-ink-dim">How it runs</label>
+        <label className="mt-4 block text-xs font-medium text-fg-muted">How it runs</label>
         <div className="mt-1 flex gap-2">
           {(["stdio", "http", "sse"] as const).map((t) => (
             <button
@@ -510,8 +498,8 @@ function ServerEditor({
               onClick={() => setTransport(t)}
               className={`rounded-lg border px-3 py-1.5 text-xs ${
                 transport === t
-                  ? "border-accent bg-accent/5 text-accent"
-                  : "border-line hover:bg-panel-2"
+                  ? "border-accent bg-accent-subtle text-accent-fg"
+                  : "border-border hover:bg-panel-2"
               }`}
             >
               {t === "stdio" ? "Local command" : t.toUpperCase()}
@@ -521,14 +509,14 @@ function ServerEditor({
 
         {transport === "stdio" ? (
           <>
-            <label className="mt-4 block text-xs font-medium text-ink-dim">Command</label>
+            <label className="mt-4 block text-xs font-medium text-fg-muted">Command</label>
             <input
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               placeholder="npx -y @playwright/mcp"
-              className="mt-1 w-full rounded-lg border border-line bg-panel px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+              className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2 font-mono text-sm outline-none focus:border-accent"
             />
-            <label className="mt-4 block text-xs font-medium text-ink-dim">
+            <label className="mt-4 block text-xs font-medium text-fg-muted">
               Environment (one KEY=value per line)
             </label>
             <textarea
@@ -536,44 +524,29 @@ function ServerEditor({
               onChange={(e) => setEnv(e.target.value)}
               rows={3}
               placeholder="DATABASE_URL=postgres://localhost/app"
-              className="mt-1 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent"
+              className="mt-1 w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent"
             />
-            <div className="mt-1 text-[11px] text-ink-dim">
+            <div className="mt-1 text-[11px] text-fg-muted">
               Anthropic API keys are refused here — aichip runs on your CLI's own
               login and never handles credentials.
             </div>
           </>
         ) : (
           <>
-            <label className="mt-4 block text-xs font-medium text-ink-dim">URL</label>
+            <label className="mt-4 block text-xs font-medium text-fg-muted">URL</label>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com/mcp"
-              className="mt-1 w-full rounded-lg border border-line bg-panel px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+              className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2 font-mono text-sm outline-none focus:border-accent"
             />
           </>
         )}
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
         )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
-            Cancel
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={save}
-            disabled={busy || !name.trim()}
-            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {busy ? "Saving…" : "Save"}
-          </motion.button>
-        </div>
-      </motion.div>
-    </motion.div>
+    </Dialog>
   );
 }
 

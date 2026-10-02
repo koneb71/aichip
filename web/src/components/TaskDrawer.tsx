@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
+import { Agent, api, Attachment, CheckoutState, displayTier, MergeGateError, PendingPermission, Skill, Task, Team, tierColor, type Unmet } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
 import { estimateLine, ForecastAsk, parseForecastAsk } from "../lib/forecast";
@@ -28,6 +28,28 @@ import { BaseStatus } from "./BaseStatus";
 import { parseMergeRefusal } from "../lib/mergeRefusal";
 import { RunError } from "./ui/RunError";
 import { springy } from "../lib/motion";
+import { Badge, StatusDot, type Tone } from "./ui/Badge";
+import { Avatar } from "./ui/Avatar";
+import { Button, IconButton } from "./ui/Button";
+import { Menu } from "./ui/Overlay";
+import { Tabs, TabPanel } from "./ui/Tabs";
+import { Timeline } from "./task/Timeline";
+import { ReviewPanel } from "./task/ReviewPanel";
+import { HandOff } from "./task/HandOff";
+import { GoalPicker } from "./GoalPicker";
+import { Textarea } from "./ui/Field";
+import { Building2, FileDiff, GitMerge, MoreHorizontal, Play, RotateCcw, Scale, Square, Trash2, X } from "lucide-react";
+
+type DrawerTab = "overview" | "activity" | "comments" | "checks" | "history" | "diff" | "bakeoff";
+
+/** A run status as a tone: live is accent, parked is warning, failed is danger. */
+function runTone(status: string): Tone {
+  if (status === "failed") return "danger";
+  if (status === "completed") return "success";
+  if (status === "awaiting_approval" || status === "waiting_permission" || status === "rate_limited") return "warning";
+  if (status === "canceled") return "neutral";
+  return "accent";
+}
 
 export function TaskDrawer({
   onOpenPreviews,
@@ -58,8 +80,24 @@ export function TaskDrawer({
   // permission prompts, the plan panel — stays bound to regardless.
   const [viewing, setViewing] = useState<string | null>(null);
   useEffect(() => setViewing(null), [task.id, task.runId]);
+  // The drawer is reused when another card is picked. Anything pinned about
+  // the last card — a refused merge, the gate it hit, a half-written note to
+  // merge anyway — must not carry over, or its buttons act on the new card.
+  useEffect(() => {
+    setGate(null);
+    setOverride("");
+    setConfirm(null);
+    setBlocked(null);
+    setConflicted(false);
+    setError(null);
+  }, [task.id]);
   const events = useRunStream(viewing ?? task.runId);
   const [diff, setDiff] = useState<string | null>(null);
+  // Whether the Diff tab is chosen — separate from whether the diff has
+  // arrived, so the tab selects at the click and shows that it is loading,
+  // and a slow fetch landing later never pulls the person back to it.
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffReq = useRef(0);
   // The bake-off panel: same brief, several attempts, compare and keep one.
   const [bakeoff, setBakeoff] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -82,13 +120,18 @@ export function TaskDrawer({
   // A live run opens on its transcript, not on an empty comment thread —
   // landing on "No comments yet" while an agent is mid-Bash is how the card
   // ends up looking like nothing is happening at all.
-  const [panel, setPanel] = useState<"comments" | "activity" | "history">(
-    isActive(task.runStatus) ? "activity" : "comments",
+  const [panel, setPanel] = useState<"overview" | "comments" | "activity" | "history" | "checks">(
+    isActive(task.runStatus) ? "activity" : "overview",
   );
+  const [historyView, setHistoryView] = useState<"runs" | "timeline">("runs");
   const att = useAttachments(task.projectId);
   const [attachBusy, setAttachBusy] = useState(false);
   const [busy, setBusy] = useState<"retry" | "resume" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What the project's review policy still wants before this card may land,
+  // after a merge it refused — and the note a person writes to merge anyway.
+  const [gate, setGate] = useState<Unmet[] | null>(null);
+  const [override, setOverride] = useState("");
   const [confirm, setConfirm] = useState<{
     title: string;
     body: string;
@@ -288,7 +331,20 @@ export function TaskDrawer({
     }
   };
 
-  const loadDiff = async () => setDiff((await api.diff(task.id)).diff);
+  const loadDiff = () => {
+    const req = ++diffReq.current;
+    setDiff(null);
+    api
+      .diff(task.id)
+      .then((r) => {
+        if (diffReq.current === req) setDiff(r.diff);
+      })
+      .catch((e) => {
+        if (diffReq.current !== req) return;
+        setError(`Could not load the diff. ${String(e).replace(/^Error:\s*/, "")}`);
+        setDiffOpen(false);
+      });
+  };
   // Failing checks warn, they do not block: the person may know the failure
   // is old, flaky, or not this card's — but they should know it is there.
   const merge = () => {
@@ -308,23 +364,31 @@ export function TaskDrawer({
     }
   };
 
-  const doMerge = async () => {
+  const doMerge = async (force?: { note: string }) => {
     if (merging) return;
     setMerging(true);
     setError(null);
     setBlocked(null);
     try {
-      await api.merge(task.id);
+      await api.merge(task.id, force);
+      setGate(null);
       onChanged();
       onClose();
     } catch (e) {
+      if (e instanceof MergeGateError) {
+        setGate(e.unmet);
+        return;
+      }
       // Inline, like every other failure in this drawer. A native alert()
       // loses the drawer's context and can't be copied out of easily.
       const raw = String(e).replace(/^Error:\s*/, "");
       const refusal = parseMergeRefusal(raw);
       const text = refusal?.error ?? raw;
       setError(`Merge failed. ${text}`);
-      setConflicted(refusal?.kind === "conflict" || refusal?.kind === "markers");
+      const conflict = refusal?.kind === "conflict" || refusal?.kind === "markers";
+      setConflicted(conflict);
+      // "Update from main" — the remedy the message names — is on Checks.
+      if (conflict) setTab("checks");
       // The one refusal with something to do about it. The guard names the
       // files in prose; fetching them as data is what lets the buttons below
       // exist, and it asks the same endpoint the guard reads so the list
@@ -361,73 +425,312 @@ export function TaskDrawer({
     }
   };
 
+  // Which tab is showing. The board's urgent things — permission prompts, a
+  // refused merge, a confirmation — are pinned above the tabs, never inside
+  // one, so they cannot be missed by looking at the wrong tab.
+  const hasChecks =
+    task.boardColumn === "review" || task.boardColumn === "done" || !!task.localChecks;
+  const tab: DrawerTab = bakeoff ? "bakeoff" : diffOpen ? "diff" : panel;
+  function setTab(t: DrawerTab) {
+    if (t !== "bakeoff") setBakeoff(false);
+    setDiffOpen(t === "diff");
+    if (t !== "diff") {
+      diffReq.current++;
+      setDiff(null);
+    }
+    if (t === "diff") loadDiff();
+    else if (t === "overview" || t === "comments" || t === "activity" || t === "history" || t === "checks") setPanel(t);
+  }
+  const statusTone = task.runStatus ? runTone(task.runStatus) : "neutral";
+  const cost =
+    (task.runCount ?? 0) > 1 && task.totalCostUsd != null
+      ? { text: `$${task.totalCostUsd.toFixed(3)}`, title: `over ${task.runCount} runs — latest $${(task.costUsd ?? 0).toFixed(3)}` }
+      : task.costUsd != null
+        ? { text: `$${task.costUsd.toFixed(3)}`, title: undefined }
+        : null;
+
   return (
     <motion.aside
-      initial={{ x: 560 }}
+      initial={{ x: 600 }}
       animate={{ x: 0 }}
-      exit={{ x: 560 }}
-      transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[560px] flex-col border-l border-line bg-panel"
+      exit={{ x: 600 }}
+      transition={{ type: "spring", stiffness: 340, damping: 36 }}
+      aria-label={`Card: ${task.title}`}
+      className="fixed inset-y-0 right-0 z-30 flex w-full max-w-[600px] flex-col border-l border-border bg-panel shadow-[var(--shadow-lg)]"
     >
-      <div className="flex items-start gap-3 border-b border-line p-5">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-semibold">{task.title}</div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-ink-dim">
-            <span
-              className="rounded-full px-2 py-0.5"
-              style={{ background: `${accent}22`, color: accent }}
-            >
-              {task.tierIsAuto && "auto · "}
-              {tierModel(shownTier)}
-            </span>
-            {task.runStatus && <span>{statusLabel(task.runStatus)}</span>}
-            {(task.runCount ?? 0) > 1 && task.totalCostUsd != null ? (
-              <span title={`Latest run $${(task.costUsd ?? 0).toFixed(3)}`}>
-                ${task.totalCostUsd.toFixed(3)} over {task.runCount} runs
+      <header className="shrink-0 border-b border-border px-4 pb-3 pt-3.5">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[15px] font-semibold leading-snug text-fg">{task.title}</h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+              <Badge tone={shownTier}>
+                {task.tierIsAuto && "auto · "}
+                {tierModel(shownTier)}
+              </Badge>
+              {task.runStatus && (
+                <Badge tone={statusTone} icon={<StatusDot tone={statusTone} pulse={running} className="size-1.5" />}>
+                  {statusLabel(task.runStatus)}
+                </Badge>
+              )}
+              {task.agentName && (
+                <span className="flex items-center gap-1">
+                  <Avatar name={task.agentName} color={task.agentColor} size={16} />
+                  {task.agentName}
+                </span>
+              )}
+              {cost && (
+                <span className="tabular ml-auto font-mono" title={cost.title}>
+                  {cost.text}
+                </span>
+              )}
+            </div>
+            {/* Why aichip picked this tier, whenever aichip did the picking — a
+                choice made on someone's behalf that they cannot see is the
+                silent downgrade this project refuses elsewhere. */}
+            {task.tierIsAuto && task.tierReason && (
+              <div className="mt-1 text-[11px] text-fg-muted">
+                Auto → {task.tierResolved}: {task.tierReason}
+              </div>
+            )}
+            {(() => {
+              const stopped = stopReason(task.runStatus, task.runError);
+              return stopped ? <RunError reason={stopped.text} tone={stopped.tone} className="mt-2" /> : null;
+            })()}
+            <ActivityLine events={viewing ? [] : events} live={running && !viewing} className="mt-1" />
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="size-4" />
+          </IconButton>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {task.boardColumn === "review" &&
+            (task.prState === "merged" ? (
+              // Once it is merged on GitHub, squash-merging would write the
+              // same change again under this card's message. What is needed
+              // is a pull, and saying so beats a button that duplicates.
+              <span className="text-xs text-fg-muted">
+                Merged on GitHub — <code className="font-mono">git pull</code> to update your checkout.
               </span>
             ) : (
-              task.costUsd != null && <span>${task.costUsd.toFixed(3)}</span>
-            )}
-          </div>
-          {/* Why aichip picked this tier. Shown whenever aichip did the
-              picking, because a choice made on someone's behalf that they
-              cannot see is the silent downgrade this project refuses
-              elsewhere — the reason travels with the run that used it. */}
-          {task.tierIsAuto && task.tierReason && (
-            <div className="mt-1 text-[11px] text-ink-dim/80">
-              Auto → {task.tierResolved}: {task.tierReason}
-            </div>
+              <Button size="sm" variant="primary" icon={<GitMerge className="size-3.5" />} loading={merging} onClick={merge}>
+                Squash-merge
+              </Button>
+            ))}
+          {/* Resume before Retry: cheaper, and what people want after a run
+              dies forty minutes in. Only when there is a session to pick up. */}
+          {!running && task.runResumable && (
+            <Button
+              size="sm"
+              variant={task.boardColumn === "review" ? "secondary" : "primary"}
+              icon={<Play className="size-3.5" />}
+              loading={busy === "resume"}
+              disabled={busy !== null}
+              onClick={resume}
+              title="Continue the same session, in the same worktree, from where it stopped"
+            >
+              Resume
+            </Button>
           )}
-          {/* The run's own account of how it ended, in full. The header said
-              "failed" and had nowhere to say why; the sentence was written to
-              the database and read by nothing. */}
-          {(() => {
-            const stopped = stopReason(task.runStatus, task.runError);
-            return stopped ? (
-              <RunError reason={stopped.text} tone={stopped.tone} className="mt-2" />
-            ) : null;
-          })()}
-          {/* What it is doing, right in the header — visible without opening
-              a tab or scrolling a transcript. */}
-          <ActivityLine events={viewing ? [] : events} live={running && !viewing} className="mt-1" />
+          {!running && (
+            <Button
+              size="sm"
+              icon={<RotateCcw className="size-3.5" />}
+              loading={busy === "retry"}
+              disabled={busy !== null}
+              onClick={retry}
+              title="Run this card again from a clean checkout"
+            >
+              Retry
+            </Button>
+          )}
+          {task.runId && isWorking(task.runStatus) && (
+            <Button size="sm" variant="danger" icon={<Square className="size-3" />} onClick={() => api.cancelRun(task.runId!)}>
+              Cancel run
+            </Button>
+          )}
+          {task.orgRunId && onOpenTeamRoom && (
+            <Button size="sm" icon={<Building2 className="size-3.5" />} onClick={() => onOpenTeamRoom(task.orgRunId!)}>
+              Team room
+            </Button>
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            <Menu
+              align="end"
+              trigger={
+                <IconButton label="More actions">
+                  <MoreHorizontal className="size-4" />
+                </IconButton>
+              }
+              items={[
+                // A bake-off answers "which agent should do this?" with
+                // evidence, so it belongs before the work is accepted.
+                ...(!task.teamId && task.boardColumn !== "done"
+                  ? [{ label: "Bake-off", icon: <Scale className="size-3.5" />, onSelect: () => setTab("bakeoff") }]
+                  : []),
+                ...(task.boardColumn === "review"
+                  ? [{ label: "View diff", icon: <FileDiff className="size-3.5" />, onSelect: () => setTab("diff") }]
+                  : []),
+                null,
+                { label: "Delete card", icon: <Trash2 className="size-3.5" />, danger: true, disabled: busy !== null, onSelect: remove },
+              ]}
+            />
+          </div>
         </div>
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">
-          ✕
-        </button>
+        {/* Merging what an agent left half-finished reads like accepting
+            finished work unless it is said. */}
+        {task.boardColumn === "review" &&
+          task.prState !== "merged" &&
+          (task.runStatus === "failed" || task.runStatus === "canceled") && (
+            <p className="mt-2 text-[11px] text-warning-fg">
+              This run {task.runStatus === "failed" ? "failed" : "was cancelled"} — merging lands whatever it got to.
+            </p>
+          )}
+        {!running && task.runResumable && (
+          <p className="mt-1.5 text-[11px] leading-snug text-fg-muted">
+            Resume continues where it stopped. Retry starts over from a clean checkout.
+          </p>
+        )}
+      </header>
+
+      {/* Everything pinned above the tabs scrolls as one, and never takes more
+          than half the drawer: several prompts stacked up is exactly when you
+          most need to reach all of them, and the tabs below must stay. */}
+      <div className="max-h-[50vh] shrink-0 overflow-y-auto">
+        <AnimatePresence>
+          {openPermissions.length > 0 && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden border-b border-border bg-warning-subtle"
+            >
+              <div className="flex flex-col gap-2 p-4">
+                {openPermissions.map((p) => (
+                  <PermissionRow
+                    key={p.requestId}
+                    toolName={p.toolName}
+                    input={p.input}
+                    onAnswer={(allowed) => answer(p.requestId, allowed)}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {/* `whitespace-pre-wrap`: the merge guard formats the blocking files one
+            per line, and without this they arrived as a single run-on sentence.
+            Same treatment app build errors already get. */}
+        {error && (
+          <div className="whitespace-pre-wrap border-b border-border bg-danger-subtle px-4 py-2 text-xs leading-relaxed text-danger-fg">
+            {error}
+          </div>
+        )}
+
+        {blocked && blocked.dirty.length > 0 && (
+          <div className="border-b border-border bg-warning-subtle px-5 py-3">
+            <div className="text-xs font-medium text-warning-fg">
+              {blocked.dirty.length === 1
+                ? "One file in your checkout is in the way"
+                : `${blocked.dirty.length} files in your checkout are in the way`}
+              {blocked.branch && <span className="font-normal"> — on {blocked.branch}</span>}
+            </div>
+            <ul className="mt-1.5 max-h-40 overflow-y-auto">
+              {blocked.dirty.map((f) => (
+                <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-warning-fg/90">
+                  <span className="w-4 shrink-0 text-warning-fg">{`${f.index}${f.worktree}`.trim()}</span>
+                  <span className="truncate">{f.path}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button size="sm" onClick={() => clearTheWay("stash")} disabled={resolving !== null}>
+                {resolving === "stash" ? "Setting aside…" : "Stash them"}
+              </Button>
+              <Button size="sm" onClick={() => clearTheWay("commit")} disabled={resolving !== null}>
+                {resolving === "commit" ? "Committing…" : "Commit them"}
+              </Button>
+              {/* Which one to press is a real choice, so say what each does
+                  rather than leaving it to be discovered. */}
+              <span className="text-[11px] text-warning-fg/80">
+                Stashing sets them aside; committing keeps them, in their own commit.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {gate && (
+          <div className="border-b border-border bg-warning-subtle px-4 py-3 text-xs text-warning-fg">
+            <div className="font-medium">This project's review policy still wants:</div>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {gate.map((u) => (
+                <li key={u.kind}>{u.message}</li>
+              ))}
+            </ul>
+            <Textarea
+              className="mt-2 min-h-[52px] text-fg"
+              value={override}
+              maxLength={500}
+              onChange={(e) => setOverride(e.target.value)}
+              placeholder="To merge anyway, say why. It goes on the card and in the audit log."
+              aria-label="Why merge anyway"
+            />
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                variant="danger"
+                loading={merging}
+                disabled={!override.trim()}
+                onClick={() => void doMerge({ note: override.trim() })}
+              >
+                Merge anyway
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setGate(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {confirm && (
+          <div className="border-b border-border bg-warning-subtle px-5 py-3 text-xs text-warning-fg">
+            <div className="font-medium">{confirm.title}</div>
+            <div className="mt-0.5">{confirm.body}</div>
+            <div className="mt-2 flex gap-2">
+              <Button size="sm" variant="danger" onClick={confirm.go}>
+                {confirm.cta}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Everything between the pinned header and the pinned tabs scrolls on
-          its own. Without this the card's controls, attachments and any
-          queued permission prompts simply ran off the bottom of the drawer
-          with no way to reach them — several prompts stacked up is exactly
-          when you most need to get at them. Capped so it can never crowd out
-          the transcript below. */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.08, duration: 0.2 }}
-        className="max-h-[55vh] overflow-y-auto"
+      <Tabs<DrawerTab>
+        className="min-h-0 flex-1"
+        value={tab}
+        onValueChange={setTab}
+        tabs={[
+          { value: "overview", label: "Overview" },
+          {
+            value: "activity",
+            label: "Activity",
+            badge: running ? <StatusDot tone="accent" pulse className="size-1.5" /> : undefined,
+          },
+          { value: "comments", label: "Comments" },
+          ...(hasChecks ? [{ value: "checks" as const, label: "Checks" }] : []),
+          {
+            value: "history",
+            label: "History",
+            badge: (task.runCount ?? 0) > 1 ? <span className="tabular text-[11px] text-fg-muted">{task.runCount}</span> : undefined,
+          },
+          ...(task.boardColumn === "review" || diffOpen ? [{ value: "diff" as const, label: "Diff" }] : []),
+          ...(bakeoff ? [{ value: "bakeoff" as const, label: "Bake-off" }] : []),
+        ]}
       >
+        <TabPanel value="overview" className="overflow-y-auto">
       <StatusMover task={task} running={running} onChanged={onChanged} />
       <Blockers task={task} boardTasks={boardTasks} onChanged={onChanged} onOpenTask={onOpenTask} />
       <Description task={task} running={running} onChanged={onChanged} />
@@ -448,7 +751,7 @@ export function TaskDrawer({
           .filter(Boolean)
           .join(" · ")}
       >
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <div className="mb-1.5 text-xs font-medium text-fg-muted">
           Assigned to
         </div>
         <AssigneePicker
@@ -462,11 +765,14 @@ export function TaskDrawer({
           agents={agents}
           teams={teams}
           disabled={running}
-          disabledReason="Cancel the run to hand this card to someone else."
+          disabledReason="Cancel the run, or hand it off with a note below."
           onChange={reassign}
         />
+        {running && !task.teamId && (
+          <HandOff taskId={task.id} current={task.agentId ?? null} agents={agents} onDone={onChanged} />
+        )}
         {reassignError && (
-          <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+          <div className="mt-1.5 rounded-md bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
             {reassignError}
           </div>
         )}
@@ -476,7 +782,7 @@ export function TaskDrawer({
             one — a card pointing at a skill has to say so. */}
         {(skills.some((s) => s.enabled) || task.skillId) && (
           <div className="mt-3">
-            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-1.5 text-xs font-medium text-fg-muted">
               How
             </div>
             <SkillPicker
@@ -491,6 +797,18 @@ export function TaskDrawer({
             />
           </div>
         )}
+        {/* What the work is for: every run of this card is told the goal
+            chain. Hidden until the workspace has goals. */}
+        <div className="mt-3 empty:hidden">
+          <GoalPicker
+            workspaceId={workspaceId}
+            value={task.goalId ?? null}
+            onChange={async (goal) => {
+              await api.moveTask(task.id, { goal_id: goal });
+              onChanged();
+            }}
+          />
+        </div>
         <div className="mt-3">
           <ArticlePicker
             workspaceId={workspaceId}
@@ -515,7 +833,7 @@ export function TaskDrawer({
           />
           <span className="min-w-0">
             <span className="block font-medium">Plan first</span>
-            <span className="block text-[11px] text-ink-dim">
+            <span className="block text-[11px] text-fg-muted">
               Write a plan and stop, so you can confirm or rewrite it before
               anything changes.
             </span>
@@ -524,7 +842,7 @@ export function TaskDrawer({
 
         {!!engines && engines.length > 1 && (
           <div className="mt-3 flex items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="text-xs font-medium text-fg-muted">
               Run on
             </span>
             <EnginePicker
@@ -539,7 +857,7 @@ export function TaskDrawer({
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="text-xs font-medium text-fg-muted">
             Model
           </span>
           <CardTierPicker
@@ -551,7 +869,7 @@ export function TaskDrawer({
               onChanged();
             }}
           />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="text-xs font-medium text-fg-muted">
             Thinking
           </span>
           <EffortPicker
@@ -569,14 +887,14 @@ export function TaskDrawer({
           {/* Where "Default" actually came from. Silent when the card sets it
               itself, since the picker already says so. */}
           {task.effortSource === "agent" && (
-            <span className="text-[11px] text-ink-dim">
+            <span className="text-[11px] text-fg-muted">
               {task.agentName
                 ? `set by the ${task.agentName} agent, which outranks this card`
                 : "set by its agent, which outranks this card"}
             </span>
           )}
           {task.effortSource === "tier" && (
-            <span className="text-[11px] text-ink-dim">
+            <span className="text-[11px] text-fg-muted">
               from the {task.modelTier} tier on {task.engine}
             </span>
           )}
@@ -585,7 +903,7 @@ export function TaskDrawer({
         <Permissions task={task} />
       </Setup>
 
-      <div className="border-b border-line px-5 py-1 empty:hidden">
+      <div className="border-b border-border px-4 py-1 empty:hidden">
         <PreviewPanel
           taskId={task.id}
           projectId={task.projectId}
@@ -593,125 +911,45 @@ export function TaskDrawer({
         />
       </div>
 
-      <div className="flex gap-2 border-b border-line px-5 py-3">
-        {task.orgRunId && onOpenTeamRoom && (
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => onOpenTeamRoom(task.orgRunId!)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
-          >
-            🏛 Open team room
-          </motion.button>
-        )}
-        {/* A bake-off answers "which agent should do this?" with evidence
-            rather than a hunch, so it belongs before the work is accepted —
-            not on a card that already has a diff you like. */}
-        {!task.teamId && task.boardColumn !== "done" && (
-          <button
-            onClick={() => setBakeoff(true)}
-            className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
-          >
-            ⚖ Bake-off
-          </button>
-        )}
-        {task.runId && isWorking(task.runStatus) && (
-          <button
-            onClick={() => api.cancelRun(task.runId!)}
-            className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-red-400 hover:text-red-400"
-          >
-            Cancel run
-          </button>
-        )}
-        {task.boardColumn === "review" && (
-          <>
-            <button
-              onClick={loadDiff}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
-            >
-              View diff
-            </button>
-            {/* Once it is merged on GitHub, squash-merging is a trap rather
-                than a shortcut: your base branch has not pulled yet, so the
-                squash would write the same change again under this card's
-                message. What is needed is a pull, and saying so is more use
-                than a button that quietly duplicates a commit. */}
-            {task.prState === "merged" ? (
-              <span className="text-xs text-ink-dim">
-                Merged on GitHub — <code className="font-mono">git pull</code> to update
-                your checkout.
-              </span>
-            ) : (
-              <>
-                <motion.button
-                  whileTap={{ scale: 0.96 }}
-                  onClick={merge}
-                  disabled={merging}
-                  className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
-                >
-                  {merging ? "Merging…" : "Squash-merge"}
-                </motion.button>
-                {/* A run that failed or was cancelled still lands its card in
-                    review, and the button looks identical — so merging what an
-                    agent left half-finished is one click away and reads like
-                    accepting finished work. Landing partial work is sometimes
-                    the right call, which is why this says so rather than
-                    disabling the button. */}
-                {(task.runStatus === "failed" || task.runStatus === "canceled") && (
-                  <span className="text-[11px] text-amber-700">
-                    this run {task.runStatus === "failed" ? "failed" : "was cancelled"} —
-                    merging lands whatever it got to
-                  </span>
-                )}
-              </>
-            )}
-          </>
-        )}
-        {/* Resume before Retry, because it is the cheaper of the two and the
-            one people want after a run dies forty minutes in. Only shown when
-            there is actually a session to pick up — a card that has never run,
-            or whose run left none, gets Retry alone rather than a button that
-            explains itself only after being clicked. */}
-        {!running && task.runResumable && (
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={resume}
-            disabled={busy !== null}
-            className="rounded-lg border border-tier-medium/50 bg-tier-medium/10 px-3 py-1.5 text-xs font-medium text-tier-medium hover:border-tier-medium disabled:opacity-50"
-            title="Continue the same session, in the same worktree, from where it stopped"
-          >
-            {busy === "resume" ? "Resuming…" : "▸ Resume"}
-          </motion.button>
-        )}
-        {!running && (
-          <button
-            onClick={retry}
-            disabled={busy !== null}
-            className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim disabled:opacity-50"
-            title="Run this card again from a clean checkout"
-          >
-            {busy === "retry" ? "Restarting…" : "↻ Retry"}
-          </button>
-        )}
-        {/* The two buttons look alike and do opposite things to the work
-            already on disk, so the difference is written down rather than left
-            to the tooltips. */}
-        {!running && task.runResumable && (
-          <span className="text-[11px] leading-tight text-ink-dim">
-            Resume continues where it stopped. Retry starts over from a clean
-            checkout.
-          </span>
-        )}
-        <button
-          onClick={remove}
-          disabled={busy !== null}
-          className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger disabled:opacity-50"
-        >
-          {busy === "delete" ? "Deleting…" : "Delete"}
-        </button>
+      <div className="border-b border-border px-4 py-3">
+        <div className="mb-2 text-xs font-medium text-fg-muted">
+          Attachments
+        </div>
+        <AttachmentList attachments={attachments} />
+        <div className="flex items-center gap-2">
+          <AttachmentBar
+            items={att.items}
+            onAdd={att.add}
+            onRemove={att.remove}
+            full={att.full}
+          />
+          {att.ids.length > 0 && (
+            <Button variant="primary" size="sm" onClick={commitAttachments} disabled={att.busy || attachBusy}>
+              {attachBusy ? "Attaching…" : `Attach ${att.ids.length}`}
+            </Button>
+          )}
+        </div>
       </div>
 
+        </TabPanel>
+        <TabPanel value="activity" className="overflow-y-auto p-4">
+          {viewing && (
+            <div className="mb-3 flex items-center justify-between rounded-md bg-panel-2 px-3 py-2 text-[11px] text-fg-muted">
+              <span>Showing an earlier run of this card.</span>
+              <Button variant="link" size="xs" onClick={() => setViewing(null)}>
+                Back to the latest
+              </Button>
+            </div>
+          )}
+          <RunStream events={events} empty="Nothing yet." />
+        </TabPanel>
+        <TabPanel value="comments" className="overflow-y-auto p-4">
+          <TaskComments taskId={task.id} />
+        </TabPanel>
+        {hasChecks && (
+          <TabPanel value="checks" className="overflow-y-auto">
       {task.boardColumn === "review" && (
-        <div className="border-b border-line px-5 py-2 empty:hidden">
+        <div className="border-b border-border px-4 py-2 empty:hidden">
           <BaseStatus
             taskId={task.id}
             busy={running}
@@ -729,7 +967,7 @@ export function TaskDrawer({
       {/* Before the pull request: whether the work passes is the first thing
           to know about a diff you are deciding whether to land. */}
       {(task.boardColumn === "review" || (task.localChecks && task.boardColumn !== "done")) && (
-        <div className="border-b border-line px-5 py-2">
+        <div className="border-b border-border px-4 py-2">
           <ChecksPanel
             taskId={task.id}
             busy={running}
@@ -739,10 +977,16 @@ export function TaskDrawer({
         </div>
       )}
 
+      {(task.boardColumn === "review" || task.boardColumn === "done") && (
+        <div className="border-b border-border px-4 py-2 empty:hidden">
+          <ReviewPanel taskId={task.id} busy={running} refreshKey={`${task.runId}:${task.runStatus}`} />
+        </div>
+      )}
+
       {/* Below the row rather than in it: the status line wants the full
           width, and a card keeps its pull request after it leaves review. */}
       {(task.boardColumn === "review" || task.boardColumn === "done") && (
-        <div className="border-b border-line px-5 py-2">
+        <div className="border-b border-border px-4 py-2">
           <PullRequestPanel
             taskId={task.id}
             projectId={task.projectId}
@@ -751,164 +995,23 @@ export function TaskDrawer({
         </div>
       )}
 
-      {/* `whitespace-pre-wrap`: the merge guard formats the blocking files one
-          per line, and without this they arrived as a single run-on sentence.
-          Same treatment app build errors already get. */}
-      {error && (
-        <div className="whitespace-pre-wrap border-b border-line bg-red-50 px-5 py-2 text-xs leading-relaxed text-danger">
-          {error}
-        </div>
-      )}
-
-      {blocked && blocked.dirty.length > 0 && (
-        <div className="border-b border-line bg-amber-50 px-5 py-3">
-          <div className="text-xs font-medium text-amber-900">
-            {blocked.dirty.length === 1
-              ? "One file in your checkout is in the way"
-              : `${blocked.dirty.length} files in your checkout are in the way`}
-            {blocked.branch && <span className="font-normal"> — on {blocked.branch}</span>}
-          </div>
-          <ul className="mt-1.5 max-h-40 overflow-y-auto">
-            {blocked.dirty.map((f) => (
-              <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-amber-900/90">
-                <span className="w-4 shrink-0 text-amber-700">{`${f.index}${f.worktree}`.trim()}</span>
-                <span className="truncate">{f.path}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => clearTheWay("stash")}
-              disabled={resolving !== null}
-              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-            >
-              {resolving === "stash" ? "Setting aside…" : "Stash them"}
-            </button>
-            <button
-              onClick={() => clearTheWay("commit")}
-              disabled={resolving !== null}
-              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-            >
-              {resolving === "commit" ? "Committing…" : "Commit them"}
-            </button>
-            {/* Which one to press is a real choice, so say what each does
-                rather than leaving it to be discovered. */}
-            <span className="text-[11px] text-amber-900/80">
-              Stashing sets them aside; committing keeps them, in their own commit.
-            </span>
-          </div>
-        </div>
-      )}
-
-      {confirm && (
-        <div className="border-b border-line bg-amber-50 px-5 py-3 text-xs text-amber-800">
-          <div className="font-medium">{confirm.title}</div>
-          <div className="mt-0.5">{confirm.body}</div>
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={confirm.go}
-              className="rounded-lg bg-danger px-3 py-1 font-medium text-white"
-            >
-              {confirm.cta}
-            </button>
-            <button onClick={() => setConfirm(null)} className="px-2 py-1 hover:underline">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="border-b border-line px-5 py-3">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
-          Attachments
-        </div>
-        <AttachmentList attachments={attachments} />
-        <div className="flex items-center gap-2">
-          <AttachmentBar
-            items={att.items}
-            onAdd={att.add}
-            onRemove={att.remove}
-            full={att.full}
-          />
-          {att.ids.length > 0 && (
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={commitAttachments}
-              disabled={att.busy || attachBusy}
-              className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
-            >
-              {attachBusy ? "Attaching…" : `Attach ${att.ids.length}`}
-            </motion.button>
-          )}
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {openPermissions.length > 0 && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden border-b border-line bg-amber-50"
-          >
-            <div className="flex flex-col gap-2 p-4">
-              {openPermissions.map((p) => (
-                <PermissionRow
-                  key={p.requestId}
-                  toolName={p.toolName}
-                  input={p.input}
-                  onAnswer={(allowed) => answer(p.requestId, allowed)}
-                />
-              ))}
-            </div>
-          </motion.div>
+          </TabPanel>
         )}
-      </AnimatePresence>
-      </motion.div>
-
-      <div className="flex gap-1 border-b border-line px-5 py-2">
-        {(["comments", "activity", "history"] as const).map((p) => (
-          <button
-            key={p}
-            onClick={() => setPanel(p)}
-            className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
-              panel === p ? "bg-panel-2 font-medium text-ink" : "text-ink-dim"
-            }`}
-          >
-            {p === "activity" ? "Activity" : p === "history" ? "History" : "Comments"}
-            {p === "history" && (task.runCount ?? 0) > 1 && (
-              <span className="ml-1 text-ink-dim">{task.runCount}</span>
-            )}
-            {p === "activity" && running && (
-              <motion.span
-                className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-tier-medium align-middle"
-                animate={{ opacity: [1, 0.25, 1] }}
-                transition={{ duration: 1.6, repeat: Infinity }}
-              />
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        {bakeoff ? (
-          <BakeoffView
-            taskId={task.id}
-            agents={agents.filter((a) => a.status !== "retired")}
-            currentTier={shownTier}
-            onKept={onChanged}
-            onClose={() => setBakeoff(false)}
-          />
-        ) : diff !== null ? (
-          <DiffView
-            diff={diff}
-            taskId={task.id}
-            onBack={() => setDiff(null)}
-            onFixStarted={onChanged}
-          />
-        ) : panel === "comments" ? (
-          <TaskComments taskId={task.id} />
-        ) : panel === "history" ? (
+        <TabPanel value="history" className="overflow-y-auto p-4">
+          <div className="mb-3">
+            <Tabs<"runs" | "timeline">
+              variant="pill"
+              value={historyView}
+              onValueChange={setHistoryView}
+              tabs={[
+                { value: "runs", label: "Runs" },
+                { value: "timeline", label: "Timeline" },
+              ]}
+            />
+          </div>
+          {historyView === "timeline" ? (
+            <Timeline taskId={task.id} refreshKey={`${task.runId}:${task.runStatus}`} />
+          ) : (
           <RunHistory
             taskId={task.id}
             latestRunId={task.runId}
@@ -919,20 +1022,27 @@ export function TaskDrawer({
               setPanel("activity");
             }}
           />
-        ) : (
-          <>
-            {viewing && (
-              <div className="mb-3 flex items-center justify-between rounded-md bg-panel-2 px-3 py-2 text-[11px] text-ink-dim">
-                <span>Showing an earlier run of this card.</span>
-                <button onClick={() => setViewing(null)} className="text-ink hover:underline">
-                  Back to the latest
-                </button>
-              </div>
-            )}
-            <RunStream events={events} empty="Nothing yet." />
-          </>
-        )}
-      </div>
+          )}
+        </TabPanel>
+        <TabPanel value="diff" className="overflow-y-auto p-4">
+          {diff === null ? (
+            <div className="text-xs text-fg-muted">Loading the diff…</div>
+          ) : (
+            <DiffView diff={diff} taskId={task.id} onBack={() => setTab("overview")} onFixStarted={onChanged} />
+          )}
+        </TabPanel>
+        <TabPanel value="bakeoff" className="overflow-y-auto p-4">
+          {bakeoff && (
+            <BakeoffView
+              taskId={task.id}
+              agents={agents.filter((a) => a.status !== "retired")}
+              currentTier={shownTier}
+              onKept={onChanged}
+              onClose={() => setTab("overview")}
+            />
+          )}
+        </TabPanel>
+      </Tabs>
     </motion.aside>
   );
 }
@@ -964,13 +1074,13 @@ function Permissions({ task }: { task: Task }) {
 
   return (
     <div className="mt-3 flex items-baseline gap-2 text-[11px]">
-      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="font-semibold uppercase tracking-wide text-fg-muted">
         Permission
       </span>
-      <span className={asks ? "text-ink" : "text-tier-easy"}>{says}</span>
+      <span className={asks ? "text-fg" : "text-tier-easy"}>{says}</span>
       {/* Naming the source is the whole point — it turns "why is this asking me"
           into a place to go and change it. */}
-      <span className="text-ink-dim">· {from}</span>
+      <span className="text-fg-muted">· {from}</span>
     </div>
   );
 }
@@ -998,19 +1108,19 @@ function EpicPanel({
   if (!parent && children.length === 0) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       {parent && (
         <button
           onClick={() => onOpenTask?.(parent)}
           disabled={!onOpenTask}
-          className="text-[11px] text-ink-dim hover:text-accent disabled:hover:text-ink-dim"
+          className="text-[11px] text-fg-muted hover:text-accent-fg disabled:hover:text-fg-muted"
         >
           ↳ part of <span className="font-medium">{parent.title}</span>
         </button>
       )}
       {children.length > 0 && (
         <>
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Sub-tasks · {children.filter((c) => resolved(c)).length} of {children.length} done
           </div>
           <div className="space-y-1">
@@ -1019,15 +1129,15 @@ function EpicPanel({
                 key={child.id}
                 onClick={() => onOpenTask?.(child)}
                 disabled={!onOpenTask}
-                className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-line"
+                className="flex w-full items-center gap-2 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-border"
               >
                 <span className="min-w-0 flex-1 truncate">{child.title}</span>
                 {child.agentName && (
-                  <span className="shrink-0 text-[10px] text-ink-dim">{child.agentName}</span>
+                  <span className="shrink-0 text-[10px] text-fg-muted">{child.agentName}</span>
                 )}
                 <span
                   className={`shrink-0 text-[10px] ${
-                    child.stepStatus === "failed" ? "text-danger" : "text-ink-dim"
+                    child.stepStatus === "failed" ? "text-danger-fg" : "text-fg-muted"
                   }`}
                 >
                   {child.stepStatus === "failed" ? "failed" : child.boardColumn}
@@ -1092,10 +1202,10 @@ function DiffView({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <button onClick={onBack} className="text-xs text-ink-dim hover:text-ink">
+        <Button variant="ghost" size="xs" onClick={onBack}>
           ← back to stream
-        </button>
-        <span className="text-[11px] text-ink-dim">Click a line to comment on it</span>
+        </Button>
+        <span className="text-[11px] text-fg-muted">Click a line to comment on it</span>
       </div>
 
       {sent && (
@@ -1115,16 +1225,16 @@ function DiffView({
                 line.kind === "add"
                   ? "text-tier-easy"
                   : line.kind === "del"
-                    ? "text-red-400"
+                    ? "text-danger-fg"
                     : line.kind === "hunk"
                       ? "text-tier-medium"
-                      : "text-ink-dim"
+                      : "text-fg-muted"
               }`}
             >
-              <span className="w-8 shrink-0 select-none text-right text-ink-dim/50">
+              <span className="w-8 shrink-0 select-none text-right text-fg-muted/50">
                 {line.newLine ?? ""}
               </span>
-              <span className="w-3 shrink-0 select-none text-ink-dim opacity-0 group-hover:opacity-100">
+              <span className="w-3 shrink-0 select-none text-fg-muted opacity-0 group-hover:opacity-100">
                 {isCommentable(line) ? "+" : ""}
               </span>
               <span className="whitespace-pre">{line.text || " "}</span>
@@ -1132,7 +1242,7 @@ function DiffView({
 
             {openAt === i && (
               <div className="my-1 rounded-lg border border-accent/40 bg-panel p-2.5 font-sans">
-                <div className="text-[11px] text-ink-dim">
+                <div className="text-[11px] text-fg-muted">
                   {line.file ?? "this change"}
                   {line.newLine ? ` · line ${line.newLine}` : ""}
                 </div>
@@ -1142,32 +1252,25 @@ function DiffView({
                   onChange={(e) => setNote(e.target.value)}
                   rows={2}
                   placeholder="What's wrong with this?"
-                  className="mt-1.5 w-full resize-none rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  className="mt-1.5 w-full resize-none rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => submit(true)}
-                    disabled={busy || !note.trim()}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                  >
+                  <Button variant="primary" size="sm" onClick={() => submit(true)} disabled={busy || !note.trim()}>
                     {busy ? "…" : "Ask to fix"}
-                  </button>
-                  <button
-                    onClick={() => submit(false)}
-                    disabled={busy || !note.trim()}
-                    className="rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-50"
-                  >
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => submit(false)} disabled={busy || !note.trim()}>
                     Just comment
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setOpenAt(null);
                       setNote("");
                     }}
-                    className="px-2 text-xs text-ink-dim hover:text-ink"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -1228,24 +1331,25 @@ function Description({
   if (!text.trim() && draft === null) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Description
         </span>
         {draft === null && (
-          <button
-            onClick={() => setDraft(text)}
-            disabled={running}
+          // The kit button takes no pointer events while disabled, so the
+          // reason it is disabled rides on a wrapper that still shows it.
+          <span
             title={
               running
                 ? "The agent is working from this brief — cancel the run to rewrite it"
                 : "Edit the card's brief; the next run uses the new text"
             }
-            className="text-[11px] text-ink-dim hover:text-accent disabled:opacity-40 disabled:hover:text-ink-dim"
           >
-            Edit
-          </button>
+            <Button variant="ghost" size="xs" onClick={() => setDraft(text)} disabled={running}>
+              Edit
+            </Button>
+          </span>
         )}
       </div>
 
@@ -1259,12 +1363,9 @@ function Description({
             {text}
           </div>
           {long && (
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="mt-1 text-[11px] text-accent hover:underline"
-            >
+            <Button variant="link" size="xs" onClick={() => setExpanded(!expanded)} className="mt-1">
               {expanded ? "Show less" : "Show more"}
-            </button>
+            </Button>
           )}
         </>
       ) : (
@@ -1277,28 +1378,25 @@ function Description({
             className="w-full resize-y rounded-lg border border-accent bg-panel px-2.5 py-2 text-[13px] leading-relaxed outline-none"
           />
           <div className="mt-1.5 flex items-center gap-2">
-            <button
-              onClick={save}
-              disabled={saving || !draft.trim() || draft === text}
-              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-40"
-            >
+            <Button variant="primary" size="xs" onClick={save} disabled={saving || !draft.trim() || draft === text}>
               {saving ? "Saving…" : "Save"}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={() => {
                 setDraft(null);
                 setError(null);
               }}
-              className="rounded-lg border border-line px-2.5 py-1 text-[11px] hover:border-ink-dim"
             >
               Cancel
-            </button>
+            </Button>
             {!draft.trim() && (
-              <span className="text-[11px] text-danger">the description can't be empty</span>
+              <span className="text-[11px] text-danger-fg">the description can't be empty</span>
             )}
           </div>
           {error && (
-            <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+            <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
               {error}
             </div>
           )}
@@ -1373,8 +1471,8 @@ function StatusMover({
   };
 
   return (
-    <div className="border-b border-line px-5 py-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+    <div className="border-b border-border px-5 py-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         Status
       </div>
       <div className="flex w-fit flex-wrap gap-0.5 rounded-xl bg-panel-2 p-0.5">
@@ -1396,8 +1494,8 @@ function StatusMover({
               }
               className={`relative rounded-lg px-2.5 py-1 text-xs transition-colors ${
                 current
-                  ? "font-semibold text-accent"
-                  : "text-ink-dim hover:text-ink disabled:opacity-40"
+                  ? "font-semibold text-accent-fg"
+                  : "text-fg-muted hover:text-fg disabled:opacity-40"
               }`}
             >
               {/* One pill sliding between segments, like the page tabs — the
@@ -1414,25 +1512,22 @@ function StatusMover({
           );
         })}
       </div>
-      {estimate && !ask && <div className="mt-1.5 text-[11px] text-ink-dim">Starting it: {estimate}</div>}
+      {estimate && !ask && <div className="mt-1.5 text-[11px] text-fg-muted">Starting it: {estimate}</div>}
       {ask && (
-        <div className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+        <div className="mt-1.5 rounded-lg bg-warning-subtle px-2.5 py-1.5 text-[11px] text-warning-fg">
           {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
           <div className="mt-1.5 flex gap-2">
-            <button
-              onClick={() => move("running", true)}
-              className="rounded-md bg-accent px-2 py-0.5 font-medium text-white"
-            >
+            <Button variant="primary" size="xs" onClick={() => move("running", true)}>
               Start anyway
-            </button>
-            <button onClick={() => setAsk(null)} className="rounded-md border border-amber-300 px-2 py-0.5">
+            </Button>
+            <Button variant="secondary" size="xs" onClick={() => setAsk(null)}>
               Not now
-            </button>
+            </Button>
           </div>
         </div>
       )}
       {error && (
-        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+        <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
           {error}
         </div>
       )}
@@ -1459,12 +1554,12 @@ function Setup({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-b border-line">
+    <div className="border-b border-border">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-panel-2/50"
       >
-        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Setup
         </span>
         {/* Animated with `animate` on mounted elements rather than
@@ -1474,14 +1569,14 @@ function Setup({
         <motion.span
           animate={{ opacity: open ? 0 : 1 }}
           transition={{ duration: 0.15 }}
-          className="min-w-0 truncate text-[11px] text-ink-dim/80"
+          className="min-w-0 truncate text-[11px] text-fg-muted/80"
         >
           {summary}
         </motion.span>
         <motion.span
           animate={{ rotate: open ? 90 : 0 }}
           transition={springy}
-          className="ml-auto shrink-0 text-ink-dim"
+          className="ml-auto shrink-0 text-fg-muted"
         >
           ›
         </motion.span>
@@ -1560,29 +1655,26 @@ function Blockers({
   if (blockers.length === 0 && candidates.length === 0 && !task.blockedNote) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Blocked by
         </span>
         {!adding && candidates.length > 0 && (
-          <button
-            onClick={() => setAdding(true)}
-            className="text-[11px] text-ink-dim hover:text-accent"
-          >
+          <Button variant="ghost" size="xs" onClick={() => setAdding(true)}>
             + Add
-          </button>
+          </Button>
         )}
       </div>
 
       {task.blockedNote && (
-        <div className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+        <div className="mb-2 rounded-lg bg-warning-subtle px-2.5 py-1.5 text-[11px] text-warning-fg">
           <span className="font-medium">The agent reported it is stuck:</span> {task.blockedNote}
         </div>
       )}
 
       {blockers.length === 0 && !adding && !task.blockedNote && (
-        <div className="text-[11px] text-ink-dim/70">
+        <div className="text-[11px] text-fg-muted/70">
           Nothing — this card can start any time.
         </div>
       )}
@@ -1602,11 +1694,11 @@ function Blockers({
                 className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
                   landed
                     ? "bg-tier-easy/10 text-tier-easy"
-                    : "bg-amber-50 text-amber-700"
+                    : "bg-warning-subtle text-warning-fg"
                 }`}
                 title={landed ? "Landed — no longer blocking" : "Not landed yet — still blocking"}
               >
-                <span className={`size-1.5 rounded-full ${landed ? "bg-tier-easy" : "bg-amber-400"}`} />
+                <span className={`size-1.5 rounded-full ${landed ? "bg-tier-easy" : "bg-warning"}`} />
                 {full && onOpenTask ? (
                   <button onClick={() => onOpenTask(full)} className="hover:underline">
                     {b.title}
@@ -1630,7 +1722,7 @@ function Blockers({
       {/* Only while something still blocks it: once they have all landed,
           starting is a click away and there is nothing left to wait for. */}
       {blockers.some((b) => b.boardColumn !== "done") && task.boardColumn === "backlog" && (
-        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-fg-muted">
           <input
             type="checkbox"
             checked={task.startWhenUnblocked}
@@ -1647,7 +1739,7 @@ function Blockers({
           defaultValue=""
           onChange={(e) => e.target.value && add(e.target.value)}
           onBlur={() => setAdding(false)}
-          className="mt-1.5 w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-xs"
+          className="mt-1.5 w-full rounded-lg border border-border bg-panel px-2 py-1.5 text-xs"
         >
           <option value="" disabled>
             Which card must land first?
@@ -1661,7 +1753,7 @@ function Blockers({
       )}
 
       {error && (
-        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+        <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
           {error}
         </div>
       )}

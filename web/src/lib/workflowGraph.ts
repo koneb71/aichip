@@ -172,6 +172,23 @@ export function layoutSteps(
   return positions;
 }
 
+/**
+ * Whether the editor holds work its saved workflow does not: different YAML
+ * (both sides as `emitWorkflow` writes it, so formatting is not an edit), or a
+ * step that now sits somewhere else. Positions are compared as laid out, since
+ * the canvas commits every node after a drag — including the ones still where
+ * the auto-layout put them.
+ */
+export function workflowChanged(
+  saved: { yaml: string; layout: Record<string, Position> },
+  draft: { yaml: string; steps: StepData[]; positions: Record<string, Position> },
+): boolean {
+  if (draft.yaml !== saved.yaml) return true;
+  const was = layoutSteps(draft.steps, saved.layout);
+  const now = layoutSteps(draft.steps, draft.positions);
+  return draft.steps.some((s) => was[s.id].x !== now[s.id].x || was[s.id].y !== now[s.id].y);
+}
+
 /** Every step `from` transitively depends on. */
 function ancestors(steps: StepData[], from: string): Set<string> {
   const byId = new Map(steps.map((s) => [s.id, s]));

@@ -1,6 +1,7 @@
 //! Claude Code adapter: spawns the official `claude` binary from PATH in
 //! headless mode and normalizes its stream-json output.
 
+pub mod compat;
 pub mod mcp;
 pub mod stream_parser;
 
@@ -127,6 +128,12 @@ impl Engine for ClaudeEngine {
             fixed_model_catalog: true,
             // `total_cost_usd` on the final result line.
             reports_cost: true,
+            // `--disallowedTools` is enforced by the CLI.
+            enforces_denied_tools: true,
+            // `--mcp-config` takes a file aichip writes in its own scratch
+            // directory, per run.
+            mcp_tools: true,
+            auto_edit: true,
         }
     }
 

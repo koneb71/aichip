@@ -46,7 +46,7 @@ export function SpendPanel() {
     return (
       <Card>
         <Heading>Breakdown</Heading>
-        <p className="mt-2 text-xs text-ink-dim">
+        <p className="mt-2 text-xs text-fg-muted">
           This server doesn't report a spend breakdown yet.
         </p>
       </Card>
@@ -56,7 +56,7 @@ export function SpendPanel() {
     return (
       <Card>
         <Heading>Breakdown</Heading>
-        <p className="mt-2 text-xs text-ink-dim">Adding it up…</p>
+        <p className="mt-2 text-xs text-fg-muted">Adding it up…</p>
       </Card>
     );
   }
@@ -75,8 +75,8 @@ export function SpendPanel() {
               onClick={() => setDim(d.id)}
               className={`rounded-lg px-2 py-1 text-[11px] transition ${
                 dim === d.id
-                  ? "bg-accent text-white"
-                  : "bg-panel-2 text-ink-dim hover:text-ink"
+                  ? "bg-accent text-on-accent"
+                  : "bg-panel-2 text-fg-muted hover:text-fg"
               }`}
             >
               {d.label}
@@ -98,7 +98,7 @@ export function SpendPanel() {
 
       {/* State the gaps rather than letting a total look complete. */}
       {(totals.unpricedRuns > 0 || totals.provisionalRuns > 0) && (
-        <p className="mt-3 text-[11px] leading-relaxed text-ink-dim/80">
+        <p className="mt-3 text-[11px] leading-relaxed text-fg-muted/80">
           {totals.unpricedRuns > 0 && (
             <>
               {totals.unpricedRuns} run{totals.unpricedRuns === 1 ? "" : "s"} spent tokens
@@ -116,14 +116,14 @@ export function SpendPanel() {
 
       <div className="mt-4 flex flex-col gap-2">
         {slices.length === 0 && (
-          <p className="text-xs text-ink-dim">Nothing recorded in this window.</p>
+          <p className="text-xs text-fg-muted">Nothing recorded in this window.</p>
         )}
         {slices.map((s) => (
           <Row key={s.key} slice={s} top={Math.max(...slices.map((x) => x.costUsd), 0.0001)} dim={dim} />
         ))}
       </div>
 
-      <p className="mt-4 text-[11px] leading-relaxed text-ink-dim/80">
+      <p className="mt-4 text-[11px] leading-relaxed text-fg-muted/80">
         Costs are what each CLI reported as it worked — aichip asks nothing and prices
         nothing itself.
       </p>
@@ -145,15 +145,15 @@ function Row({ slice, top, dim }: { slice: SpendSlice; top: number; dim: SpendDi
         />
       </div>
       <div
-        className="w-14 shrink-0 text-right text-[11px] tabular-nums text-ink-dim"
+        className="w-14 shrink-0 text-right text-[11px] tabular-nums text-fg-muted"
         title="Share of this row's tokens served from cache"
       >
         {cacheHitLabel(hit)}
       </div>
-      <div className="w-12 shrink-0 text-right text-[11px] tabular-nums text-ink-dim">
+      <div className="w-12 shrink-0 text-right text-[11px] tabular-nums text-fg-muted">
         {slice.runs} run{slice.runs === 1 ? "" : "s"}
       </div>
-      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-ink-dim">
+      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-fg-muted">
         ${slice.costUsd.toFixed(2)}
       </div>
     </div>
@@ -163,21 +163,21 @@ function Row({ slice, top, dim }: { slice: SpendSlice; top: number; dim: SpendDi
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div className="flex flex-col">
-      <span className="text-[11px] uppercase tracking-wider text-ink-dim">{label}</span>
+      <span className="text-[11px] uppercase tracking-wider text-fg-muted">{label}</span>
       <span className="text-xl font-bold tabular-nums">{value}</span>
-      {note && <span className="text-[11px] text-ink-dim/80">{note}</span>}
+      {note && <span className="text-[11px] text-fg-muted/80">{note}</span>}
     </div>
   );
 }
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="card-shadow mt-4 rounded-xl border border-line bg-panel p-5">{children}</div>
+    <div className="card-shadow mt-4 rounded-xl border border-border bg-panel p-5">{children}</div>
   );
 }
 
 function Heading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-xs font-semibold uppercase tracking-wider text-ink-dim">{children}</div>
+    <div className="text-xs font-semibold uppercase tracking-wider text-fg-muted">{children}</div>
   );
 }

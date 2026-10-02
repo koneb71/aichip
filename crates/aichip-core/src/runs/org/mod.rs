@@ -213,6 +213,13 @@ impl Orchestrator {
             ..Default::default()
         };
         crate::budgets::check(&self.db, &scope, true).await?;
+        let team_engine: Option<String> =
+            sqlx::query_scalar("SELECT engine FROM teams WHERE id = $1")
+                .bind(team_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+                .flatten();
+        self.vet_team_engine(&team_engine.unwrap_or_else(|| self.default_engine()))?;
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
              SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)
@@ -228,6 +235,21 @@ impl Orchestrator {
         let run_id: Uuid = row.get("id");
         self.queue(run_id, 15).await?;
         Ok(run_id)
+    }
+
+    /// Can an org team run on this engine? Every member runs on the run's
+    /// engine — never its own — hands work over through aichip's tools, and
+    /// works in Auto-edit. So that one engine needs both, checked by both
+    /// doors into a team run: the Teams page and a card assigned to a team.
+    fn vet_team_engine(&self, engine: &str) -> anyhow::Result<()> {
+        self.needs_tools(engine, "a team")?;
+        if let Some(why) = self.vet_engine(engine, PermissionMode::AutoEdit) {
+            return Err(crate::runs::orchestrator::CantHonour(format!(
+                "A team's members work in Auto-edit. {why}"
+            ))
+            .into());
+        }
+        Ok(())
     }
 
     /// Put a run on the queue. Public because approving a parked plan
@@ -282,6 +304,8 @@ impl Orchestrator {
             .unwrap_or_else(|| row.get("task_engine"));
 
         if pattern == "org" {
+            // The card's door into a team, held to what the Teams page's is.
+            self.vet_team_engine(&engine)?;
             let run = sqlx::query(
                 "INSERT INTO runs (task_id, team_id, project_id, goal, status, trigger, engine)
                  VALUES ($1,$2,$3,$4,'queued','task',$5) RETURNING id",
@@ -484,6 +508,14 @@ impl Orchestrator {
                             )
                             .await?;
                             self.set_status(run_id, RunStatus::AwaitingApproval).await?;
+                            // The same knock a card's plan gets: a team plan
+                            // waiting on a person is no less waiting.
+                            let ctx = crate::attention::Ctx {
+                                title: "aichip: a team plan needs your review".to_string(),
+                                ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+                            };
+                            crate::attention::fire(&self.db, crate::attention::Event::Plan, ctx)
+                                .await;
                             return Ok(());
                         }
                         session

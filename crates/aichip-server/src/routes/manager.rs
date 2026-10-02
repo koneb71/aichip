@@ -44,7 +44,8 @@ async fn manager_row(
     sqlx::query(
         "SELECT rt.id, rt.name, rt.prompt, rt.cron_expr, rt.catch_up, rt.enabled,
                 rt.engine, rt.model_tier, rt.effort, rt.chat_id, rt.agent_id,
-                rt.max_starts, a.name AS agent_name
+                rt.max_starts, rt.on_events, rt.cooldown_secs, rt.max_passes_per_day, rt.goal_id,
+                a.name AS agent_name
            FROM routines rt
            LEFT JOIN agents a ON a.id = rt.agent_id
           WHERE rt.kind = 'manage' AND rt.project_id = $1",
@@ -92,6 +93,10 @@ async fn read(
             "effort": r.get::<Option<String>, _>("effort"),
             "chatId": r.get::<Option<Uuid>, _>("chat_id"),
             "maxStarts": manager::clamp_starts(r.get::<Option<i32>, _>("max_starts")),
+            "onEvents": r.get::<Vec<String>, _>("on_events"),
+            "cooldownSecs": r.get::<i32, _>("cooldown_secs"),
+            "maxPassesPerDay": r.get::<i32, _>("max_passes_per_day"),
+            "goalId": r.get::<Option<Uuid>, _>("goal_id"),
             "nextAt": next_at(&expr, enabled),
         }
     })))
@@ -99,7 +104,7 @@ async fn read(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ManagerBody {
+pub(crate) struct ManagerBody {
     agent_id: Option<Uuid>,
     /// What this project's manager should care about. May be empty — a
     /// manager with no brief still has a job.
@@ -115,9 +120,39 @@ struct ManagerBody {
     effort: Option<String>,
     /// Cards one pass may start. Clamped, never trusted.
     max_starts: Option<i32>,
+    /// What news wakes this manager before its schedule (`aichip_core::wake`
+    /// kinds). Absent leaves it as it is; unknown kinds are dropped.
+    #[serde(default)]
+    on_events: Option<Vec<String>>,
+    /// Least time between two passes a wake may fire. Clamped.
+    #[serde(default)]
+    cooldown_secs: Option<i32>,
+    /// Early passes a day, at most. Clamped.
+    #[serde(default)]
+    max_passes_per_day: Option<i32>,
+    /// The goal the cards it files serve. Absent leaves it; null clears it.
+    #[serde(default, deserialize_with = "present")]
+    goal_id: Option<Option<Uuid>>,
 }
 
-async fn upsert(
+fn present<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(de).map(Some)
+}
+
+/// This project's manager routine, if it has one.
+async fn manager_id(state: &AppState, project_id: Uuid) -> Result<Option<Uuid>, ApiError> {
+    sqlx::query_scalar("SELECT id FROM routines WHERE kind = 'manage' AND project_id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)
+}
+
+pub(crate) async fn upsert(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ManagerBody>,
@@ -145,6 +180,15 @@ async fn upsert(
                 format!("{engine} isn't installed on this machine"),
             ));
         }
+    }
+    // A manager works the board through aichip's tools; refused at the save,
+    // not at nine tomorrow morning.
+    let engine = body
+        .engine
+        .clone()
+        .unwrap_or_else(|| state.orchestrator.default_engine());
+    if let Err(no) = state.orchestrator.needs_tools(&engine, "a project manager") {
+        return Err((StatusCode::CONFLICT, no.to_string()));
     }
 
     // A repository, not a document space: a manager on a space would be
@@ -194,12 +238,23 @@ async fn upsert(
     // on update, deliberately: the standing thread is the manager's memory,
     // and changing the schedule or the brief should not amount to firing it
     // and hiring someone with amnesia.
+    if let Some(existing) = manager_id(&state, project_id).await? {
+        aichip_core::revisions::keep(
+            &state.db,
+            aichip_core::revisions::EntityKind::Routine,
+            &existing.to_string(),
+        )
+        .await;
+    }
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO routines
             (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up,
-             enabled, engine, model_tier, effort, agent_id, max_starts)
+             enabled, engine, model_tier, effort, agent_id, max_starts,
+             on_events, cooldown_secs, max_passes_per_day, goal_id)
          VALUES ($1,$2,'manage',$3,$4,$5,coalesce($6,'run_once'),
-                 coalesce($7,true),$8,$9,$10,$11,$12)
+                 coalesce($7,true),$8,$9,$10,$11,$12,
+                 coalesce($13,'{}'),coalesce($14,900),coalesce($15,6),
+                 (SELECT id FROM goals WHERE id = $17 AND workspace_id = $1))
          ON CONFLICT (project_id) WHERE kind = 'manage'
          DO UPDATE SET name = EXCLUDED.name,
                        prompt = EXCLUDED.prompt,
@@ -211,6 +266,10 @@ async fn upsert(
                        effort = EXCLUDED.effort,
                        agent_id = EXCLUDED.agent_id,
                        max_starts = EXCLUDED.max_starts,
+                       on_events = coalesce($13, routines.on_events),
+                       cooldown_secs = coalesce($14, routines.cooldown_secs),
+                       max_passes_per_day = coalesce($15, routines.max_passes_per_day),
+                       goal_id = CASE WHEN $16 THEN EXCLUDED.goal_id ELSE routines.goal_id END,
                        updated_at = now()
          RETURNING id",
     )
@@ -226,6 +285,11 @@ async fn upsert(
     .bind(&body.effort)
     .bind(body.agent_id)
     .bind(max_starts)
+    .bind(body.on_events.as_deref().map(aichip_core::wake::known))
+    .bind(body.cooldown_secs.map(|s| s.clamp(60, 86_400)))
+    .bind(body.max_passes_per_day.map(|n| n.clamp(1, 48)))
+    .bind(body.goal_id.is_some())
+    .bind(body.goal_id.flatten())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -242,6 +306,14 @@ async fn remove(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(existing) = manager_id(&state, project_id).await? {
+        aichip_core::revisions::keep(
+            &state.db,
+            aichip_core::revisions::EntityKind::Routine,
+            &existing.to_string(),
+        )
+        .await;
+    }
     sqlx::query("DELETE FROM routines WHERE kind = 'manage' AND project_id = $1")
         .bind(project_id)
         .execute(&state.db.pool)

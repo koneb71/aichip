@@ -65,25 +65,25 @@ export function PreviewLogs({
   }, [text]);
 
   return (
-    <div className="mt-2 rounded-xl border border-line bg-panel">
-      <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
+    <div className="mt-2 rounded-xl border border-border bg-panel">
+      <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
         {(["build", "runtime"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`rounded-md px-2 py-0.5 text-[11px] ${
-              tab === t ? "bg-line/60 font-medium" : "text-ink-dim hover:text-ink"
+              tab === t ? "bg-border/60 font-medium" : "text-fg-muted hover:text-fg"
             }`}
           >
             {t === "build" ? "Build" : "Output"}
           </button>
         ))}
         {live && (
-          <span className="ml-1 text-[11px] text-ink-dim">following…</span>
+          <span className="ml-1 text-[11px] text-fg-muted">following…</span>
         )}
         <button
           onClick={onClose}
-          className="ml-auto px-1 text-[11px] text-ink-dim hover:text-ink"
+          className="ml-auto px-1 text-[11px] text-fg-muted hover:text-fg"
         >
           hide
         </button>

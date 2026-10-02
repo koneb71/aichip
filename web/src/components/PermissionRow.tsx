@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { Button } from "./ui/Button";
 
 /**
  * One "may I?" from a running agent, with the answer buttons.
@@ -26,32 +27,24 @@ export function PermissionRow({
     <motion.div
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="rounded-xl border border-amber-300 bg-panel px-3 py-2.5"
+      className="rounded-xl border border-warning/40 bg-panel px-3 py-2.5"
     >
-      {context && <div className="mb-1 truncate text-xs text-ink-dim">{context}</div>}
-      <div className="text-sm font-medium text-amber-700">
+      {context && <div className="mb-1 truncate text-xs text-fg-muted">{context}</div>}
+      <div className="text-sm font-medium text-warning-fg">
         Allow <span className="font-mono">{toolName}</span>?
       </div>
       {summary && (
-        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-ink">
+        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-fg">
           {summary}
         </pre>
       )}
       <div className="mt-2.5 flex gap-2">
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={() => onAnswer(true)}
-          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-white"
-        >
+        <Button variant="primary" size="sm" onClick={() => onAnswer(true)}>
           Allow
-        </motion.button>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={() => onAnswer(false)}
-          className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:border-danger hover:text-danger"
-        >
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => onAnswer(false)}>
           Deny
-        </motion.button>
+        </Button>
       </div>
     </motion.div>
   );

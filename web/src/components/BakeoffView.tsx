@@ -7,6 +7,7 @@ import { useTierModel } from "../lib/models";
 import { useEngines } from "../lib/engines";
 import { TIERS } from "./TierPicker";
 import { RunError } from "./ui/RunError";
+import { Button } from "./ui/Button";
 
 /**
  * One brief, several attempts, side by side.
@@ -66,11 +67,11 @@ export function BakeoffView({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <button onClick={onClose} className="text-xs text-ink-dim hover:text-ink">
+        <Button variant="ghost" size="xs" onClick={onClose} className="-ml-2">
           ← back to stream
-        </button>
+        </Button>
         {running && (
-          <span className="text-[11px] text-ink-dim">
+          <span className="text-[11px] text-fg-muted">
             {done.length} of {variants?.length} finished…
           </span>
         )}
@@ -87,7 +88,7 @@ export function BakeoffView({
             <motion.div
               key={v.runId}
               layout
-              className="card-shadow rounded-xl border border-line bg-panel"
+              className="card-shadow rounded-xl border border-border bg-panel"
             >
               <div className="flex flex-wrap items-center gap-2 p-3">
                 <span
@@ -100,7 +101,7 @@ export function BakeoffView({
                     cheapest
                   </span>
                 )}
-                <span className="text-[11px] text-ink-dim">
+                <span className="text-[11px] text-fg-muted">
                   {[
                     v.agentName,
                     v.model,
@@ -113,25 +114,28 @@ export function BakeoffView({
                 </span>
                 <div className="ml-auto flex gap-2">
                   {v.diff && (
-                    <button
-                      onClick={() => setSelected(isOpen ? null : v.runId)}
-                      className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2"
-                    >
+                    <Button size="sm" onClick={() => setSelected(isOpen ? null : v.runId)}>
                       {isOpen ? "Hide diff" : "See diff"}
-                    </button>
+                    </Button>
                   )}
-                  <button
-                    onClick={() => keep(v.runId)}
-                    disabled={busy || v.status !== "completed"}
+                  {/* On a wrapper: a disabled kit Button takes no pointer events. */}
+                  <span
+                    className="shrink-0"
                     title={
                       v.status === "completed"
                         ? "Adopt this attempt and discard the others"
                         : "Only a finished attempt can be kept"
                     }
-                    className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
                   >
-                    Keep this
-                  </button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => keep(v.runId)}
+                      disabled={busy || v.status !== "completed"}
+                    >
+                      Keep this
+                    </Button>
+                  </span>
                 </div>
               </div>
 
@@ -145,7 +149,7 @@ export function BakeoffView({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="border-t border-line"
+                    className="border-t border-border"
                   >
                     <pre className="max-h-80 overflow-auto bg-panel-2 p-3 font-mono text-xs leading-relaxed">
                       {annotateDiff(v.diff).map((line, i) => (
@@ -155,10 +159,10 @@ export function BakeoffView({
                             line.kind === "add"
                               ? "text-tier-easy"
                               : line.kind === "del"
-                                ? "text-red-400"
+                                ? "text-danger-fg"
                                 : line.kind === "hunk"
                                   ? "text-tier-medium"
-                                  : "text-ink-dim"
+                                  : "text-fg-muted"
                           }
                         >
                           {line.text || " "}
@@ -173,7 +177,7 @@ export function BakeoffView({
         })}
       </div>
 
-      <p className="mt-3 text-[11px] text-ink-dim">
+      <p className="mt-3 text-[11px] text-fg-muted">
         Keeping one adopts its branch as this card's work and deletes the other
         checkouts. What they cost stays on the record.
       </p>
@@ -237,11 +241,11 @@ function BakeoffSetup({
 
   return (
     <div>
-      <button onClick={onClose} className="mb-3 text-xs text-ink-dim hover:text-ink">
+      <Button variant="ghost" size="xs" onClick={onClose} className="-ml-2 mb-3">
         ← back to stream
-      </button>
+      </Button>
       <div className="text-sm font-semibold">Run this task more than one way</div>
-      <p className="mt-1 text-xs text-ink-dim">
+      <p className="mt-1 text-xs text-fg-muted">
         Each attempt works in its own checkout and never sees the others. When
         they finish you compare the diffs and keep one.
       </p>
@@ -255,7 +259,7 @@ function BakeoffSetup({
               key={m}
               onClick={() => setMode(m)}
               className={`rounded-lg border px-3 py-1.5 text-xs ${
-                mode === m ? "border-accent bg-accent/5 text-accent" : "border-line"
+                mode === m ? "border-accent bg-accent/5 text-accent-fg" : "border-border"
               }`}
             >
               {m === "tiers"
@@ -272,7 +276,7 @@ function BakeoffSetup({
           ? engines.map((e) => (
               <label
                 key={e.id}
-                className="flex cursor-pointer items-center gap-2 rounded-lg border border-line p-2.5 text-sm hover:bg-panel-2"
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2.5 text-sm hover:bg-panel-2"
               >
                 <input
                   type="checkbox"
@@ -285,7 +289,7 @@ function BakeoffSetup({
                   className="accent-[var(--color-accent)]"
                 />
                 <span>{e.label}</span>
-                <span className="text-xs text-ink-dim">
+                <span className="text-xs text-fg-muted">
                   {e.providers.map((p) => p.name).join(", ") || e.version}
                 </span>
               </label>
@@ -294,7 +298,7 @@ function BakeoffSetup({
           ? TIERS.map((t) => (
               <label
                 key={t}
-                className="flex cursor-pointer items-center gap-2 rounded-lg border border-line p-2.5 text-sm hover:bg-panel-2"
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2.5 text-sm hover:bg-panel-2"
               >
                 <input
                   type="checkbox"
@@ -307,13 +311,13 @@ function BakeoffSetup({
                   className="accent-[var(--color-accent)]"
                 />
                 <span className="capitalize">{t}</span>
-                <span className="text-xs text-ink-dim">{tierModel(t)}</span>
+                <span className="text-xs text-fg-muted">{tierModel(t)}</span>
               </label>
             ))
           : agents.map((a) => (
               <label
                 key={a.id}
-                className="flex cursor-pointer items-center gap-2 rounded-lg border border-line p-2.5 text-sm hover:bg-panel-2"
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2.5 text-sm hover:bg-panel-2"
               >
                 <input
                   type="checkbox"
@@ -336,15 +340,10 @@ function BakeoffSetup({
       )}
 
       <div className="mt-4 flex items-center gap-3">
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={start}
-          disabled={busy || count < 2}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Button variant="primary" onClick={start} disabled={busy || count < 2}>
           {busy ? "Starting…" : `Run ${count || 0} attempts`}
-        </motion.button>
-        <span className="text-[11px] text-ink-dim">
+        </Button>
+        <span className="text-[11px] text-fg-muted">
           {count < 2
             ? "Pick at least two."
             : `${count} runs against your rate limit, at once.`}

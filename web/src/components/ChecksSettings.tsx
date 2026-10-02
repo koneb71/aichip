@@ -1,5 +1,8 @@
+import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { api, CheckCommand, ProjectChecks } from "../lib/api";
+import { Button, IconButton } from "./ui/Button";
 
 /**
  * The commands that decide whether an agent's work passes: `cargo test`,
@@ -14,6 +17,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [loads, setLoads] = useState(0);
   useEffect(() => {
     api
       .projectChecks(projectId)
@@ -22,9 +26,9 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
         setSaved(JSON.stringify(c));
       })
       .catch((e) => setError(String(e)));
-  }, [projectId]);
+  }, [projectId, loads]);
 
-  if (!draft) return <p className="text-[11px] text-ink-dim">{error ?? "Loading…"}</p>;
+  if (!draft) return <p className="text-[11px] text-fg-muted">{error ?? "Loading…"}</p>;
 
   const dirty = JSON.stringify(draft) !== saved;
   const setCommand = (i: number, patch: Partial<CheckCommand>) =>
@@ -47,7 +51,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
     }
   };
 
-  const input = "rounded-lg border border-line bg-panel px-2 py-1 text-xs outline-none focus:border-accent";
+  const input = "rounded-lg border border-border bg-panel px-2 py-1 text-xs outline-none focus:border-accent";
 
   return (
     <div className="space-y-2">
@@ -65,23 +69,25 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
             placeholder="cargo test --workspace"
             className={`${input} min-w-0 flex-1 font-mono`}
           />
-          <button
+          <IconButton
+            size="xs"
+            label="Remove this check"
             onClick={() => setDraft({ ...draft, commands: draft.commands.filter((_, j) => j !== i) })}
-            className="px-1 text-ink-dim hover:text-danger"
-            title="Remove this check"
+            className="hover:text-danger-fg"
           >
-            ✕
-          </button>
+            <X className="size-3.5" />
+          </IconButton>
         </div>
       ))}
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setDraft({ ...draft, commands: [...draft.commands, { name: "", command: "" }] })}
-        className="text-xs text-ink-dim hover:text-ink"
       >
         + Add a check
-      </button>
+      </Button>
 
-      <div className="flex flex-wrap items-center gap-3 text-xs text-ink-dim">
+      <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
         <label className="flex items-center gap-1.5">
           Time limit
           <input
@@ -107,17 +113,15 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
             <option value={3}>up to 3 times</option>
           </select>
         </label>
-        <button
-          onClick={save}
-          disabled={!dirty || busy}
-          className="ml-auto rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
-        >
+        <span className="ml-auto" />
+        <HistoryButton kind="project_checks" id={projectId} onRestored={() => setLoads((n) => n + 1)} />
+        <Button variant="primary" size="sm" onClick={save} disabled={!dirty || busy}>
           {busy ? "Saving…" : dirty ? "Save checks" : "Saved"}
-        </button>
+        </Button>
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</p>}
-      <p className="text-[11px] leading-relaxed text-ink-dim/80">
+      {error && <p className="rounded-lg bg-danger-subtle px-3 py-2 text-[11px] text-danger-fg">{error}</p>}
+      <p className="text-[11px] leading-relaxed text-fg-muted/80">
         They run in the card's worktree when an agent finishes. Because they execute code the agent may
         have just changed, they start by themselves — and fix failures by themselves — only after a{" "}
         <b>Full Auto</b> run, where the agent already had a shell; otherwise the card offers a Run checks

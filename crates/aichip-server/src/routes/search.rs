@@ -49,7 +49,7 @@ async fn search(
     // debounce cheap by refusing to do the work at all.
     if q.len() < 2 {
         return Ok(Json(json!({
-            "projects": [], "tasks": [], "agents": [], "teams": [], "workflows": [],
+            "projects": [], "tasks": [], "agents": [], "teams": [], "workflows": [], "goals": [],
         })));
     }
     let pattern = contains(q);
@@ -170,12 +170,34 @@ async fn search(
     })
     .collect::<Vec<_>>();
 
+    let goals = sqlx::query(
+        "SELECT id, title, status FROM goals
+         WHERE workspace_id=$1 AND (title ILIKE $2 ESCAPE '\\' OR description ILIKE $2 ESCAPE '\\')
+         ORDER BY (status = 'active') DESC, title LIMIT $3",
+    )
+    .bind(sq.workspace_id)
+    .bind(&pattern)
+    .bind(LIMIT)
+    .fetch_all(pool)
+    .await
+    .map_err(internal)?
+    .iter()
+    .map(|r| {
+        json!({
+            "id": r.get::<Uuid, _>("id"),
+            "label": r.get::<String, _>("title"),
+            "sublabel": r.get::<String, _>("status"),
+        })
+    })
+    .collect::<Vec<_>>();
+
     Ok(Json(json!({
         "projects": projects,
         "tasks": tasks,
         "agents": agents,
         "teams": teams,
         "workflows": workflows,
+        "goals": goals,
     })))
 }
 

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
 import { Agent, api, Effort, Project, Skill, Team, TierChoice, tierColor, tierSoft } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useAttachments } from "../lib/useAttachments";
@@ -7,12 +6,16 @@ import { AttachmentBar } from "./AttachmentBar";
 import { useMentionPicker } from "./MentionPicker";
 import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
 import { SkillPicker } from "./SkillPicker";
+import { GoalPicker } from "./GoalPicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { TIERS } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
 import { estimateLine, ForecastAsk, parseForecastAsk } from "../lib/forecast";
+import { Dialog } from "./ui/Dialog";
+import { Button } from "./ui/Button";
+import { Input, Textarea } from "./ui/Field";
 
 export function NewTaskModal({
   project,
@@ -34,6 +37,7 @@ export function NewTaskModal({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [assignee, setAssignee] = useState<string>("");
   const [skillId, setSkillId] = useState<string | null>(null);
+  const [goalId, setGoalId] = useState<string | null>(null);
   // null = the machine default, which is what the server picks.
   const [engine, setEngine] = useState<string | null>(null);
   // null = inherit: the agent's budget if it has one, else the machine default.
@@ -66,6 +70,22 @@ export function NewTaskModal({
       });
     },
   });
+
+  // The dialog hears Escape before the textarea does (Radix listens on the
+  // document, capturing), so which key closed it is noted on the way down.
+  const escInPicker = useRef(false);
+  const picking = mention.open;
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => {
+      escInPicker.current = e.key === "Escape" && document.activeElement === promptRef.current;
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      escInPicker.current = false;
+    };
+  }, [picking]);
 
   useEffect(() => {
     if (!active) return;
@@ -101,6 +121,7 @@ export function NewTaskModal({
         agent_id: kind === "agent" ? id : null,
         team_id: kind === "team" ? id : null,
         skill_id: skillId,
+        goal_id: goalId,
         start,
         engine: engine ?? undefined,
         plan_first: planFirst,
@@ -127,36 +148,86 @@ export function NewTaskModal({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4 sm:p-6"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (o) return;
+        // Escape with the @ picker open dismisses the picker (its own key
+        // handler does that), not the whole form. A click outside still closes.
+        if (escInPicker.current) {
+          escInPicker.current = false;
+          return;
+        }
+        onClose();
+      }}
+      // Anything typed or attached is work a stray Escape would throw away.
+      dismissible={!title.trim() && !prompt.trim() && att.items.length === 0}
+      title={`New task · ${project.name}`}
+      width={576}
+      className={att.dragging ? "border-accent! ring-2 ring-accent/30" : undefined}
+      footer={
+        // What the buttons answer — a failure, or the budget question — sits
+        // beside them, not somewhere up the scrolling form.
+        <div className="flex w-full min-w-0 flex-col gap-2">
+          {error && (
+            <div className="rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">
+              {error}
+            </div>
+          )}
+          {ask && (
+            <div className="rounded-lg bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
+              <div>
+                The card is in the backlog. {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button
+                  variant="primary"
+                  size="xs"
+                  onClick={async () => {
+                    try {
+                      await api.startTask(ask.taskId!, true);
+                      onCreated();
+                    } catch (e) {
+                      setAsk(null);
+                      setError(String(e));
+                    }
+                  }}
+                >
+                  Start anyway
+                </Button>
+                <Button size="xs" onClick={onCreated} className="border-warning/40!">
+                  Leave it in the backlog
+                </Button>
+              </div>
+            </div>
+          )}
+          {estimate && !ask && <div className="text-right text-[11px] text-fg-muted">{estimate}</div>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={() => submit(false)} disabled={busy || ask !== null}>
+              Add to backlog
+            </Button>
+            <Button variant="primary" onClick={() => submit(true)} disabled={busy || ask !== null}>
+              {planFirst ? "Plan it" : "Start now"}
+            </Button>
+          </div>
+        </div>
+      }
     >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 24, scale: 0.97 }}
-        onClick={(e) => e.stopPropagation()}
-        // Drop anywhere in the modal, not just on the prompt box.
-        {...att.dropProps}
-        className={`card-shadow max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border bg-panel p-5 sm:p-6 ${
-          att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
-        }`}
-      >
-        <div className="mb-4 text-lg font-semibold">New task · {project.name}</div>
-        <input
+      {/* Drop anywhere in the modal, not just on the prompt box. */}
+      <div {...att.dropProps}>
+        <Input
           autoFocus
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Task title"
-          className="mb-3 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          className="mb-3"
         />
         <div className="relative mb-2">
           {mention.node}
-          <textarea
+          <Textarea
             ref={promptRef}
             value={prompt}
             onChange={(e) => {
@@ -171,7 +242,7 @@ export function NewTaskModal({
             }}
             placeholder="Describe what the agent should do… (@ to reference a file)"
             rows={5}
-            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="resize-none"
           />
         </div>
         <div className="mb-4">
@@ -184,15 +255,9 @@ export function NewTaskModal({
           />
         </div>
 
-        {error && (
-          <div className="mb-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
-            {error}
-          </div>
-        )}
-
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Complexity → model
             </div>
             <div className="flex gap-1.5">
@@ -203,8 +268,8 @@ export function NewTaskModal({
                 onClick={() => setTier("auto")}
                 className="flex-1 rounded-lg border px-2 py-1.5 text-xs"
                 style={{
-                  borderColor: tier === "auto" ? "var(--color-accent)" : "var(--color-line)",
-                  color: tier === "auto" ? "var(--color-accent)" : "var(--color-ink-dim)",
+                  borderColor: tier === "auto" ? "var(--color-accent)" : "var(--color-border)",
+                  color: tier === "auto" ? "var(--color-accent)" : "var(--color-fg-muted)",
                 }}
               >
                 auto
@@ -216,9 +281,9 @@ export function NewTaskModal({
                   onClick={() => setTier(t)}
                   className="flex-1 rounded-lg border px-2 py-1.5 text-xs capitalize"
                   style={{
-                    borderColor: tier === t ? tierColor[t] : "var(--color-line)",
+                    borderColor: tier === t ? tierColor[t] : "var(--color-border)",
                     background: tier === t ? tierSoft[t] : "transparent",
-                    color: tier === t ? tierColor[t] : "var(--color-ink-dim)",
+                    color: tier === t ? tierColor[t] : "var(--color-fg-muted)",
                   }}
                 >
                   {t}
@@ -230,7 +295,7 @@ export function NewTaskModal({
             </div>
           </div>
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Assign to
             </div>
             <AssigneePicker
@@ -246,7 +311,7 @@ export function NewTaskModal({
             just be a question nobody in this workspace can answer yet. */}
         {skills.some((s) => s.enabled) && (
           <div className="mb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               How
             </div>
             <SkillPicker value={skillId} skills={skills} onChange={setSkillId} />
@@ -255,7 +320,7 @@ export function NewTaskModal({
 
         {!!engines && engines.length > 1 && (
           <div className="mb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Run on
             </div>
             <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
@@ -263,11 +328,17 @@ export function NewTaskModal({
         )}
 
         <div className="mb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
             Thinking
           </div>
           <EffortPicker value={effort} onChange={setEffort} />
         </div>
+
+        {!!active && (
+          <div className="mb-4">
+            <GoalPicker workspaceId={active.id} value={goalId} onChange={setGoalId} />
+          </div>
+        )}
 
         {!!active && (
           <div className="mb-4">
@@ -288,63 +359,13 @@ export function NewTaskModal({
           />
           <span className="min-w-0">
             <span className="block font-medium">Plan first</span>
-            <span className="block text-xs text-ink-dim">
+            <span className="block text-xs text-fg-muted">
               The agent writes down what it intends to do and stops. You confirm
               it, rewrite it, or send it back — then work starts.
             </span>
           </span>
         </label>
-
-        {ask && (
-          <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            <div>
-              The card is in the backlog. {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
-            </div>
-            <div className="mt-2 flex gap-2">
-              <button
-                onClick={async () => {
-                  try {
-                    await api.startTask(ask.taskId!, true);
-                    onCreated();
-                  } catch (e) {
-                    setAsk(null);
-                    setError(String(e));
-                  }
-                }}
-                className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
-              >
-                Start anyway
-              </button>
-              <button onClick={onCreated} className="rounded-md border border-amber-300 px-2.5 py-1 text-[11px]">
-                Leave it in the backlog
-              </button>
-            </div>
-          </div>
-        )}
-
-        {estimate && !ask && <div className="mb-2 text-right text-[11px] text-ink-dim">{estimate}</div>}
-
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
-            Cancel
-          </button>
-          <button
-            onClick={() => submit(false)}
-            disabled={busy || ask !== null}
-            className="rounded-lg border border-line px-4 py-2 text-sm hover:bg-panel-2"
-          >
-            Add to backlog
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => submit(true)}
-            disabled={busy || ask !== null}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-          >
-            {planFirst ? "Plan it" : "Start now"}
-          </motion.button>
-        </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </Dialog>
   );
 }

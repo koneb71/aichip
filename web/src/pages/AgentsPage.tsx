@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -6,7 +7,8 @@ import { AgentEditorDrawer } from "../components/agents/AgentEditorDrawer";
 import { GenerateWizard } from "../components/agents/GenerateWizard";
 import { Card, Empty, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button } from "../components/ui/Button";
+import { Plus, Sparkles } from "lucide-react";
 import { tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 
@@ -24,6 +26,29 @@ export default function AgentsPage() {
 
   useEffect(refresh, [refresh]);
 
+  // `?new=1` (the top bar's New menu) and `?agent=<id>` (a palette hit) open
+  // the editor; the param is consumed so a reload does not reopen it.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const want = params.get("agent");
+    if (params.get("new") === "1") {
+      setEditing("new");
+      setParams((p) => {
+        p.delete("new");
+        return p;
+      }, { replace: true });
+    } else if (want) {
+      const found = agents.find((a) => a.id === want);
+      if (found) {
+        setEditing(found);
+        setParams((p) => {
+          p.delete("agent");
+          return p;
+        }, { replace: true });
+      }
+    }
+  }, [params, agents, setParams]);
+
   const working = agents.filter((a) => a.status !== "retired");
   const retired = agents.filter((a) => a.status === "retired");
 
@@ -34,22 +59,12 @@ export default function AgentsPage() {
         subtitle="Reusable specialists you can bind to tasks — or let the assistant pick from."
         actions={
           <>
-            <motion.button
-              {...tappable}
-              onClick={() => setWizard(true)}
-              className="ring-focus flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.06] px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
-            >
-              <Icon name="sparkle" size={15} />
+            <Button size="sm" icon={<Sparkles className="size-3.5" />} onClick={() => setWizard(true)}>
               Generate with AI
-            </motion.button>
-            <motion.button
-              {...tappable}
-              onClick={() => setEditing("new")}
-              className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
-            >
-              <Icon name="plus" size={15} strokeWidth={2.5} />
+            </Button>
+            <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setEditing("new")}>
               New agent
-            </motion.button>
+            </Button>
           </>
         }
       />
@@ -60,7 +75,7 @@ export default function AgentsPage() {
             <Card onClick={() => setEditing(a)} className="h-full p-4">
               <div className="flex items-center gap-3">
                 <span
-                  className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-white transition-transform duration-300 group-hover:scale-105"
+                  className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-on-accent transition-transform duration-300 group-hover:scale-105"
                   style={{
                     background: a.color,
                     boxShadow: `0 4px 12px -4px ${a.color}`,
@@ -73,7 +88,7 @@ export default function AgentsPage() {
                     <span className="truncate text-sm font-semibold">{a.name}</span>
                     {a.status === "paused" && (
                       <span
-                        className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                        className="shrink-0 rounded-full bg-warning-subtle px-1.5 py-0.5 text-[10px] font-medium text-warning-fg"
                         title={a.pauseReason ?? "Starts nothing until resumed"}
                       >
                         paused
@@ -88,7 +103,7 @@ export default function AgentsPage() {
                   </span>
                 </div>
               </div>
-              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-fg-muted">
                 {a.description || "No description yet."}
               </p>
             </Card>
@@ -107,10 +122,10 @@ export default function AgentsPage() {
 
       {retired.length > 0 && (
         <details className="mt-8">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-ink-dim">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-fg-muted">
             Retired · {retired.length}
           </summary>
-          <p className="mt-1 text-[11px] text-ink-dim">
+          <p className="mt-1 text-[11px] text-fg-muted">
             No new work and gone from pickers; their runs and comments still name them.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -118,7 +133,7 @@ export default function AgentsPage() {
               <button
                 key={a.id}
                 onClick={() => setEditing(a)}
-                className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-dim hover:bg-panel-2"
+                className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-fg-muted hover:bg-panel-2"
               >
                 <span className="size-2 rounded-full opacity-50" style={{ background: a.color }} />
                 {a.name}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, type Project, type RepoApp } from "../../lib/api";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Field";
 
 /**
  * Apps a project offers under `.aichip/apps/`.
@@ -69,13 +70,13 @@ export function RepoApps({
   return (
     <div className="mt-8">
       <div className="mb-2 flex items-center gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
           From a repository
         </span>
-        <select
+        <Select
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
-          className="rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-accent"
+          className="w-auto"
         >
           <option value="">Choose a project…</option>
           {projects.map((p) => (
@@ -83,18 +84,18 @@ export function RepoApps({
               {p.name}
             </option>
           ))}
-        </select>
-        <span className="text-[11px] text-ink-dim">
+        </Select>
+        <span className="text-[11px] text-fg-muted">
           Anything committed under <span className="font-mono">.aichip/apps/</span>.
         </span>
       </div>
 
       {error && (
-        <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       {found?.length === 0 && (
-        <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-ink-dim">
+        <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-fg-muted">
           This project has no apps in <span className="font-mono">.aichip/apps/</span>. Export one
           as <strong>Share</strong> and commit its manifest there to offer it to everyone working
           on this repository.
@@ -105,13 +106,13 @@ export function RepoApps({
         {(found ?? []).map((a) => (
           <div
             key={a.dir}
-            className="flex items-center gap-3 rounded-lg border border-line px-3 py-2 text-xs"
+            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-xs"
           >
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{a.name}</div>
-              <div className="truncate text-[11px] text-ink-dim">
+              <div className="truncate text-[11px] text-fg-muted">
                 {a.error ? (
-                  <span className="text-danger">{a.error}</span>
+                  <span className="text-danger-fg">{a.error}</span>
                 ) : (
                   a.summary || <span className="font-mono">{a.dir}</span>
                 )}
@@ -119,11 +120,11 @@ export function RepoApps({
             </div>
             {/* "Update" rather than "Install" when it is already here: syncing
                 replaces the manifest of the app of that name and keeps its
-                rows, which is a different promise and worth a different word. */}
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => sync(a)}
-              disabled={busy !== null || a.error !== null}
+                rows, which is a different promise and worth a different word.
+                The title is on a wrapper: a disabled kit Button takes no
+                pointer events, and the title is what says why it is disabled. */}
+            <span
+              className="shrink-0"
               title={
                 a.error
                   ? "This manifest does not parse, so there is nothing to install."
@@ -131,10 +132,11 @@ export function RepoApps({
                     ? "Replace the installed app's manifest. Its rows are kept."
                     : "Install it here."
               }
-              className="shrink-0 rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
             >
-              {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
-            </motion.button>
+              <Button size="xs" onClick={() => sync(a)} disabled={busy !== null || a.error !== null}>
+                {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
+              </Button>
+            </span>
           </div>
         ))}
       </div>

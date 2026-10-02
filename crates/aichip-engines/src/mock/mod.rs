@@ -53,6 +53,10 @@ impl Engine for MockEngine {
             append_system_prompt: true,
             fixed_model_catalog: true,
             reports_cost: true,
+            // The fixture replays; nothing it does writes.
+            enforces_denied_tools: true,
+            mcp_tools: true,
+            auto_edit: true,
         }
     }
 

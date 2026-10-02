@@ -14,9 +14,9 @@ import type { StopTone } from "../../lib/runStatus";
  * at the call site is how a healthy run ends up in a red box.
  */
 const TONE: Record<StopTone, string> = {
-  danger: "bg-red-50 text-danger",
-  amber: "bg-amber-50 text-amber-800",
-  note: "bg-panel-2 text-ink-dim",
+  danger: "bg-danger-subtle text-danger-fg",
+  amber: "bg-warning-subtle text-warning-fg",
+  note: "bg-panel-2 text-fg-muted",
 };
 
 export function RunError({

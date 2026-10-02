@@ -12,6 +12,10 @@
 //! - a card's work pass: everything below;
 //! - a planning pass, a summary pass, or a workflow step with no card: the
 //!   read tools only — writing on a card is not looking something up;
+//! - a review pass: the read tools, and `submit_review` — its one way to say
+//!   what it decided. A verdict gates a person's Merge and, when it asks for
+//!   changes, the project's review policy (a person's standing setting) sends
+//!   one fix run; the tool itself starts nothing;
 //! - a run that has ended: nothing. A CLI that outlives its run (stopped,
 //!   orphaned) must not keep writing on the card.
 //!
@@ -40,6 +44,8 @@ pub(crate) struct RunCtx {
     project_id: Option<Uuid>,
     workspace_id: Option<Uuid>,
     agent_id: Option<Uuid>,
+    /// A review pass, which may give its verdict and nothing else.
+    reviewing: bool,
 }
 
 pub(crate) async fn context(state: &AppState, run_id: Uuid) -> Result<RunCtx, String> {
@@ -60,14 +66,18 @@ pub(crate) async fn context(state: &AppState, run_id: Uuid) -> Result<RunCtx, St
     .map_err(|e| e.to_string())?
     .ok_or("no such run")?;
     let status: String = row.get("status");
+    let trigger: String = row.get("trigger");
+    let reviewing = trigger == aichip_core::review::PEER_REVIEW;
     let read_only = row.get::<Option<bool>, _>("planning").unwrap_or(false)
-        || row.get::<String, _>("trigger") == "summary";
+        || trigger == "summary"
+        || reviewing;
     Ok(RunCtx {
         live: !matches!(status.as_str(), "completed" | "failed" | "canceled"),
         card: row.get::<Option<Uuid>, _>("task_id").filter(|_| !read_only),
         project_id: row.get("project_id"),
         workspace_id: row.get("workspace_id"),
         agent_id: row.get("agent_id"),
+        reviewing,
     })
 }
 
@@ -92,6 +102,39 @@ pub(crate) fn tools(ctx: &RunCtx) -> Vec<Value> {
                 "reason": { "type": "string" },
                 "card_id": { "type": "string", "description": "optional: the id of the card this one is waiting on" }
             }), vec!["reason"]),
+        }));
+        tools.push(json!({
+            "name": "ask_person",
+            "description": "Ask the person a question you genuinely cannot settle yourself — a fork in the road only they can choose. It goes to their inbox; your run does not wait. After asking, finish your turn with a short summary of where you are; their answer comes back to you as your next turn, in this same worktree. Offer up to 5 short suggested answers when the choice is between options.",
+            "inputSchema": obj(json!({
+                "question": { "type": "string" },
+                "options": { "type": "array", "items": { "type": "string" }, "description": "optional: up to 5 suggested answers" }
+            }), vec!["question"]),
+        }));
+    }
+    if ctx.workspace_id.is_some() && ctx.card.is_some() {
+        tools.push(json!({
+            "name": "propose_decision",
+            "description": "Propose something only the person can do, with your reason: start a card, move one to backlog/review/done, give one to an agent, make one wait for another, or pause an agent. It goes to their inbox to approve or turn down; nothing happens until they do. Effects: {\"kind\":\"start_card\",\"card_id\"}, {\"kind\":\"move_card\",\"card_id\",\"column\"}, {\"kind\":\"assign_card\",\"card_id\",\"agent\"}, {\"kind\":\"add_blocker\",\"card_id\",\"blocked_by\"}, {\"kind\":\"pause_agent\",\"agent\"}.",
+            "inputSchema": obj(json!({
+                "effect": { "type": "object" },
+                "reason": { "type": "string" }
+            }), vec!["effect", "reason"]),
+        }));
+    }
+    if ctx.reviewing {
+        tools.push(json!({
+            "name": "submit_review",
+            "description": "Give your verdict on the change, once. verdict is \"approve\" when it is ready to merge as it is, or \"request_changes\" with notes — one per thing to change, each with the file and line where it applies when there is one. summary is a few sentences for the person reading the card. At most 20 notes.",
+            "inputSchema": obj(json!({
+                "verdict": { "type": "string", "enum": ["approve", "request_changes"] },
+                "summary": { "type": "string" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": {
+                    "file": { "type": "string" },
+                    "line": { "type": "integer" },
+                    "body": { "type": "string" }
+                }, "required": ["body"] } }
+            }), vec!["verdict"]),
         }));
     }
     if ctx.workspace_id.is_some() {
@@ -120,6 +163,9 @@ pub(crate) fn tools(ctx: &RunCtx) -> Vec<Value> {
 const OWN: &[&str] = &[
     "comment",
     "report_blocker",
+    "ask_person",
+    "propose_decision",
+    "submit_review",
     "search_kb",
     "read_article",
     "recall",
@@ -214,6 +260,81 @@ pub(crate) async fn call(
                 "next": "Stop here and finish with a short summary of what is done and what is not.",
             }))
         }
+        "ask_person" => {
+            let card = ctx.card.ok_or("this run has no card to ask about")?;
+            let options: Vec<String> = match args.get("options") {
+                None | Some(Value::Null) => vec![],
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|_| "options must be a list of short strings")?,
+            };
+            aichip_core::asks::ask(
+                &state.db,
+                run_id,
+                card,
+                text_arg(&args, "question")?,
+                &options,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "asked": true,
+                "next": "Finish your turn now with a short summary of where you are and what the answer decides. The answer comes back to you as your next turn.",
+            }))
+        }
+        "propose_decision" => {
+            let ws = ctx.workspace_id.ok_or("this run has no workspace")?;
+            ctx.card.ok_or("only a card's run can propose")?;
+            let effect: aichip_core::decisions::Effect =
+                serde_json::from_value(args.get("effect").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("effect is not one of the five kinds: {e}"))?;
+            let who: String = match ctx.agent_id {
+                Some(a) => sqlx::query_scalar("SELECT name FROM agents WHERE id = $1")
+                    .bind(a)
+                    .fetch_optional(&state.db.pool)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_else(|| "An agent".into()),
+                None => "An agent".into(),
+            };
+            let id = aichip_core::decisions::propose(
+                &state.db,
+                ws,
+                ctx.project_id,
+                Some(run_id),
+                &who,
+                &effect,
+                text_arg(&args, "reason")?,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(
+                json!({ "proposed": true, "id": id, "next": "It is with the person. Carry on with your work; do not wait for it." }),
+            )
+        }
+        "submit_review" => {
+            if !ctx.reviewing {
+                return Err("only a review pass gives a verdict".into());
+            }
+            let notes: Vec<aichip_core::review::Note> = match args.get("notes") {
+                None | Some(Value::Null) => vec![],
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|_| "notes must be a list of {file?, line?, body}")?,
+            };
+            let summary = args.get("summary").and_then(Value::as_str).unwrap_or("");
+            aichip_core::review::submit(
+                &state.db,
+                run_id,
+                text_arg(&args, "verdict")?,
+                summary,
+                &notes,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "recorded": true,
+                "next": "Finish now with one line restating your verdict.",
+            }))
+        }
         "search_kb" => {
             let ws = ctx.workspace_id.ok_or("this run has no workspace")?;
             let hits = kb::search(&state.db, ws, text_arg(&args, "query")?, MAX_HITS)
@@ -304,7 +425,25 @@ mod tests {
             project_id: Some(Uuid::new_v4()),
             workspace_id: Some(Uuid::new_v4()),
             agent_id: agent.then(Uuid::new_v4),
+            reviewing: false,
         }
+    }
+
+    fn reviewer() -> RunCtx {
+        RunCtx {
+            reviewing: true,
+            ..ctx(true, false, true)
+        }
+    }
+
+    #[test]
+    fn a_review_pass_reads_and_gives_its_verdict_and_nothing_else() {
+        assert_eq!(
+            names(&reviewer()),
+            ["submit_review", "search_kb", "read_article", "recall"]
+        );
+        // A work pass is never offered the verdict.
+        assert!(!names(&ctx(true, true, true)).contains(&"submit_review".to_string()));
     }
 
     fn names(ctx: &RunCtx) -> Vec<String> {
@@ -321,6 +460,8 @@ mod tests {
             [
                 "comment",
                 "report_blocker",
+                "ask_person",
+                "propose_decision",
                 "search_kb",
                 "read_article",
                 "recall"
@@ -349,7 +490,10 @@ mod tests {
         assert!(!is_own("comment"));
         assert!(!is_own("Bash"));
         // Every tool a run can be offered is one `is_own` knows.
-        for name in names(&ctx(true, true, true)) {
+        for name in names(&ctx(true, true, true))
+            .into_iter()
+            .chain(names(&reviewer()))
+        {
             assert!(is_own(&format!("mcp__aichip__{name}")), "{name}");
         }
     }
@@ -362,8 +506,15 @@ mod tests {
     /// The line every agent-facing toolbox holds.
     #[test]
     fn nothing_here_merges_starts_or_configures() {
-        for name in names(&ctx(true, true, true)) {
-            for forbidden in ["merge", "start", "setting", "check", "run"] {
+        for name in names(&ctx(true, true, true))
+            .into_iter()
+            .chain(names(&reviewer()))
+        {
+            // "resolve", "approve" and "decide" too: an agent may propose,
+            // never settle — its own proposal least of all.
+            for forbidden in [
+                "merge", "start", "setting", "check", "run", "resolve", "approve", "decide",
+            ] {
                 assert!(
                     !name.contains(forbidden),
                     "{name} looks like it could {forbidden}"

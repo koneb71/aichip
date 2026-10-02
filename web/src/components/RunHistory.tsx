@@ -43,8 +43,8 @@ export function RunHistory({
   }, [taskId, latestRunId, latestStatus]);
 
   if (error) return <RunError reason={error} />;
-  if (!runs) return <p className="text-xs text-ink-dim">Loading…</p>;
-  if (runs.length === 0) return <p className="text-xs text-ink-dim">This card has not run yet.</p>;
+  if (!runs) return <p className="text-xs text-fg-muted">Loading…</p>;
+  if (runs.length === 0) return <p className="text-xs text-fg-muted">This card has not run yet.</p>;
 
   const total = runs.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
   const priced = runs.some((r) => r.costUsd != null);
@@ -62,7 +62,7 @@ export function RunHistory({
 
   return (
     <div>
-      <div className="mb-3 text-[11px] text-ink-dim">
+      <div className="mb-3 text-[11px] text-fg-muted">
         {runs.length} {runs.length === 1 ? "run" : "runs"}
         {priced && <> · {dollars(total)} in all</>}
       </div>
@@ -75,7 +75,7 @@ export function RunHistory({
           return (
             <li
               key={run.runId}
-              className={`rounded-lg border p-3 ${shown ? "border-accent/50 bg-panel-2" : "border-line"}`}
+              className={`rounded-lg border p-3 ${shown ? "border-accent/50 bg-panel-2" : "border-border"}`}
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span
@@ -86,20 +86,20 @@ export function RunHistory({
                 {run.variantLabel && (
                   <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px]">{run.variantLabel}</span>
                 )}
-                <span className="text-[11px] text-ink-dim">{statusLabel(run.status)}</span>
-                <span className="ml-auto text-[11px] tabular-nums text-ink-dim">
+                <span className="text-[11px] text-fg-muted">{statusLabel(run.status)}</span>
+                <span className="ml-auto text-[11px] tabular-nums text-fg-muted">
                   {duration(run.seconds)} · {dollars(run.costUsd)}
                 </span>
               </div>
-              <div className="mt-1 text-[11px] text-ink-dim">
+              <div className="mt-1 text-[11px] text-fg-muted">
                 {new Date(run.createdAt).toLocaleString()} · {run.engine}
                 {run.model && <> · {run.model}</>}
                 {run.agentName && <> · {run.agentName}</>}
               </div>
-              {tokens && <div className="mt-0.5 text-[11px] tabular-nums text-ink-dim">{tokens}</div>}
-              {excerpt && <p className="mt-1.5 text-xs text-ink">{excerpt}</p>}
+              {tokens && <div className="mt-0.5 text-[11px] tabular-nums text-fg-muted">{tokens}</div>}
+              {excerpt && <p className="mt-1.5 text-xs text-fg">{excerpt}</p>}
               {(run.resumedFrom || run.rateLimitAttempts > 0) && (
-                <div className="mt-0.5 text-[11px] text-ink-dim">
+                <div className="mt-0.5 text-[11px] text-fg-muted">
                   {run.resumedFrom && "Continued an earlier run's session"}
                   {run.resumedFrom && run.rateLimitAttempts > 0 && " · "}
                   {run.rateLimitAttempts > 0 &&
@@ -111,7 +111,7 @@ export function RunHistory({
                 {!shown && (
                   <button
                     onClick={() => onView(run.runId)}
-                    className="rounded-md border border-line px-2 py-0.5 text-[11px] hover:bg-panel"
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel"
                   >
                     View transcript
                   </button>
@@ -120,7 +120,7 @@ export function RunHistory({
                   <button
                     onClick={() => copy(run)}
                     title={run.resumeCommand}
-                    className="rounded-md border border-line px-2 py-0.5 text-[11px] hover:bg-panel"
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel"
                   >
                     {copied === run.runId ? "Copied" : "Copy resume command"}
                   </button>
@@ -131,7 +131,7 @@ export function RunHistory({
         })}
       </ol>
       {runs.some((r) => r.resumeCommand) && (
-        <p className="mt-3 text-[11px] text-ink-dim">
+        <p className="mt-3 text-[11px] text-fg-muted">
           The resume command continues that session in your own terminal, in the folder it ran in. It
           is offered only while nothing is running on this card.
         </p>

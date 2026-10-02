@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, DockerStatus, ProjectPreview } from "../../lib/api";
 import { size } from "../../lib/bytes";
 import { RecipeGate } from "../RecipeGate";
 import { PreviewLogs } from "./PreviewLogs";
+import { Button, buttonClasses } from "../ui/Button";
 
 /**
  * Everything this project has running, in one place.
@@ -87,7 +87,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
   if (docker && !docker.usable) {
     return (
       <div className="p-6">
-        <div className="max-w-xl rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+        <div className="max-w-xl rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
           {docker.problem}
         </div>
       </div>
@@ -99,7 +99,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">Previews</h2>
-          <p className="mt-0.5 max-w-xl text-xs text-ink-dim">
+          <p className="mt-0.5 max-w-xl text-xs text-fg-muted">
             Each card's branch, built and running so you can look at it rather
             than read its diff. They run on this machine and on loopback only.
           </p>
@@ -107,25 +107,27 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
         {/* "of {maxLive}" is a workspace-wide budget, and saying so stops the
             number reading as a per-project one that another project can
             silently eat. */}
-        <span className="text-xs text-ink-dim" title="Across every project, not just this one">
+        <span className="text-xs text-fg-muted" title="Across every project, not just this one">
           {live} of {maxLive} running everywhere · {size(disk)} of images
           {reclaimable > 0 && (
             <>
               {" · "}
-              <button
+              <Button
+                variant="link"
+                size="xs"
                 onClick={() => act("reclaim", api.reclaimPreviewDisk)}
                 disabled={busy === "reclaim"}
-                className="text-accent hover:underline disabled:opacity-50"
+                className="text-xs! font-normal!"
               >
                 reclaim {reclaimable}
-              </button>
+              </Button>
             </>
           )}
         </span>
       </div>
 
       {error && (
-        <div className="mb-3 max-w-2xl rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+        <div className="mb-3 max-w-2xl rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
           {error}
         </div>
       )}
@@ -136,14 +138,13 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
             title="main"
             subtitle="The branch cards merge into — run it to compare a card against it."
             action={
-              <motion.button
-                whileTap={{ scale: 0.96 }}
+              <Button
+                size="sm"
                 onClick={() => act("base", () => api.startBasePreview(projectId))}
                 disabled={busy === "base"}
-                className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
               >
                 Build &amp; run
-              </motion.button>
+              </Button>
             }
           />
         )}
@@ -162,13 +163,14 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                     href={named(r.slug)}
                     target="_blank"
                     rel="noreferrer"
-                    className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white"
+                    className={buttonClasses({ variant: "primary", size: "sm" })}
                   >
                     Open
                   </a>
                 )}
                 {(r.status === "idle" || r.status === "failed" || r.status === "stopped") && (
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() =>
                       act(r.id, () =>
                         r.taskId
@@ -177,13 +179,13 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                       )
                     }
                     disabled={busy === r.id}
-                    className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
                   >
                     {r.status === "stopped" ? "Start" : r.canWake ? "Wake" : "Try again"}
-                  </button>
+                  </Button>
                 )}
                 {r.status !== "failed" && r.status !== "stopped" && (
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() =>
                       act(r.id, () =>
                         r.taskId
@@ -192,20 +194,21 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                       )
                     }
                     disabled={busy === r.id}
-                    className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
                   >
                     Stop
-                  </button>
+                  </Button>
                 )}
                 {/* Offered on every row, not only failures: a preview that
                     built fine and serves the wrong thing is the case with no
                     error message at all. */}
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setShowing(showing === r.id ? null : r.id)}
-                  className="rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+                  className="px-1.5! font-normal!"
                 >
                   {showing === r.id ? "hide logs" : "logs"}
-                </button>
+                </Button>
               </div>
             }
           />
@@ -220,7 +223,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
         ))}
 
         {rows.length === 0 && (
-          <p className="text-xs text-ink-dim">
+          <p className="text-xs text-fg-muted">
             Nothing running. Open a card and press Build &amp; run, or start the
             base branch above.
           </p>
@@ -228,10 +231,10 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
       </div>
 
       <div className="mt-6 max-w-3xl">
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           How this gets built
         </div>
-        <p className="mb-1.5 text-xs text-ink-dim">
+        <p className="mb-1.5 text-xs text-fg-muted">
           Used when a branch has no Dockerfile and no compose file of its own. An
           agent reads the project and decides which it needs; you read that
           before anything builds it.
@@ -257,20 +260,20 @@ function Row({
   action: React.ReactNode;
 }) {
   return (
-    <div className="card-shadow flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-panel p-3">
+    <div className="card-shadow flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-panel p-3">
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate text-sm font-semibold">{title}</span>
           {[badge, badge2].filter(Boolean).map((b) => (
             <span
               key={b}
-              className="rounded-md bg-line/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-dim"
+              className="rounded-md bg-border/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-muted"
             >
               {b}
             </span>
           ))}
         </div>
-        <div className="mt-0.5 text-[11px] text-ink-dim">{subtitle}</div>
+        <div className="mt-0.5 text-[11px] text-fg-muted">{subtitle}</div>
       </div>
       {action}
     </div>
@@ -285,7 +288,7 @@ function detail(r: ProjectPreview): React.ReactNode {
       : "Building — the first one takes a few minutes.";
   if (r.status === "failed")
     return (
-      <span className="text-danger">
+      <span className="text-danger-fg">
         {(r.error ?? "Build failed.").split("\n").slice(-1)[0]}
       </span>
     );
@@ -300,7 +303,7 @@ function detail(r: ProjectPreview): React.ReactNode {
     <span className="flex flex-wrap items-baseline gap-2">
       <span className="font-mono">{r.slug}.preview.localhost</span>
       {r.stale && (
-        <span className="rounded bg-amber-50 px-1 text-amber-900">
+        <span className="rounded bg-warning-subtle px-1 text-warning-fg">
           built before the latest run
         </span>
       )}

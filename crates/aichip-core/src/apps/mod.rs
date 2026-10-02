@@ -495,10 +495,15 @@ pub async fn pending_plan(db: &Db, app_id: Uuid) -> anyhow::Result<Option<Pendin
 /// The stored statements, not freshly derived ones — what was approved is what
 /// executes. All of it in one transaction, so a migration that fails half way
 /// leaves the schema as it was rather than in a shape nothing describes.
-pub async fn apply_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
-    let row =
-        sqlx::query("SELECT statements FROM app_schema_plans WHERE id = $1 AND status = 'pending'")
-            .bind(plan_id)
+///
+/// Scoped to the app the request names: a plan id alone would let one app's
+/// page apply another app's migration.
+pub async fn apply_plan(db: &Db, app_id: Uuid, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
+    let row = sqlx::query(
+        "SELECT statements FROM app_schema_plans WHERE id = $1 AND app_id = $2 AND status = 'pending'",
+    )
+    .bind(plan_id)
+    .bind(app_id)
             .fetch_optional(&db.pool)
             .await?
             .ok_or_else(|| anyhow::anyhow!("that change has already been dealt with"))?;
@@ -522,11 +527,22 @@ pub async fn apply_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<Vec<Stmt>> {
 }
 
 /// Turn down a proposed migration. The app keeps the tables it has.
-pub async fn discard_plan(db: &Db, plan_id: Uuid) -> anyhow::Result<()> {
-    sqlx::query("UPDATE app_schema_plans SET status = 'discarded' WHERE id = $1")
-        .bind(plan_id)
-        .execute(&db.pool)
-        .await?;
+///
+/// Only a pending plan, and only this app's: discarding one that was already
+/// applied or failed would rewrite its record into something that never
+/// happened.
+pub async fn discard_plan(db: &Db, app_id: Uuid, plan_id: Uuid) -> anyhow::Result<()> {
+    let done = sqlx::query(
+        "UPDATE app_schema_plans SET status = 'discarded'
+          WHERE id = $1 AND app_id = $2 AND status = 'pending'",
+    )
+    .bind(plan_id)
+    .bind(app_id)
+    .execute(&db.pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        anyhow::bail!("that change has already been dealt with");
+    }
     Ok(())
 }
 

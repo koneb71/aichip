@@ -21,10 +21,6 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-/// Same gate, and same reason, as the attention hook in `settings.rs`: there
-/// is no CORS layer, so a browser cannot send this header cross-origin.
-const WRITE_HEADER: &str = "x-aichip-write";
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects/{id}/checks", get(get_config).put(put_config))
@@ -32,15 +28,9 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/checks/fix", post(fix))
 }
 
+/// See [`super::require_write`]: a check is a shell command this machine runs.
 fn require_write_header(headers: &HeaderMap, what: &str) -> Result<(), ApiError> {
-    if headers.contains_key(WRITE_HEADER) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            format!("this endpoint {what}, so it needs the {WRITE_HEADER} header"),
-        ))
-    }
+    super::require_write(headers, &format!("this endpoint {what}"))
 }
 
 async fn get_config(
@@ -65,13 +55,13 @@ async fn get_config(
 }
 
 #[derive(Deserialize)]
-struct ConfigBody {
+pub(crate) struct ConfigBody {
     commands: Vec<Check>,
     timeout_secs: i32,
     auto_fix_attempts: i32,
 }
 
-async fn put_config(
+pub(crate) async fn put_config(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
@@ -94,6 +84,12 @@ async fn put_config(
     }
     let commands = checks::validate(&body.commands, body.timeout_secs, body.auto_fix_attempts)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::ProjectChecks,
+        &project_id.to_string(),
+    )
+    .await;
     sqlx::query(
         "INSERT INTO project_checks (project_id, commands, timeout_secs, auto_fix_attempts, updated_at)
          VALUES ($1, $2, $3, $4, now())

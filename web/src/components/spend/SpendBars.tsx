@@ -50,10 +50,10 @@ export function SpendBars({
             <div
               style={{ height: d.cost > 0 ? Math.max(3, (d.cost / top) * height) : 2 }}
               className={`w-full rounded-t transition-[height] duration-500 ease-out ${
-                d.cost > 0 ? "bg-accent/70 group-hover/bar:bg-accent" : "bg-line"
+                d.cost > 0 ? "bg-accent/70 group-hover/bar:bg-accent" : "bg-border"
               }`}
             />
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[11px] text-white group-hover/bar:block">
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-fg px-2 py-1 text-[11px] text-bg group-hover/bar:block">
               {formatDay(d.day)} · ${d.cost.toFixed(2)} · {d.runs} run
               {d.runs === 1 ? "" : "s"}
             </div>
@@ -61,7 +61,7 @@ export function SpendBars({
         ))}
       </div>
       {labels && (
-        <div className="mt-1.5 flex justify-between text-[11px] text-ink-dim">
+        <div className="mt-1.5 flex justify-between text-[11px] text-fg-muted">
           <span>{formatDay(days[0].day)}</span>
           <span>today</span>
         </div>

@@ -38,7 +38,9 @@ pub async fn rpc(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
-            match call_tool(&state, run_id, step_id, name, args).await {
+            let outcome = call_tool(&state, run_id, step_id, name, args).await;
+            super::log_tool(&state, run_id, name, &outcome);
+            match outcome {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]
                 }),

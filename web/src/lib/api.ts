@@ -1,4 +1,8 @@
 import { TreePage } from "./kbTree";
+import type { OrgNode } from "./orgChart";
+export type { OrgNode };
+import type { Goal } from "./goals";
+export type { Goal };
 export type Tier = "easy" | "medium" | "complex";
 /**
  * What a person picked for a card, which is not the same as what a run gets.
@@ -21,7 +25,11 @@ export type AttentionEvent =
   | "finished"
   | "routine"
   | "unblocked"
-  | "budget_warning";
+  | "budget_warning"
+  | "question"
+  | "decision"
+  | "review"
+  | "stalled";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -243,6 +251,9 @@ export interface Task {
   /** How this job gets done — composes with the agent. */
   skillId?: string | null;
   skillName?: string | null;
+  /** The goal this card serves. */
+  goalId?: string | null;
+  goalTitle?: string | null;
   agentColor: string | null;
   teamId: string | null;
   teamName: string | null;
@@ -661,6 +672,12 @@ export interface Agent {
   maxConcurrent: number | null;
   maxDailyRuns: number | null;
   cooldownSecs: number | null;
+  /** Who it reports to on the org chart; null at the top. */
+  reportsTo?: string | null;
+  title?: string | null;
+  /** Seconds between heartbeats; null when off. */
+  heartbeatSecs?: number | null;
+  lastHeartbeatAt?: string | null;
 }
 
 export interface AgentDraft {
@@ -896,6 +913,8 @@ export interface SearchResults {
   agents: SearchHit[];
   teams: SearchHit[];
   workflows: SearchHit[];
+  /** Absent from servers older than goals. */
+  goals?: SearchHit[];
 }
 
 export interface WorkflowDef {
@@ -1069,7 +1088,7 @@ export interface EngineModels {
   label: string;
   /** False for engines fronting many providers — the field is free text. */
   fixedCatalog: boolean;
-  choices: { id: string; label: string; blurb: string }[];
+  choices: { id: string; label: string; blurb: string | null }[];
   /** Model ids this install can actually reach. Suggestions, not a whitelist. */
   available: string[];
   providers: { name: string; auth: string }[];
@@ -1551,8 +1570,24 @@ export interface Manager {
   chatId: string | null;
   /** Cards one pass may start. 0 means review and report only. */
   maxStarts: number;
+  /** News that wakes it before its schedule. Empty: only the schedule. */
+  onEvents: WakeKind[];
+  /** Least time between two passes a wake may fire. */
+  cooldownSecs: number;
+  /** Early passes a day, at most. */
+  maxPassesPerDay: number;
   nextAt: string | null;
 }
+
+/** What can wake a manager early. See `aichip_core::wake::Kind`. */
+export type WakeKind =
+  | "landed"
+  | "unblocked"
+  | "failed"
+  | "checks_exhausted"
+  | "review_exhausted"
+  | "question"
+  | "stalled";
 
 export interface ManagerDraft {
   agentId?: string | null;
@@ -1564,6 +1599,9 @@ export interface ManagerDraft {
   modelTier?: string | null;
   effort?: string | null;
   maxStarts?: number;
+  onEvents?: WakeKind[];
+  cooldownSecs?: number;
+  maxPassesPerDay?: number;
 }
 
 /** Something the manager did during one pass. */
@@ -1708,12 +1746,182 @@ const put = (url: string, body: unknown) =>
 // server would fail to parse the body.
 /** A write that lifts or sets a limit on spending: carries the header no
  *  cross-origin page can send, like the attention and file writes. */
-const guarded = (method: "POST" | "PATCH" | "DELETE", url: string, body?: unknown) =>
+const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?: unknown) =>
   fetch(url, {
     method,
     headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+/** One heartbeat: what an agent that pulls its own work did when it checked in. */
+export interface Beat {
+  at: string;
+  reason: "timer" | "wake";
+  outcome: "started" | "fired" | "idle" | "busy" | "held" | "paused";
+  taskId: string | null;
+  taskTitle: string | null;
+  projectId: string | null;
+  detail: string;
+}
+
+/** What aichip does about runs that stop showing signs of life. See `aichip_core::reaper`. */
+export interface Unattended {
+  /** Stop a run that has said nothing for this long. 0 is off. */
+  silenceMinutes: number;
+  /** Pick a lost or silenced run back up — at most twice along a chain. */
+  autoResume: boolean;
+}
+
+/** What a project's Merge requires. See `aichip_core::review`. */
+export interface ReviewPolicy {
+  requireChecks: boolean;
+  requireReview: boolean;
+  reviewerAgentId: string | null;
+  maxRounds: number;
+  requirePrGreen: boolean;
+  runChecksAfterEveryRun: boolean;
+}
+
+export interface ReviewNote {
+  file?: string | null;
+  line?: number | null;
+  body: string;
+}
+
+export interface ReviewDecision {
+  id: string;
+  runId: string | null;
+  round: number;
+  verdict: "approve" | "request_changes";
+  /** False: the reviewer ended without a verdict, recorded as changes requested. */
+  submitted: boolean;
+  summary: string;
+  notes: ReviewNote[];
+  reviewer: string | null;
+  createdAt: string;
+}
+
+/** One requirement Merge still waits on. */
+export interface Unmet {
+  kind: "checks" | "review" | "pull_request";
+  message: string;
+}
+
+export interface CardReviews {
+  reviews: ReviewDecision[];
+  rounds: number;
+  maxRounds: number;
+  requireReview: boolean;
+  unmet: Unmet[];
+}
+
+/** A merge the review policy refused, with what it still wants. */
+export class MergeGateError extends Error {
+  constructor(public unmet: Unmet[]) {
+    super(unmet.map((u) => u.message).join(" "));
+  }
+}
+
+export type InboxKind =
+  | "plan"
+  | "team_plan"
+  | "permission"
+  | "permission_expired"
+  | "question"
+  | "decision"
+  | "chat_question"
+  | "chat_plan"
+  | "schema"
+  | "kb_revision"
+  | "review"
+  | "recipe";
+
+/** One thing waiting on a person. See `aichip_core::inbox`. */
+export interface InboxItem {
+  key: string;
+  kind: InboxKind;
+  title: string;
+  detail: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  taskId: string | null;
+  runId: string | null;
+  /** Where "open" goes. */
+  link: string;
+  createdAt: string;
+  /** What can be done from the inbox itself. */
+  actions: string[];
+  read: boolean;
+  snoozedUntil: string | null;
+  /** Suggested answers a question offered. */
+  options: string[];
+}
+
+/** One line of the ledger. See `aichip_core::audit`. */
+export interface AuditEntry {
+  id: number;
+  at: string;
+  /** "api" is anything through the dashboard's API — aichip has no login,
+   *  so it does not claim "a person". */
+  actorKind: "api" | "agent" | "system";
+  actorRunId: string | null;
+  action: string;
+  entityKind: string | null;
+  entityId: string | null;
+  summary: string;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditQuery {
+  entityKind?: string;
+  entityId?: string;
+  actorKind?: string;
+  before?: number;
+  limit?: number;
+}
+
+export interface TimelineEvent {
+  at: string;
+  kind: "comment" | "run" | "checks" | "audit";
+  actor: string | null;
+  title: string;
+  detail?: string | null;
+  runId?: string;
+  costUsd?: number | null;
+  status?: string;
+}
+
+const auditParams = (q: AuditQuery) => {
+  const p = new URLSearchParams();
+  if (q.entityKind) p.set("entity_kind", q.entityKind);
+  if (q.entityId) p.set("entity_id", q.entityId);
+  if (q.actorKind) p.set("actor_kind", q.actorKind);
+  if (q.before != null) p.set("before", String(q.before));
+  if (q.limit != null) p.set("limit", String(q.limit));
+  return p.toString();
+};
+
+export type RevisionKind =
+  | "agent"
+  | "team"
+  | "routine"
+  | "skill"
+  | "project_checks"
+  | "budget_policy"
+  | "attention"
+  | "review_policy"
+  | "unattended";
+
+/** A setting as it was before one change. See `aichip_core::revisions`. */
+export interface ConfigRevision {
+  id: number;
+  entityKind: RevisionKind;
+  entityId: string;
+  createdAt: string;
+  snapshot: Record<string, unknown>;
+  /** What restoring it would change, against the setting as it is now. */
+  changed: string[];
+}
 
 const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
@@ -1776,6 +1984,29 @@ export const api = {
     fetch("/api/budgets").then((r) =>
       json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),
     ),
+  configRevisions: (kind: RevisionKind, id: string) =>
+    fetch(`/api/revisions?kind=${kind}&id=${encodeURIComponent(id)}`).then((r) =>
+      json<{ revisions: ConfigRevision[] }>(r),
+    ),
+  restoreConfigRevision: (rev: number) =>
+    guarded("POST", `/api/revisions/${rev}/restore`).then((r) => json<{ restored: boolean }>(r)),
+  audit: (q: AuditQuery = {}) =>
+    fetch(`/api/audit?${auditParams(q)}`).then((r) => json<{ entries: AuditEntry[]; next: number | null }>(r)),
+  auditCsvUrl: (q: AuditQuery = {}) => `/api/audit.csv?${auditParams(q)}`,
+  timeline: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/timeline`).then((r) => json<{ events: TimelineEvent[] }>(r)),
+  inbox: (workspaceId: string, all = false) =>
+    fetch(`/api/inbox?workspace_id=${workspaceId}${all ? "&all=true" : ""}`).then((r) =>
+      json<{ items: InboxItem[]; unread: number }>(r),
+    ),
+  /** `acknowledgeForecast`: approving a start the person saw the cost of. */
+  resolveInbox: (key: string, action: string, text?: string, acknowledgeForecast = false) =>
+    guarded("POST", "/api/inbox/resolve", { key, action, text, acknowledge_forecast: acknowledgeForecast }).then((r) =>
+      json<{ ok: boolean; outcome: unknown }>(r),
+    ),
+  readInbox: (key: string) => guarded("POST", "/api/inbox/read", { key }).then((r) => json<{ ok: boolean }>(r)),
+  snoozeInbox: (key: string, hours: number) =>
+    guarded("POST", "/api/inbox/snooze", { key, hours }).then((r) => json<{ ok: boolean; until: string }>(r)),
   createBudget: (body: BudgetBody) => guarded("POST", "/api/budgets", body).then((r) => json<{ id: string }>(r)),
   updateBudget: (id: string, body: BudgetBody) =>
     guarded("PATCH", `/api/budgets/${id}`, body).then((r) => json<{ updated: boolean }>(r)),
@@ -2040,6 +2271,7 @@ export const api = {
     start: boolean;
     agent_id?: string | null;
     skill_id?: string | null;
+    goal_id?: string | null;
     team_id?: string | null;
     engine?: string;
     plan_first?: boolean;
@@ -2093,6 +2325,8 @@ export const api = {
       /** Start by itself once every blocker has landed. */
       start_when_unblocked?: boolean;
       /** Dropping it into In Progress after seeing the forecast. */
+      /** The goal it serves; null clears it. */
+      goal_id?: string | null;
       acknowledge_forecast?: boolean;
     },
   ) =>
@@ -2410,8 +2644,30 @@ export const api = {
     ),
   diff: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/diff`).then((r) => json<{ diff: string }>(r)),
-  merge: (taskId: string) =>
-    post(`/api/tasks/${taskId}/merge`).then((r) => json<{ merged: boolean }>(r)),
+  /** `force` + `note`: merge past what the review policy still wants. A
+   *  refusal by the policy throws `MergeGateError` with what is unmet. */
+  merge: (taskId: string, force?: { note: string }) =>
+    post(`/api/tasks/${taskId}/merge`, force ? { force: true, note: force.note } : undefined).then(async (r) => {
+      if (r.status === 409) {
+        const text = await r.text();
+        let gate: { kind?: string; unmet?: Unmet[] } | null = null;
+        try {
+          gate = JSON.parse(text);
+        } catch {
+          // plain-text refusal
+        }
+        if (gate?.kind === "gate" && Array.isArray(gate.unmet)) throw new MergeGateError(gate.unmet);
+        throw new Error(text);
+      }
+      return json<{ merged: boolean }>(r);
+    }),
+  reviewPolicy: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/review-policy`).then((r) => json<{ policy: ReviewPolicy }>(r)),
+  saveReviewPolicy: (projectId: string, policy: ReviewPolicy) =>
+    guarded("PUT", `/api/projects/${projectId}/review-policy`, policy).then((r) => json<{ policy: ReviewPolicy }>(r)),
+  cardReviews: (taskId: string) => fetch(`/api/tasks/${taskId}/reviews`).then((r) => json<CardReviews>(r)),
+  /** A person asks for a review now — one round past the cap if need be. */
+  startReview: (taskId: string) => post(`/api/tasks/${taskId}/reviews`).then((r) => json<{ runId: string }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`),
 
   /** Hand a card to someone else, or to nobody.
@@ -2423,6 +2679,17 @@ export const api = {
       agent_id: assignee?.kind === "agent" ? assignee.id : null,
       team_id: assignee?.kind === "team" ? assignee.id : null,
     }).then(json),
+
+  unattended: () =>
+    fetch("/api/settings/unattended").then((r) => json<{ unattended: Unattended; maxSilenceMinutes: number }>(r)),
+  saveUnattended: (u: Unattended) =>
+    guarded("PUT", "/api/settings/unattended", u).then((r) => json<{ unattended: Unattended }>(r)),
+  /** Stop the running agent and hand the work to another, with a note that
+   *  is its brief. It continues in the same worktree once the old run ends. */
+  handOff: (taskId: string, agentId: string, note: string) =>
+    patch(`/api/tasks/${taskId}`, { agent_id: agentId, team_id: null, handoff_note: note }).then((r) =>
+      json<{ handingOff: boolean }>(r),
+    ),
 
   // bake-off: one brief, several attempts, keep the best
   startBakeoff: (
@@ -2495,7 +2762,7 @@ export const api = {
     ),
   /** Dollars per day; null removes the cap. */
   setBudget: (capUsd: number | null) =>
-    post("/api/queue/budget", { cap_usd: capUsd }).then((r) =>
+    guarded("POST", "/api/queue/budget", { cap_usd: capUsd }).then((r) =>
       json<{ capUsd: number | null }>(r),
     ),
   teamEstimate: (teamId: string) =>
@@ -2531,6 +2798,34 @@ export const api = {
     post(`/api/agents/${id}/retire`).then((r) => json<{ retired: boolean; stopped: number }>(r)),
   createAgent: (body: Record<string, unknown>) =>
     post("/api/agents", body).then((r) => json<Agent>(r)),
+  goals: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/goals`).then((r) => json<{ goals: Goal[]; maxDepth: number }>(r)),
+  createGoal: (
+    workspaceId: string,
+    body: { title: string; description?: string; parentId?: string | null; targetDate?: string | null },
+  ) => post(`/api/workspaces/${workspaceId}/goals`, body).then((r) => json<{ id: string }>(r)),
+  updateGoal: (
+    id: string,
+    body: Partial<{ title: string; description: string; status: Goal["status"]; parentId: string | null; targetDate: string | null }>,
+  ) => patch(`/api/goals/${id}`, body).then((r) => json<{ updated: boolean }>(r)),
+  deleteGoal: (id: string) => fetch(`/api/goals/${id}`, { method: "DELETE" }).then((r) => json<{ deleted: boolean }>(r)),
+  goal: (id: string) =>
+    fetch(`/api/goals/${id}`).then((r) =>
+      json<{
+        goal: Goal;
+        chain: string[];
+        cards: { id: string; title: string; column: string; projectId: string; agent: string | null; direct: boolean }[];
+        projects: { id: string; name: string }[];
+        spendUsd: number;
+        runs: number;
+      }>(r),
+    ),
+  agentHeartbeats: (agentId: string) =>
+    fetch(`/api/agents/${agentId}/heartbeats`).then((r) => json<{ beats: Beat[] }>(r)),
+  workspaceHeartbeats: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/heartbeats`).then((r) => json<{ beats: { agent: string; beat: Beat }[] }>(r)),
+  orgChart: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/org-chart`).then((r) => json<{ nodes: OrgNode[]; maxDepth: number }>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>
     patch(`/api/agents/${id}`, body).then((r) => json<Agent>(r)),
   deleteAgent: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }),

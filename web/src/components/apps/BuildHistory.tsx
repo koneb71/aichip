@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
 import { api, type AppBuild } from "../../lib/api";
+import { Button } from "../ui/Button";
 import { buildLine } from "../../lib/apps";
 
 /**
@@ -78,17 +78,17 @@ export function BuildHistory({
     // Bounded and scrolling, not flexible: this sits under a view that wants
     // every pixel it can have, and a long history must not squeeze it away.
     <div className="mt-6 max-h-56 shrink-0 overflow-y-auto">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
         Changes
       </div>
       {error && (
-        <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
       <div className="flex flex-col gap-1">
         {builds.map((b) => (
           <div
             key={b.id}
-            className="flex items-center gap-3 rounded-lg border border-line px-3 py-2 text-xs"
+            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-xs"
           >
             <span
               className={
@@ -97,18 +97,18 @@ export function BuildHistory({
                   ? "animate-pulse bg-tier-medium"
                   : b.status === "landed"
                     ? b.error
-                      ? "bg-amber-500"
+                      ? "bg-warning"
                       : "bg-accent"
                     : b.status === "reverted"
-                      ? "bg-line"
+                      ? "bg-border"
                       : "bg-danger")
               }
             />
             <div className="min-w-0 flex-1">
               <div className="truncate">{b.brief}</div>
-              <div className="truncate text-[11px] text-ink-dim">{buildLine(b)}</div>
+              <div className="truncate text-[11px] text-fg-muted">{buildLine(b)}</div>
               {b.error && (
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-danger">
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-danger-fg">
                   {b.error}
                 </pre>
               )}
@@ -117,21 +117,20 @@ export function BuildHistory({
               <Link
                 to={`/projects/${projectId}?task=${b.taskId}`}
                 title="Open the card, where the run's output and diff are."
-                className="shrink-0 text-ink-dim hover:text-ink hover:underline"
+                className="shrink-0 text-fg-muted hover:text-fg hover:underline"
               >
                 Card
               </Link>
             )}
             {b.revertible && (
-              <motion.button
-                whileTap={{ scale: 0.96 }}
+              <Button
+                size="xs"
                 onClick={() => revert(b)}
                 disabled={busy}
                 title="Put the app back exactly as it was before this change."
-                className="shrink-0 rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-50"
               >
                 Undo
-              </motion.button>
+              </Button>
             )}
           </div>
         ))}

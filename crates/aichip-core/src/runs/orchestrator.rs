@@ -78,6 +78,23 @@ pub const CHAT_DENIED_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "Notebook
 /// so the assistant could not read the repository or reach its own tools and
 /// fell back to asking the user what they were working on. `vet` exists to
 /// refuse exactly that pairing, and this was the one caller that never ran it.
+/// What a run that was refused Full Auto runs as instead: the narrowest mode
+/// this engine can honour, or `None` when it has none — Amp and Cursor allow
+/// every tool or nothing, so for them the refusal has to be a refusal.
+///
+/// Reviewed where the engine can ask; otherwise Auto-edit, which is no more
+/// than a person could pick for the card directly. Never a mode `vet` would
+/// refuse: on OpenCode, Reviewed silently rejects every tool call.
+pub(crate) fn short_of_full_auto(caps: &aichip_engines::Capabilities) -> Option<PermissionMode> {
+    if caps.interactive_permissions {
+        Some(PermissionMode::Reviewed)
+    } else if caps.auto_edit {
+        Some(PermissionMode::AutoEdit)
+    } else {
+        None
+    }
+}
+
 fn chat_permission_mode(engine: &dyn aichip_engines::Engine) -> PermissionMode {
     if engine.capabilities().interactive_permissions {
         // Claude: the allow-list has already pre-approved the read tools, so
@@ -199,6 +216,36 @@ pub struct Orchestrator {
     pub(crate) mcp_base_url: Option<String>,
     /// Keyed by run, never by step — see `CancelState`.
     cancels: Mutex<HashMap<Uuid, CancelState>>,
+    /// Runs whose `execute` has not returned yet, with when each last showed
+    /// a sign of life. In memory on purpose: it answers "is this process
+    /// still working on it", which no row can — a row says `running` just as
+    /// confidently after the task holding it died. Entered and left only by
+    /// [`Alive`], so an `execute` that panics or errors still leaves it.
+    liveness: Arc<Mutex<HashMap<Uuid, Liveness>>>,
+}
+
+/// One executing run's signs of life.
+#[derive(Clone, Copy)]
+struct Liveness {
+    /// The last event it produced (or when it started).
+    seen: std::time::Instant,
+    /// When `runs.last_event_at` was last written for it, so a chatty run
+    /// writes the row every fifteen seconds rather than every event.
+    written: Option<std::time::Instant>,
+}
+
+/// A run's place in [`Orchestrator::liveness`] for as long as it is held.
+pub(crate) struct Alive {
+    map: Arc<Mutex<HashMap<Uuid, Liveness>>>,
+    run_id: Uuid,
+}
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.map.lock() {
+            map.remove(&self.run_id);
+        }
+    }
 }
 
 pub(crate) struct StreamOutcome {
@@ -378,6 +425,26 @@ impl CallerKind {
 #[error("this card is already running — cancel it before starting it again")]
 pub struct AlreadyRunning;
 
+/// The work needs aichip's tools — the chat assistant's board tools, a team
+/// member's hand-off tools — and this engine cannot be given them for one
+/// run without a config file in the run's folder. Refused at the click, the
+/// way `vet` refuses a permission mode.
+#[derive(Debug, thiserror::Error)]
+#[error("{label} can't be handed aichip's tools for a single run, and {what} works through them — pick an engine that can ({can})")]
+pub struct NoTools {
+    pub label: String,
+    pub what: &'static str,
+    /// The installed engines that can, by name — computed, so the advice is
+    /// never an engine this machine does not have.
+    pub can: String,
+}
+
+/// An engine that cannot honour the mode some work needs — `vet`'s answer,
+/// as a refusal a door turns into a 409 rather than a run that fails later.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct CantHonour(pub String);
+
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
@@ -414,6 +481,84 @@ impl Orchestrator {
             slots: Arc::new(crate::runs::slots::Slots::new(max_concurrent)),
             mcp_base_url,
             cancels: Mutex::new(HashMap::new()),
+            liveness: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub(crate) fn alive(&self, run_id: Uuid) -> Alive {
+        self.liveness.lock().unwrap().insert(
+            run_id,
+            Liveness {
+                seen: std::time::Instant::now(),
+                written: None,
+            },
+        );
+        Alive {
+            map: self.liveness.clone(),
+            run_id,
+        }
+    }
+
+    /// Is this process still inside the run's `execute` — including the
+    /// post-work after the engine exits (the report, checks, the review)?
+    /// A run's status turns terminal before that work is done, so "not live
+    /// in the database" alone does not mean "safe to start another run in
+    /// its worktree".
+    pub fn is_executing(&self, run_id: Uuid) -> bool {
+        self.liveness.lock().unwrap().contains_key(&run_id)
+    }
+
+    /// How long since an executing run last showed a sign of life. `None`
+    /// when this process is not executing it.
+    pub fn since_last_sign(&self, run_id: Uuid) -> Option<std::time::Duration> {
+        self.liveness
+            .lock()
+            .unwrap()
+            .get(&run_id)
+            .map(|l| l.seen.elapsed())
+    }
+
+    /// A sign of life that is not an event — a parked run allowed to go on.
+    /// Memory only.
+    pub fn mark_seen(&self, run_id: Uuid) {
+        if let Some(l) = self.liveness.lock().unwrap().get_mut(&run_id) {
+            l.seen = std::time::Instant::now();
+        }
+    }
+
+    /// Pretend an executing run last spoke `ago` ago. For the reaper's tests.
+    #[cfg(test)]
+    pub(crate) fn backdate(&self, run_id: Uuid, ago: std::time::Duration) {
+        if let Some(l) = self.liveness.lock().unwrap().get_mut(&run_id) {
+            l.seen = std::time::Instant::now() - ago;
+        }
+    }
+
+    /// A run said something. Cheap: memory every time, the row at most every
+    /// fifteen seconds, and never an error for the run.
+    async fn touch(&self, run_id: Uuid) {
+        let now = std::time::Instant::now();
+        let write = {
+            let mut map = self.liveness.lock().unwrap();
+            match map.get_mut(&run_id) {
+                Some(l) => {
+                    l.seen = now;
+                    let due = l.written.is_none_or(|w| {
+                        now.duration_since(w) >= std::time::Duration::from_secs(15)
+                    });
+                    if due {
+                        l.written = Some(now);
+                    }
+                    due
+                }
+                None => false,
+            }
+        };
+        if write {
+            let _ = sqlx::query("UPDATE runs SET last_event_at = now() WHERE id = $1")
+                .bind(run_id)
+                .execute(&self.db.pool)
+                .await;
         }
     }
 
@@ -496,9 +641,28 @@ impl Orchestrator {
         if self.engines.contains_key("claude-code") {
             return "claude-code".into();
         }
-        self.engines()
+        // Otherwise the most capable engine installed, by what it can do: one
+        // that can carry aichip's tools and edit without a shell first, since
+        // the assistant, a manager, a team and an ordinary card all fall back
+        // to this. Alphabetical order alone made Amp the default beside Codex
+        // — an engine every one of those would refuse.
+        let installed: Vec<_> = self
+            .engines()
             .into_iter()
-            .find(|e| e.id() != "mock")
+            .filter(|e| e.id() != "mock")
+            .collect();
+        let rank = |e: &Arc<dyn Engine>| {
+            let c = e.capabilities();
+            match (c.mcp_tools, c.auto_edit) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }
+        };
+        installed
+            .iter()
+            .min_by_key(|e| rank(e))
             .map(|e| e.id().to_string())
             .unwrap_or_else(|| "claude-code".into())
     }
@@ -793,9 +957,48 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Create a run for a chat turn. Chat runs outrank task runs in the
-    /// queue (priority 20 vs 10) so the assistant feels responsive.
-    pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
+    /// Refuse an engine that cannot be handed aichip's MCP tools per run, for
+    /// work that lives on them. An unknown engine passes: dispatch reports
+    /// that with a better message.
+    pub fn needs_tools(&self, engine: &str, what: &'static str) -> Result<(), NoTools> {
+        match self.engine(engine) {
+            Some(e) if !e.capabilities().mcp_tools => {
+                let mut can: Vec<&str> = self
+                    .engines
+                    .values()
+                    .filter(|e| e.id() != "mock" && e.capabilities().mcp_tools)
+                    .map(|e| e.label())
+                    .collect();
+                can.sort_unstable();
+                Err(NoTools {
+                    label: e.label().to_string(),
+                    what,
+                    can: match can.len() {
+                        0 => "none is installed".to_string(),
+                        _ => can.join(", "),
+                    },
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Every refusal a chat turn can meet, without starting it — so a caller
+    /// that writes something first (an answer, an approval) can ask before
+    /// it does, and a refusal leaves nothing half-done.
+    pub async fn vet_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<()> {
+        // Only a chat on a project is handed aichip's tools (`execute_chat_run`
+        // wires them by project); a general chat or a watch routine reads the
+        // web and nothing else, and any engine can do that.
+        let project: Option<Uuid> =
+            sqlx::query_scalar("SELECT project_id FROM chats WHERE id = $1")
+                .bind(chat_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+                .flatten();
+        if project.is_some() {
+            self.needs_tools(engine, "the assistant")?;
+        }
         // The assistant spends like anything else: a spent workspace or
         // project says so on the message, not by leaving the turn queued.
         crate::budgets::check(
@@ -804,6 +1007,28 @@ impl Orchestrator {
             true,
         )
         .await?;
+        Ok(())
+    }
+
+    /// The engine a chat's next turn runs on when nobody picked one: the one
+    /// its last turn ran on, so an answer or an approval carries on where the
+    /// conversation was — a manager thread on Qwen stays on Qwen.
+    pub async fn chat_engine(&self, chat_id: Uuid) -> anyhow::Result<String> {
+        let last: Option<String> = sqlx::query_scalar(
+            "SELECT engine FROM runs WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(chat_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        Ok(last
+            .filter(|e| self.engine(e).is_some())
+            .unwrap_or_else(|| self.default_engine()))
+    }
+
+    /// Create a run for a chat turn. Chat runs outrank task runs in the
+    /// queue (priority 20 vs 10) so the assistant feels responsive.
+    pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
+        self.vet_chat_turn(chat_id, engine).await?;
         let row = sqlx::query(
             "INSERT INTO runs (chat_id, status, trigger, engine)
              VALUES ($1, 'queued', 'chat', $2) RETURNING id",
@@ -1084,9 +1309,8 @@ impl Orchestrator {
         let mut tx = self.db.pool.begin().await?;
         // A run that was waiting on a person already recorded what it was
         // waiting for, and "orphaned by server restart" would throw that away.
-        // This is the whole reason pending prompts need no table of their own:
-        // the restart kills the run either way, and all persistence would have
-        // bought is a truthful sentence, which `park` has already written.
+        // The question itself is in `permission_requests`; it is marked
+        // expired below, which is what the inbox offers to resume from.
         let orphans: Vec<Uuid> = sqlx::query_scalar(
             "UPDATE runs SET status='failed',
                     error_reason = CASE WHEN status='waiting_permission'
@@ -1102,6 +1326,22 @@ impl Orchestrator {
         // The steps died with the run. Leaving them at 'running' is what makes
         // a failed team run still animate a teammate as "working…".
         settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
+        // The questions those runs were holding will never be answered now.
+        sqlx::query(
+            "UPDATE permission_requests SET resolved_at = now(), decision = 'expired'
+              WHERE resolved_at IS NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        // A proposal claimed for approval whose effect never reported back —
+        // the server went down between the two — goes back to the inbox
+        // rather than reading as approved with nothing done.
+        sqlx::query(
+            "UPDATE decisions SET status = 'open', decided_at = NULL
+              WHERE status = 'approved' AND outcome IS NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
         // Nothing terminal keeps a place in the queue. This is the sweep for
         // rows written before `finish` learned to delete them — without it,
         // every failure this repository has already recorded stays claimable
@@ -1170,6 +1410,7 @@ impl Orchestrator {
                 Ok(Some(run_id)) => {
                     let this = self.clone();
                     tokio::spawn(async move {
+                        let _alive = this.alive(run_id);
                         if let Err(e) = this.execute(run_id).await {
                             tracing::error!(%run_id, error=%e, "run execution error");
                             let _ = this
@@ -1199,17 +1440,41 @@ impl Orchestrator {
     pub async fn vet_card(&self, task_id: Uuid) -> anyhow::Result<Option<String>> {
         let row = sqlx::query(
             "SELECT COALESCE(a.engine, t.engine) AS engine,
-                    COALESCE(a.permission_preset, t.permission_mode) AS mode
-             FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+                    COALESCE(a.permission_preset, t.permission_mode) AS mode,
+                    p.full_auto_opt_in, p.vcs
+             FROM tasks t JOIN projects p ON p.id = t.project_id
+             LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
         )
         .bind(task_id)
         .fetch_one(&self.db.pool)
         .await?;
-        let mode = match row.get::<Option<String>, _>("mode") {
+        let mut mode = match row.get::<Option<String>, _>("mode") {
             Some(m) => serde_json::from_value(serde_json::Value::String(m)).unwrap_or_default(),
             None => self.default_permission_mode().await,
         };
-        Ok(self.vet_engine(&row.get::<String, _>("engine"), mode))
+        let engine_id: String = row.get("engine");
+        // The Full Auto gate dispatch will apply, said at the click: where it
+        // will not hold, the card runs as the narrowest mode its engine has —
+        // or, for an engine with none, cannot start at all.
+        if mode == PermissionMode::FullAuto {
+            // In place (no git) means no worktree, which Full Auto needs.
+            let gated =
+                !row.get::<bool, _>("full_auto_opt_in") || row.get::<String, _>("vcs") != "git";
+            if let (true, Some(engine)) = (gated, self.engine(&engine_id)) {
+                match short_of_full_auto(&engine.capabilities()) {
+                    Some(narrower) => mode = narrower,
+                    None => {
+                        return Ok(Some(format!(
+                            "{} can only run with every tool allowed, and Full Auto is off for \
+this project (it needs the project's opt-in and a worktree to work in). Turn it on for the \
+project, or run this card on an engine with a narrower mode.",
+                            engine.label()
+                        )))
+                    }
+                }
+            }
+        }
+        Ok(self.vet_engine(&engine_id, mode))
     }
 
     /// Start a card the way the Start button does — vetted, queued, moved to
@@ -1276,6 +1541,15 @@ impl Orchestrator {
         // guess — and for a multi-provider engine it's usually a wrong one.
         // The install itself knows better, so ask it.
         for engine in self.engines() {
+            // An engine with a catalog of its own and defaults named from it
+            // (Gemini's aliases, Amp's modes) already has the right answer:
+            // those names match none of the keywords below, and deriving
+            // from them put every tier on one model.
+            if engine.capabilities().fixed_model_catalog
+                && !EngineTierMapping::defaults_for(engine.id()).0.is_empty()
+            {
+                continue;
+            }
             let Some(info) = self.detected.get(engine.id()) else {
                 continue;
             };
@@ -1893,10 +2167,52 @@ impl Orchestrator {
             .resolve_effort(agent_effort, card_effort, &engine_id, tier)
             .await;
 
+        // FullAuto is refused outside aichip-managed worktrees and outside
+        // opted-in projects — the structural safety gate. The run steps down
+        // to the narrowest mode its engine can actually honour; one with
+        // nothing narrower (Amp, Cursor) keeps FullAuto here only so that
+        // the vet below refuses it with the reason.
+        let full_auto_opt_in: bool = run.get("full_auto_opt_in");
+        let permission_mode = if permission_mode == PermissionMode::FullAuto
+            && !(full_auto_opt_in && self.worktrees.manages(&cwd))
+        {
+            match short_of_full_auto(&engine.capabilities()) {
+                Some(mode) => {
+                    tracing::warn!(%run_id, ?mode, "stepping FullAuto down (gate not satisfied)");
+                    mode
+                }
+                None => {
+                    let reason = format!(
+                        "{} can only run with every tool allowed, and this project does not allow \
+that here — Full Auto needs the project's opt-in and a worktree to work in. Turn it on for the \
+project, or run this card on an engine with a narrower mode.",
+                        engine.label()
+                    );
+                    let seq = next_seq(&self.db, run_id).await?;
+                    self.persist_and_publish(
+                        run_id,
+                        None,
+                        seq,
+                        &AichipEvent::RunFailed {
+                            reason: reason.clone(),
+                        },
+                    )
+                    .await?;
+                    self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+                    return Ok(());
+                }
+            }
+        } else {
+            permission_mode
+        };
+
         // Capability gate. Checked here as well as at enqueue time because a
         // card's mode can be edited after it was queued — and a run that
         // can't honour its mode must fail loudly rather than quietly running
-        // with more freedom than was asked for.
+        // with more freedom than was asked for. On the mode the run will
+        // actually have, after the gate above: Amp cannot be held to
+        // Reviewed and runs every tool regardless, so a Full Auto it was
+        // refused has to stop it, not hand it Reviewed and let it run.
         if let Err(reason) = aichip_engines::vet(
             engine.as_ref(),
             permission_mode,
@@ -1917,18 +2233,6 @@ impl Orchestrator {
             self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
             return Ok(());
         }
-
-        // FullAuto is refused outside aichip-managed worktrees and outside
-        // opted-in projects — the structural safety gate.
-        let full_auto_opt_in: bool = run.get("full_auto_opt_in");
-        let permission_mode = if permission_mode == PermissionMode::FullAuto
-            && !(full_auto_opt_in && self.worktrees.manages(&cwd))
-        {
-            tracing::warn!(%run_id, "downgrading FullAuto to Reviewed (gate not satisfied)");
-            PermissionMode::Reviewed
-        } else {
-            permission_mode
-        };
 
         // Servers this agent opted into. Loaded before the config is written
         // because they go into the same file as aichip's own endpoint.
@@ -2047,6 +2351,16 @@ impl Orchestrator {
         )
         .await;
         let prompt = standing.apply(&prompt);
+        // What the card's work is for: the goal chain and the epic, fenced,
+        // after everything else — background, never the brief.
+        let prompt = match crate::goals::why_this_matters(&self.db, task_id).await {
+            Ok(Some(why)) => format!("{prompt}\n\n{why}"),
+            Ok(None) => prompt,
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "could not load the card's goals");
+                prompt
+            }
+        };
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
                 .await
@@ -2072,9 +2386,16 @@ impl Orchestrator {
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         // Kept for the checks that may run in it once the work is done.
         let work_dir = cwd.clone();
-        // A summary pass explains work already done; it may read the
-        // worktree but not change it, exactly like a planning pass.
-        let read_only = planning || run.get::<String, _>("trigger") == "summary";
+        // A summary pass explains work already done, and a review pass judges
+        // it; either may read the worktree but not change it, exactly like a
+        // planning pass. A review that could edit the diff it judges is not a
+        // review — which is why `review::start` refuses an engine that does
+        // not enforce `denied_tools`.
+        let read_only = planning
+            || matches!(
+                run.get::<String, _>("trigger").as_str(),
+                "summary" | crate::review::PEER_REVIEW
+            );
         let spec = RunSpec {
             cwd,
             prompt,
@@ -2180,7 +2501,11 @@ impl Orchestrator {
             // and changed nothing, so the card stays where it is and nothing
             // is checked or announced again.
             let summarizing = trigger == "summary";
-            if !summarizing {
+            // A review pass is the same: it judged the work, it did none, and
+            // its verdict is posted by `settle_review` below.
+            let reviewing = trigger == crate::review::PEER_REVIEW;
+            let passive = summarizing || reviewing;
+            if !passive {
                 // Review exists to gate a diff onto the base branch. An
                 // in-place run already wrote to the user's folder and produced
                 // no diff, so parking it in review would offer a review that
@@ -2230,18 +2555,23 @@ impl Orchestrator {
 
             // What the run did goes on the card, where a person reading it
             // looks — not only into the agent's memory. Best-effort: a report
-            // that failed to write must not fail a completed run.
-            if let Err(e) = report::post(
-                &self.db,
-                task_id,
-                run_id,
-                bound_agent,
-                &trigger,
-                variant.as_deref(),
-                &outcome.output,
-            )
-            .await
-            {
+            // that failed to write must not fail a completed run. A review's
+            // report is its verdict, which `settle_review` posts.
+            let posted = if reviewing {
+                Ok(())
+            } else {
+                report::post(
+                    &self.db,
+                    task_id,
+                    run_id,
+                    bound_agent,
+                    &trigger,
+                    variant.as_deref(),
+                    &outcome.output,
+                )
+                .await
+            };
+            if let Err(e) = posted {
                 tracing::warn!(%run_id, error = %e, "could not post the run's report");
             }
             // A run that said nothing gets one read-only pass to explain
@@ -2249,7 +2579,7 @@ impl Orchestrator {
             // Not for a bake-off variant (the card's worktree is not the one
             // it worked in) or an in-place card (there is no worktree).
             let summarize = outcome.output.trim().is_empty()
-                && !summarizing
+                && !passive
                 && !in_place
                 && variant.is_none()
                 // An app's change lands by itself just below; a summary
@@ -2281,14 +2611,19 @@ impl Orchestrator {
             // after a Full Auto run — see `checks` for why — and never for an
             // in-place project (no worktree), an app (it lands by itself) or a
             // bake-off variant (its own worktree, compared by a person).
+            //
+            // Or after any run, where the project's review policy carries a
+            // person's standing consent to that (`run_checks_after_every_run`).
             let title: String = run.get("title");
             let chat_id: Option<Uuid> = run.get("task_chat_id");
-            let auto_checks = if !summarizing
-                && !in_place
+            let reviewable = !in_place
                 && run.get::<Option<String>, _>("variant_label").is_none()
-                && run.get::<String, _>("project_kind") == "repo"
-                && permission_mode == PermissionMode::FullAuto
-            {
+                && run.get::<String, _>("project_kind") == "repo";
+            let consented = permission_mode == PermissionMode::FullAuto
+                || crate::review::policy(&self.db, project_id)
+                    .await
+                    .is_ok_and(|p| p.run_checks_after_every_run);
+            let auto_checks = if !passive && reviewable && consented {
                 crate::checks::config(&self.db, project_id)
                     .await
                     .unwrap_or_else(|e| {
@@ -2298,6 +2633,7 @@ impl Orchestrator {
             } else {
                 None
             };
+            let checking = auto_checks.is_some();
             match auto_checks {
                 Some(config) => {
                     let check_run_id =
@@ -2317,7 +2653,7 @@ impl Orchestrator {
                         .await
                     });
                 }
-                None if summarizing => {}
+                None if passive => {}
                 None => {
                     self.announce_ready(run_id, &title, chat_id, in_place, None)
                         .await;
@@ -2326,10 +2662,14 @@ impl Orchestrator {
                     }
                 }
             }
+            // With checks running, `settle_checks` asks once they are done.
+            if reviewable && !checking {
+                self.settle_review(task_id, run_id, &trigger).await;
+            }
 
             // The work joins the agent's memory. Best-effort: a failed memory
-            // write must not fail a completed run.
-            if let Some(agent_id) = bound_agent {
+            // write must not fail a completed run. A reviewer did no work.
+            if let Some(agent_id) = bound_agent.filter(|_| !reviewing) {
                 let title: String = run.get("title");
                 let note = format!(
                     "Completed task \"{title}\": {}",
@@ -4331,6 +4671,7 @@ this workflow manually."
                 event = proc.events.recv() => {
                     let Some(event) = event else { break };
                     self.persist_and_publish(run_id, step_id, seq.next(), &event).await?;
+                    self.touch(run_id).await;
                     match &event {
                         AichipEvent::AssistantText { text } => text_parts.push(text.clone()),
                         AichipEvent::RunStarted { session_id: sid, .. } => {
@@ -4652,6 +4993,51 @@ this workflow manually."
         // leaves through, and a routine's whole point is running while nobody
         // watches. A no-op unless the run was a routine firing.
         crate::routines::announce_finished(&self.db, run_id, status).await;
+        // A review pass that did not complete is still a review that ended:
+        // a verdict it gave before dying is acted on, and one that gave none
+        // is recorded fail-closed and put to a person. A person's own cancel
+        // with no verdict is left alone — they stopped it on purpose.
+        if matches!(status, RunStatus::Failed | RunStatus::Canceled) {
+            if let Ok(Some((task_id, decided, reaped))) = sqlx::query_as::<_, (Uuid, bool, bool)>(
+                "SELECT r.task_id,
+                            EXISTS (SELECT 1 FROM review_decisions d WHERE d.run_id = r.id),
+                            r.reaped IS NOT NULL
+                       FROM runs r WHERE r.id = $1 AND r.task_id IS NOT NULL AND r.trigger = $2",
+            )
+            .bind(run_id)
+            .bind(crate::review::PEER_REVIEW)
+            .fetch_optional(&self.db.pool)
+            .await
+            {
+                if status == RunStatus::Failed || decided || reaped {
+                    // Boxed: settling can start a fix through the follow-up
+                    // door, which can end a summary through `finish` — a
+                    // cycle an async fn cannot size without the indirection.
+                    Box::pin(self.settle_review(task_id, run_id, crate::review::PEER_REVIEW)).await;
+                }
+            }
+        }
+        // A card's work that failed is news to its project's manager. Not a
+        // cancel (a person did that), and not aichip's own passes.
+        if status == RunStatus::Failed {
+            if let Ok(Some((task_id, reason))) = sqlx::query_as::<_, (Uuid, Option<String>)>(
+                "SELECT task_id, error_reason FROM runs WHERE id = $1 AND task_id IS NOT NULL
+                    AND trigger NOT IN ('summary', 'peer_review')",
+            )
+            .bind(run_id)
+            .fetch_optional(&self.db.pool)
+            .await
+            {
+                crate::wake::raise(
+                    &self.db,
+                    task_id,
+                    Some(run_id),
+                    crate::wake::Kind::Failed,
+                    reason.as_deref().unwrap_or(""),
+                )
+                .await;
+            }
+        }
         Ok(())
     }
 
@@ -5047,5 +5433,222 @@ mod db_tests {
             assert!(started(&t, live).await, "vetted: {vetted}");
         }
         t.finish().await;
+    }
+
+    /// The assistant and a team live on aichip's tools. An engine that cannot
+    /// be handed them for one run is refused at the click — never started
+    /// toolless — and the refusal names the installed engines that can.
+    #[tokio::test]
+    async fn work_that_lives_on_aichips_tools_refuses_an_engine_that_cannot_carry_them() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::mock::MockEngine::demo()));
+        orch.register_engine(Arc::new(aichip_engines::gemini::GeminiEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::qwen::QwenEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::cursor::CursorEngine::default()));
+
+        let no = orch.needs_tools("gemini", "the assistant").unwrap_err();
+        let said = no.to_string();
+        assert!(said.starts_with("Gemini CLI can't"), "{said}");
+        // Qwen can; the mock is not advice; Cursor cannot.
+        assert!(said.ends_with("(Qwen Code)"), "{said}");
+        orch.needs_tools("qwen", "the assistant").unwrap();
+        orch.needs_tools("mock", "the assistant").unwrap();
+        // Unknown is dispatch's to explain.
+        orch.needs_tools("nope", "the assistant").unwrap();
+
+        let (ws, project) = t.project(dir.path(), true).await;
+        let chat: Uuid = sqlx::query_scalar(
+            "INSERT INTO chats (project_id, title) VALUES ($1, 'Talk') RETURNING id",
+        )
+        .bind(project)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let err = orch.enqueue_chat_turn(chat, "gemini").await.unwrap_err();
+        assert!(err.is::<NoTools>(), "{err}");
+        // A chat with no project is never handed the tools, so any engine
+        // will do for it.
+        let general: Uuid = sqlx::query_scalar(
+            "INSERT INTO chats (title, workspace_id) VALUES ('General', $1) RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        orch.enqueue_chat_turn(general, "gemini").await.unwrap();
+        sqlx::query("DELETE FROM runs WHERE chat_id = $1")
+            .bind(general)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+
+        // A team on a capable engine. Its members run on the team's engine,
+        // so one pinned to Cursor for its own card work does not matter here.
+        let member: Uuid = sqlx::query_scalar(
+            "INSERT INTO agents (workspace_id, name, engine) VALUES ($1, 'Cy', 'cursor') RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO teams (workspace_id, name, pattern, definition, engine)
+             VALUES ($1, 'T', 'org', $2, 'gemini') RETURNING id",
+        )
+        .bind(ws)
+        .bind(serde_json::json!({ "members": [{ "agent_id": member.to_string() }] }))
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        // On Gemini it is refused, at either door: the Teams page…
+        let err = orch
+            .enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap_err();
+        assert!(err.is::<NoTools>(), "{err}");
+        // …and a card assigned to the team.
+        let card = t.card(project, "for the team").await;
+        sqlx::query("UPDATE tasks SET team_id = $2 WHERE id = $1")
+            .bind(card)
+            .bind(team)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let err = orch.enqueue_task(card).await.unwrap_err();
+        assert!(err.is::<NoTools>(), "{err}");
+
+        // Nothing was queued by any of it.
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0);
+
+        // On Qwen it starts, the Cursor-pinned member and all.
+        sqlx::query("UPDATE teams SET engine = 'qwen' WHERE id = $1")
+            .bind(team)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        orch.enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap();
+    }
+
+    /// Without Claude Code, the default is the most capable engine installed
+    /// — not the first by name, which with Amp installed was one that the
+    /// assistant, a manager and a team would all refuse.
+    #[tokio::test]
+    async fn the_default_engine_is_chosen_by_what_it_can_do() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::amp::AmpEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::cursor::CursorEngine::default()));
+        assert_eq!(orch.default_engine(), "amp", "first of equals, by name");
+        orch.register_engine(Arc::new(aichip_engines::gemini::GeminiEngine::default()));
+        assert_eq!(
+            orch.default_engine(),
+            "gemini",
+            "it can at least edit without a shell"
+        );
+        orch.register_engine(Arc::new(aichip_engines::codex::CodexEngine::default()));
+        assert_eq!(orch.default_engine(), "codex");
+    }
+
+    /// Gemini's aliases and Amp's modes are their own catalogs; the keyword
+    /// guess that serves a multi-provider engine put every tier on one of
+    /// them.
+    #[tokio::test]
+    async fn an_engine_with_its_own_catalog_keeps_its_own_defaults() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        for engine in [
+            Arc::new(aichip_engines::amp::AmpEngine::default()) as Arc<dyn Engine>,
+            Arc::new(aichip_engines::gemini::GeminiEngine::default()),
+        ] {
+            let models = match engine.id() {
+                "amp" => ["low", "medium", "high", "ultra"]
+                    .map(String::from)
+                    .to_vec(),
+                _ => ["auto", "pro", "flash", "flash-lite"]
+                    .map(String::from)
+                    .to_vec(),
+            };
+            orch.detected.insert(
+                engine.id(),
+                aichip_engines::EngineInfo {
+                    version: "1".into(),
+                    authenticated: true,
+                    providers: vec![],
+                    models,
+                },
+            );
+            orch.register_engine(engine);
+        }
+        orch.load_tier_mapping().await.unwrap();
+        let tiers = |e: &str| {
+            [ModelTier::Easy, ModelTier::Medium, ModelTier::Complex].map(|t| orch.model_for(e, t))
+        };
+        assert_eq!(tiers("amp"), ["low", "medium", "high"]);
+        assert_eq!(tiers("gemini"), ["flash-lite", "flash", "pro"]);
+        assert!(orch.derived_defaults("amp").is_none());
+        assert!(orch.derived_defaults("gemini").is_none());
+    }
+
+    /// Where Full Auto is off for the project, a card steps down to the
+    /// narrowest mode its engine can honour — and an engine with nothing
+    /// narrower (Amp runs every tool, always) is refused at the click rather
+    /// than handed Reviewed, which it would ignore.
+    #[tokio::test]
+    async fn full_auto_refused_steps_down_or_says_no() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::amp::AmpEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::codex::CodexEngine::default()));
+        let (_, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "go").await;
+        let on = |engine: &'static str| {
+            sqlx::query("UPDATE tasks SET engine = $2, permission_mode = 'full_auto' WHERE id = $1")
+                .bind(card)
+                .bind(engine)
+                .execute(&t.db.pool)
+        };
+        let opt_in = |yes: bool| {
+            sqlx::query("UPDATE projects SET full_auto_opt_in = $2 WHERE id = $1")
+                .bind(project)
+                .bind(yes)
+                .execute(&t.db.pool)
+        };
+        opt_in(false).await.unwrap();
+        on("amp").await.unwrap();
+        let said = orch.vet_card(card).await.unwrap().expect("refused");
+        assert!(
+            said.starts_with("Amp can only run with every tool allowed"),
+            "{said}"
+        );
+        // Codex steps down to Auto-edit, which it can honour.
+        on("codex").await.unwrap();
+        assert_eq!(orch.vet_card(card).await.unwrap(), None);
+        // With the opt-in, Amp's Full Auto is what was asked for and allowed.
+        opt_in(true).await.unwrap();
+        on("amp").await.unwrap();
+        assert_eq!(orch.vet_card(card).await.unwrap(), None);
+        assert_eq!(
+            short_of_full_auto(&aichip_engines::mock::MockEngine::demo().capabilities()),
+            Some(PermissionMode::Reviewed)
+        );
     }
 }

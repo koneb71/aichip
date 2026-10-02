@@ -305,41 +305,9 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    // A paused agent's plan can be approved later; it is not run now.
-    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+    aichip_core::approvals::approve_org_plan(&state.orchestrator, run_id)
         .await
-        .map_err(super::run_refused)?;
-    let updated = sqlx::query(
-        "UPDATE runs SET plan_approved_at = now(), status = 'queued'
-         WHERE id = $1 AND status = 'awaiting_approval'",
-    )
-    .bind(run_id)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    state
-        .orchestrator
-        .queue(run_id, 15)
-        .await
-        .map_err(internal)?;
-    state
-        .orchestrator
-        .post(
-            run_id,
-            None,
-            "system",
-            None,
-            "status",
-            "Plan approved — starting work.",
-        )
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     // The updated run, not a bare ack: the caller can then render the new state
     // without racing its own poll for it.
     Ok(Json(build_detail(&state, run_id).await?))
@@ -356,49 +324,9 @@ async fn reject_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Reject>,
 ) -> Result<Json<Value>, ApiError> {
-    let reason = body
-        .reason
-        .filter(|r| !r.trim().is_empty())
-        .unwrap_or_else(|| "the plan was rejected".to_string());
-    // The status check and the write are one statement, on purpose. Reading it
-    // first and then writing unconditionally leaves a window in which the
-    // executor picks the run up between the two, and this would then cancel a
-    // run that had already started working.
-    let updated = sqlx::query(
-        "UPDATE runs SET status='canceled', error_reason=$2, finished_at=now()
-         WHERE id=$1 AND status='awaiting_approval'",
-    )
-    .bind(run_id)
-    .bind(&reason)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    sqlx::query(
-        "UPDATE steps SET status='skipped', finished_at=now()
-         WHERE run_id=$1 AND status='queued'",
-    )
-    .bind(run_id)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    state
-        .orchestrator
-        .post(
-            run_id,
-            None,
-            "system",
-            None,
-            "status",
-            &format!("Run canceled — {reason}"),
-        )
+    aichip_core::approvals::reject_org_plan(&state.orchestrator, run_id, body.reason.as_deref())
         .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(build_detail(&state, run_id).await?))
 }
 

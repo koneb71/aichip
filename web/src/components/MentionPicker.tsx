@@ -350,7 +350,7 @@ export function useMentionPicker({
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -4 }}
-          className="absolute bottom-full left-0 right-0 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-line bg-panel p-1 shadow-lg"
+          className="absolute bottom-full left-0 right-0 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-border bg-panel p-1 shadow-lg"
         >
           {inLineMode ? (
             <LineList
@@ -405,7 +405,7 @@ function OfferList({
 }) {
   if (!rows.length) {
     return (
-      <div className="px-2 py-3 text-xs text-ink-dim">
+      <div className="px-2 py-3 text-xs text-fg-muted">
         {query ? `Nothing matches “${query}”.` : "Type to find an agent, a skill or a file."}
       </div>
     );
@@ -456,10 +456,10 @@ function OfferList({
             >
               {/* A hollow marker where an agent has a filled dot: same slot,
                   visibly not a person. */}
-              <span className="size-2 shrink-0 rounded-full border border-ink-dim" />
+              <span className="size-2 shrink-0 rounded-full border border-fg-muted" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{row.skill.name}</span>
-                <span className="block truncate text-[11px] text-ink-dim">
+                <span className="block truncate text-[11px] text-fg-muted">
                   {row.skill.description || "a way of doing something"}
                 </span>
               </span>
@@ -482,7 +482,7 @@ function OfferList({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{row.agent.name}</span>
                 {row.agent.description && (
-                  <span className="block truncate text-[11px] text-ink-dim">
+                  <span className="block truncate text-[11px] text-fg-muted">
                     {row.agent.description}
                   </span>
                 )}
@@ -503,7 +503,7 @@ function OfferList({
                 className="flex min-w-0 flex-1 flex-col text-left"
               >
                 <span className="truncate text-sm">{row.hit.name}</span>
-                <span className="truncate text-[11px] text-ink-dim">{row.hit.path}</span>
+                <span className="truncate text-[11px] text-fg-muted">{row.hit.path}</span>
               </button>
               <button
                 onMouseDown={(e) => {
@@ -511,7 +511,7 @@ function OfferList({
                   onPickLines(row.hit);
                 }}
                 title="Pick specific lines"
-                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-ink-dim hover:bg-panel hover:text-ink"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-fg-muted hover:bg-panel hover:text-fg"
               >
                 :lines
               </button>
@@ -520,7 +520,7 @@ function OfferList({
         </div>
       ))}
       {truncated && (
-        <div className="px-2 py-1.5 text-[10px] text-ink-dim">
+        <div className="px-2 py-1.5 text-[10px] text-fg-muted">
           Showing the first matches — keep typing to narrow.
         </div>
       )}
@@ -535,7 +535,7 @@ function files(rows: Row[]): number {
 
 function Heading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+    <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
       {children}
     </div>
   );
@@ -561,8 +561,8 @@ function LineList({
     ref.current?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  if (note) return <div className="px-2 py-3 text-xs text-ink-dim">{note}</div>;
-  if (!lines) return <div className="px-2 py-3 text-xs text-ink-dim">Loading {path}…</div>;
+  if (note) return <div className="px-2 py-3 text-xs text-fg-muted">{note}</div>;
+  if (!lines) return <div className="px-2 py-3 text-xs text-fg-muted">Loading {path}…</div>;
 
   // Render a window around the cursor rather than the whole file.
   const from = Math.max(0, cursor - Math.floor(LINE_WINDOW / 2));
@@ -572,7 +572,7 @@ function LineList({
 
   return (
     <>
-      <div className="px-2 py-1 text-[10px] text-ink-dim">
+      <div className="px-2 py-1 text-[10px] text-fg-muted">
         {path} · ↑↓ to move, Enter to insert, Shift+Enter for a range, Esc to go back
       </div>
       {lines.slice(from, to).map((line, k) => {
@@ -590,7 +590,7 @@ function LineList({
               selected ? "bg-panel-2" : ""
             } ${i === cursor ? "outline outline-1 outline-accent" : ""}`}
           >
-            <span className="w-10 shrink-0 select-none text-right text-ink-dim">{i + 1}</span>
+            <span className="w-10 shrink-0 select-none text-right text-fg-muted">{i + 1}</span>
             <span className="truncate">{line || " "}</span>
           </div>
         );

@@ -281,6 +281,29 @@ async fn refresh(
     Ok(Json(json!({ "pr": as_json(&pull) })))
 }
 
+/// Ask GitHub once more what a card's pull request says, for a gate about to
+/// read it. Best-effort: on any failure the stored state stands, and a state
+/// nobody could confirm does not open the gate.
+pub(crate) async fn sync_for_gate(state: &AppState, id: Uuid) {
+    let Ok(card) = card(state, id).await else {
+        return;
+    };
+    let Some(number) = card.pr_number else { return };
+    match pr::view(
+        std::path::Path::new(&card.project_path),
+        &number.to_string(),
+    )
+    .await
+    {
+        Ok(pull) => {
+            if let Err((_, e)) = store(state, id, &pull).await {
+                tracing::warn!(%id, error = %e, "could not store the pull request's state");
+            }
+        }
+        Err(e) => tracing::info!(%id, error = %e, "could not refresh the pull request"),
+    }
+}
+
 fn as_json(pull: &pr::PullRequest) -> Value {
     json!({
         "number": pull.number,

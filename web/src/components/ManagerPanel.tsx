@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, Manager, ManagerPass, api } from "../lib/api";
+import { Agent, Manager, ManagerPass, WakeKind, api } from "../lib/api";
+import { Checkbox, Select } from "./ui/Field";
 import { Preset, WEEKDAYS, compile, describeCron, recognize, relative } from "../lib/cron";
 import { Icon } from "./ui/Icon";
+import { Button, buttonClasses } from "./ui/Button";
+import { ToolsNote } from "../lib/engines";
+
+/** What can wake the manager before its schedule, as the editor says it. */
+const WAKES: { kind: WakeKind; label: string }[] = [
+  { kind: "failed", label: "a card's run fails" },
+  { kind: "landed", label: "a card lands" },
+  { kind: "unblocked", label: "a blocked card can start" },
+  { kind: "question", label: "an agent asks a question" },
+  { kind: "review_exhausted", label: "a review runs out of rounds" },
+  { kind: "checks_exhausted", label: "checks still fail after fixes" },
+  { kind: "stalled", label: "a run stalls" },
+];
 
 /**
  * Assign someone to run this board while you are not looking.
@@ -41,6 +55,9 @@ export function ManagerPanel({
   const [monthday, setMonthday] = useState(1);
   const [custom, setCustom] = useState("0 9 * * *");
   const [maxStarts, setMaxStarts] = useState(2);
+  const [onEvents, setOnEvents] = useState<WakeKind[]>([]);
+  const [cooldownSecs, setCooldownSecs] = useState(900);
+  const [maxPassesPerDay, setMaxPassesPerDay] = useState(6);
   const [nextThree, setNextThree] = useState<string[]>([]);
 
   const cronExpr = compile(preset, time, weekday, monthday, custom);
@@ -76,6 +93,9 @@ export function ManagerPanel({
       setMonthday(r.monthday);
       setCustom(m.cronExpr);
       setMaxStarts(m.maxStarts);
+      setOnEvents(m.onEvents ?? []);
+      setCooldownSecs(m.cooldownSecs ?? 900);
+      setMaxPassesPerDay(m.maxPassesPerDay ?? 6);
     });
   }, [load]);
 
@@ -110,9 +130,12 @@ export function ManagerPanel({
       (manager.agentId ?? "") !== agentId ||
       manager.brief !== brief.trim() ||
       manager.cronExpr !== cronExpr ||
-      manager.maxStarts !== maxStarts
+      manager.maxStarts !== maxStarts ||
+      [...(manager.onEvents ?? [])].sort().join() !== [...onEvents].sort().join() ||
+      manager.cooldownSecs !== cooldownSecs ||
+      manager.maxPassesPerDay !== maxPassesPerDay
     );
-  }, [manager, agentId, brief, cronExpr, maxStarts]);
+  }, [manager, agentId, brief, cronExpr, maxStarts, onEvents, cooldownSecs, maxPassesPerDay]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -134,22 +157,25 @@ export function ManagerPanel({
         brief: brief.trim(),
         cronExpr,
         maxStarts,
+        onEvents,
+        cooldownSecs,
+        maxPassesPerDay,
         enabled: manager?.enabled ?? true,
       }),
     );
 
   if (!loaded) {
-    return <div className="p-6 text-sm text-ink-dim">Loading…</div>;
+    return <div className="p-6 text-sm text-fg-muted">Loading…</div>;
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-4">
       {/* Who, and whether they are on duty. */}
-      <section className="rounded-2xl border border-line bg-panel p-4">
+      <section className="rounded-2xl border border-border bg-panel p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">Project manager</h2>
-            <p className="mt-0.5 max-w-lg text-xs text-ink-dim">
+            <p className="mt-0.5 max-w-lg text-xs text-fg-muted">
               An agent that reviews this board on a schedule and acts on it while nobody is
               watching — reading what finished, filing what is done, and starting what it
               judges should happen next, within a cap you set.
@@ -171,8 +197,8 @@ export function ManagerPanel({
               disabled={busy}
               className={`ring-focus shrink-0 rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
                 manager.enabled
-                  ? "border-accent bg-accent/10 font-medium text-accent"
-                  : "border-line text-ink-dim hover:border-accent/50"
+                  ? "border-accent bg-accent/10 font-medium text-accent-fg"
+                  : "border-border text-fg-muted hover:border-accent/50"
               }`}
             >
               {manager.enabled ? "On duty" : "Off duty"}
@@ -182,13 +208,13 @@ export function ManagerPanel({
 
         <div className="mt-4 space-y-3">
           <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               Who manages this project
             </span>
             <select
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
-              className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+              className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
             >
               <option value="">The assistant, with no particular persona</option>
               {agents.map((a) => (
@@ -197,14 +223,17 @@ export function ManagerPanel({
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-[11px] text-ink-dim">
+            <span className="mt-1 block text-[11px] text-fg-muted">
               The agent's own instructions shape how it manages. It does not become the
               agent that writes the code — the manager picks that per card.
             </span>
           </label>
+          {/* No engine picker here: a manager runs on the one its routine
+              names, or the machine's default — which may lack the tools. */}
+          <ToolsNote engine={manager?.engine ?? null} what="a project manager" inheritsDefault />
 
           <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               What it should care about
             </span>
             <textarea
@@ -212,20 +241,20 @@ export function ManagerPanel({
               onChange={(e) => setBrief(e.target.value)}
               rows={3}
               placeholder="Bugs before features. Keep the test suite green. Don't touch the payments code without asking."
-              className="w-full resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+              className="w-full resize-y rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
             />
           </label>
 
           {/* The schedule builder, same shapes the Routines editor writes. */}
           <div>
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               How often
             </span>
             <div className="flex flex-wrap items-center gap-2">
               <select
                 value={preset}
                 onChange={(e) => setPreset(e.target.value as Preset)}
-                className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                className="rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
               >
                 <option value="hourly">Every hour</option>
                 <option value="daily">Every day</option>
@@ -239,14 +268,14 @@ export function ManagerPanel({
                   type="time"
                   value={time}
                   onChange={(e) => setTime(e.target.value)}
-                  className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  className="rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
               )}
               {preset === "weekly" && (
                 <select
                   value={weekday}
                   onChange={(e) => setWeekday(parseInt(e.target.value, 10))}
-                  className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  className="rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 >
                   {WEEKDAYS.map((d, i) => (
                     <option key={d} value={i}>
@@ -262,7 +291,7 @@ export function ManagerPanel({
                   max={28}
                   value={monthday}
                   onChange={(e) => setMonthday(parseInt(e.target.value, 10) || 1)}
-                  className="w-20 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  className="w-20 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
               )}
               {preset === "custom" && (
@@ -270,11 +299,11 @@ export function ManagerPanel({
                   value={custom}
                   onChange={(e) => setCustom(e.target.value)}
                   placeholder="0 9 * * *"
-                  className="w-40 rounded-lg border border-line bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+                  className="w-40 rounded-lg border border-border bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
                 />
               )}
             </div>
-            <p className="mt-1 text-[11px] text-ink-dim">
+            <p className="mt-1 text-[11px] text-fg-muted">
               {nextThree.length > 0
                 ? `Next: ${nextThree.slice(0, 2).map((t) => new Date(t).toLocaleString()).join(", ")}`
                 : "That isn't a schedule this can read."}
@@ -283,7 +312,7 @@ export function ManagerPanel({
 
           {/* The setting that decides whether this is comfortable to leave on. */}
           <div>
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               Cards it may start per pass
             </span>
             <div className="flex items-center gap-3">
@@ -297,7 +326,7 @@ export function ManagerPanel({
               />
               <span className="w-6 text-sm font-medium tabular-nums">{maxStarts}</span>
             </div>
-            <p className="mt-1 max-w-lg text-[11px] text-ink-dim">
+            <p className="mt-1 max-w-lg text-[11px] text-fg-muted">
               {maxStarts === 0
                 ? "It will review, file and report, but never start anything. Cards it thinks should run wait in the backlog for you."
                 : `A hard limit, counted server-side — not a request. Past ${maxStarts}, the ${
@@ -306,49 +335,85 @@ export function ManagerPanel({
             </p>
           </div>
 
+          <div>
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
+              Wake it early when…
+            </span>
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {WAKES.map((w) => (
+                <Checkbox
+                  key={w.kind}
+                  checked={onEvents.includes(w.kind)}
+                  onChange={(on) =>
+                    setOnEvents((cur) => (on ? [...cur, w.kind] : cur.filter((k) => k !== w.kind)))
+                  }
+                  label={w.label}
+                />
+              ))}
+            </div>
+            {onEvents.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+                At most every
+                <Select className="w-28" aria-label="Cooldown" value={cooldownSecs} onChange={(e) => setCooldownSecs(Number(e.target.value))}>
+                  <option value={300}>5 minutes</option>
+                  <option value={900}>15 minutes</option>
+                  <option value={3600}>hour</option>
+                  <option value={14400}>4 hours</option>
+                </Select>
+                and
+                <Select className="w-20" aria-label="Early passes a day" value={maxPassesPerDay} onChange={(e) => setMaxPassesPerDay(Number(e.target.value))}>
+                  {[1, 2, 4, 6, 12, 24].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </Select>
+                times a day.
+              </div>
+            )}
+            <p className="mt-1 max-w-lg text-[11px] text-fg-muted">
+              Each early pass is a run, and costs like one. It waits while the manager is mid-turn,
+              and whatever happened is waiting at the top of its next pass either way.
+            </p>
+          </div>
+
           {error && (
-            <div className="rounded-lg border border-danger/40 bg-danger/5 px-2.5 py-1.5 text-xs text-danger">
+            <div className="rounded-lg border border-danger/40 bg-danger-subtle px-2.5 py-1.5 text-xs text-danger-fg">
               {error}
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
-            <button
-              onClick={save}
-              disabled={busy || (!dirty && !!manager)}
-              className="ring-focus rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-40"
-            >
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            <Button variant="primary" size="sm" onClick={save} disabled={busy || (!dirty && !!manager)}>
               {manager ? "Save" : "Assign a manager"}
-            </button>
+            </Button>
             {manager && (
               <>
-                <button
-                  onClick={() => run(() => api.managerRunNow(projectId))}
-                  disabled={busy}
-                  className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent disabled:opacity-40"
-                >
+                <Button size="sm" onClick={() => run(() => api.managerRunNow(projectId))} disabled={busy}>
                   Run a pass now
-                </button>
+                </Button>
                 {manager.chatId && (
                   <Link
                     to={`/chat?project=${projectId}&chat=${manager.chatId}`}
-                    className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent"
+                    className={buttonClasses({ size: "sm" })}
                   >
                     Open its thread
                   </Link>
                 )}
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => run(() => api.managerRemove(projectId))}
                   disabled={busy}
-                  className="ring-focus ml-auto rounded-lg px-3 py-1.5 text-xs text-ink-dim hover:text-danger disabled:opacity-40"
+                  className="ml-auto"
                 >
                   Unassign
-                </button>
+                </Button>
               </>
             )}
           </div>
           {manager?.enabled && manager.nextAt && (
-            <p className="text-[11px] text-ink-dim">
+            <p className="text-[11px] text-fg-muted">
               <Icon name="clock" className="mr-1 inline size-3" />
               {describeCron(manager.cronExpr)} — next {relative(manager.nextAt)}
             </p>
@@ -359,11 +424,11 @@ export function ManagerPanel({
       {/* The reason to open this tab. */}
       {manager && (
         <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             What it has done
           </h3>
           {passes.length === 0 ? (
-            <p className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-xs text-ink-dim">
+            <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-fg-muted">
               No passes yet. It will run {describeCron(manager.cronExpr)} — or press “Run a
               pass now” to watch one.
             </p>
@@ -376,33 +441,33 @@ export function ManagerPanel({
                     layout
                     initial={{ opacity: 0, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="rounded-xl border border-line bg-panel p-3"
+                    className="rounded-xl border border-border bg-panel p-3"
                   >
                     <div className="flex flex-wrap items-baseline gap-2">
                       <span className="text-xs font-medium">
                         {new Date(p.firedAt).toLocaleString()}
                       </span>
                       {p.trigger === "manual" && (
-                        <span className="rounded bg-panel-2 px-1.5 text-[10px] text-ink-dim">
+                        <span className="rounded bg-panel-2 px-1.5 text-[10px] text-fg-muted">
                           by hand
                         </span>
                       )}
                       {p.runStatus && (
-                        <span className="text-[10px] text-ink-dim">{p.runStatus}</span>
+                        <span className="text-[10px] text-fg-muted">{p.runStatus}</span>
                       )}
                       {typeof p.costUsd === "number" && (
-                        <span className="text-[10px] text-ink-dim tabular-nums">
+                        <span className="text-[10px] text-fg-muted tabular-nums">
                           ${p.costUsd.toFixed(2)}
                         </span>
                       )}
                     </div>
                     {p.error ? (
-                      <p className="mt-1 text-xs text-danger">{p.error}</p>
+                      <p className="mt-1 text-xs text-danger-fg">{p.error}</p>
                     ) : p.actions.length === 0 ? (
                       // Said out loud rather than left blank: "it looked and
                       // decided nothing needed doing" is a real outcome, and an
                       // empty row reads as a failure.
-                      <p className="mt-1 text-xs text-ink-dim">
+                      <p className="mt-1 text-xs text-fg-muted">
                         Nothing to change — read its thread for what it found.
                       </p>
                     ) : (
@@ -412,10 +477,10 @@ export function ManagerPanel({
                             <span
                               className={`shrink-0 rounded px-1.5 text-[10px] ${
                                 a.kind === "start"
-                                  ? "bg-accent/10 text-accent"
+                                  ? "bg-accent/10 text-accent-fg"
                                   : a.kind === "cancel"
-                                    ? "bg-danger/10 text-danger"
-                                    : "bg-panel-2 text-ink-dim"
+                                    ? "bg-danger-subtle text-danger-fg"
+                                    : "bg-panel-2 text-fg-muted"
                               }`}
                             >
                               {a.kind === "create"
@@ -427,12 +492,12 @@ export function ManagerPanel({
                             {a.taskId ? (
                               <Link
                                 to={`/projects/${projectId}?task=${a.taskId}`}
-                                className="truncate hover:text-accent hover:underline"
+                                className="truncate hover:text-accent-fg hover:underline"
                               >
                                 {a.title}
                               </Link>
                             ) : (
-                              <span className="truncate text-ink-dim">{a.title}</span>
+                              <span className="truncate text-fg-muted">{a.title}</span>
                             )}
                           </li>
                         ))}

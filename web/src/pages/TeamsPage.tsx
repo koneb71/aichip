@@ -1,14 +1,17 @@
+import { HistoryButton } from "../components/RevisionsPanel";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, OrgRunSummary, Project, Team, TeamEstimate } from "../lib/api";
-import { EnginePicker, useEngines } from "../lib/engines";
+import { EnginePicker, ToolsNote, useEngines } from "../lib/engines";
 import { useWorkspace } from "../lib/workspace";
+import { formChanged } from "../lib/formDirty";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
 import { Page, PageHead } from "../components/ui/Surface";
-import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button, IconButton } from "../components/ui/Button";
+import { Dialog, Sheet } from "../components/ui/Dialog";
+import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 
 const PATTERNS: { key: Team["pattern"]; label: string; blurb: string }[] = [
   {
@@ -58,14 +61,9 @@ export default function TeamsPage() {
         title="Teams"
         subtitle="Compose agents into coordination patterns — or build an organization with a manager who plans the work and delegates it."
         actions={
-          <motion.button
-            {...tappable}
-            onClick={() => setEditing("new")}
-            className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
-          >
-            <Icon name="plus" size={15} strokeWidth={2.5} />
+          <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setEditing("new")}>
             New team
-          </motion.button>
+          </Button>
         }
       />
 
@@ -75,11 +73,11 @@ export default function TeamsPage() {
             key={t.id}
             layout
             whileHover={{ y: -2 }}
-            className="card-shadow rounded-xl border border-line bg-panel p-4"
+            className="card-shadow rounded-xl border border-border bg-panel p-4"
           >
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">{t.name}</div>
-              <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] capitalize text-ink-dim">
+              <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] capitalize text-fg-muted">
                 {t.pattern}
               </span>
             </div>
@@ -88,12 +86,12 @@ export default function TeamsPage() {
                 <>
                   <span
                     title={`${agentById(t.definition.manager)?.name} — manager`}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white ring-2 ring-accent ring-offset-1"
-                    style={{ background: agentById(t.definition.manager)?.color ?? "#9ca3af" }}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-on-accent ring-2 ring-accent ring-offset-1 ring-offset-panel"
+                    style={{ background: agentById(t.definition.manager)?.color ?? "var(--color-fg-subtle)" }}
                   >
                     {(agentById(t.definition.manager)?.name ?? "?").slice(0, 1).toUpperCase()}
                   </span>
-                  <span className="text-ink-dim">→</span>
+                  <span className="text-fg-muted">→</span>
                 </>
               )}
               <div className="flex -space-x-1.5">
@@ -103,41 +101,38 @@ export default function TeamsPage() {
                     <span
                       key={i}
                       title={`${a?.name}${m.role ? ` — ${m.role}` : ""}`}
-                      className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-panel text-[11px] font-bold text-white"
-                      style={{ background: a?.color ?? "#9ca3af" }}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-panel text-[11px] font-bold text-on-accent"
+                      style={{ background: a?.color ?? "var(--color-fg-subtle)" }}
                     >
                       {(a?.name ?? "?").slice(0, 1).toUpperCase()}
                     </span>
                   );
                 })}
                 {(t.definition.members ?? []).length === 0 && (
-                  <span className="text-xs text-ink-dim">No members yet</span>
+                  <span className="text-xs text-fg-muted">No members yet</span>
                 )}
               </div>
             </div>
             <div className="mt-4 flex gap-2">
-              <motion.button
-                whileTap={{ scale: 0.96 }}
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => setRunning(t)}
                 disabled={
                   (t.definition.members ?? []).length === 0 ||
                   (t.pattern === "org" && !t.definition.manager)
                 }
-                className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
               >
                 {t.pattern === "org" ? "▶ Run organization" : "▶ Run team"}
-              </motion.button>
-              <button
-                onClick={() => setEditing(t)}
-                className="rounded-lg border border-line px-3 py-1 text-xs hover:bg-panel-2"
-              >
+              </Button>
+              <Button size="sm" onClick={() => setEditing(t)}>
                 Edit
-              </button>
+              </Button>
             </div>
           </motion.div>
         ))}
         {teams.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
+          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
             No teams yet — compose your agents into a pipeline, debate, or swarm.
           </div>
         )}
@@ -155,7 +150,7 @@ export default function TeamsPage() {
                   layout
                   key={r.id}
                   onClick={() => setOpenOrgRun(r.id)}
-                  className="card-shadow flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2.5 text-left"
+                  className="card-shadow flex items-center gap-3 rounded-xl border border-border bg-panel px-4 py-2.5 text-left"
                 >
                   {live ? (
                     <motion.span
@@ -171,18 +166,18 @@ export default function TeamsPage() {
                     />
                   )}
                   <span className="shrink-0 text-sm font-medium">{r.teamName}</span>
-                  <span className="min-w-0 flex-1 truncate text-xs text-ink-dim">
+                  <span className="min-w-0 flex-1 truncate text-xs text-fg-muted">
                     {r.goal}
                   </span>
                   {needsYou(r.status) && (
-                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    <span className="shrink-0 rounded-full bg-warning-subtle px-2 py-0.5 text-[11px] font-medium text-warning-fg">
                       needs you
                     </span>
                   )}
                   {r.costUsd != null && (
-                    <span className="text-xs text-ink-dim">${r.costUsd.toFixed(3)}</span>
+                    <span className="text-xs text-fg-muted">${r.costUsd.toFixed(3)}</span>
                   )}
-                  <span className="text-xs text-ink-dim">
+                  <span className="text-xs text-fg-muted">
                     {new Date(r.createdAt).toLocaleTimeString()}
                   </span>
                 </motion.button>
@@ -270,111 +265,97 @@ function RunTeamModal({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4 sm:p-6"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 20, scale: 0.98 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-5 sm:p-6"
-      >
-        <div className="text-base font-semibold">Run {team.name}</div>
-        <div className="mt-0.5 text-xs text-ink-dim">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      width={512}
+      title={`Run ${team.name}`}
+      description={
+        <>
           The team's <span className="capitalize">{team.pattern}</span> pattern becomes a
           workflow, then runs step by step on your board.
-        </div>
-
-        {projects.length === 0 ? (
-          <div className="mt-4 rounded-lg border border-dashed border-line p-4 text-center text-sm text-ink-dim">
-            Load a project folder first.
-          </div>
-        ) : (
-          <>
-            <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="mt-4 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <textarea
-              autoFocus
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              rows={4}
-              placeholder="What should the team accomplish?"
-              className="mt-3 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-            {team.pattern === "org" && (
-              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2.5">
-                <input
-                  type="checkbox"
-                  checked={reviewPlan}
-                  onChange={(e) => setReviewPlan(e.target.checked)}
-                  className="mt-0.5 accent-[var(--color-accent)]"
-                />
-                <span className="text-xs">
-                  <span className="font-medium">Review the plan before work starts</span>
-                  <span className="mt-0.5 block text-ink-dim">
-                    The team pauses after planning so you can reword, reassign, or drop
-                    assignments. Cheaper than finding out an hour in.
-                  </span>
-                </span>
-              </label>
-            )}
-            {estimate && estimate.runs > 0 && estimate.medianUsd != null && (
-              <div className="mt-3 flex items-center gap-2 rounded-lg bg-panel-2 px-3 py-2 text-xs text-ink-dim">
-                <span>◷</span>
-                <span>
-                  Past runs cost about{" "}
-                  <span className="font-semibold text-ink">
-                    ${estimate.medianUsd.toFixed(2)}
-                  </span>
-                  {estimate.medianSecs != null &&
-                    ` and took ${Math.round(estimate.medianSecs / 60)} min`}{" "}
-                  (median of {estimate.runs})
-                  {estimate.worstUsd != null &&
-                    estimate.worstUsd > estimate.medianUsd * 1.5 &&
-                    `; the worst was $${estimate.worstUsd.toFixed(2)}`}
-                  .
-                </span>
-              </div>
-            )}
-          </>
-        )}
-
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-            {error}
-          </div>
-        )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
+        </>
+      }
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={start}
-            disabled={busy || !goal.trim() || !projectId}
-            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+          </Button>
+          <Button variant="primary" onClick={start} disabled={busy || !goal.trim() || !projectId}>
             {busy ? "Starting…" : "Start run"}
-          </motion.button>
+          </Button>
+        </>
+      }
+    >
+      {projects.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-fg-muted">
+          Load a project folder first.
         </div>
-      </motion.div>
-    </motion.div>
+      ) : (
+        <>
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <textarea
+            autoFocus
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            rows={4}
+            placeholder="What should the team accomplish?"
+            className="mt-3 w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          {team.pattern === "org" && (
+            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5">
+              <input
+                type="checkbox"
+                checked={reviewPlan}
+                onChange={(e) => setReviewPlan(e.target.checked)}
+                className="mt-0.5 accent-[var(--color-accent)]"
+              />
+              <span className="text-xs">
+                <span className="font-medium">Review the plan before work starts</span>
+                <span className="mt-0.5 block text-fg-muted">
+                  The team pauses after planning so you can reword, reassign, or drop
+                  assignments. Cheaper than finding out an hour in.
+                </span>
+              </span>
+            </label>
+          )}
+          {estimate && estimate.runs > 0 && estimate.medianUsd != null && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-panel-2 px-3 py-2 text-xs text-fg-muted">
+              <span>◷</span>
+              <span>
+                Past runs cost about{" "}
+                <span className="font-semibold text-fg">
+                  ${estimate.medianUsd.toFixed(2)}
+                </span>
+                {estimate.medianSecs != null &&
+                  ` and took ${Math.round(estimate.medianSecs / 60)} min`}{" "}
+                (median of {estimate.runs})
+                {estimate.worstUsd != null &&
+                  estimate.worstUsd > estimate.medianUsd * 1.5 &&
+                  `; the worst was $${estimate.worstUsd.toFixed(2)}`}
+                .
+              </span>
+            </div>
+          )}
+        </>
+      )}
+
+      {error && (
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
+          {error}
+        </div>
+      )}
+    </Dialog>
   );
 }
 
@@ -432,6 +413,19 @@ function TeamEditor({
     }
   };
 
+  // Against what it opened with: member order is part of a team, so a
+  // reorder counts as an edit.
+  const dirty = formChanged(
+    {
+      name: team?.name,
+      pattern: team?.pattern ?? "pipeline",
+      members: team?.definition.members ?? [],
+      manager: team?.definition.manager,
+      engine: team?.engine,
+    },
+    { name, pattern, members, manager, engine },
+  );
+
   const move = (index: number, dir: -1 | 1) =>
     setMembers((prev) => {
       const next = [...prev];
@@ -442,172 +436,173 @@ function TeamEditor({
     });
 
   return (
-    <motion.aside
-      initial={{ x: 480 }}
-      animate={{ x: 0 }}
-      exit={{ x: 480 }}
-      transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-line bg-panel"
+    <Sheet
+      open
+      onOpenChange={(o) => !o && onClose()}
+      dismissible={!dirty}
+      width={480}
+      title={team ? `Edit ${team.name}` : "New team"}
+      actions={team && <HistoryButton kind="team" id={team.id} onRestored={onClose} />}
     >
-      <div className="flex items-center justify-between border-b border-line p-5">
-        <div className="text-base font-semibold">{team ? `Edit ${team.name}` : "New team"}</div>
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">✕</button>
-      </div>
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Team name"
+            className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          />
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Team name"
-          className="w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-accent"
-        />
-
-        {!!engines && engines.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-ink-dim">
-              Run on
-            </span>
-            <EnginePicker
-              value={engine}
-              onChange={setEngine}
-              inheritLabel="Whatever the card says"
-            />
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-2">
-          {PATTERNS.map((p) => (
-            <button
-              key={p.key}
-              onClick={() => setPattern(p.key)}
-              className={`rounded-xl border p-3 text-left ${
-                pattern === p.key ? "border-accent" : "border-line"
-              }`}
-            >
-              <div className={`text-sm font-semibold ${pattern === p.key ? "text-accent" : ""}`}>
-                {p.label}
-              </div>
-              <div className="mt-1 text-[11px] leading-snug text-ink-dim">{p.blurb}</div>
-            </button>
-          ))}
-        </div>
-
-        {pattern === "org" && (
-          <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
-              Manager
+          {!!engines && engines.length > 1 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                Run on
+              </span>
+              <EnginePicker
+                value={engine}
+                onChange={setEngine}
+                inheritLabel="Whatever the card says"
+              />
             </div>
-            <select
-              value={manager}
-              onChange={(e) => {
-                setManager(e.target.value);
-                setMembers((prev) => prev.filter((m) => m.agent_id !== e.target.value));
-              }}
-              className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm"
-            >
-              <option value="">Pick who runs this team…</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-            <div className="mt-1 text-[11px] text-ink-dim">
-              Analyzes the goal, splits it into assignments, and answers questions while
-              the team works. Pick someone strong — this one thinks, it doesn't code.
-            </div>
-          </div>
-        )}
+          )}
+          <ToolsNote engine={engine} what="a team" />
 
-        <div>
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
-            {pattern === "org" ? "Specialists" : "Members"}
-            {pattern === "pipeline" && " (in order)"}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {members.map((m, i) => {
-              const a = agents.find((x) => x.id === m.agent_id);
-              return (
-                <div key={m.agent_id} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1.5">
-                  <span
-                    className="flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                    style={{ background: a?.color ?? "#9ca3af" }}
-                  >
-                    {(a?.name ?? "?").slice(0, 1).toUpperCase()}
-                  </span>
-                  <span className="min-w-0 shrink-0 truncate text-sm">{a?.name ?? "Unknown"}</span>
-                  {pattern === "org" && (
-                    <input
-                      value={m.role ?? ""}
-                      onChange={(e) =>
-                        setMembers((prev) =>
-                          prev.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)),
-                        )
-                      }
-                      placeholder="their role on this team"
-                      className="min-w-0 flex-1 rounded border border-line px-1.5 py-0.5 text-xs outline-none focus:border-accent"
-                    />
-                  )}
-                  {pattern !== "org" && <span className="flex-1" />}
-                  <button onClick={() => move(i, -1)} className="px-1 text-ink-dim hover:text-ink">↑</button>
-                  <button onClick={() => move(i, 1)} className="px-1 text-ink-dim hover:text-ink">↓</button>
-                  <button
-                    onClick={() => setMembers((prev) => prev.filter((x) => x.agent_id !== m.agent_id))}
-                    className="px-1 text-ink-dim hover:text-danger"
-                  >
-                    ✕
-                  </button>
+          <div className="grid grid-cols-2 gap-2">
+            {PATTERNS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setPattern(p.key)}
+                className={`rounded-xl border p-3 text-left ${
+                  pattern === p.key ? "border-accent" : "border-border"
+                }`}
+              >
+                <div className={`text-sm font-semibold ${pattern === p.key ? "text-accent-fg" : ""}`}>
+                  {p.label}
                 </div>
-              );
-            })}
+                <div className="mt-1 text-[11px] leading-snug text-fg-muted">{p.blurb}</div>
+              </button>
+            ))}
           </div>
-          {available.length > 0 && (
-            <select
-              value=""
-              onChange={(e) =>
-                e.target.value &&
-                setMembers((prev) => [...prev, { agent_id: e.target.value }])
-              }
-              className="mt-2 w-full rounded-lg border border-dashed border-line px-3 py-2 text-sm text-ink-dim"
-            >
-              <option value="">+ Add agent…</option>
-              {available.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          )}
-          {agents.length === 0 && (
-            <div className="mt-2 text-xs text-ink-dim">
-              Create some agents first — try “Generate with AI” on the Agents page.
+
+          {pattern === "org" && (
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                Manager
+              </div>
+              <select
+                value={manager}
+                onChange={(e) => {
+                  setManager(e.target.value);
+                  setMembers((prev) => prev.filter((m) => m.agent_id !== e.target.value));
+                }}
+                className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm"
+              >
+                <option value="">Pick who runs this team…</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <div className="mt-1 text-[11px] text-fg-muted">
+                Analyzes the goal, splits it into assignments, and answers questions while
+                the team works. Pick someone strong — this one thinks, it doesn't code.
+              </div>
             </div>
           )}
-        </div>
-        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>}
-      </div>
 
-      <div className="flex items-center justify-between border-t border-line p-4">
-        {team ? (
-          <button
-            onClick={async () => {
-              await api.deleteTeam(team.id);
-              onChanged();
-            }}
-            className="text-sm text-danger hover:underline"
-          >
-            Delete
-          </button>
-        ) : (
-          <span />
-        )}
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={save}
-          disabled={busy || !name.trim()}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          {busy ? "Saving…" : "Save team"}
-        </motion.button>
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+              {pattern === "org" ? "Specialists" : "Members"}
+              {pattern === "pipeline" && " (in order)"}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {members.map((m, i) => {
+                const a = agents.find((x) => x.id === m.agent_id);
+                return (
+                  <div key={m.agent_id} className="flex items-center gap-2 rounded-lg border border-border px-2 py-1.5">
+                    <span
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold text-on-accent"
+                      style={{ background: a?.color ?? "var(--color-fg-subtle)" }}
+                    >
+                      {(a?.name ?? "?").slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 shrink-0 truncate text-sm">{a?.name ?? "Unknown"}</span>
+                    {pattern === "org" && (
+                      <input
+                        value={m.role ?? ""}
+                        onChange={(e) =>
+                          setMembers((prev) =>
+                            prev.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)),
+                          )
+                        }
+                        placeholder="their role on this team"
+                        className="min-w-0 flex-1 rounded border border-border bg-panel px-1.5 py-0.5 text-xs outline-none focus:border-accent"
+                      />
+                    )}
+                    {pattern !== "org" && <span className="flex-1" />}
+                    <IconButton size="xs" label="Move up" onClick={() => move(i, -1)}>
+                      <ArrowUp className="size-3.5" />
+                    </IconButton>
+                    <IconButton size="xs" label="Move down" onClick={() => move(i, 1)}>
+                      <ArrowDown className="size-3.5" />
+                    </IconButton>
+                    <IconButton
+                      size="xs"
+                      label="Remove"
+                      onClick={() => setMembers((prev) => prev.filter((x) => x.agent_id !== m.agent_id))}
+                      className="hover:text-danger-fg!"
+                    >
+                      <X className="size-3.5" />
+                    </IconButton>
+                  </div>
+                );
+              })}
+            </div>
+            {available.length > 0 && (
+              <select
+                value=""
+                onChange={(e) =>
+                  e.target.value &&
+                  setMembers((prev) => [...prev, { agent_id: e.target.value }])
+                }
+                className="mt-2 w-full rounded-lg border border-dashed border-border bg-panel px-3 py-2 text-sm text-fg-muted"
+              >
+                <option value="">+ Add agent…</option>
+                {available.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            )}
+            {agents.length === 0 && (
+              <div className="mt-2 text-xs text-fg-muted">
+                Create some agents first — try “Generate with AI” on the Agents page.
+              </div>
+            )}
+          </div>
+          {error && <div className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border p-4">
+          {team ? (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={async () => {
+                await api.deleteTeam(team.id);
+                onChanged();
+              }}
+            >
+              Delete
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button variant="primary" onClick={save} disabled={busy || !name.trim()}>
+            {busy ? "Saving…" : "Save team"}
+          </Button>
+        </div>
       </div>
-    </motion.aside>
+    </Sheet>
   );
 }

@@ -43,7 +43,7 @@ export function StoragePanel({ projectId }: { projectId: string }) {
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-4">
         <h2 className="text-base font-semibold">Storage</h2>
-        <p className="mt-0.5 max-w-xl text-xs text-ink-dim">
+        <p className="mt-0.5 max-w-xl text-xs text-fg-muted">
           What this project is holding on disk. Everything here is safe to give
           back — anything that is not, stays, and says why.
         </p>
@@ -124,8 +124,8 @@ export function StoragePanel({ projectId }: { projectId: string }) {
       {/* A footer, not a section with a dead button. Saying "11 MB, and you
           cannot have it back" as a row with a greyed-out control reads as
           broken; saying why it is kept reads as a decision. */}
-      <div className="mt-6 border-t border-line pt-4 text-[11px] leading-relaxed text-ink-dim">
-        <span className="font-medium text-ink">Kept on purpose.</span> This
+      <div className="mt-6 border-t border-border pt-4 text-[11px] leading-relaxed text-fg-muted">
+        <span className="font-medium text-fg">Kept on purpose.</span> This
         project's run history — {held.history.events.toLocaleString()} events,
         about {size(held.history.bytes)} — is what a reconnecting page replays
         from, so nothing trims it. Deleting a card takes its own history with it.
@@ -137,7 +137,7 @@ export function StoragePanel({ projectId }: { projectId: string }) {
       </div>
 
       {note && (
-        <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] text-ink-dim">{note}</div>
+        <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] text-fg-muted">{note}</div>
       )}
     </div>
   );
@@ -161,18 +161,18 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="card-shadow mb-4 max-w-2xl rounded-xl border border-line bg-panel p-4">
+    <div className="card-shadow mb-4 max-w-2xl rounded-xl border border-border bg-panel p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-medium">{title}</div>
-          <p className="mt-0.5 text-[11px] text-ink-dim">{subtitle}</p>
+          <p className="mt-0.5 text-[11px] text-fg-muted">{subtitle}</p>
         </div>
         {/* `ml-auto` as well as `justify-between`: a long subtitle wraps this
             block onto its own flex line, where `justify-between` has nothing to
             push it against and the figure drifts to the middle of the card. */}
         <div className="ml-auto shrink-0 text-right">
           <div className="text-sm font-semibold">{size(bytes)}</div>
-          <div className="text-[11px] text-ink-dim">
+          <div className="text-[11px] text-fg-muted">
             {count} item{count === 1 ? "" : "s"}
             {note && ` · ${note}`}
           </div>
@@ -183,7 +183,7 @@ function Section({
         <button
           onClick={action.run}
           disabled={action.busy}
-          className="mt-3 text-[11px] text-accent underline disabled:opacity-50"
+          className="mt-3 text-[11px] text-accent-fg underline disabled:opacity-50"
         >
           {action.busy ? "reclaiming…" : action.label}
         </button>
@@ -206,9 +206,9 @@ function Row({
       <span className="min-w-0 flex-1 truncate">{name}</span>
       {/* The reason comes before the size: a person scanning this wants to know
           why something is staying, not how big it is. */}
-      {why && <span className="shrink-0 text-ink-dim/80">{why}</span>}
+      {why && <span className="shrink-0 text-fg-muted/80">{why}</span>}
       {bytes != null && (
-        <span className="w-16 shrink-0 text-right tabular-nums text-ink-dim">{size(bytes)}</span>
+        <span className="w-16 shrink-0 text-right tabular-nums text-fg-muted">{size(bytes)}</span>
       )}
     </div>
   );

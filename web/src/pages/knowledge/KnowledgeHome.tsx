@@ -49,15 +49,15 @@ export default function KnowledgeHome() {
                       <span className="min-w-0">{a.title}</span>
                     </span>
                     {a.status === "draft" && (
-                      <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                      <span className="shrink-0 rounded-md bg-warning-subtle px-1.5 py-0.5 text-[10px] font-medium text-warning-fg">
                         draft
                       </span>
                     )}
                   </div>
-                  <div className="mt-2 line-clamp-3 text-xs leading-relaxed text-ink-dim">
+                  <div className="mt-2 line-clamp-3 text-xs leading-relaxed text-fg-muted">
                     {a.summary || "Empty"}
                   </div>
-                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-ink-dim/80">
+                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-fg-muted">
                     <Icon name="clock" size={12} />
                     {new Date(a.updatedAt).toLocaleDateString()}
                     {/* Worth saying on the card rather than only inside: a page

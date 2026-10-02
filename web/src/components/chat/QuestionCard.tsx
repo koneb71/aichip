@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { OpenQuestion } from "../../lib/api";
+import { Button } from "../ui/Button";
 
 /**
  * The assistant asking, instead of guessing.
@@ -63,7 +64,7 @@ export function QuestionCard({
       transition={{ duration: 0.15, ease: "easeOut" }}
       className="self-start w-full max-w-[85%] rounded-2xl border border-accent/40 bg-panel px-3 py-2.5"
     >
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-accent">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-accent-fg">
         ? Before going further
       </div>
 
@@ -72,7 +73,7 @@ export function QuestionCard({
           <div key={qi}>
             <div className="flex items-baseline gap-1.5">
               {q.header && (
-                <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-ink-dim">
+                <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-fg-muted">
                   {q.header}
                 </span>
               )}
@@ -89,13 +90,13 @@ export function QuestionCard({
                     title={o.description}
                     className={`ring-focus rounded-lg border px-2.5 py-1 text-left text-xs transition-colors disabled:opacity-50 ${
                       on
-                        ? "border-accent bg-accent/10 font-medium text-accent"
-                        : "border-line hover:border-accent/50 hover:bg-panel-2"
+                        ? "border-accent bg-accent-subtle font-medium text-accent-fg"
+                        : "border-border hover:border-accent/50 hover:bg-panel-2"
                     }`}
                   >
                     <span className="block">{o.label}</span>
                     {o.description && (
-                      <span className="block max-w-56 truncate text-[10px] font-normal text-ink-dim">
+                      <span className="block max-w-56 truncate text-[10px] font-normal text-fg-muted">
                         {o.description}
                       </span>
                     )}
@@ -109,17 +110,18 @@ export function QuestionCard({
 
       <div className="mt-2.5 flex items-center gap-2 border-t border-accent/20 pt-2">
         {!oneShot && (
-          <button
+          <Button
+            variant="primary"
+            size="xs"
             onClick={() => onAnswer(picked)}
             disabled={busy || answered === 0}
-            className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white disabled:opacity-40"
           >
             {all > 1 ? `Send ${answered} of ${all}` : "Send"}
-          </button>
+          </Button>
         )}
         {/* The escape hatch, said out loud. Without it the card reads as the
             only way to reply, and somebody picks the least wrong option. */}
-        <span className="text-[10px] text-ink-dim">
+        <span className="text-[10px] text-fg-muted">
           {oneShot
             ? "Pick one — or answer in your own words below, that works too"
             : "or answer in your own words below — that works too"}

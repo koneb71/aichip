@@ -108,7 +108,16 @@ impl UsageTally {
     /// Separate from [`Self::reconcile`] so the streaming loop can adopt the
     /// final numbers as they arrive and still write the step's tokens exactly
     /// once, after the loop — one UPDATE per step rather than one per message.
+    ///
+    /// All zeros is not a figure. Amp and Cursor finish with a result that
+    /// carries no usage at all, which a parser can only render as zeros — and
+    /// adopting that would erase every token the run was seen to spend, so a
+    /// token cap would never move. No finished run spent nothing, so zeros
+    /// leave the estimate standing, still marked provisional.
     pub fn adopt(&mut self, authoritative: &Usage) {
+        if *authoritative == Usage::default() {
+            return;
+        }
         self.live = authoritative.clone();
         self.reconciled = true;
     }
@@ -244,5 +253,24 @@ mod tests {
         t.observe(&usage(100, 10, 0, 0));
         assert!(!t.take_delta().is_zero());
         assert!(t.take_delta().is_zero(), "a second flush must be a no-op");
+    }
+
+    #[test]
+    fn a_result_that_reports_no_usage_keeps_what_was_seen() {
+        let mut t = UsageTally::default();
+        t.observe(&Usage {
+            input_tokens: 10,
+            output_tokens: 111,
+            ..Default::default()
+        });
+        t.observe(&Usage {
+            input_tokens: 12,
+            output_tokens: 4,
+            ..Default::default()
+        });
+        t.adopt(&Usage::default());
+        assert_eq!(t.output_tokens(), 115);
+        assert!(t.is_provisional(), "an estimate, said to be one");
+        assert_eq!(t.take_delta().output, 115);
     }
 }

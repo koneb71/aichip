@@ -71,11 +71,11 @@ export function statusLabel(status: string): string {
 export function statusTone(status: string): { text: string; bg: string; dot: string } {
   switch (status) {
     case "blocked":
-      return { text: "text-danger", bg: "bg-red-50", dot: "bg-red-500" };
+      return { text: "text-danger-fg", bg: "bg-danger-subtle", dot: "bg-danger" };
     case "warning":
-      return { text: "text-amber-900", bg: "bg-amber-50", dot: "bg-amber-500" };
+      return { text: "text-warning-fg", bg: "bg-warning-subtle", dot: "bg-warning" };
     default:
-      return { text: "text-ink-dim", bg: "bg-panel", dot: "bg-emerald-500" };
+      return { text: "text-fg-muted", bg: "bg-panel", dot: "bg-success" };
   }
 }
 

@@ -20,6 +20,7 @@ import { useMentionPicker } from "../MentionPicker";
 import { ArticlePicker } from "../kb/ArticlePicker";
 import { QuestionCard } from "./QuestionCard";
 import { Markdown } from "../Markdown";
+import { Button } from "../ui/Button";
 
 /**
  * One conversation: the scroller, the live run, and the composer.
@@ -375,7 +376,7 @@ export function ChatThread({
           "",
           <>
           {messages.length === 0 && !activeRunId && (
-            <div className="mt-8 px-4 text-center text-sm text-ink-dim">
+            <div className="mt-8 px-4 text-center text-sm text-fg-muted">
               Describe what you want done — e.g. “fix the flaky login test and
               open it for review”. The assistant creates tasks on the board and
               keeps you posted here. Type <span className="font-medium">@</span> to
@@ -421,19 +422,19 @@ export function ChatThread({
       </div>
 
       {error && (
-        <div className="mx-4 mb-1 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+        <div className="mx-4 mb-1 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">
           {error}
         </div>
       )}
 
-      <div className="relative border-t border-line p-3" {...(general ? {} : att.dropProps)}>
+      <div className="relative border-t border-border p-3" {...(general ? {} : att.dropProps)}>
         {wrap(
           "relative",
           <>
           {!general && mention.node}
           <div
             className={`flex flex-col gap-1.5 rounded-xl border bg-panel px-3 py-2 focus-within:border-accent ${
-              att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
+              att.dragging ? "border-accent ring-2 ring-accent/30" : "border-border"
             }`}
           >
             {/* Above the textarea, not beside it: what the assistant will be
@@ -503,28 +504,28 @@ export function ChatThread({
                   A separate Stop elsewhere on the page would be a second
                   thing to find at the moment you least want to look. */}
               {activeRunId ? (
-                <motion.button
-                  whileTap={{ scale: 0.92 }}
+                <Button
+                  variant="primary"
                   onClick={stop}
                   disabled={stopping}
                   title="Stop — keeps what it has said so far"
                   aria-label="Stop the assistant"
-                  className="rounded-lg bg-ink px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                  className="bg-fg! px-2.5! text-bg! hover:bg-fg/85! disabled:opacity-40!"
                 >
                   ■
-                </motion.button>
+                </Button>
               ) : (
-                <motion.button
-                  whileTap={{ scale: 0.92 }}
+                <Button
+                  variant="primary"
                   onClick={send}
                   disabled={
                     att.busy ||
                     (!draft.trim() && att.ids.length === 0 && articleIds.length === 0)
                   }
-                  className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                  className="px-2.5! disabled:opacity-40!"
                 >
                   ↑
-                </motion.button>
+                </Button>
               )}
             </div>
             {/* Which CLI, which model, and how hard it thinks. All three stick to
@@ -541,6 +542,7 @@ export function ChatThread({
                 effort={effort}
                 onEffort={setEffort}
                 disabled={!!activeRunId}
+                usesTools={!general}
               />
               {/* On the row, not inside the settings popover. A collapsed
                   control is fine for "which model"; plan mode changes whether
@@ -557,8 +559,8 @@ export function ChatThread({
                   }
                   className={`ring-focus rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
                     planMode
-                      ? "bg-accent/10 font-medium text-accent"
-                      : "text-ink-dim hover:bg-line/40 hover:text-ink"
+                      ? "bg-accent-subtle font-medium text-accent-fg"
+                      : "text-fg-muted hover:bg-panel-2 hover:text-fg"
                   }`}
                 >
                   ◷ Plan{planMode ? " mode" : ""}
@@ -605,7 +607,7 @@ function Message({
                 key={a.id}
                 to={`/knowledge/${a.id}`}
                 title="Knowledge-base page given to the assistant for this message"
-                className="ring-focus max-w-56 truncate rounded-lg border border-accent/40 bg-accent/5 px-2 py-0.5 text-[11px] text-ink-dim hover:text-ink"
+                className="ring-focus max-w-56 truncate rounded-lg border border-accent/40 bg-accent/5 px-2 py-0.5 text-[11px] text-fg-muted hover:text-fg"
               >
                 ▦ {a.title}
               </Link>
@@ -613,7 +615,7 @@ function Message({
           </div>
         )}
         {message.content && (
-          <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
+          <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-on-accent">
             <WithMentions text={message.content} agentNames={agentNames} />
           </div>
         )}
@@ -636,7 +638,7 @@ function Message({
       }`}
     >
       {message.isPlan && (
-        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-accent-fg">
           ◷ Plan — nothing has happened yet
         </div>
       )}
@@ -645,7 +647,7 @@ function Message({
           assistant's session still holds the rest, so saying so is what makes
           "carry on" an obvious next message rather than a guess. */}
       {message.stopped && (
-        <div className="mt-1.5 border-t border-line pt-1 text-[10px] text-ink-dim">
+        <div className="mt-1.5 border-t border-border pt-1 text-[10px] text-fg-muted">
           ■ You stopped this — the assistant had more to say.
         </div>
       )}
@@ -678,14 +680,14 @@ function PlanActions({
 
   if (message.planOutcome === "approved") {
     return (
-      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-fg-muted">
         ✓ Approved — carried out below.
       </div>
     );
   }
   if (message.planOutcome === "superseded") {
     return (
-      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-fg-muted">
         Replaced by a later plan.
       </div>
     );
@@ -700,21 +702,15 @@ function PlanActions({
           value={editing}
           onChange={(e) => setEditing(e.target.value)}
           rows={Math.min(16, Math.max(4, editing.split("\n").length))}
-          className="ring-focus w-full resize-y rounded-lg border border-line bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
+          className="ring-focus w-full resize-y rounded-lg border border-border bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
         />
         <div className="mt-1.5 flex gap-1.5">
-          <button
-            onClick={() => onApprove(message.id, editing)}
-            className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
-          >
+          <Button variant="primary" size="xs" onClick={() => onApprove(message.id, editing)}>
             Approve this version
-          </button>
-          <button
-            onClick={() => setEditing(null)}
-            className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
-          >
+          </Button>
+          <Button variant="secondary" size="xs" onClick={() => setEditing(null)}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -722,19 +718,13 @@ function PlanActions({
 
   return (
     <div className="mt-2 flex items-center gap-1.5 border-t border-accent/20 pt-1.5">
-      <button
-        onClick={() => onApprove(message.id)}
-        className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
-      >
+      <Button variant="primary" size="xs" onClick={() => onApprove(message.id)}>
         Approve &amp; run
-      </button>
-      <button
-        onClick={() => setEditing(message.content)}
-        className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
-      >
+      </Button>
+      <Button variant="secondary" size="xs" onClick={() => setEditing(message.content)}>
         Edit first
-      </button>
-      <span className="text-[10px] text-ink-dim">or just say what to change</span>
+      </Button>
+      <span className="text-[10px] text-fg-muted">or just say what to change</span>
     </div>
   );
 }
@@ -758,7 +748,7 @@ function WithMentions({ text, agentNames }: { text: string; agentNames: string[]
     parts.push(
       <span
         key={i}
-        className="rounded bg-white/25 px-1 font-medium"
+        className="rounded bg-[color-mix(in_oklab,var(--color-on-accent)_25%,transparent)] px-1 font-medium"
         title={`Assigned to ${span.name}`}
       >
         {text.slice(span.start, span.end)}
@@ -796,7 +786,7 @@ function ToolChip({ name, input }: { name: string; input: unknown }) {
     <motion.div
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-ink-dim"
+      className="self-start rounded-full border border-border bg-panel px-3 py-1 text-xs text-fg-muted"
     >
       ⚙ {label}
     </motion.div>
@@ -809,7 +799,7 @@ function Thinking() {
       {[0, 1, 2].map((i) => (
         <motion.span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-ink-dim"
+          className="h-1.5 w-1.5 rounded-full bg-fg-muted"
           animate={{ opacity: [0.3, 1, 0.3] }}
           transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.2 }}
         />

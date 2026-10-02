@@ -112,6 +112,9 @@ struct ParkGuard {
     slots: Arc<Slots>,
     run_id: Uuid,
     request_id: String,
+    /// How the question ended, set just before the guard drops. Still `gone`
+    /// if the wait was dropped mid-await — a cancel closing the connection.
+    outcome: &'static str,
 }
 
 impl Drop for ParkGuard {
@@ -133,6 +136,14 @@ impl Drop for ParkGuard {
             let gate = self.gate.clone();
             let run_id = self.run_id;
             tokio::spawn(async move { gate.unpark(run_id).await });
+        }
+        // However it ended, the record says so — here, because this is the
+        // one place every ending passes through.
+        let gate = self.gate.clone();
+        let request_id = std::mem::take(&mut self.request_id);
+        let outcome = self.outcome;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { gate.close(&request_id, outcome).await });
         }
     }
 }
@@ -189,12 +200,13 @@ impl PermissionBroker {
         // Constructed before the first `.await` below, so every path out of
         // this function — including the one where the future is dropped —
         // unwinds through it.
-        let guard = ParkGuard {
+        let mut guard = ParkGuard {
             inner: self.inner.clone(),
             gate: self.gate.clone(),
             slots: self.slots.clone(),
             run_id,
             request_id: request_id.clone(),
+            outcome: "gone",
         };
 
         if first {
@@ -209,6 +221,9 @@ impl PermissionBroker {
             }
             self.slots.lend();
         }
+        self.gate
+            .record(&request_id, run_id, &tool_name, &input)
+            .await;
 
         self.bus.publish(EventEnvelope {
             run_id,
@@ -252,6 +267,12 @@ impl PermissionBroker {
                 .await;
         }
 
+        guard.outcome = match &decision {
+            Decision::Allowed => "allowed",
+            Decision::Denied => "denied",
+            Decision::Unanswered { .. } => "unanswered",
+            Decision::RunGone => "gone",
+        };
         drop(guard);
         self.bus.publish(EventEnvelope {
             run_id,

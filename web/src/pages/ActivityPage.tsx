@@ -17,6 +17,8 @@ import { UsagePanel } from "../components/usage/UsagePanel";
 import { useRunStream } from "../lib/ws";
 import { Page, PageHead, Stagger } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
+import { Button, IconButton } from "../components/ui/Button";
+import { X } from "lucide-react";
 import { tappable } from "../lib/motion";
 
 /**
@@ -75,8 +77,8 @@ export default function ActivityPage() {
               disabled={busy || !data}
               className={`ring-focus flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
                 data?.paused
-                  ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                  : "border-line bg-panel hover:border-ink-dim/40 hover:bg-panel-2"
+                  ? "border-warning/40 bg-warning-subtle text-warning-fg hover:bg-[color-mix(in_oklab,var(--color-warning)_18%,transparent)]"
+                  : "border-border bg-panel hover:border-fg-muted/40 hover:bg-panel-2"
               }`}
             >
               {data?.paused ? (
@@ -106,7 +108,7 @@ export default function ActivityPage() {
             exit={{ opacity: 0, height: 0 }}
             className="mt-4 overflow-hidden"
           >
-            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="rounded-xl border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-warning-fg">
               {data.gate.state === "paused" ? (
                 <>
                   <span className="font-semibold">Queue paused.</span> Nothing new
@@ -141,14 +143,14 @@ export default function ActivityPage() {
           value={String(blocked.length)}
           icon="bell"
           tint={blocked.length ? "amber" : "slate"}
-          accent="#d97706"
+          accent="var(--color-warning)"
         />
         <Stat
           label="Queued"
           value={String(queued.length)}
           icon="clock"
           tint="slate"
-          accent="var(--color-ink-dim)"
+          accent="var(--color-fg-muted)"
         />
         <Stat
           label={
@@ -159,7 +161,7 @@ export default function ActivityPage() {
           tint={data?.gate.state === "over_budget" ? "amber" : "mint"}
           accent={
             data?.gate.state === "over_budget"
-              ? "#d97706"
+              ? "var(--color-warning)"
               : "var(--color-tier-easy)"
           }
         />
@@ -173,7 +175,7 @@ export default function ActivityPage() {
                 width: `${Math.min(100, ((data.spend.today ?? 0) / data.budgetUsd) * 100)}%`,
               }}
               className={`h-full rounded-full transition-[width] duration-500 ${
-                data.gate.state === "over_budget" ? "bg-amber-500" : "bg-tier-easy"
+                data.gate.state === "over_budget" ? "bg-warning" : "bg-tier-easy"
               }`}
             />
           </div>
@@ -210,7 +212,7 @@ export default function ActivityPage() {
 
       <Section title={`Live runs${live.length ? ` (${live.length})` : ""}`}>
         {live.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-ink-dim">
+          <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-fg-muted">
             Nothing is running.
           </div>
         ) : (
@@ -234,13 +236,13 @@ export default function ActivityPage() {
       </Section>
 
       <Section title="Spend, last 14 days">
-        <div className="card-shadow rounded-xl border border-line bg-panel p-5">
+        <div className="card-shadow rounded-xl border border-border bg-panel p-5">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl font-bold">
                 ${(data?.spend.window ?? 0).toFixed(2)}
               </span>
-              <span className="text-xs text-ink-dim">
+              <span className="text-xs text-fg-muted">
                 across {(data?.spend.daily ?? []).reduce((n, d) => n + d.runs, 0)} runs
               </span>
             </div>
@@ -253,11 +255,11 @@ export default function ActivityPage() {
         <BudgetsPanel onChanged={load} />
 
         {(data?.spend.byAgent.length ?? 0) > 0 && (
-          <div className="card-shadow mt-4 rounded-xl border border-line bg-panel p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
+          <div className="card-shadow mt-4 rounded-xl border border-border bg-panel p-5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-fg-muted">
               By agent
             </div>
-            <p className="mt-1 text-[11px] text-ink-dim/80">
+            <p className="mt-1 text-[11px] text-fg-muted/80">
               A run an agent did alone is theirs; a team run is charged step by step.
             </p>
             <div className="mt-3 flex flex-col gap-2">
@@ -272,7 +274,7 @@ export default function ActivityPage() {
                         className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
                       />
                     </div>
-                    <div className="w-16 shrink-0 text-right text-xs tabular-nums text-ink-dim">
+                    <div className="w-16 shrink-0 text-right text-xs tabular-nums text-fg-muted">
                       ${a.cost.toFixed(2)}
                     </div>
                   </div>
@@ -311,7 +313,7 @@ function NotifyToggle() {
           : "Get a browser notification when a run needs you"
       }
       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors disabled:opacity-50 ${
-        on ? "border-accent bg-accent/5 text-accent" : "border-line bg-panel hover:bg-panel-2"
+        on ? "border-accent bg-accent-subtle text-accent-fg" : "border-border bg-panel hover:bg-panel-2"
       }`}
     >
       {on ? "🔔 Notifications on" : "🔕 Notify me"}
@@ -351,20 +353,21 @@ function StopRun({
 
   if (!confirming) {
     return (
-      <button
+      <IconButton
         onClick={() => setConfirming(true)}
-        title={`Stop ${what}`}
-        aria-label={`Stop ${what}`}
-        className="shrink-0 rounded-lg px-2 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-danger"
+        label={`Stop ${what}`}
+        size="sm"
       >
-        ✕
-      </button>
+        <X className="size-3.5" aria-hidden />
+      </IconButton>
     );
   }
 
   return (
     <span className="flex shrink-0 items-center gap-1">
-      <button
+      <Button
+        variant="danger"
+        size="xs"
         disabled={busy}
         onClick={async () => {
           setBusy(true);
@@ -377,16 +380,12 @@ function StopRun({
             setError(String(e).replace(/^Error:\s*/, ""));
           }
         }}
-        className="rounded-lg bg-danger px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
       >
         {busy ? "Stopping…" : "Stop it"}
-      </button>
-      <button
-        onClick={() => setConfirming(false)}
-        className="rounded-lg px-2 py-1 text-xs text-ink-dim hover:text-ink"
-      >
+      </Button>
+      <Button variant="ghost" size="xs" onClick={() => setConfirming(false)}>
         Keep going
-      </button>
+      </Button>
     </span>
   );
 }
@@ -423,7 +422,7 @@ function RunRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{run.label}</div>
-        <div className="truncate text-xs text-ink-dim">
+        <div className="truncate text-xs text-fg-muted">
           {[
             run.projectName,
             run.teamName,
@@ -438,14 +437,14 @@ function RunRow({
         {/* The operations view is exactly where "running" is too vague. */}
         {isWorking(run.status) && <LiveAction runId={run.id} />}
         {run.holdReason && (
-          <div className="mt-0.5 text-[11px] text-amber-700" title={run.holdReason}>
+          <div className="mt-0.5 text-[11px] text-warning-fg" title={run.holdReason}>
             Held — {run.holdReason}
           </div>
         )}
       </div>
       <Elapsed since={run.startedAt ?? run.createdAt} />
       {run.costUsd != null && (
-        <span className="w-14 shrink-0 text-right text-xs tabular-nums text-ink-dim">
+        <span className="w-14 shrink-0 text-right text-xs tabular-nums text-fg-muted">
           ${run.costUsd.toFixed(2)}
         </span>
       )}
@@ -463,7 +462,7 @@ function RunRow({
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
-      className="card-shadow flex items-center gap-2 rounded-xl border border-line bg-panel py-3 pl-4 pr-2"
+      className="card-shadow flex items-center gap-2 rounded-xl border border-border bg-panel py-3 pl-4 pr-2"
     >
       {run.isOrg ? (
         <button onClick={onOpenOrg} className={open}>
@@ -498,14 +497,14 @@ function Elapsed({ since }: { since: string }) {
         ? `${Math.floor(secs / 60)}m ${secs % 60}s`
         : `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
   return (
-    <span className="w-16 shrink-0 text-right text-xs tabular-nums text-ink-dim">{text}</span>
+    <span className="w-16 shrink-0 text-right text-xs tabular-nums text-fg-muted">{text}</span>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <>
-      <h2 className="mt-10 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+      <h2 className="mt-10 text-sm font-semibold uppercase tracking-wider text-fg-muted">
         {title}
       </h2>
       <div className="mt-3 max-w-3xl">{children}</div>
@@ -539,7 +538,7 @@ function PlanBlocker({
       <span className="text-lg">◧</span>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold">{blocker.label}</div>
-        <div className="truncate text-xs text-ink-dim">
+        <div className="truncate text-xs text-fg-muted">
           A plan is ready for your review
         </div>
       </div>
@@ -549,7 +548,7 @@ function PlanBlocker({
     <motion.div
       initial={{ opacity: 0, x: -6 }}
       animate={{ opacity: 1, x: 0 }}
-      className="card-shadow flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50/60 py-3 pl-4 pr-2"
+      className="card-shadow flex items-center gap-2 rounded-xl border border-warning/40 bg-warning-subtle py-3 pl-4 pr-2"
     >
       {blocker.isOrg ? (
         <button onClick={onOpenOrg} className={open}>

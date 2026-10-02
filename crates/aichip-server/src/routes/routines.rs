@@ -181,6 +181,37 @@ fn vet(body: &RoutineBody) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// What a routine of this kind does through aichip's tools, if anything: a
+/// chat on a project is the assistant, and a project's manager pass is one.
+/// A watch, or a chat with no project, reads the web and nothing else.
+fn needs_tools_as(kind: &str, project: Option<Uuid>) -> Option<&'static str> {
+    match kind {
+        "manage" => Some("a project manager"),
+        "chat" if project.is_some() => Some("the assistant"),
+        _ => None,
+    }
+}
+
+/// Refuse, at the save, an engine every firing of this routine would be
+/// refused on — rather than at nine tomorrow morning.
+fn vet_tools(
+    state: &AppState,
+    kind: &str,
+    project: Option<Uuid>,
+    engine: Option<&str>,
+) -> Result<(), ApiError> {
+    let Some(what) = needs_tools_as(kind, project) else {
+        return Ok(());
+    };
+    let engine = engine
+        .map(str::to_string)
+        .unwrap_or_else(|| state.orchestrator.default_engine());
+    state
+        .orchestrator
+        .needs_tools(&engine, what)
+        .map_err(|no| (StatusCode::CONFLICT, no.to_string()))
+}
+
 async fn create(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
@@ -195,6 +226,7 @@ async fn create(
             ));
         }
     }
+    vet_tools(&state, &body.kind, body.project_id, body.engine.as_deref())?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO routines (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up, engine, model_tier, effort, url)
          VALUES ($1,$2,$3,$4,$5,$6,coalesce($7,'run_once'),$8,$9,$10,$11) RETURNING id",
@@ -220,7 +252,7 @@ async fn create(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct UpdateBody {
+pub(crate) struct UpdateBody {
     name: Option<String>,
     prompt: Option<String>,
     url: Option<String>,
@@ -232,7 +264,7 @@ struct UpdateBody {
     effort: Option<String>,
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateBody>,
@@ -259,9 +291,27 @@ async fn update(
             "a watch needs a full page address (https://…)".into(),
         ));
     }
+    // A new engine is held to what this routine's kind needs — the manager
+    // editor's own check, which this generic edit would otherwise go around.
+    if let Some(engine) = body.engine.as_deref() {
+        let row: Option<(String, Option<Uuid>)> =
+            sqlx::query_as("SELECT kind, project_id FROM routines WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.db.pool)
+                .await
+                .map_err(internal)?;
+        let (kind, project) = row.ok_or((StatusCode::NOT_FOUND, "no such routine".to_string()))?;
+        vet_tools(&state, &kind, project, Some(engine))?;
+    }
     // Re-enabling resets the bookmark: the scheduler measures the next
     // occurrence from now, instead of instantly "catching up" a window that
     // passed while the routine was off.
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Routine,
+        &id.to_string(),
+    )
+    .await;
     let n = sqlx::query(
         "UPDATE routines SET
             name = coalesce($2, name),
@@ -304,6 +354,12 @@ async fn remove(
 ) -> Result<Json<Value>, ApiError> {
     // The standing chat thread and everything the routine produced stay:
     // deleting a schedule must not delete its answers.
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Routine,
+        &id.to_string(),
+    )
+    .await;
     sqlx::query("DELETE FROM routines WHERE id = $1")
         .bind(id)
         .execute(&state.db.pool)
@@ -384,4 +440,19 @@ async fn history(
         })
         .collect();
     Ok(Json(json!({ "runs": items })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_routines_that_act_as_the_assistant_need_its_tools() {
+        let p = Some(Uuid::nil());
+        assert_eq!(needs_tools_as("manage", p), Some("a project manager"));
+        assert_eq!(needs_tools_as("chat", p), Some("the assistant"));
+        assert_eq!(needs_tools_as("chat", None), None);
+        assert_eq!(needs_tools_as("watch", None), None);
+        assert_eq!(needs_tools_as("research", p), None);
+    }
 }

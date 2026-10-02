@@ -73,9 +73,26 @@ pub async fn fire(
     .bind(fired.and_then(|f| f.research_id))
     .bind(fired.and_then(|f| f.task_id))
     .bind(fired.and_then(|f| f.chat_id))
-    .bind(error)
+    .bind(&error)
     .execute(&db.pool)
     .await?;
+    // A person clicking "run now" is already in the ledger through the API;
+    // everything else that fires a routine is aichip acting on its own.
+    if trigger != "manual" {
+        crate::audit::record(
+            db,
+            crate::audit::Entry::new(
+                crate::audit::Actor::System,
+                format!("routine fired ({trigger})"),
+            )
+            .on("routines", routine_id)
+            .summary(match &error {
+                None => format!("fired by {trigger}"),
+                Some(e) => format!("fired by {trigger}, did not run: {e}"),
+            }),
+        )
+        .await;
+    }
     outcome.map(|_| ())
 }
 
@@ -176,7 +193,31 @@ async fn dispatch(
                 anyhow::bail!("a document space has no board to manage");
             }
             let max_starts = crate::manager::clamp_starts(r.get("max_starts"));
-            fire_chat(
+            // What happened since the last pass opens this one, whatever
+            // fired it — and is read once: consumed only if the turn queued.
+            let news = crate::wake::pending(db, routine_id)
+                .await
+                .unwrap_or_default();
+            let mut brief = crate::manager::pass_prompt(&prompt, max_starts);
+            // Its reports, if this manager agent has any: who it delegates to.
+            if let Some(manager) = agent {
+                let reports = crate::org_chart::reports(db, manager)
+                    .await
+                    .unwrap_or_default();
+                if let Some(section) = crate::org_chart::render_reports(&reports) {
+                    brief = format!("{brief}\n\n{section}");
+                }
+            }
+            let goals = crate::goals::list(db, workspace_id)
+                .await
+                .unwrap_or_default();
+            if let Some(section) = crate::goals::render_for_pass(&goals) {
+                brief = format!("{brief}\n\n{section}");
+            }
+            if let Some(section) = crate::wake::render(&news) {
+                brief = format!("{section}\n\n{brief}");
+            }
+            let fired = fire_chat(
                 db,
                 orchestrator,
                 routine_id,
@@ -184,13 +225,18 @@ async fn dispatch(
                 Some(project_id),
                 r.get("chat_id"),
                 &r.get::<String, _>("name"),
-                &crate::manager::pass_prompt(&prompt, max_starts),
+                &brief,
                 &engine,
                 tier,
                 effort,
                 Some(pass_id),
             )
-            .await
+            .await?;
+            let ids: Vec<Uuid> = news.iter().map(|w| w.id).collect();
+            if !ids.is_empty() {
+                crate::wake::consume(db, &ids, pass_id).await?;
+            }
+            Ok(fired)
         }
         "research" => {
             let (research_id, run_id) = orchestrator

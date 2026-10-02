@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import * as RP from "@radix-ui/react-popover";
 
 /**
  * Pick a table size by dragging over a grid.
@@ -32,8 +33,11 @@ export function TableSizePicker({
   const [hover, setHover] = useState({ r: 0, c: 0 });
   const [header, setHeader] = useState(true);
   const boxRef = useRef<HTMLDivElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [shift, setShift] = useState(0);
+  // Set when a size is picked: the editor has already taken focus back to
+  // insert the table, and handing it to the toolbar button would steal it.
+  const picked = useRef(false);
 
   // Reset every time it opens, so a previous sweep doesn't preselect a size
   // the next person didn't choose.
@@ -42,7 +46,7 @@ export function TableSizePicker({
     setCols(START_COLS);
     setRows(START_ROWS);
     setHover({ r: 0, c: 0 });
-    boxRef.current?.focus();
+    picked.current = false;
   }, [open]);
 
   // Keep the popover on screen — the table button sits near the right of a
@@ -54,14 +58,17 @@ export function TableSizePicker({
   // one you were looking at: hovering "4 × 5" inserted a 4 × 6 table. Reserving
   // the full width up front means growth only ever fills cells in, and nothing
   // moves.
+  //
+  // That is also why the popover's own collision handling is off: it re-clamps
+  // on every resize, which is the sweep bug again. The panel starts at the
+  // trigger's left edge, so the trigger is what is measured.
   useLayoutEffect(() => {
     if (!open) return;
-    const el = popRef.current;
+    const el = triggerRef.current;
     if (!el) return;
-    const left = el.getBoundingClientRect().left - shift;
+    const left = el.getBoundingClientRect().left;
     const overflow = left + MAX_WIDTH - (window.innerWidth - 8);
     setShift(overflow > 0 ? -overflow : 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const move = (r: number, c: number) => {
@@ -73,6 +80,7 @@ export function TableSizePicker({
 
   const pick = (r: number, c: number) => {
     if (r < 1 || c < 1) return;
+    picked.current = true;
     onPick(r, c, header);
     setOpen(false);
   };
@@ -95,78 +103,87 @@ export function TableSizePicker({
   };
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="Insert a table"
-        className={`rounded-md px-2 py-1 text-xs ${
-          open ? "bg-accent/10 text-accent" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
-        }`}
-      >
-        ▦
-      </button>
+    <RP.Root open={open} onOpenChange={setOpen}>
+      <RP.Trigger asChild>
+        <button
+          ref={triggerRef}
+          type="button"
+          title="Insert a table"
+          className={`rounded-md px-2 py-1 text-xs ${
+            open ? "bg-accent-subtle text-accent-fg" : "text-fg-muted hover:bg-panel-2 hover:text-fg"
+          }`}
+        >
+          ▦
+        </button>
+      </RP.Trigger>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+      <RP.Portal>
+        <RP.Content
+          align="start"
+          sideOffset={4}
+          alignOffset={shift}
+          avoidCollisions={false}
+          // The grid takes focus itself, so arrow keys size it at once.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            boxRef.current?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            if (picked.current) e.preventDefault();
+          }}
+          className="z-50 rounded-xl border border-border bg-raised p-2 text-fg shadow-[var(--shadow-md)] outline-none data-[state=open]:animate-[pop-in_var(--dur-fast)_var(--ease-out-soft)]"
+        >
           <div
-            ref={popRef}
-            style={{ transform: `translateX(${shift}px)` }}
-            className="card-shadow absolute left-0 top-full z-20 mt-1 rounded-xl border border-line bg-panel p-2"
+            ref={boxRef}
+            tabIndex={0}
+            role="grid"
+            aria-label="Table size"
+            onKeyDown={onKeyDown}
+            onMouseLeave={() => setHover({ r: 0, c: 0 })}
+            className="grid gap-[3px] outline-none"
+            style={{ gridTemplateColumns: `repeat(${cols}, 1rem)` }}
           >
-            <div
-              ref={boxRef}
-              tabIndex={0}
-              role="grid"
-              aria-label="Table size"
-              onKeyDown={onKeyDown}
-              onMouseLeave={() => setHover({ r: 0, c: 0 })}
-              className="grid gap-[3px] outline-none"
-              style={{ gridTemplateColumns: `repeat(${cols}, 1rem)` }}
-            >
-              {Array.from({ length: rows * cols }, (_, i) => {
-                const r = Math.floor(i / cols) + 1;
-                const c = (i % cols) + 1;
-                const on = r <= hover.r && c <= hover.c;
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    tabIndex={-1}
-                    aria-label={`${r} by ${c}`}
-                    onMouseEnter={() => move(r, c)}
-                    onClick={() => pick(r, c)}
-                    className={`h-4 w-4 rounded-[3px] border ${
-                      on ? "border-accent bg-accent/25" : "border-line bg-panel-2"
-                    }`}
-                  />
-                );
-              })}
-            </div>
-
-            <div className="mt-2 text-center text-[11px] text-ink-dim">
-              {hover.r && hover.c ? (
-                <span className="font-medium text-ink">
-                  {hover.r} × {hover.c}
-                </span>
-              ) : (
-                "Drag to size"
-              )}
-            </div>
-
-            <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 border-t border-line pt-1.5 text-[11px] text-ink-dim">
-              <input
-                type="checkbox"
-                checked={header}
-                onChange={(e) => setHeader(e.target.checked)}
-                className="accent-[var(--color-accent)]"
-              />
-              Header row
-            </label>
+            {Array.from({ length: rows * cols }, (_, i) => {
+              const r = Math.floor(i / cols) + 1;
+              const c = (i % cols) + 1;
+              const on = r <= hover.r && c <= hover.c;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={`${r} by ${c}`}
+                  onMouseEnter={() => move(r, c)}
+                  onClick={() => pick(r, c)}
+                  className={`h-4 w-4 rounded-[3px] border ${
+                    on ? "border-accent bg-accent/25" : "border-border bg-panel-2"
+                  }`}
+                />
+              );
+            })}
           </div>
-        </>
-      )}
-    </div>
+
+          <div className="mt-2 text-center text-[11px] text-fg-muted">
+            {hover.r && hover.c ? (
+              <span className="font-medium text-fg">
+                {hover.r} × {hover.c}
+              </span>
+            ) : (
+              "Drag to size"
+            )}
+          </div>
+
+          <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 border-t border-border pt-1.5 text-[11px] text-fg-muted">
+            <input
+              type="checkbox"
+              checked={header}
+              onChange={(e) => setHeader(e.target.checked)}
+              className="accent-[var(--color-accent)]"
+            />
+            Header row
+          </label>
+        </RP.Content>
+      </RP.Portal>
+    </RP.Root>
   );
 }

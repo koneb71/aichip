@@ -31,7 +31,7 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
   }, [refresh]);
 
   if (!state) {
-    return <div className="text-xs text-ink-dim">{error ?? "Loading…"}</div>;
+    return <div className="text-xs text-fg-muted">{error ?? "Loading…"}</div>;
   }
 
   const held = state.granted.map((g) => g.scope);
@@ -53,14 +53,14 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
   };
 
   return (
-    <div className="rounded-xl border border-line p-4">
+    <div className="rounded-xl border border-border p-4">
       <h3 className="text-sm font-semibold">Permissions</h3>
-      <p className="mt-1 text-xs text-ink-dim">
+      <p className="mt-1 text-xs text-fg-muted">
         This app's own tables need no permission. These are about your data.
       </p>
 
       {asking.length > 0 && (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="mt-3 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
           This app is asking for{" "}
           {asking.map((s) => (
             <span key={s} className="font-mono">
@@ -81,7 +81,7 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
               key={s.scope}
               className={
                 "flex cursor-pointer items-start gap-3 rounded-lg border p-2 " +
-                (wanted ? "border-line" : "border-transparent opacity-60")
+                (wanted ? "border-border" : "border-transparent opacity-60")
               }
             >
               <input
@@ -95,16 +95,16 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
                 <span className="flex items-center gap-2">
                   <span className="font-mono text-xs">{s.scope}</span>
                   {s.write && (
-                    <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
+                    <span className="rounded bg-warning-subtle px-1 text-[10px] text-warning-fg">
                       changes things
                     </span>
                   )}
                 </span>
-                <span className="mt-0.5 block text-xs text-ink-dim">{s.blurb}</span>
+                <span className="mt-0.5 block text-xs text-fg-muted">{s.blurb}</span>
                 {/* "Granted in August, never used" is the sentence that makes
                     this screen worth opening. */}
                 {on && (
-                  <span className="mt-0.5 block text-[11px] text-ink-dim">
+                  <span className="mt-0.5 block text-[11px] text-fg-muted">
                     {used ? `Last used ${new Date(used).toLocaleDateString()}` : "Never used"}
                   </span>
                 )}
@@ -114,10 +114,10 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
         })}
       </div>
 
-      {error && <div className="mt-3 text-xs text-danger">{error}</div>}
+      {error && <div className="mt-3 text-xs text-danger-fg">{error}</div>}
 
       {busy && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2 text-xs text-ink-dim">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2 text-xs text-fg-muted">
           Saving…
         </motion.div>
       )}

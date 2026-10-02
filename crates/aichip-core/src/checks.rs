@@ -528,6 +528,9 @@ impl crate::runs::orchestrator::Orchestrator {
         if summarize && !fixing {
             self.ask_for_summary(task_id, run_id).await;
         }
+        // The review a policy asks for comes after the checks. It waits for a
+        // fix or a summary just queued, whose own completion asks again.
+        self.settle_review(task_id, run_id, "checks_settled").await;
     }
 
     /// Start the bounded auto-fix for failing checks. True when a fix run was
@@ -539,14 +542,14 @@ impl crate::runs::orchestrator::Orchestrator {
         // Bounded: counted from the last run that was not itself a checks fix
         // or a summary pass, so a person's own run or review note resets it,
         // and an agent that cannot make the tests pass stops trying after the
-        // number set. A summary pass is aichip asking, not a person, and must
-        // not reset the count.
+        // number set. A summary or review pass is aichip asking, not a person,
+        // and must not reset the count.
         let attempts: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM runs
               WHERE task_id = $1 AND trigger = 'checks'
                 AND created_at > COALESCE(
                       (SELECT max(created_at) FROM runs
-                        WHERE task_id = $1 AND trigger NOT IN ('checks', 'summary')),
+                        WHERE task_id = $1 AND trigger NOT IN ('checks', 'summary', 'peer_review')),
                       '-infinity')",
         )
         .bind(task_id)
@@ -555,6 +558,14 @@ impl crate::runs::orchestrator::Orchestrator {
         .unwrap_or(i64::MAX);
         if attempts >= config.auto_fix_attempts as i64 {
             tracing::info!(%task_id, attempts, "checks still fail; leaving it for a person");
+            crate::wake::raise(
+                &self.db,
+                task_id,
+                None,
+                crate::wake::Kind::ChecksExhausted,
+                &format!("after {attempts} fix attempts"),
+            )
+            .await;
             return false;
         }
         match self

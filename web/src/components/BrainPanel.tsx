@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ProjectBrain } from "../lib/api";
+import { Button } from "./ui/Button";
 
 /**
  * What every run in this project should already know.
@@ -75,7 +76,7 @@ export function BrainPanel({ projectId }: { projectId: string }) {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">Brain</h2>
-          <p className="mt-0.5 max-w-xl text-xs text-ink-dim">
+          <p className="mt-0.5 max-w-xl text-xs text-fg-muted">
             What every run in this project should already know — where things live, how it
             is deployed, what not to touch. It reaches every card, every chat and every
             reply here, without being attached to anything.
@@ -84,18 +85,19 @@ export function BrainPanel({ projectId }: { projectId: string }) {
         <label className="flex shrink-0 items-center gap-2 text-xs">
           <input
             type="checkbox"
+            className="accent-[var(--color-accent)]"
             checked={brain.enabled}
             disabled={busy}
             onChange={(e) => save(e.target.checked)}
           />
-          <span className={brain.enabled ? "text-ink" : "text-ink-dim"}>
+          <span className={brain.enabled ? "text-fg" : "text-fg-muted"}>
             {brain.enabled ? "In use" : "Off"}
           </span>
         </label>
       </div>
 
       {!brain.enabled && (
-        <p className="mb-3 max-w-2xl rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+        <p className="mb-3 max-w-2xl rounded-lg bg-warning-subtle px-3 py-2 text-[11px] leading-relaxed text-warning-fg">
           Off, so runs behave as though this were empty. It is still here — turning it off
           is how you check whether it is the reason a run went wrong.
         </p>
@@ -111,74 +113,74 @@ export function BrainPanel({ projectId }: { projectId: string }) {
           "The API lives in /backend. Tests are `pnpm test`.\n" +
           "Do not add dependencies without asking."
         }
-        className="w-full max-w-2xl resize-y rounded-xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed outline-none focus:border-accent disabled:opacity-60"
+        className="w-full max-w-2xl resize-y rounded-xl border border-border bg-bg p-3 font-mono text-xs leading-relaxed outline-none focus:border-accent disabled:opacity-60"
       />
 
       <div className="mt-2 flex max-w-2xl flex-wrap items-center gap-3">
-        <button
-          onClick={() => save()}
-          disabled={busy || !dirty || over}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
+        <Button variant="primary" size="sm" onClick={() => save()} disabled={busy || !dirty || over}>
           {busy ? "Saving…" : dirty ? "Save" : "Saved"}
-        </button>
+        </Button>
         {/* Counted against the budget rather than silently truncated at the
             far end, where the loss would only show up as an agent that had not
             read the last paragraph. */}
-        <span className={`text-[11px] ${over ? "font-medium text-danger" : "text-ink-dim"}`}>
+        <span className={`text-[11px] ${over ? "font-medium text-danger-fg" : "text-fg-muted"}`}>
           {draft.length.toLocaleString()} / {brain.maxChars.toLocaleString()} characters
           {over && " — too long to fit in a prompt"}
         </span>
         {brain.updatedAt && !dirty && (
-          <span className="text-[11px] text-ink-dim">
+          <span className="text-[11px] text-fg-muted">
             saved {new Date(brain.updatedAt).toLocaleString()}
           </span>
         )}
-        <button
+        <Button
+          variant="link"
+          size="xs"
           onClick={() =>
             history
               ? setHistory(null)
               : api.brainRevisions(projectId).then((r) => setHistory(r.revisions)).catch(() => {})
           }
-          className="ml-auto text-[11px] text-ink-dim underline hover:text-ink"
+          className="ml-auto font-normal! text-fg-muted! underline hover:text-fg!"
         >
           {history ? "hide history" : "history"}
-        </button>
+        </Button>
       </div>
 
       {error && (
-        <div className="mt-3 max-w-2xl whitespace-pre-wrap rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
+        <div className="mt-3 max-w-2xl whitespace-pre-wrap rounded-lg bg-danger-subtle px-3 py-2 text-[11px] leading-relaxed text-danger-fg">
           {error}
         </div>
       )}
-      {note && <div className="mt-3 text-[11px] text-ink-dim">{note}</div>}
+      {note && <div className="mt-3 text-[11px] text-fg-muted">{note}</div>}
 
       {history && (
         <div className="mt-4 max-w-2xl">
           <div className="text-xs font-medium">Earlier versions</div>
           {history.length === 0 ? (
-            <p className="mt-1 text-[11px] text-ink-dim">
+            <p className="mt-1 text-[11px] text-fg-muted">
               Nothing yet — the previous text is kept from your next save onwards.
             </p>
           ) : (
             <div className="mt-2 flex flex-col gap-2">
               {history.map((r) => (
-                <div key={r.id} className="rounded-lg border border-line bg-panel p-2.5">
+                <div key={r.id} className="rounded-lg border border-border bg-panel p-2.5">
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[11px] text-ink-dim">
+                    <span className="text-[11px] text-fg-muted">
                       {new Date(r.savedAt).toLocaleString()}
                     </span>
                     {/* Into the editor, not straight to the database: restoring
                         is a save like any other, so it is reviewed and it keeps
                         the version it replaced. */}
-                    <button
+                    <Button
+                      variant="link"
+                      size="xs"
                       onClick={() => setDraft(r.body)}
-                      className="text-[11px] text-accent underline"
+                      className="font-normal! underline"
                     >
                       put this in the editor
-                    </button>
+                    </Button>
                   </div>
-                  <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-ink-dim">
+                  <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-fg-muted">
                     {r.body}
                   </pre>
                 </div>
@@ -188,8 +190,8 @@ export function BrainPanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <p className="mt-6 max-w-2xl text-[11px] leading-relaxed text-ink-dim">
-        <span className="font-medium text-ink">No secrets here.</span> This text goes into
+      <p className="mt-6 max-w-2xl text-[11px] leading-relaxed text-fg-muted">
+        <span className="font-medium text-fg">No secrets here.</span> This text goes into
         a prompt and stays readable to anyone who opens this page, so a save containing
         something key-shaped is refused. Keep credentials in your shell or a password
         manager.

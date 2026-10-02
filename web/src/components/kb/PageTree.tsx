@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { motion } from "framer-motion";
 import { nest, TreeNode, TreePage, visibleRows } from "../../lib/kbTree";
+import { Plus } from "lucide-react";
+import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 
 /**
@@ -68,7 +70,7 @@ export function PageTree({
 
   if (pages.length === 0) {
     return (
-      <div className="px-2 py-8 text-center text-xs text-ink-dim">
+      <div className="px-2 py-8 text-center text-xs text-fg-muted">
         <span className="mb-2 flex justify-center opacity-50">
           <Icon name="knowledge" size={22} />
         </span>
@@ -109,7 +111,7 @@ function Row({
   return (
     <div
       className={`group relative flex items-center gap-0.5 rounded-lg pr-1 transition-colors ${
-        active ? "bg-accent/[0.09]" : "hover:bg-panel-2"
+        active ? "bg-accent-subtle" : "hover:bg-panel-2"
       }`}
       // Indent by depth, clamped: past five levels the extra offset costs more
       // width than it communicates.
@@ -121,7 +123,7 @@ function Row({
       <button
         onClick={onToggle}
         aria-label={open ? "Collapse" : "Expand"}
-        className={`grid w-4 shrink-0 place-items-center text-ink-dim transition-transform duration-200 ${
+        className={`grid w-4 shrink-0 place-items-center text-fg-muted transition-transform duration-200 ${
           node.childCount > 0 ? "" : "invisible"
         } ${open ? "rotate-90" : ""}`}
       >
@@ -130,7 +132,7 @@ function Row({
       <NavLink
         to={`/knowledge/${node.id}`}
         className={`ring-focus min-w-0 flex-1 truncate rounded py-1.5 text-sm transition-colors ${
-          active ? "font-semibold text-accent" : "hover:text-ink"
+          active ? "font-semibold text-accent-fg" : "hover:text-fg"
         }`}
       >
         <span className="mr-1.5">{node.icon || "▦"}</span>
@@ -149,21 +151,22 @@ function Row({
       )}
       {!node.writing && node.hasPending && (
         <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
           title="a proposed revision is waiting for you"
         />
       )}
       {node.status === "draft" && (
-        <span className="shrink-0 text-[9px] text-ink-dim">draft</span>
+        <span className="shrink-0 text-[9px] text-fg-muted">draft</span>
       )}
 
-      <button
+      <IconButton
+        size="xs"
         onClick={onCreateChild}
-        title="Add a page inside this one"
-        className="shrink-0 px-1 text-xs text-ink-dim opacity-0 group-hover:opacity-100 hover:text-accent"
+        label="Add a page inside this one"
+        className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-accent-fg!"
       >
-        +
-      </button>
+        <Plus className="size-3.5" />
+      </IconButton>
     </div>
   );
 }

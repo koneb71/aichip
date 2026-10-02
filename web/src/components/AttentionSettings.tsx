@@ -1,5 +1,7 @@
+import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
 import { api, AttentionSettingsValue, AttentionEvent } from "../lib/api";
+import { Button } from "./ui/Button";
 
 /**
  * How long aichip waits for you, and how it reaches you while it waits.
@@ -15,6 +17,10 @@ const EVENTS: { id: AttentionEvent; label: string; hint: string }[] = [
   { id: "plan", label: "A plan needs review", hint: "a plan-first card, waiting on you" },
   { id: "rate_limited", label: "Rate limited", hint: "it will resume on its own; this just tells you" },
   { id: "budget_warning", label: "A budget is nearly spent", hint: "past its warning line, before anything is held" },
+  { id: "question", label: "An agent asked you something", hint: "the card waits for your answer in the inbox" },
+  { id: "decision", label: "An agent proposed a decision", hint: "only you can approve it, in the inbox" },
+  { id: "review", label: "An agent review needs you", hint: "its rounds are spent, or the reviewer gave no verdict" },
+  { id: "stalled", label: "A run stalled", hint: "nothing was running it any more, or it went silent past your limit" },
   { id: "over_budget", label: "A budget is spent", hint: "what it covers holds until its window turns" },
   { id: "routine", label: "A routine delivered", hint: "it ran on its schedule; the result is waiting" },
   { id: "unblocked", label: "A card can start", hint: "the card it was waiting on landed" },
@@ -36,6 +42,7 @@ export function AttentionSettings() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
+  const [loads, setLoads] = useState(0);
   useEffect(() => {
     api
       .attentionSettings()
@@ -43,7 +50,7 @@ export function AttentionSettings() {
       // An older server has no such route; the panel removes itself rather
       // than sitting there broken. Same guard PreviewSettings uses.
       .catch(() => setAvailable(false));
-  }, []);
+  }, [loads]);
 
   if (!available || !v) return null;
 
@@ -68,15 +75,18 @@ export function AttentionSettings() {
 
   return (
     <section className="mt-8 max-w-2xl">
-      <h2 className="text-sm font-semibold">When a run needs you</h2>
-      <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">When a run needs you</h2>
+        <HistoryButton kind="attention" id="attention" onRestored={() => setLoads((n) => n + 1)} />
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-fg-muted">
         A run that stops to ask something releases its place in the queue, so the rest of the
         board keeps moving. It waits for you — and unlike before, if the wait runs out it is{" "}
-        <span className="font-medium text-ink">stopped rather than told you said no</span>.
+        <span className="font-medium text-fg">stopped rather than told you said no</span>.
       </p>
 
       <div className="mt-4">
-        <label className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <label className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Wait for me
         </label>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -90,17 +100,15 @@ export function AttentionSettings() {
               key={o.secs}
               disabled={busy}
               onClick={() => save({ waitSecs: o.secs })}
-              className="rounded-lg border px-2.5 py-1.5 text-xs disabled:opacity-50"
-              style={{
-                borderColor: v.waitSecs === o.secs ? "var(--color-accent)" : "var(--color-line)",
-                color: v.waitSecs === o.secs ? "var(--color-accent)" : "var(--color-ink-dim)",
-              }}
+              className={`ring-focus rounded-lg border px-2.5 py-1.5 text-xs disabled:opacity-50 ${
+                v.waitSecs === o.secs ? "border-accent text-accent-fg" : "border-border text-fg-muted"
+              }`}
             >
               {o.label}
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11px] text-ink-dim/80">
+        <p className="mt-1 text-[11px] text-fg-muted/80">
           {v.waitSecs === 0
             ? "It will hold the card until you answer. A waiting run costs nothing but a worktree — it is not using a queue slot."
             : "After that it stops the run and says nobody answered, which is not the same as you refusing."}
@@ -117,7 +125,7 @@ export function AttentionSettings() {
         />
         <span className="min-w-0">
           <span className="block font-medium">Run a command to tell me</span>
-          <span className="block text-xs text-ink-dim">
+          <span className="block text-xs text-fg-muted">
             Anything your shell can do — a desktop notification, a beep, a push to your phone.
             This works with the dashboard closed, which browser notifications do not.
           </span>
@@ -125,29 +133,29 @@ export function AttentionSettings() {
       </label>
 
       {v.enabled && (
-        <div className="mt-3 rounded-xl border border-line bg-surface p-3">
+        <div className="mt-3 rounded-xl border border-border bg-bg p-3">
           <input
             defaultValue={v.command}
             disabled={busy}
             onBlur={(e) => e.target.value !== v.command && save({ command: e.target.value })}
             placeholder={EXAMPLES[0].command}
-            className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-xs outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-2 py-1.5 font-mono text-xs outline-none focus:border-accent"
           />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {EXAMPLES.map((ex) => (
-              <button
+              <Button
                 key={ex.os}
+                size="xs"
                 disabled={busy}
                 onClick={() => save({ command: ex.command })}
                 title={ex.command}
-                className="rounded-md border border-line px-2 py-0.5 text-[10px] text-ink-dim hover:border-ink-dim hover:text-ink"
               >
                 {ex.os}
-              </button>
+              </Button>
             ))}
           </div>
 
-          <div className="mt-3 text-[11px] text-ink-dim">
+          <div className="mt-3 text-[11px] text-fg-muted">
             Your command is run as one argument, so nothing from a card can become part of it.
             The details arrive as environment variables:
           </div>
@@ -160,14 +168,14 @@ export function AttentionSettings() {
           </div>
           {/* Stated rather than left to be discovered, because the absence is
               deliberate and someone will otherwise go looking for it. */}
-          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/80">
+          <p className="mt-1.5 text-[11px] leading-relaxed text-fg-muted/80">
             What the tool was going to do is <span className="font-medium">not</span> among them.
             A command can forward anywhere, and a Bash input or a file edit carries your code.
             Open the dashboard to see that before you answer.
           </p>
 
           <div className="mt-3">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               Tell me about
             </div>
             {EVENTS.map((e) => (
@@ -181,7 +189,7 @@ export function AttentionSettings() {
                 />
                 <span className="min-w-0">
                   <span className="block">{e.label}</span>
-                  <span className="block text-[11px] text-ink-dim">{e.hint}</span>
+                  <span className="block text-[11px] text-fg-muted">{e.hint}</span>
                 </span>
               </label>
             ))}
@@ -190,12 +198,12 @@ export function AttentionSettings() {
       )}
 
       {warning && (
-        <div className="mt-3 whitespace-pre-wrap rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+        <div className="mt-3 whitespace-pre-wrap rounded-lg bg-warning-subtle px-3 py-2 text-[11px] leading-relaxed text-warning-fg">
           {warning}
         </div>
       )}
       {error && (
-        <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</div>
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-[11px] text-danger-fg">{error}</div>
       )}
     </section>
   );

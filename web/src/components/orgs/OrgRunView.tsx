@@ -8,6 +8,7 @@ import { ActivityLine, RunStream } from "../RunStream";
 import { StreamEvent, useRunStream } from "../../lib/ws";
 import { PlanReview } from "./PlanReview";
 import { RunError } from "../ui/RunError";
+import { Dialog } from "../ui/Dialog";
 
 /** What a teammate is doing right now, derived from their assignments. */
 type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
@@ -88,7 +89,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
   if (!run) {
     return (
       <Shell onClose={onClose} title="Loading…">
-        <div className="p-8 text-sm text-ink-dim">Fetching the team…</div>
+        <div className="p-8 text-sm text-fg-muted">Fetching the team…</div>
       </Shell>
     );
   }
@@ -109,7 +110,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
       <div className="flex min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(200px,240px)_minmax(0,1fr)_minmax(0,300px)]">
         {/* ── Roster ───────────────────────────────────────────── */}
         {show("team") && (
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-line p-3 lg:flex-none lg:border-r">
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-border p-3 lg:flex-none lg:border-r">
             {!narrow && <SectionLabel>Team</SectionLabel>}
             <div className="mt-2 flex flex-col gap-2">
               {run.roster.map((member, i) => (
@@ -154,7 +155,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
 
         {/* ── Assignments ──────────────────────────────────────── */}
         {show("tasks") && (
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-line p-3 lg:flex-none lg:border-l">
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-border p-3 lg:flex-none lg:border-l">
             {!narrow && <SectionLabel>Assignments</SectionLabel>}
             {/* Keyed and inside AnimatePresence so the review panel leaves the
                 way it arrived. As a bare ternary it popped out of existence the
@@ -191,7 +192,7 @@ export function OrgRunView({ runId, onClose }: { runId: string; onClose: () => v
                         ))}
                     </AnimatePresence>
                     {run.assignments.every((a) => a.kind === "manager") && (
-                      <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
+                      <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-fg-muted">
                         The manager is still working out the plan…
                       </div>
                     )}
@@ -225,19 +226,19 @@ function PaneTabs({
     ["tasks", needsReview ? "Approve plan" : "Assignments"],
   ];
   return (
-    <div className="flex shrink-0 gap-1 border-b border-line px-2 py-1.5">
+    <div className="flex shrink-0 gap-1 border-b border-border px-2 py-1.5">
       {tabs.map(([id, label]) => (
         <button
           key={id}
           onClick={() => onPick(id)}
           aria-current={pane === id}
           className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${
-            pane === id ? "bg-panel-2 text-ink" : "text-ink-dim hover:text-ink"
+            pane === id ? "bg-panel-2 text-fg" : "text-fg-muted hover:text-fg"
           }`}
         >
           {label}
           {id === "tasks" && needsReview && (
-            <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-[#d97706] align-middle" />
+            <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warning align-middle" />
           )}
         </button>
       ))}
@@ -261,49 +262,43 @@ function Shell({
   children: React.ReactNode;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-0 sm:p-4 lg:p-6"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (o) return;
+        // A plan row saves its edits on blur, and Escape or a click outside
+        // closes before focus ever leaves the field — the room unmounts and
+        // the blur never runs. Blurring first sends the edit while it still can.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        onClose();
+      }}
+      width={1152}
+      // Full screen on a phone, a tall room everywhere else: three columns of
+      // live work do not fit the kit's default 76vh.
+      className="top-0! h-full max-h-none! w-full! rounded-none! border-0! bg-panel! sm:top-[6vh]! sm:h-[88vh] sm:w-[calc(100vw-32px)]! sm:rounded-xl! sm:border!"
+      title={
+        // Wraps rather than shoving the close button off the edge: a long team
+        // name plus a status chip plus a cost overflows a phone header.
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate">{title}</span>
+          {status && <StatusChip status={status} />}
+          {cost != null && (
+            <span className="text-xs font-normal text-fg-muted">${cost.toFixed(3)}</span>
+          )}
+        </span>
+      }
+      description={subtitle ? <span className="line-clamp-1">{subtitle}</span> : undefined}
     >
-      <motion.div
-        initial={{ y: 24, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
-        exit={{ y: 24, scale: 0.98 }}
-        transition={{ type: "spring", stiffness: 360, damping: 32 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-line bg-panel sm:h-[88vh] sm:rounded-2xl sm:border"
-      >
-        <header className="flex items-start gap-3 border-b border-line px-4 py-3 sm:px-5">
-          <div className="min-w-0 flex-1">
-            {/* Wraps rather than shoving the ✕ off the edge: a long team name
-             *  plus a status chip plus a cost overflows a phone header. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="truncate text-base font-semibold">{title}</span>
-              {status && <StatusChip status={status} />}
-              {cost != null && (
-                <span className="text-xs text-ink-dim">${cost.toFixed(3)}</span>
-              )}
-            </div>
-            {subtitle && (
-              <div className="mt-0.5 line-clamp-1 text-xs text-ink-dim">{subtitle}</div>
-            )}
-          </div>
-          <button onClick={onClose} className="text-ink-dim hover:text-ink">
-            ✕
-          </button>
-        </header>
-        {children}
-      </motion.div>
-    </motion.div>
+      {/* The kit pads and scrolls its body; this room scrolls each column on
+       *  its own, so it takes the body edge to edge. */}
+      <div className="-mx-5 -my-4 flex h-[calc(100%+2rem)] flex-col overflow-hidden">{children}</div>
+    </Dialog>
   );
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+    <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
       {children}
     </div>
   );
@@ -326,14 +321,14 @@ function MemberCard({
       transition={{ delay: index * 0.05 }}
       className="relative rounded-xl border bg-panel p-2.5"
       style={{
-        borderColor: busy ? member.color : "var(--color-line)",
-        boxShadow: busy ? `0 0 0 3px ${member.color}1a` : undefined,
+        borderColor: busy ? member.color : "var(--color-border)",
+        boxShadow: busy ? `0 0 0 3px color-mix(in oklab, ${member.color} 10%, transparent)` : undefined,
       }}
     >
       <div className="flex items-center gap-2.5">
         <div className="relative">
           <motion.span
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold text-on-accent"
             style={{ background: member.color }}
             animate={busy ? { scale: [1, 1.06, 1] } : { scale: 1 }}
             transition={busy ? { repeat: Infinity, duration: 1.8 } : undefined}
@@ -352,7 +347,7 @@ function MemberCard({
             <motion.span
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
-              className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-tier-easy text-[9px] text-white"
+              className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-tier-easy text-[9px] text-bg"
             >
               ✓
             </motion.span>
@@ -360,12 +355,14 @@ function MemberCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{member.name}</div>
-          <div className="truncate text-[11px] text-ink-dim">
+          <div className="truncate text-[11px] text-fg-muted">
             {member.isManager ? "Manager" : member.title}
           </div>
         </div>
       </div>
-      <motion.div layout className="mt-1.5 text-[11px]" style={{ color: busy ? member.color : "var(--color-ink-dim)" }}>
+      {/* The agent's colour is tuned for fills, not for words on a dark panel;
+          it stays on the border and the ring, and the label reads in fg. */}
+      <motion.div layout className={`mt-1.5 text-[11px] ${busy ? "font-medium text-fg" : "text-fg-muted"}`}>
         {stateLabel(state)}
       </motion.div>
     </motion.div>
@@ -379,7 +376,7 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
         layout
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="self-center rounded-full bg-panel-2 px-3 py-1 text-[11px] text-ink-dim"
+        className="self-center rounded-full bg-panel-2 px-3 py-1 text-[11px] text-fg-muted"
       >
         {message.content}
       </motion.div>
@@ -403,6 +400,9 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
       : message.kind === "answer"
         ? "var(--color-tier-medium)"
         : color;
+  // The tier tokens are themed for text; an agent's colour is not, so where it
+  // is the accent it only tints the chip and the words stay fg-muted.
+  const ink = accent === color ? "var(--color-fg-muted)" : accent;
 
   return (
     <motion.div
@@ -413,7 +413,7 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
       className="flex gap-2.5"
     >
       <span
-        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-on-accent"
         style={{ background: color }}
       >
         {message.from.slice(0, 1).toUpperCase()}
@@ -424,12 +424,12 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
           {label && (
             <span
               className="rounded-full px-1.5 py-0.5 text-[10px]"
-              style={{ background: `${accent}1a`, color: accent }}
+              style={{ background: `color-mix(in oklab, ${accent} 10%, transparent)`, color: ink }}
             >
               {label}
             </span>
           )}
-          <span className="text-[10px] text-ink-dim">
+          <span className="text-[10px] text-fg-muted">
             {new Date(message.ts).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -467,7 +467,7 @@ function WorkingIndicator({
         {busy.map((m) => (
           <span
             key={m.name}
-            className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-panel text-[9px] font-bold text-white"
+            className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-panel text-[9px] font-bold text-on-accent"
             style={{ background: m.color }}
           >
             {m.name.slice(0, 1).toUpperCase()}
@@ -478,13 +478,13 @@ function WorkingIndicator({
         {[0, 1, 2].map((i) => (
           <motion.span
             key={i}
-            className="h-1.5 w-1.5 rounded-full bg-ink-dim"
+            className="h-1.5 w-1.5 rounded-full bg-fg-muted"
             animate={{ opacity: [0.3, 1, 0.3] }}
             transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.2 }}
           />
         ))}
       </div>
-      <span className="text-[11px] text-ink-dim">
+      <span className="text-[11px] text-fg-muted">
         {busy.map((m) => m.name).join(", ")} {busy.length === 1 ? "is" : "are"} working…
       </span>
     </motion.div>
@@ -512,8 +512,8 @@ function AssignmentCard({
       onClick={() => setOpen((o) => !o)}
       className="rounded-xl border bg-panel p-2.5 text-left"
       style={{
-        borderColor: running ? color : "var(--color-line)",
-        boxShadow: running ? `0 0 0 3px ${color}14` : undefined,
+        borderColor: running ? color : "var(--color-border)",
+        boxShadow: running ? `0 0 0 3px color-mix(in oklab, ${color} 8%, transparent)` : undefined,
       }}
     >
       <div className="flex items-start gap-2">
@@ -523,9 +523,8 @@ function AssignmentCard({
             {assignment.title ?? assignment.key}
           </div>
           {assignment.assignee && (
-            <div className="mt-0.5 text-[11px]" style={{ color }}>
-              {assignment.assignee}
-            </div>
+            // In words, fg-muted: the pip beside it already carries their colour.
+            <div className="mt-0.5 text-[11px] text-fg-muted">{assignment.assignee}</div>
           )}
           {/* Collapsed, each teammate still shows their current action. */}
           <ActivityLine events={events} stepId={assignment.id} live={running} className="mt-1" />
@@ -539,7 +538,7 @@ function AssignmentCard({
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden"
           >
-            <div className="mt-2 border-t border-line pt-2 text-[11px] text-ink-dim">
+            <div className="mt-2 border-t border-border pt-2 text-[11px] text-fg-muted">
               {assignment.touches.length > 0 && (
                 <div className="mb-1.5 flex flex-wrap gap-1">
                   {assignment.touches.map((path) => (
@@ -557,7 +556,7 @@ function AssignmentCard({
             </div>
             {/* Expanded, the full transcript for this teammate alone — the
                 same renderer a solo task uses, filtered to their step. */}
-            <div className="mt-2 max-h-72 overflow-y-auto border-t border-line pt-2">
+            <div className="mt-2 max-h-72 overflow-y-auto border-t border-border pt-2">
               <RunStream
                 events={events}
                 stepId={assignment.id}
@@ -578,10 +577,10 @@ function StatusPip({ status, color, live }: { status: string; color: string; liv
       : status === "failed"
         ? "var(--color-danger)"
         : status === "canceled"
-          ? "var(--color-ink-dim)"
+          ? "var(--color-fg-muted)"
           : live
             ? color
-            : "var(--color-line)";
+            : "var(--color-border)";
   return live ? (
     <motion.span
       className="mt-1 h-2 w-2 shrink-0 rounded-full"
@@ -599,8 +598,8 @@ function StatusChip({ status }: { status: string }) {
   const color = statusColor(status);
   return (
     <span
-      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px]"
-      style={{ background: `${color}1a`, color }}
+      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-normal"
+      style={{ background: `color-mix(in oklab, ${color} 10%, transparent)`, color }}
     >
       {live ? (
         <motion.span
@@ -618,7 +617,7 @@ function StatusChip({ status }: { status: string }) {
 }
 
 function colorOf(roster: OrgMember[], name: string): string {
-  return roster.find((m) => m.name === name)?.color ?? "var(--color-ink-dim)";
+  return roster.find((m) => m.name === name)?.color ?? "var(--color-fg-muted)";
 }
 
 function stateLabel(state: MemberState): string {

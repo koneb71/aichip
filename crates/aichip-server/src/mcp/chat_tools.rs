@@ -56,6 +56,7 @@ pub async fn rpc(
                 Ok(()) => call_tool(&state, chat_id, name, args).await,
                 Err(e) => Err(e),
             };
+            super::log_tool(&state, run_id, name, &outcome);
             match outcome {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]
@@ -176,6 +177,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
                     "title": { "type": "string" },
                     "prompt": { "type": "string", "description": "full instructions for the coding agent" },
                     "agent_name": { "type": "string", "description": "optional: bind a named agent from the library, spelled exactly as list_agents reports it. An unknown name is rejected. Omit it and a single agent the user @mentioned in their message is used instead." },
+                    "goal": { "type": "string", "description": "optional: the goal this card serves, by its title exactly as the Goals section lists it — or by its path, \"Parent > Title\", when two goals share a title. Omit it and a card made during a manager pass serves that manager's goal." },
                     "skill_name": { "type": "string", "description": "optional: how this card's work should be done — a skill name exactly as list_skills reports it. A card takes one skill. Omit it and a single skill the user @mentioned is used; if they named several, say which one each card uses." },
                     "model_tier": { "type": "string", "enum": ["easy", "medium", "complex"] },
                     "start": { "type": "boolean" }
@@ -396,6 +398,32 @@ async fn call_tool(
             let skill_id = skill.as_ref().map(|(id, _)| *id);
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
             let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
+            // A manager with reports delegates down its own tree, never
+            // across it — refused here, with the names it may use.
+            if let (Some(pass), Some(agent)) = (pass.as_ref(), agent_id) {
+                aichip_core::org_chart::may_delegate(&state.db, pass.id, agent)
+                    .await
+                    .map_err(|e| e.to_string())??;
+            }
+            // The goal it serves: named, or the manager's own.
+            let goal_id = match args
+                .get("goal")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|g| !g.is_empty())
+            {
+                Some(title) => Some(
+                    aichip_core::goals::by_title(&state.db, workspace_id, title)
+                        .await
+                        .map_err(|e| e.to_string())??,
+                ),
+                None => match pass.as_ref() {
+                    Some(p) => aichip_core::goals::of_pass(&state.db, p.id)
+                        .await
+                        .map_err(|e| e.to_string())?,
+                    None => None,
+                },
+            };
             // Checked before the card exists, so a refusal does not leave a
             // half-made card behind. `None` for the task: this one is about to
             // be created here, so it cannot have come from outside — only the
@@ -411,8 +439,8 @@ async fn call_tool(
             // below, can. A card sitting in 'running' with no run behind it is
             // the one state the board cannot explain.
             let row = sqlx::query(
-                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, skill_id, chat_id, board_column, engine)
-                 VALUES ($1,$2,$3,$4,$5,$7,$6,'backlog',$8)
+                "INSERT INTO tasks (project_id, title, prompt, model_tier, agent_id, skill_id, chat_id, board_column, engine, goal_id)
+                 VALUES ($1,$2,$3,$4,$5,$7,$6,'backlog',$8,$9)
                  RETURNING id",
             )
             .bind(project_id)
@@ -430,6 +458,7 @@ async fn call_tool(
             // one inherited a default from before there was more than one
             // engine.
             .bind(state.orchestrator.default_engine())
+            .bind(goal_id)
             .fetch_one(&state.db.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -592,9 +621,10 @@ async fn call_tool(
         }
         "list_agents" => {
             let rows = sqlx::query(
-                "SELECT name, description, model_tier, status FROM agents
-                  WHERE workspace_id=$1 AND status <> 'retired'
-                 ORDER BY name ASC",
+                "SELECT a.name, a.description, a.model_tier, a.status, a.title, m.name AS manager
+                   FROM agents a LEFT JOIN agents m ON m.id = a.reports_to AND m.status <> 'retired'
+                  WHERE a.workspace_id=$1 AND a.status <> 'retired'
+                 ORDER BY a.name ASC",
             )
             .bind(workspace_id)
             .fetch_all(&state.db.pool)
@@ -608,6 +638,8 @@ async fn call_tool(
                     // A paused agent can be given a card, but it will not
                     // start until a person resumes it.
                     "paused": r.get::<String, _>("status") != "active",
+                    "title": r.get::<Option<String>, _>("title"),
+                    "reports_to": r.get::<Option<String>, _>("manager"),
                 })).collect::<Vec<_>>()
             }))
         }

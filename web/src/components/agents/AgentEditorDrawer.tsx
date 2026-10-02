@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { HistoryButton } from "../RevisionsPanel";
+import { X } from "lucide-react";
 import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
 import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../lib/engines";
 import { TIERS } from "../TierPicker";
 import { AgentAvailability } from "./AgentAvailability";
+import { HeartbeatLog } from "./HeartbeatLog";
+import { AGENT_SWATCH_NAMES, AGENT_SWATCHES, DEFAULT_AGENT_COLOR } from "../../lib/swatches";
+import { Sheet } from "../ui/Dialog";
+import { Button, IconButton } from "../ui/Button";
+import { formChanged } from "../../lib/formDirty";
 
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
-const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
 
 export function AgentEditorDrawer({
   workspaceId,
@@ -25,7 +30,7 @@ export function AgentEditorDrawer({
   const [description, setDescription] = useState(agent?.description ?? "");
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt ?? "");
   const [tier, setTier] = useState<Tier>(agent?.modelTier ?? "medium");
-  const [color, setColor] = useState(agent?.color ?? COLORS[0]);
+  const [color, setColor] = useState(agent?.color ?? DEFAULT_AGENT_COLOR);
   // null = inherit the workspace default, which is what a new agent should do.
   const [preset, setPreset] = useState<string | null>(agent?.permissionPreset ?? null);
   const [effort, setEffort] = useState<Effort | "">(agent?.effort ?? "");
@@ -36,6 +41,11 @@ export function AgentEditorDrawer({
   const [maxConcurrent, setMaxConcurrent] = useState(agent?.maxConcurrent?.toString() ?? "");
   const [maxDaily, setMaxDaily] = useState(agent?.maxDailyRuns?.toString() ?? "");
   const [cooldown, setCooldown] = useState(agent?.cooldownSecs?.toString() ?? "");
+  // Its place on the org chart, and whether it pulls its own work.
+  const [title, setTitle] = useState(agent?.title ?? "");
+  const [reportsTo, setReportsTo] = useState<string>(agent?.reportsTo ?? "");
+  const [heartbeat, setHeartbeat] = useState<string>(agent?.heartbeatSecs?.toString() ?? "");
+  const [colleagues, setColleagues] = useState<Agent[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which connected MCP servers this agent may use. Opt-in per agent: a
@@ -43,13 +53,25 @@ export function AgentEditorDrawer({
   // connection just because the workspace has one configured.
   const [servers, setServers] = useState<McpServer[]>([]);
   const [enabledServers, setEnabledServers] = useState<string[]>([]);
+  // What it had when it was loaded, to tell an unsaved edit from none.
+  const [savedServers, setSavedServers] = useState<string[]>([]);
+
+  useEffect(() => {
+    api
+      .agents(workspaceId)
+      .then((r) => setColleagues(r.agents.filter((a) => a.id !== agent?.id)))
+      .catch(() => {});
+  }, [workspaceId, agent]);
 
   useEffect(() => {
     api.mcpServers(workspaceId).then((r) => setServers(r.servers)).catch(() => {});
     if (agent) {
       api
         .agentMcpServers(agent.id)
-        .then((r) => setEnabledServers(r.serverIds))
+        .then((r) => {
+          setEnabledServers(r.serverIds);
+          setSavedServers(r.serverIds);
+        })
         .catch(() => {});
     }
   }, [workspaceId, agent]);
@@ -80,6 +102,14 @@ export function AgentEditorDrawer({
       effort: effort || null,
       engine,
       ...limits,
+      // Only an existing agent has a place on the chart to change.
+      ...(agent
+        ? {
+            title: title.trim() || null,
+            reports_to: reportsTo || null,
+            heartbeat_secs: heartbeat ? Number(heartbeat) : null,
+          }
+        : {}),
     };
     try {
       // A new agent has no id until it exists, so the server list is saved
@@ -96,6 +126,45 @@ export function AgentEditorDrawer({
     }
   };
 
+  // Field by field against what the drawer opened with — the same defaults the
+  // state above starts from — so an untouched form closes on Escape as before.
+  const dirty = formChanged(
+    {
+      name: agent?.name,
+      description: agent?.description,
+      systemPrompt: agent?.systemPrompt,
+      tier: agent?.modelTier ?? "medium",
+      color: agent?.color ?? DEFAULT_AGENT_COLOR,
+      preset: agent?.permissionPreset,
+      effort: agent?.effort,
+      engine: agent?.engine,
+      maxConcurrent: agent?.maxConcurrent?.toString(),
+      maxDaily: agent?.maxDailyRuns?.toString(),
+      cooldown: agent?.cooldownSecs?.toString(),
+      title: agent?.title,
+      reportsTo: agent?.reportsTo,
+      heartbeat: agent?.heartbeatSecs?.toString(),
+      servers: [...savedServers].sort(),
+    },
+    {
+      name,
+      description,
+      systemPrompt,
+      tier,
+      color,
+      preset,
+      effort,
+      engine,
+      maxConcurrent,
+      maxDaily,
+      cooldown,
+      title,
+      reportsTo,
+      heartbeat,
+      servers: [...enabledServers].sort(),
+    },
+  );
+
   const remove = async () => {
     if (!agent) return;
     await api.deleteAgent(agent.id);
@@ -103,210 +172,253 @@ export function AgentEditorDrawer({
   };
 
   return (
-    <motion.aside
-      initial={{ x: 480 }}
-      animate={{ x: 0 }}
-      exit={{ x: 480 }}
-      transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-line bg-panel"
+    <Sheet
+      open
+      onOpenChange={(o) => !o && onClose()}
+      dismissible={!dirty}
+      width={480}
+      title={agent ? `Edit ${agent.name}` : "New agent"}
     >
-      <div className="flex items-center justify-between border-b border-line p-5">
-        <div className="text-base font-semibold">
-          {agent ? `Edit ${agent.name}` : "New agent"}
-        </div>
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">
-          ✕
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-        {agent && !agent.builtin && <AgentAvailability agent={agent} onChanged={onChanged} />}
-        <Field label="Name">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-        <Field label="Color">
-          <div className="flex gap-2">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                onClick={() => setColor(c)}
-                className="h-7 w-7 rounded-full border-2"
-                style={{ background: c, borderColor: color === c ? "var(--color-ink)" : "transparent" }}
-              />
-            ))}
-          </div>
-        </Field>
-        <Field label="Description">
-          <input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-        <Field label="System prompt">
-          <textarea
-            value={systemPrompt}
-            onChange={(e) => setSystemPrompt(e.target.value)}
-            rows={7}
-            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-            placeholder="Role, approach, output standards…"
-          />
-        </Field>
-        <Field label="Model tier">
-          <div className="flex gap-2">
-            {TIERS.map((t) => (
-              <button
-                key={t}
-                onClick={() => setTier(t)}
-                className="flex-1 rounded-lg border px-3 py-2 text-sm capitalize"
-                style={{
-                  borderColor: tier === t ? tierColor[t] : "var(--color-line)",
-                  color: tier === t ? tierColor[t] : "var(--color-ink-dim)",
-                }}
-              >
-                {t}
-                <span className="block text-[11px] opacity-75">{tierModel(t)}</span>
-              </button>
-            ))}
-          </div>
-        </Field>
-        <Field label="Thinking">
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => setEffort("")}
-              className={`rounded-lg border px-2 py-1.5 text-xs ${
-                effort === "" ? "border-accent text-accent" : "border-line text-ink-dim"
-              }`}
-            >
-              default
-            </button>
-            {EFFORTS.map((e) => (
-              <button
-                key={e}
-                onClick={() => setEffort(e)}
-                className={`flex-1 rounded-lg border px-1 py-1.5 text-xs ${
-                  effort === e ? "border-accent text-accent" : "border-line text-ink-dim"
-                }`}
-              >
-                {e}
-              </button>
-            ))}
-          </div>
-          <div className="mt-1 text-[11px] text-ink-dim">
-            How hard this agent thinks before answering. Separate from the model —
-            more thinking is usually cheaper than a bigger model.
-          </div>
-        </Field>
-        <Field label="Limits">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">at a time</span>
-            <input value={maxDaily} onChange={(e) => setMaxDaily(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">runs a day</span>
-            <input value={cooldown} onChange={(e) => setCooldown(e.target.value)} inputMode="numeric" placeholder="—" className="w-16 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">seconds' rest between runs</span>
-          </div>
-          <div className="mt-1.5 text-[11px] text-ink-dim">
-            Empty is no limit. Work over a limit waits its turn in the queue rather than failing.
-          </div>
-        </Field>
-        <Field label="Permissions">
-          <div className="flex flex-wrap gap-2">
-            {([
-              [null, "Workspace default"],
-              ["reviewed", "Ask first"],
-              ["auto_edit", "Edit freely"],
-              ["full_auto", "Don't ask"],
-            ] as [string | null, string][]).map(([value, label]) => (
-              <button
-                key={label}
-                onClick={() => setPreset(value)}
-                className={`rounded-lg border px-3 py-2 text-sm ${
-                  preset === value
-                    ? "border-accent text-accent"
-                    : "border-line text-ink-dim"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="mt-1 text-[11px] text-ink-dim">
-            An agent's own setting overrides the workspace default for any card it
-            runs. Leave it on "Workspace default" unless this agent specifically
-            needs more or less freedom than the rest.
-          </div>
-          <EngineWarning engine={engine} preset={preset} />
-        </Field>
-        <EngineField engine={engine} onChange={setEngine} />
-        {servers.length > 0 && (
-          <Field label="Connections">
-            <div className="space-y-1.5">
-              {servers.map((s) => (
-                <label
-                  key={s.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2.5 hover:bg-panel-2"
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+          {agent && !agent.builtin && <AgentAvailability agent={agent} onChanged={onChanged} />}
+          <Field label="Name">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+          </Field>
+          {agent && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Title">
+                <input
+                  value={title}
+                  maxLength={80}
+                  placeholder="e.g. Backend lead"
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+                />
+              </Field>
+              <Field label="Reports to">
+                <select
+                  value={reportsTo}
+                  onChange={(e) => setReportsTo(e.target.value)}
+                  aria-label="Reports to"
+                  className="w-full rounded-lg border border-border bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
                 >
-                  <input
-                    type="checkbox"
-                    checked={enabledServers.includes(s.id)}
-                    onChange={(e) =>
-                      setEnabledServers((prev) =>
-                        e.target.checked
-                          ? [...prev, s.id]
-                          : prev.filter((id) => id !== s.id),
-                      )
-                    }
-                    className="mt-0.5 accent-[var(--color-accent)]"
-                  />
-                  <span className="min-w-0 text-xs">
-                    <span className="font-medium">{s.name}</span>
-                    <span className="mt-0.5 block truncate text-ink-dim">
-                      {s.transport === "stdio"
-                        ? [s.command, ...s.args].join(" ")
-                        : s.url}
-                    </span>
-                  </span>
-                </label>
+                  <option value="">Nobody — top of the chart</option>
+                  {colleagues.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          )}
+          {agent && (
+            <Field label="Heartbeat">
+              <select
+                value={heartbeat}
+                onChange={(e) => setHeartbeat(e.target.value)}
+                aria-label="Heartbeat"
+                className="w-full rounded-lg border border-border bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
+              >
+                <option value="">Off — it works only when given a card</option>
+                <option value="300">Every 5 minutes</option>
+                <option value="900">Every 15 minutes</option>
+                <option value="3600">Every hour</option>
+                <option value="14400">Every 4 hours</option>
+              </select>
+              <p className="mt-1 text-[11px] leading-relaxed text-fg-muted">
+                On a heartbeat it starts its next unblocked card from the backlog — through the Start button's own
+                checks, so budgets, limits and Full Auto still apply. With nothing to do it records an idle beat, at no cost.
+              </p>
+              <HeartbeatLog agentId={agent.id} />
+            </Field>
+          )}
+          <Field label="Color">
+            <div className="flex gap-2" role="group" aria-label="Color">
+              {AGENT_SWATCHES.map((c, i) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(c)}
+                  aria-label={AGENT_SWATCH_NAMES[c] ?? `Colour ${i + 1}`}
+                  aria-pressed={color === c}
+                  title={AGENT_SWATCH_NAMES[c]}
+                  className="ring-focus h-7 w-7 rounded-full border-2"
+                  style={{ background: c, borderColor: color === c ? "var(--color-fg)" : "transparent" }}
+                />
               ))}
             </div>
-            <div className="mt-1.5 text-[11px] text-ink-dim">
-              Tools from these servers become available to this agent on every run.
+          </Field>
+          <Field label="Description">
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+          </Field>
+          <Field label="System prompt">
+            <textarea
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              rows={7}
+              className="w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+              placeholder="Role, approach, output standards…"
+            />
+          </Field>
+          <Field label="Model tier">
+            <div className="flex gap-2">
+              {TIERS.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTier(t)}
+                  className="flex-1 rounded-lg border px-3 py-2 text-sm capitalize"
+                  style={{
+                    borderColor: tier === t ? tierColor[t] : "var(--color-border)",
+                    color: tier === t ? tierColor[t] : "var(--color-fg-muted)",
+                  }}
+                >
+                  {t}
+                  <span className="block text-[11px] opacity-75">{tierModel(t)}</span>
+                </button>
+              ))}
             </div>
           </Field>
-        )}
-        {error && (
-          <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
-        )}
-        {agent && <MemorySection agentId={agent.id} />}
-      </div>
+          <Field label="Thinking">
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setEffort("")}
+                className={`rounded-lg border px-2 py-1.5 text-xs ${
+                  effort === "" ? "border-accent text-accent-fg" : "border-border text-fg-muted"
+                }`}
+              >
+                default
+              </button>
+              {EFFORTS.map((e) => (
+                <button
+                  key={e}
+                  onClick={() => setEffort(e)}
+                  className={`flex-1 rounded-lg border px-1 py-1.5 text-xs ${
+                    effort === e ? "border-accent text-accent-fg" : "border-border text-fg-muted"
+                  }`}
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1 text-[11px] text-fg-muted">
+              How hard this agent thinks before answering. Separate from the model —
+              more thinking is usually cheaper than a bigger model.
+            </div>
+          </Field>
+          <Field label="Limits">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-border bg-panel px-2 py-1.5" />
+              <span className="text-fg-muted">at a time</span>
+              <input value={maxDaily} onChange={(e) => setMaxDaily(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-border bg-panel px-2 py-1.5" />
+              <span className="text-fg-muted">runs a day</span>
+              <input value={cooldown} onChange={(e) => setCooldown(e.target.value)} inputMode="numeric" placeholder="—" className="w-16 rounded-lg border border-border bg-panel px-2 py-1.5" />
+              <span className="text-fg-muted">seconds' rest between runs</span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-fg-muted">
+              Empty is no limit. Work over a limit waits its turn in the queue rather than failing.
+            </div>
+          </Field>
+          <Field label="Permissions">
+            <div className="flex flex-wrap gap-2">
+              {([
+                [null, "Workspace default"],
+                ["reviewed", "Ask first"],
+                ["auto_edit", "Edit freely"],
+                ["full_auto", "Don't ask"],
+              ] as [string | null, string][]).map(([value, label]) => (
+                <button
+                  key={label}
+                  onClick={() => setPreset(value)}
+                  className={`rounded-lg border px-3 py-2 text-sm ${
+                    preset === value
+                      ? "border-accent text-accent-fg"
+                      : "border-border text-fg-muted"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1 text-[11px] text-fg-muted">
+              An agent's own setting overrides the workspace default for any card it
+              runs. Leave it on "Workspace default" unless this agent specifically
+              needs more or less freedom than the rest.
+            </div>
+            <EngineWarning engine={engine} preset={preset} />
+          </Field>
+          <EngineField engine={engine} onChange={setEngine} />
+          {servers.length > 0 && (
+            <Field label="Connections">
+              <div className="space-y-1.5">
+                {servers.map((s) => (
+                  <label
+                    key={s.id}
+                    className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 hover:bg-panel-2"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={enabledServers.includes(s.id)}
+                      onChange={(e) =>
+                        setEnabledServers((prev) =>
+                          e.target.checked
+                            ? [...prev, s.id]
+                            : prev.filter((id) => id !== s.id),
+                        )
+                      }
+                      className="mt-0.5 accent-[var(--color-accent)]"
+                    />
+                    <span className="min-w-0 text-xs">
+                      <span className="font-medium">{s.name}</span>
+                      <span className="mt-0.5 block truncate text-fg-muted">
+                        {s.transport === "stdio"
+                          ? [s.command, ...s.args].join(" ")
+                          : s.url}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-1.5 text-[11px] text-fg-muted">
+                Tools from these servers become available to this agent on every run.
+              </div>
+            </Field>
+          )}
+          {error && (
+            <div className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
+          )}
+          {agent && <MemorySection agentId={agent.id} />}
+        </div>
 
-      <div className="flex items-center justify-between border-t border-line p-4">
-        {agent && !agent.builtin ? (
-          <button
-            onClick={remove}
-            title="An agent that has run anything is retired instead, so its history keeps its name"
-            className="text-sm text-danger hover:underline"
-          >
-            Delete
-          </button>
-        ) : (
-          <span />
-        )}
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={save}
-          disabled={busy || !name.trim()}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          {busy ? "Saving…" : "Save agent"}
-        </motion.button>
+        <div className="flex items-center justify-between border-t border-border p-4">
+          {agent && !agent.builtin ? (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={remove}
+              title="An agent that has run anything is retired instead, so its history keeps its name"
+            >
+              Delete
+            </Button>
+          ) : (
+            <span />
+          )}
+          {agent && <HistoryButton kind="agent" id={agent.id} onRestored={onChanged} />}
+          <Button variant="primary" onClick={save} disabled={busy || !name.trim()}>
+            {busy ? "Saving…" : "Save agent"}
+          </Button>
+        </div>
       </div>
-    </motion.aside>
+    </Sheet>
   );
 }
 
@@ -326,7 +438,7 @@ function MemorySection({ agentId }: { agentId: string }) {
   return (
     <Field label={`Memory (${memories.length})`}>
       {memories.length === 0 ? (
-        <div className="text-xs text-ink-dim">
+        <div className="text-xs text-fg-muted">
           Nothing yet — memories appear as this agent completes tasks and
           answers mentions, and are fed into its next runs.
         </div>
@@ -335,22 +447,23 @@ function MemorySection({ agentId }: { agentId: string }) {
           {memories.map((m) => (
             <div
               key={m.id}
-              className="group flex items-start gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-xs"
+              className="group flex items-start gap-2 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs"
             >
               <div className="min-w-0 flex-1">
-                <div className="text-[10px] text-ink-dim">
+                <div className="text-[10px] text-fg-muted">
                   {new Date(m.ts).toLocaleDateString()} · {m.projectName ?? "all projects"} ·{" "}
                   {m.kind.replace("_", " ")}
                 </div>
                 <div className="mt-0.5 break-words">{m.content}</div>
               </div>
-              <button
+              <IconButton
+                size="xs"
+                label="Forget"
                 onClick={() => api.forgetMemory(m.id).then(refresh)}
-                title="Forget"
-                className="shrink-0 text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+                className="opacity-0 hover:text-danger-fg! group-hover:opacity-100 focus-visible:opacity-100"
               >
-                ✕
-              </button>
+                <X className="size-3.5" />
+              </IconButton>
             </div>
           ))}
         </div>
@@ -362,7 +475,7 @@ function MemorySection({ agentId }: { agentId: string }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </div>
       {children}
@@ -383,7 +496,7 @@ function EngineField({
   return (
     <Field label="Engine">
       <EnginePicker value={engine} onChange={onChange} inheritLabel="Whatever the card says" />
-      <div className="mt-1 text-[11px] text-ink-dim">
+      <div className="mt-1 text-[11px] text-fg-muted">
         Which CLI this agent runs on. Pinning one is worth it when the agent
         depends on something only that engine does.
       </div>
@@ -401,7 +514,7 @@ function EngineWarning({ engine, preset }: { engine: string | null; preset: stri
   const blocker = permissionBlocker(descriptor, preset ?? "");
   if (!blocker) return null;
   return (
-    <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+    <div className="mt-2 rounded-lg border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[11px] text-warning-fg">
       {blocker} Cards using this agent would be refused when you start them.
     </div>
   );

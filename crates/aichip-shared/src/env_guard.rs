@@ -93,6 +93,14 @@ const VENDOR_PREFIXES: &[&str] = &[
     "REPLICATE_",
     "OLLAMA_",
     "OPENCODE_",
+    // The CLIs added with Gemini, Cursor, Qwen Code and Amp. Each namespace
+    // carries its own key and, for some, settings that would rewrite how the
+    // CLI runs — refused wholesale for the reason OPENCODE_ is.
+    "CURSOR_",
+    "AGENT_CLI_",
+    "QWEN_",
+    "DASHSCOPE_",
+    "AMP_",
 ];
 
 /// Would setting this variable hand an agent a credential — or let it rewrite
@@ -116,6 +124,31 @@ pub fn auth_env_refusal(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_newer_engines_keys_are_refused_too() {
+        for key in [
+            "CURSOR_API_KEY",
+            "AGENT_CLI_TOKEN",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "AMP_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_CLOUD_PROJECT",
+        ] {
+            assert!(is_auth_env(key), "{key}");
+        }
+        // And nothing ordinary is caught by the new prefixes.
+        for key in [
+            "AICHIP_RUN_ID",
+            "MCP_TOOL_TIMEOUT",
+            "PATH",
+            "AMPLIFY",
+            "CURSORY",
+        ] {
+            assert!(!is_auth_env(key), "{key}");
+        }
+    }
 
     #[test]
     fn the_original_anthropic_names_are_still_caught() {

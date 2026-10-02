@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Project, Skill, SkillInstall, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Card, Empty, Item, Page, PageHead, Stagger, TintIcon } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button } from "../components/ui/Button";
+import { Dialog } from "../components/ui/Dialog";
 
 /**
  * Skills: a named way of doing something, smaller than an agent.
@@ -64,27 +64,23 @@ export default function SkillsPage() {
         }
         actions={
           <div className="flex shrink-0 items-center gap-2">
-          <motion.button
-            {...tappable}
-            onClick={() => setInstalling(true)}
-            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent"
-          >
+          <Button variant="secondary" size="md" onClick={() => setInstalling(true)}>
             Add from a registry
-          </motion.button>
-          <motion.button
-            {...tappable}
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
             onClick={add}
-            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+            icon={<Icon name="plus" size={15} strokeWidth={2.5} />}
           >
-            <Icon name="plus" size={15} strokeWidth={2.5} />
             New skill
-          </motion.button>
+          </Button>
           </div>
         }
       />
 
       {error && (
-        <div className="mb-4 max-w-xl rounded-xl bg-red-50 px-3.5 py-2.5 text-xs text-danger">
+        <div className="mb-4 max-w-xl rounded-xl bg-danger-subtle px-3.5 py-2.5 text-xs text-danger-fg">
           {error}
         </div>
       )}
@@ -102,22 +98,22 @@ export default function SkillsPage() {
                     @{s.name}
                   </span>
                   {!s.enabled && (
-                    <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-ink-dim">
+                    <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted">
                       off
                     </span>
                   )}
                 </div>
               </div>
-              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-fg-muted">
                 {s.description || "no description yet"}
               </p>
               {s.sourceRepo && (
-                <p className="mt-2 truncate font-mono text-[10px] text-ink-dim">
+                <p className="mt-2 truncate font-mono text-[10px] text-fg-muted">
                   mirrors {s.sourceRepo}
                 </p>
               )}
               {s.mustNot.trim() && (
-                <p className="mt-2 line-clamp-1 rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                <p className="mt-2 line-clamp-1 rounded-lg bg-warning-subtle px-2 py-1 text-[11px] text-warning-fg">
                   won't: {s.mustNot}
                 </p>
               )}
@@ -135,32 +131,28 @@ export default function SkillsPage() {
         )}
       </Stagger>
 
-      <AnimatePresence>
-        {installing && active && (
-          <InstallFromRegistry
-            workspaceId={active.id}
-            onClose={() => setInstalling(false)}
-            onInstalled={load}
-          />
-        )}
-      </AnimatePresence>
+      {installing && active && (
+        <InstallFromRegistry
+          workspaceId={active.id}
+          onClose={() => setInstalling(false)}
+          onInstalled={load}
+        />
+      )}
 
-      <AnimatePresence>
-        {editing && (
-          <SkillEditor
-            skill={editing}
-            onClose={() => setEditing(null)}
-            onChanged={(s) => {
-              setEditing(s);
-              load();
-            }}
-            onDeleted={() => {
-              setEditing(null);
-              load();
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {editing && (
+        <SkillEditor
+          skill={editing}
+          onClose={() => setEditing(null)}
+          onChanged={(s) => {
+            setEditing(s);
+            load();
+          }}
+          onDeleted={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
     </Page>
   );
 }
@@ -182,6 +174,19 @@ function SkillEditor({
   const [trying, setTrying] = useState(false);
   const [tryPrompt, setTryPrompt] = useState("");
   const [result, setResult] = useState<{ output: string; prompt: string } | null>(null);
+
+  const dirty =
+    draft.name !== skill.name ||
+    draft.description !== skill.description ||
+    draft.instructions !== skill.instructions ||
+    draft.mustNot !== skill.mustNot;
+  // A close request saves an unsaved edit first, but only once per edit: a
+  // save the server refuses leaves `dirty` set, and every later close would
+  // otherwise just repeat it and never close.
+  const closeSaved = useRef(false);
+  useEffect(() => {
+    closeSaved.current = false;
+  }, [draft]);
 
   const save = async (patch: Partial<Skill> = {}) => {
     setBusy(true);
@@ -218,23 +223,44 @@ function SkillEditor({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={busy ? undefined : onClose}
-      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/25 backdrop-blur-[3px] p-4"
+    <Dialog
+      open
+      // Closing mid-save would drop the answer on the floor, as the scrim click
+      // did before. Fields save on blur, and Escape or a click outside closes
+      // without one — so an unsaved edit is saved first, and only the next
+      // request closes, the way the scrim click used to save and stay open —
+      // whether or not that save was accepted.
+      onOpenChange={(o) => {
+        if (o || busy) return;
+        if (dirty && !closeSaved.current) {
+          closeSaved.current = true;
+          save();
+          return;
+        }
+        onClose();
+      }}
+      title="Skill"
+      width={672}
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Done
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            className="ml-auto"
+            onClick={async () => {
+              await api.deleteSkill(skill.id);
+              onDeleted();
+            }}
+          >
+            Delete
+          </Button>
+        </>
+      }
     >
-      <motion.div
-        initial={{ scale: 0.97, y: 12, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ scale: 0.97, y: 8 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow-lg my-8 w-full max-w-2xl rounded-2xl border border-line bg-panel p-5"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-sm font-semibold">Skill</h3>
+        <div className="flex items-start justify-end gap-3">
           <label className="flex shrink-0 items-center gap-2 text-xs">
             <input
               type="checkbox"
@@ -242,7 +268,7 @@ function SkillEditor({
               disabled={busy}
               onChange={(e) => save({ enabled: e.target.checked })}
             />
-            <span className={draft.enabled ? "text-ink" : "text-ink-dim"}>
+            <span className={draft.enabled ? "text-fg" : "text-fg-muted"}>
               {draft.enabled ? "In use" : "Off"}
             </span>
           </label>
@@ -254,7 +280,7 @@ function SkillEditor({
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             onBlur={() => draft.name !== skill.name && save()}
             disabled={busy}
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 font-mono text-sm outline-none focus:border-accent"
           />
         </Field>
 
@@ -265,7 +291,7 @@ function SkillEditor({
             onBlur={() => save()}
             disabled={busy}
             placeholder="how we cut a release"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
           />
         </Field>
 
@@ -277,7 +303,7 @@ function SkillEditor({
             disabled={busy}
             rows={8}
             placeholder={"Name the steps, in order.\nSay what the finished thing looks like.\nSay when to stop and ask."}
-            className="w-full resize-y rounded-lg border border-line bg-surface p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
+            className="w-full resize-y rounded-lg border border-border bg-bg p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
           />
         </Field>
 
@@ -295,15 +321,15 @@ function SkillEditor({
             disabled={busy}
             rows={3}
             placeholder="never force-push; never edit files outside src/"
-            className="w-full resize-y rounded-lg border border-line bg-surface p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
+            className="w-full resize-y rounded-lg border border-border bg-bg p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
           />
         </Field>
 
-        <div className="mt-5 rounded-xl border border-line bg-surface p-3">
+        <div className="mt-5 rounded-xl border border-border bg-bg p-3">
           <div className="text-xs font-medium">Try it</div>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
+          <p className="mt-0.5 text-[11px] leading-relaxed text-fg-muted">
             Runs the skill against one harmless prompt, with{" "}
-            <span className="font-medium text-ink">no tools, no repository and no worktree</span> —
+            <span className="font-medium text-fg">no tools, no repository and no worktree</span> —
             so whatever it says to do, there is nothing here to do it to. This tells you how
             the skill reads, not what it would do to your files.
           </p>
@@ -312,15 +338,16 @@ function SkillEditor({
               value={tryPrompt}
               onChange={(e) => setTryPrompt(e.target.value)}
               placeholder="Describe what you would do for: bump the version to 2.1"
-              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent"
             />
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={runTry}
               disabled={trying || !tryPrompt.trim()}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-40"
             >
               {trying ? "Trying…" : "Try it"}
-            </button>
+            </Button>
           </div>
           {result && (
             <div className="mt-3">
@@ -330,10 +357,10 @@ function SkillEditor({
               <details className="mt-1.5">
                 {/* Half of what a test tells you is whether the skill says what
                     you thought it said. */}
-                <summary className="cursor-pointer text-[11px] text-ink-dim">
+                <summary className="cursor-pointer text-[11px] text-fg-muted">
                   what it was actually sent
                 </summary>
-                <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-panel p-2 font-mono text-[10px] text-ink-dim">
+                <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-panel p-2 font-mono text-[10px] text-fg-muted">
                   {result.prompt}
                 </pre>
               </details>
@@ -342,32 +369,16 @@ function SkillEditor({
         </div>
 
         {error && (
-          <div className="mt-3 whitespace-pre-wrap rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
+          <div className="mt-3 whitespace-pre-wrap rounded-lg bg-danger-subtle px-3 py-2 text-[11px] leading-relaxed text-danger-fg">
             {error}
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2">
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
-            Done
-          </button>
-          <button
-            onClick={async () => {
-              await api.deleteSkill(skill.id);
-              onDeleted();
-            }}
-            className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger"
-          >
-            Delete
-          </button>
-        </div>
-
-        <p className="mt-3 text-[11px] leading-relaxed text-ink-dim">
-          <span className="font-medium text-ink">No secrets here.</span> This text goes into
+        <p className="mt-3 text-[11px] leading-relaxed text-fg-muted">
+          <span className="font-medium text-fg">No secrets here.</span> This text goes into
           a prompt, so a save containing something key-shaped is refused.
         </p>
-      </motion.div>
-    </motion.div>
+    </Dialog>
   );
 }
 
@@ -382,11 +393,11 @@ function Field({
 }) {
   return (
     <div className="mt-4">
-      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </span>
       {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-dim/80">{hint}</p>}
+      {hint && <p className="mt-1 text-[11px] text-fg-muted/80">{hint}</p>}
     </div>
   );
 }
@@ -446,36 +457,49 @@ function InstallFromRegistry({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={busy ? undefined : onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-4 backdrop-blur-[3px]"
-    >
-      <motion.div
-        initial={{ scale: 0.97, y: 12, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-panel p-5"
-      >
-        <h2 className="text-sm font-semibold">Add skills from a registry</h2>
-        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+    <Dialog
+      open
+      // An install in flight is not abandoned by a stray click or Escape.
+      onOpenChange={(o) => !o && !busy && onClose()}
+      title="Add skills from a registry"
+      description={
+        <>
           Installs an Agent Skill with <code className="font-mono">npx skills</code>. The files
           land in the project you pick and are committed, which is what lets a card's worktree
           see them; each skill is also mirrored into this library so you can{" "}
           <code className="font-mono">@name</code> it anywhere.
-        </p>
-
-        <label className="mt-4 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        </>
+      }
+      width={512}
+      footer={
+        <>
+          {busy && (
+            <span className="mr-auto text-[11px] text-fg-muted">
+              fetching the package, then the repository — this takes a moment
+            </span>
+          )}
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>
+            {result ? "Done" : "Cancel"}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={install}
+            disabled={busy || !projectId || !reference.trim()}
+          >
+            {busy ? "Installing…" : result ? "Install another" : "Install"}
+          </Button>
+        </>
+      }
+    >
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Install into
           </span>
           <select
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -486,28 +510,28 @@ function InstallFromRegistry({
         </label>
 
         <label className="mt-3 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Repository
           </span>
           <input
             value={reference}
             onChange={(e) => setReference(e.target.value)}
             placeholder="vercel-labs/agent-skills"
-            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
           />
-          <span className="mt-1 block text-[11px] text-ink-dim">
+          <span className="mt-1 block text-[11px] text-fg-muted">
             owner/repo, or a link from github.com or skills.sh.
           </span>
         </label>
 
-        <p className="mt-3 rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
+        <p className="mt-3 rounded-lg bg-warning-subtle px-2.5 py-2 text-[11px] leading-relaxed text-warning-fg">
           A skill is instructions, and sometimes scripts, written by somebody else — and it runs
           with whatever permissions you give the agent. Read one before you rely on it; what it
           brought with it is listed below once it lands.
         </p>
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-danger">{error}</div>
+          <div className="mt-3 rounded-lg bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">{error}</div>
         )}
 
         {result && (
@@ -518,11 +542,11 @@ function InstallFromRegistry({
               {result.committed ? " and committed them." : " — but the commit did not happen, so a card's worktree will not see them yet."}
             </p>
             {result.skills.map((s) => (
-              <div key={s.name} className="rounded-lg border border-line p-2.5">
+              <div key={s.name} className="rounded-lg border border-border p-2.5">
                 <div className="font-mono text-xs font-semibold">@{s.name}</div>
-                <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-dim">{s.description}</p>
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-fg-muted">{s.description}</p>
                 {s.bundled.length > 0 && (
-                  <p className="mt-1 text-[11px] text-amber-700">
+                  <p className="mt-1 text-[11px] text-warning-fg">
                     ships {s.bundled.length} file{s.bundled.length === 1 ? "" : "s"}:{" "}
                     <span className="font-mono">{s.bundled.slice(0, 4).join(", ")}</span>
                     {s.bundled.length > 4 && ` and ${s.bundled.length - 4} more`}
@@ -536,28 +560,6 @@ function InstallFromRegistry({
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2 border-t border-line pt-3">
-          <button
-            onClick={install}
-            disabled={busy || !projectId || !reference.trim()}
-            className="ring-focus rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-40"
-          >
-            {busy ? "Installing…" : result ? "Install another" : "Install"}
-          </button>
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-40"
-          >
-            {result ? "Done" : "Cancel"}
-          </button>
-          {busy && (
-            <span className="text-[11px] text-ink-dim">
-              fetching the package, then the repository — this takes a moment
-            </span>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
+    </Dialog>
   );
 }

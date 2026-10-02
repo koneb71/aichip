@@ -113,16 +113,10 @@ function useNotifier(activity: Activity | null) {
       return;
     }
 
+    // Plans and permission prompts are announced by the inbox now
+    // (`lib/inbox`), which knows every kind of waiting; announcing them here
+    // too would knock twice.
     if (notificationsOn()) {
-      for (const b of activity.blocked) {
-        const key = `${b.kind}:${b.requestId ?? b.runId}`;
-        if (announced.current.has(key)) continue;
-        notify(
-          b.kind === "plan" ? "A plan needs your review" : `Allow ${b.tool ?? "a tool"}?`,
-          b.label,
-          key,
-        );
-      }
       for (const r of activity.live.filter((x) => x.status === "rate_limited")) {
         if (announced.current.has(`limit:${r.id}`)) continue;
         notify("Rate limited", `${r.label} is waiting for the limit to reset`, `limit:${r.id}`);
@@ -139,7 +133,7 @@ function useNotifier(activity: Activity | null) {
   }, [activity]);
 }
 
-function notify(title: string, body: string, tag: string) {
+export function notify(title: string, body: string, tag: string) {
   try {
     // `tag` collapses repeats: the same prompt re-announced after a reload
     // replaces its own notification instead of stacking a second one.

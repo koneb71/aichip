@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Outlet, useNavigate, useParams } from "react-router-dom";
-import { motion } from "framer-motion";
 import { api, Space } from "../../lib/api";
 import { TreePage } from "../../lib/kbTree";
 import { useWorkspace } from "../../lib/workspace";
@@ -8,7 +7,7 @@ import { PageTree } from "../../components/kb/PageTree";
 import { GenerateModal } from "../../components/kb/GenerateModal";
 import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
 import { Icon } from "../../components/ui/Icon";
-import { tappable } from "../../lib/motion";
+import { Button } from "../../components/ui/Button";
 
 /** What the tree rail shares with whichever page is open beside it. */
 export interface KnowledgeContext {
@@ -120,11 +119,11 @@ export default function KnowledgeLayout() {
   if (!active) return null;
 
   const rail = (
-    <div className="flex h-full min-h-0 flex-col gap-2 border-r border-line bg-panel p-3">
+    <div className="flex h-full min-h-0 flex-col gap-2 border-r border-border bg-panel p-3">
       <select
         value={spaceId ?? ""}
         onChange={(e) => setSpaceId(e.target.value || null)}
-        className="ring-focus rounded-xl border border-line bg-panel px-2.5 py-2 text-sm outline-none transition-colors focus:border-accent"
+        className="ring-focus rounded-xl border border-border bg-panel px-2.5 py-2 text-sm text-fg outline-none transition-colors focus:border-accent"
       >
         {spaces.map((s) => (
           <option key={s.id ?? "general"} value={s.id ?? ""}>
@@ -136,28 +135,28 @@ export default function KnowledgeLayout() {
       {/* The icon sits inside the field rather than beside it, so the rail
           keeps one column and the input keeps its full width. */}
       <div className="relative">
-        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-dim">
+        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted">
           <Icon name="search" size={14} />
         </span>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search every page…"
-          className="ring-focus w-full rounded-xl border border-line bg-surface py-2 pl-8 pr-2.5 text-xs outline-none transition-colors focus:border-accent focus:bg-panel"
+          className="ring-focus w-full rounded-xl border border-border bg-bg py-2 pl-8 pr-2.5 text-xs text-fg placeholder:text-fg-subtle outline-none transition-colors focus:border-accent focus:bg-panel"
         />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {hits ? (
           <div className="flex flex-col">
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-dim">
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-muted">
               {hits.length} result{hits.length === 1 ? "" : "s"} across all spaces
             </div>
             {hits.map((h) => (
               <button
                 key={h.id}
                 onClick={() => navigate(`/knowledge/${h.id}`)}
-                className="ring-focus truncate rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-panel-2"
+                className="ring-focus truncate rounded-lg px-2 py-1.5 text-left text-sm text-fg transition-colors hover:bg-panel-2"
               >
                 {h.icon || "▦"} {h.title}
               </button>
@@ -168,23 +167,22 @@ export default function KnowledgeLayout() {
         )}
       </div>
 
-      <div className="flex flex-col gap-1.5 border-t border-line pt-2">
-        <motion.button
-          {...tappable}
+      <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+        <Button
+          variant="primary"
+          className="w-full"
           onClick={() => createPage(null)}
-          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+          icon={<Icon name="plus" size={13} strokeWidth={2.5} />}
         >
-          <Icon name="plus" size={13} strokeWidth={2.5} />
           New page
-        </motion.button>
-        <motion.button
-          {...tappable}
+        </Button>
+        <Button
+          className="w-full"
           onClick={() => setGenerating(true)}
-          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent"
+          icon={<Icon name="sparkle" size={13} />}
         >
-          <Icon name="sparkle" size={13} />
           Ask an agent to write one
-        </motion.button>
+        </Button>
       </div>
     </div>
   );
@@ -208,7 +206,7 @@ export default function KnowledgeLayout() {
         <>
           <button
             onClick={() => setRailOpen((v) => !v)}
-            className="flex shrink-0 items-center gap-2 border-b border-line bg-panel px-3 py-2.5 text-left text-sm font-medium"
+            className="flex shrink-0 items-center gap-2 border-b border-border bg-panel px-3 py-2.5 text-left text-sm font-medium text-fg"
           >
             <Icon name="knowledge" size={15} />
             Pages

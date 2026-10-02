@@ -3,6 +3,7 @@
 #![recursion_limit = "256"]
 
 pub mod app_bridge;
+pub mod audit_layer;
 pub mod mcp;
 pub mod preview_proxy;
 pub mod routes;
@@ -36,7 +37,14 @@ pub struct AppState {
 
 pub fn app(state: AppState) -> Router {
     let mut router = Router::new()
-        .nest("/api", routes::api_router())
+        // After routing, so the ledger sees each route's template and ids.
+        .nest(
+            "/api",
+            routes::api_router().route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                audit_layer::record,
+            )),
+        )
         .nest("/mcp", mcp::mcp_router())
         .route("/ws", axum::routing::get(ws::ws_handler))
         // At the root, not under /api: the dashboard dials /ws/terminal/…,

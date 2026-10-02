@@ -22,6 +22,46 @@ pub fn router() -> Router<AppState> {
         .route("/agents/{id}/retire", post(retire))
         .route("/agents/{id}/memories", get(memories))
         .route("/agent-memories/{id}", axum::routing::delete(forget))
+        .route("/workspaces/{id}/org-chart", get(org_chart))
+        .route("/agents/{id}/heartbeats", get(heartbeats))
+        .route("/workspaces/{id}/heartbeats", get(workspace_heartbeats))
+}
+
+/// An agent's recent heartbeats: what each one did.
+async fn heartbeats(
+    State(state): State<AppState>,
+    Path(agent): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let beats = aichip_core::heartbeat::recent(&state.db, agent, 50)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "beats": beats })))
+}
+
+/// Beats across the workspace that started or fired something.
+async fn workspace_heartbeats(
+    State(state): State<AppState>,
+    Path(workspace): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let beats = aichip_core::heartbeat::recent_in(&state.db, workspace, 20)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "beats": beats.into_iter().map(|(agent, b)| json!({ "agent": agent, "beat": b })).collect::<Vec<_>>()
+    })))
+}
+
+/// The workspace's agents as a reporting tree, with what each is doing.
+async fn org_chart(
+    State(state): State<AppState>,
+    Path(workspace): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let nodes = aichip_core::org_chart::chart(&state.db, workspace)
+        .await
+        .map_err(internal)?;
+    Ok(Json(
+        json!({ "nodes": nodes, "maxDepth": aichip_core::org_chart::MAX_DEPTH }),
+    ))
 }
 
 /// What this agent remembers, newest first — shown in the agent drawer so the
@@ -85,6 +125,11 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "maxConcurrent": r.get::<Option<i32>, _>("max_concurrent"),
         "maxDailyRuns": r.get::<Option<i32>, _>("max_daily_runs"),
         "cooldownSecs": r.get::<Option<i32>, _>("cooldown_secs"),
+        // The org chart: who this agent reports to, and what it is called there.
+        "reportsTo": r.get::<Option<Uuid>, _>("reports_to"),
+        "title": r.get::<Option<String>, _>("title"),
+        "heartbeatSecs": r.get::<Option<i32>, _>("heartbeat_secs"),
+        "lastHeartbeatAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_heartbeat_at"),
     })
 }
 
@@ -212,7 +257,7 @@ async fn create(
 }
 
 #[derive(Deserialize)]
-struct AgentPatch {
+pub(crate) struct AgentPatch {
     name: Option<String>,
     icon: Option<String>,
     color: Option<String>,
@@ -236,7 +281,19 @@ struct AgentPatch {
     max_daily_runs: Option<Option<i32>>,
     #[serde(default, deserialize_with = "double_option")]
     cooldown_secs: Option<Option<i32>>,
+    /// Present-but-null puts the agent at the top of the chart.
+    #[serde(default, deserialize_with = "double_option")]
+    reports_to: Option<Option<Uuid>>,
+    /// Present-but-null (or blank) clears it.
+    #[serde(default, deserialize_with = "double_option")]
+    title: Option<Option<String>>,
+    /// Seconds between heartbeats; present-but-null turns them off.
+    #[serde(default, deserialize_with = "double_option")]
+    heartbeat_secs: Option<Option<i32>>,
 }
+
+/// Heartbeat intervals a person can pick. Matches the column's CHECK.
+pub const HEARTBEATS: [i32; 4] = [300, 900, 3600, 14_400];
 
 /// Distinguish "field absent" from "field set to null" so clearing works.
 fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
@@ -247,7 +304,7 @@ where
     serde::Deserialize::deserialize(de).map(Some)
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<AgentPatch>,
@@ -257,6 +314,18 @@ async fn update(
         body.max_daily_runs.flatten(),
         body.cooldown_secs.flatten(),
     ])?;
+    if let Some(Some(secs)) = body.heartbeat_secs {
+        if !HEARTBEATS.contains(&secs) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "a heartbeat is every 5 minutes, 15 minutes, an hour or 4 hours".into(),
+            ));
+        }
+    }
+    let title = body.title.clone().map(|t| {
+        t.map(|t| t.trim().chars().take(80).collect::<String>())
+            .filter(|t| !t.is_empty())
+    });
     let tier = body.model_tier.map(|t| {
         serde_json::to_value(t)
             .unwrap()
@@ -264,6 +333,23 @@ async fn update(
             .unwrap()
             .to_string()
     });
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Agent,
+        &id.to_string(),
+    )
+    .await;
+    // One transaction for the whole edit, so a refused manager or a failed
+    // row update leaves the agent exactly as it was. The manager is the one
+    // field whose rules span other rows (no loops, same workspace), so it is
+    // checked and written under the chart's lock, held to the commit.
+    let mut tx = state.db.pool.begin().await.map_err(internal)?;
+    if let Some(manager) = body.reports_to {
+        aichip_core::org_chart::set_manager_in(&mut tx, &state.db, id, manager)
+            .await
+            .map_err(internal)?
+            .map_err(|why| (StatusCode::CONFLICT, why.to_string()))?;
+    }
     let row = sqlx::query(
         "UPDATE agents SET
             name = COALESCE($1, name), icon = COALESCE($2, icon),
@@ -275,7 +361,9 @@ async fn update(
             engine = CASE WHEN $14 THEN $13 ELSE engine END,
             max_concurrent = CASE WHEN $15 THEN $16 ELSE max_concurrent END,
             max_daily_runs = CASE WHEN $17 THEN $18 ELSE max_daily_runs END,
-            cooldown_secs = CASE WHEN $19 THEN $20 ELSE cooldown_secs END
+            cooldown_secs = CASE WHEN $19 THEN $20 ELSE cooldown_secs END,
+            title = CASE WHEN $21 THEN $22 ELSE title END,
+            heartbeat_secs = CASE WHEN $23 THEN $24 ELSE heartbeat_secs END
          WHERE id = $11 RETURNING *",
     )
     .bind(body.name)
@@ -298,9 +386,14 @@ async fn update(
     .bind(body.max_daily_runs.flatten())
     .bind(body.cooldown_secs.is_some())
     .bind(body.cooldown_secs.flatten())
-    .fetch_one(&state.db.pool)
+    .bind(title.is_some())
+    .bind(title.flatten())
+    .bind(body.heartbeat_secs.is_some())
+    .bind(body.heartbeat_secs.flatten())
+    .fetch_one(&mut *tx)
     .await
     .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
     // A raised limit is a new answer for runs already waiting on the old one.
     sqlx::query(
         "UPDATE queue SET not_before = NULL, hold_reason = NULL
@@ -327,6 +420,16 @@ async fn remove(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Agent,
+        &id.to_string(),
+    )
+    .await;
+    // Its reports move up to its own manager either way — deleted or retired.
+    aichip_core::org_chart::lift(&state.db, id)
+        .await
+        .map_err(internal)?;
     let deleted = sqlx::query("DELETE FROM agents WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)

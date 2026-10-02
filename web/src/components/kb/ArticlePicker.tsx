@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import { X } from "lucide-react";
 import { Article, api } from "../../lib/api";
+import { IconButton } from "../ui/Button";
+import { Input } from "../ui/Field";
+import { Popover } from "../ui/Overlay";
 
 /**
  * Pick knowledge-base articles to hand an agent.
@@ -45,20 +49,6 @@ export function ArticlePicker({
       .then((r) => setArticles(r.articles))
       .catch(() => {});
   }, [workspaceId]);
-
-  // Escape closes it. Bound on the document rather than the panel, because the
-  // focus is in the search box and a keydown there must still reach this.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setOpen(false);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
 
   const chosen = useMemo(
     () => articles.filter((a) => selected.includes(a.id)),
@@ -105,7 +95,7 @@ export function ArticlePicker({
   return (
     <div>
       {!compact && (
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Read first
         </div>
       )}
@@ -116,60 +106,49 @@ export function ArticlePicker({
             layout
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="flex items-center gap-1 rounded-lg border border-accent/40 bg-accent/5 px-2 py-1 text-xs"
+            className="flex items-center gap-1 rounded-lg border border-accent/40 bg-accent-subtle px-2 py-1 text-xs text-fg"
           >
             <span className="max-w-48 truncate">{a.title}</span>
             <button
               onClick={() => toggle(a.id)}
-              className="text-ink-dim hover:text-danger"
+              className="text-fg-muted hover:text-danger-fg"
               title="Remove"
             >
               ✕
             </button>
           </motion.span>
         ))}
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="ring-focus select-none rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
-        >
-          {open ? "Done" : chosen.length ? "+ article" : "+ knowledge-base article"}
-        </button>
-      </div>
-
-      {/* Deliberately no AnimatePresence: its direct child here would be a
-          Fragment (the click-away layer plus the panel), which it cannot
-          track, so the exit never resolves and the panel stays mounted —
-          which is exactly "I can't close this one". The entry animation is
-          worth having; the exit is not worth that. */}
-      {open && (
-        <>
-        {/* Click-away, the same layer ComposerSettings uses. Below the panel,
-            above everything else, so one click outside dismisses. */}
-        <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-        <motion.div
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative z-20 mt-2 rounded-xl border border-line bg-panel p-2"
+        {/* The panel is a Popover: Escape, a click outside and its ✕ all close
+            it (radix handles the first two, and a nested Escape closes only the
+            picker, not a dialog it sits in). */}
+        <Popover
+          open={open}
+          onOpenChange={setOpen}
+          className="w-80 max-w-[calc(100vw-24px)]"
+          trigger={
+            <button className="ring-focus select-none rounded-lg border border-dashed border-border px-2 py-1 text-xs text-fg-muted hover:border-accent hover:text-accent-fg">
+              {open ? "Done" : chosen.length ? "+ article" : "+ knowledge-base article"}
+            </button>
+          }
         >
           <div className="mb-1.5 flex items-center gap-1.5">
-            <input
+            <Input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search the knowledge base…"
-              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
+              className="min-w-0 flex-1"
             />
-            <button
+            <IconButton
+              size="xs"
               onClick={() => setOpen(false)}
-              title="Close"
-              aria-label="Close the knowledge-base picker"
-              className="ring-focus shrink-0 rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+              label="Close the knowledge-base picker"
             >
-              ✕
-            </button>
+              <X className="size-3.5" />
+            </IconButton>
           </div>
           {matches.length === 0 ? (
-            <div className="px-2 py-3 text-center text-xs text-ink-dim">
+            <div className="px-2 py-3 text-center text-xs text-fg-muted">
               {query ? "Nothing matches." : "Everything is already attached."}
             </div>
           ) : (
@@ -187,27 +166,26 @@ export function ArticlePicker({
                   className="block w-full rounded-lg px-2 py-1.5 text-left hover:bg-panel-2"
                 >
                   <span className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-medium">
+                    <span className="truncate text-xs font-medium text-fg">
                       {a.icon || "▦"} {a.title}
                     </span>
                     {a.status === "draft" && (
-                      <span className="shrink-0 rounded bg-amber-100 px-1 text-[9px] text-amber-800">
+                      <span className="shrink-0 rounded bg-warning-subtle px-1 text-[9px] text-warning-fg">
                         draft
                       </span>
                     )}
                   </span>
-                  <span className="line-clamp-1 text-[11px] text-ink-dim">{a.summary}</span>
+                  <span className="line-clamp-1 text-[11px] text-fg-muted">{a.summary}</span>
                 </button>
               ))}
             </div>
           )}
-          <p className="mt-1 px-2 text-[10px] text-ink-dim">
+          <p className="mt-1 px-2 text-[10px] text-fg-muted">
             Attached articles are put in front of the agent before it starts.
             Attach the one that matters, not everything.
           </p>
-        </motion.div>
-        </>
-      )}
+        </Popover>
+      </div>
     </div>
   );
 }

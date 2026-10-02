@@ -9,6 +9,10 @@ import {
 } from "../../lib/api";
 import { languageFor } from "../../lib/language";
 import { NARROW, useMediaQuery } from "../../lib/useMediaQuery";
+import { useTheme } from "../../lib/theme";
+import { ArrowLeft } from "lucide-react";
+import { Button, IconButton } from "../ui/Button";
+import { Select } from "../ui/Field";
 
 /**
  * Monaco arrives only when someone opens a file.
@@ -23,10 +27,9 @@ import { SourceControlBar } from "./SourceControlBar";
 
 /**
  * The IDE tab: explorer tree, editor tabs, Monaco, a status bar — laid out
- * and painted the way the editor it embeds is, which is why this panel is a
- * dark island in a light app. The palette is VS Code's, hardcoded rather than
- * themed: index.css has one light theme, and these colours belong to this
- * shell, not to the app.
+ * the way the editor it embeds is, VS Code's shape. It is painted in the app's
+ * tokens and follows the app's theme; Monaco, which cannot read a CSS
+ * variable, takes the matching colours from `theme/editorThemes`.
  *
  * Editing a worktree edits the change you are about to review and merge —
  * that is the point of offering it, and the reason the tree you are in is
@@ -61,6 +64,7 @@ export function FilesPanel({
   initialPath?: string | null;
 }) {
   const narrow = useMediaQuery(NARROW);
+  const { theme } = useTheme();
   const [tree, setTree] = useState<Tree>({ kind: "project", id: projectId });
   const [error, setError] = useState<string | null>(null);
 
@@ -268,13 +272,13 @@ export function FilesPanel({
   const editable = !!buffer && buffer.hash !== null && !buffer.readOnly;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#1e1e1e] text-[#cccccc]">
+    <div className="flex h-full min-h-0 flex-col bg-panel text-fg">
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)]">
         {/* ── Explorer ─────────────────────────────────────────────────── */}
         <div
-          className={`${showTree ? "flex" : "hidden"} min-h-0 min-w-0 flex-col bg-[#252526] lg:flex lg:border-r lg:border-[#3c3c3c]`}
+          className={`${showTree ? "flex" : "hidden"} min-h-0 min-w-0 flex-col bg-panel-2 lg:flex lg:border-r lg:border-border`}
         >
-          <div className="px-3 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+          <div className="px-3 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-widest text-fg-muted">
             Explorer
           </div>
           <TreePicker
@@ -313,14 +317,16 @@ export function FilesPanel({
         <div className={`${showViewer ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}>
           {/* Tabs, VS Code's shape: active tab merges into the editor. */}
           {openTabs.length > 0 && (
-            <div className="flex items-stretch overflow-x-auto bg-[#252526]">
+            <div className="flex items-stretch overflow-x-auto bg-panel-2">
               {narrow && (
-                <button
+                <IconButton
+                  size="xs"
+                  label="Back to explorer"
                   onClick={() => setActive(null)}
-                  className="shrink-0 px-2 text-xs text-[#8c8c8c] hover:text-white"
+                  className="mx-1 self-center"
                 >
-                  ←
-                </button>
+                  <ArrowLeft className="size-3.5" />
+                </IconButton>
               )}
               {openTabs.map((path) => {
                 const b = buffers.get(path);
@@ -328,10 +334,10 @@ export function FilesPanel({
                 return (
                   <div
                     key={path}
-                    className={`group flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-[#3c3c3c] px-3 py-1.5 text-xs ${
+                    className={`group flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs ${
                       isActive
-                        ? "border-t border-t-[#0e639c] bg-[#1e1e1e] text-white"
-                        : "bg-[#2d2d2d] text-[#969696] hover:text-white"
+                        ? "border-t border-t-accent bg-panel text-fg"
+                        : "text-fg-muted hover:text-fg"
                     }`}
                     onClick={() => {
                       setConflict(null);
@@ -350,7 +356,7 @@ export function FilesPanel({
                       className="w-3.5 text-center leading-none"
                     >
                       {isDirty(b) ? (
-                        <span className="text-white">●</span>
+                        <span className="text-fg">●</span>
                       ) : (
                         <span className="opacity-0 hover:!opacity-100 group-hover:opacity-60">
                           ×
@@ -361,27 +367,29 @@ export function FilesPanel({
                 );
               })}
               {editable && (
-                <button
+                <Button
+                  size="xs"
+                  variant="primary"
                   onClick={save}
                   disabled={!dirty || saving}
-                  className="ml-auto mr-2 shrink-0 self-center rounded bg-[#0e639c] px-2.5 py-0.5 text-xs text-white hover:bg-[#1177bb] disabled:opacity-40"
+                  className="ml-auto mr-2 self-center"
                   title="⌘S"
                 >
                   {saving ? "Saving…" : "Save"}
-                </button>
+                </Button>
               )}
             </div>
           )}
 
           {error && (
-            <div className="border-b border-[#5a1d1d] bg-[#5a1d1d]/40 px-4 py-1.5 text-[11px] text-[#f48771]">
+            <div className="border-b border-danger/40 bg-danger-subtle px-4 py-1.5 text-[11px] text-danger-fg">
               {error}
             </div>
           )}
           {!active && !error && (
-            <div className="mt-16 px-6 text-center text-sm text-[#8c8c8c]">
+            <div className="mt-16 px-6 text-center text-sm text-fg-muted">
               Select a file to open it. Edits here are yours —{" "}
-              <span className="text-[#cccccc]">agents still work only in worktrees</span>,
+              <span className="text-fg">agents still work only in worktrees</span>,
               which is what keeps a run reviewable.
             </div>
           )}
@@ -398,12 +406,14 @@ export function FilesPanel({
                 </Note>
               )}
               {conflict && (
-                <div className="border-b border-[#6b5900] bg-[#3a3100] px-4 py-2 text-xs text-[#e2c08d]">
+                <div className="border-b border-warning/40 bg-warning-subtle px-4 py-2 text-xs text-warning-fg">
                   <span className="font-semibold">
                     This file changed on disk since you opened it.
                   </span>
                   <div className="mt-1.5 flex flex-wrap gap-2">
-                    <button
+                    <Button
+                      size="xs"
+                      variant="secondary"
                       onClick={() => {
                         const path = active;
                         setBuffers((prev) => {
@@ -418,11 +428,12 @@ export function FilesPanel({
                         });
                         setConflict(null);
                       }}
-                      className="rounded border border-[#6b5900] bg-[#1e1e1e] px-2 py-1 font-medium hover:bg-[#2a2d2e]"
                     >
                       Load theirs
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="secondary"
                       onClick={() => {
                         // Re-save against the *current* hash, so the
                         // compare-and-swap still happens. An escape hatch that
@@ -436,10 +447,9 @@ export function FilesPanel({
                         setConflict(null);
                         setTimeout(() => saveRef.current(), 0);
                       }}
-                      className="rounded border border-[#6b5900] bg-[#1e1e1e] px-2 py-1 hover:bg-[#2a2d2e]"
                     >
                       Keep mine
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -447,28 +457,28 @@ export function FilesPanel({
 
               <div className="min-h-0 flex-1">
                 {loadingFile && !buffer && (
-                  <div className="p-4 text-xs text-[#8c8c8c]">Loading…</div>
+                  <div className="p-4 text-xs text-fg-muted">Loading…</div>
                 )}
                 {buffer?.tooLarge && (
-                  <div className="p-4 text-sm text-[#8c8c8c]">
+                  <div className="p-4 text-sm text-fg-muted">
                     This file is {humanSize(buffer.size)} — too large to open.
                   </div>
                 )}
                 {buffer?.binary && (
-                  <div className="p-4 text-sm text-[#8c8c8c]">
+                  <div className="p-4 text-sm text-fg-muted">
                     Binary file ({humanSize(buffer.size)}), not shown.
                   </div>
                 )}
                 {buffer && buffer.content !== null && (
                   <Suspense
-                    fallback={<div className="p-4 text-xs text-[#8c8c8c]">Loading editor…</div>}
+                    fallback={<div className="p-4 text-xs text-fg-muted">Loading editor…</div>}
                   >
                     <CodeEditor
                       path={`${treeKey}/${active}`}
                       language={languageFor(active)}
                       value={buffer.draft ?? buffer.content}
                       readOnly={!editable}
-                      dark
+                      dark={theme === "dark"}
                       onChange={(next) => setDraft(active, next)}
                       onSave={() => saveRef.current()}
                       onCursor={(line, col) => setCursor({ line, col })}
@@ -482,7 +492,7 @@ export function FilesPanel({
       </div>
 
       {/* ── Status bar — the one VS Code strip everyone recognises. ────── */}
-      <div className="flex items-center gap-3 bg-[#007acc] px-3 py-0.5 text-[11px] text-white">
+      <div className="flex items-center gap-3 bg-accent px-3 py-0.5 text-[11px] text-on-accent">
         {tree.kind === "project" && checkout?.branch && (
           <span className="flex items-center gap-1" title="Current branch">
             ⎇ {checkout.branch}
@@ -513,6 +523,10 @@ export function FilesPanel({
   );
 }
 
+/** An explorer row's hover: a wash of the text colour, since the explorer
+ *  already sits on `panel-2` and a `panel-2` hover would not show. */
+const ROW_HOVER = "hover:bg-[color-mix(in_oklab,var(--color-fg)_6%,transparent)]";
+
 /** Recursive explorer entries: folders expand in place, VS Code style. */
 function DirEntries({
   dir,
@@ -538,13 +552,13 @@ function DirEntries({
   const entries = dirs.get(dir);
   if (!entries) {
     return (
-      <div style={{ paddingLeft: depth * 12 + 22 }} className="py-1 text-[11px] text-[#8c8c8c]">
+      <div style={{ paddingLeft: depth * 12 + 22 }} className="py-1 text-[11px] text-fg-subtle">
         …
       </div>
     );
   }
   if (entries.length === 0 && dir === "") {
-    return <div className="px-3 py-2 text-xs text-[#8c8c8c]">Empty folder.</div>;
+    return <div className="px-3 py-2 text-xs text-fg-muted">Empty folder.</div>;
   }
   return (
     <>
@@ -557,9 +571,9 @@ function DirEntries({
               <button
                 onClick={() => onToggle(entry.path)}
                 style={{ paddingLeft: pad }}
-                className="flex w-full items-center gap-1 py-[3px] pr-2 text-left text-[13px] text-[#cccccc] hover:bg-[#2a2d2e]"
+                className={`flex w-full items-center gap-1 py-[3px] pr-2 text-left text-[13px] text-fg ${ROW_HOVER}`}
               >
-                <span className="w-3 text-center text-[10px] text-[#8c8c8c]">
+                <span className="w-3 text-center text-[10px] text-fg-subtle">
                   {open ? "▾" : "▸"}
                 </span>
                 <span className="truncate">{entry.name}</span>
@@ -590,17 +604,17 @@ function DirEntries({
             style={{ paddingLeft: pad + 16 }}
             className={`flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[13px] ${
               isActive
-                ? "bg-[#37373d] text-white"
+                ? "bg-accent-subtle text-fg"
                 : isOpen
-                  ? "text-[#e7e7e7] hover:bg-[#2a2d2e]"
-                  : "text-[#a9a9a9] hover:bg-[#2a2d2e] hover:text-[#cccccc]"
+                  ? `text-fg ${ROW_HOVER}`
+                  : `text-fg-muted hover:text-fg ${ROW_HOVER}`
             }`}
             title={entry.path}
           >
             <span className="truncate">{entry.name}</span>
-            {dirtyDot && <span className="text-[9px] text-white">●</span>}
+            {dirtyDot && <span className="text-[9px] text-fg">●</span>}
             {entry.size !== null && !dirtyDot && (
-              <span className="ml-auto shrink-0 text-[10px] text-[#6e7681]">
+              <span className="ml-auto shrink-0 text-[10px] text-fg-muted">
                 {humanSize(entry.size)}
               </span>
             )}
@@ -614,8 +628,8 @@ function DirEntries({
 function Note({ tone, children }: { tone: "amber" | "red"; children: React.ReactNode }) {
   const cls =
     tone === "amber"
-      ? "border-[#6b5900] bg-[#3a3100] text-[#e2c08d]"
-      : "border-[#5a1d1d] bg-[#5a1d1d]/40 text-[#f48771]";
+      ? "border-warning/40 bg-warning-subtle text-warning-fg"
+      : "border-danger/40 bg-danger-subtle text-danger-fg";
   return <div className={`border-b px-4 py-1.5 text-[11px] ${cls}`}>{children}</div>;
 }
 
@@ -642,8 +656,8 @@ function TreePicker({
 
   const value = tree.kind === "project" ? "" : tree.id;
   return (
-    <div className="border-b border-[#3c3c3c] px-3 py-1.5">
-      <select
+    <div className="border-b border-border px-3 py-1.5">
+      <Select
         value={value}
         onChange={(e) =>
           onPick(
@@ -652,7 +666,6 @@ function TreePicker({
               : { kind: "project", id: projectId },
           )
         }
-        className="w-full rounded border border-[#3c3c3c] bg-[#3c3c3c] px-2 py-1 text-xs text-[#cccccc]"
       >
         <option value="">Checkout</option>
         {withBranches.map((t) => (
@@ -660,7 +673,7 @@ function TreePicker({
             {t.title}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }

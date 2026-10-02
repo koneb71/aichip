@@ -144,11 +144,11 @@ pub const THEME: &str = r#"/* aichip's look, served by the dashboard. Not a file
 :root {
   --surface: #f7f7f8;
   --panel: #ffffff;
-  --line: #e7e7ea;
-  --ink: #191a1f;
-  --ink-dim: #6d7180;
-  --accent: #4f46e5;
-  --danger: #dc2626;
+  --line: #e5e5e9;
+  --ink: #17171c;
+  --ink-dim: #5f5f6b;
+  --accent: #4f54d6;
+  --danger: #d42a2a;
 }
 
 * { box-sizing: border-box; }

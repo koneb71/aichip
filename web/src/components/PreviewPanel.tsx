@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, DockerStatus, previewUrl, TaskPreview } from "../lib/api";
+import { Button } from "./ui/Button";
 
 /**
  * Start this card's preview, and reach it.
@@ -73,11 +73,11 @@ export function PreviewPanel({
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="font-semibold uppercase tracking-wide text-fg-muted">
         Preview
       </span>
 
-      {building && <span className="text-ink-dim">building…</span>}
+      {building && <span className="text-fg-muted">building…</span>}
 
       {live && url && (
         <>
@@ -85,12 +85,12 @@ export function PreviewPanel({
             href={url}
             target="_blank"
             rel="noreferrer"
-            className="font-medium text-accent hover:underline"
+            className="font-medium text-accent-fg hover:underline"
           >
             {url.replace(/^https?:\/\//, "")}
           </a>
           {preview!.stale && (
-            <span className="rounded bg-amber-50 px-1 text-amber-900">
+            <span className="rounded bg-warning-subtle px-1 text-warning-fg">
               built before the latest run
             </span>
           )}
@@ -98,29 +98,31 @@ export function PreviewPanel({
       )}
 
       {!live && !building && (
-        <motion.button
-          whileTap={{ scale: 0.96 }}
+        <Button
+          size="xs"
           onClick={start}
           disabled={busy || (!!docker && !docker.usable)}
-          className="rounded-lg border border-line px-2 py-0.5 hover:bg-line/40 disabled:opacity-50"
+          className="font-normal!"
         >
           {preview?.canWake ? "Wake it" : "Build & run"}
-        </motion.button>
+        </Button>
       )}
 
       {/* Where the rest of it lives. Said out loud rather than left to be
           discovered, since this row is deliberately not the whole feature. */}
       {onOpenPreviews && (
-        <button
+        <Button
+          variant="link"
+          size="xs"
           onClick={onOpenPreviews}
-          className="text-ink-dim hover:text-ink hover:underline"
+          className="font-normal! text-fg-muted! hover:text-fg!"
         >
           all previews
-        </button>
+        </Button>
       )}
 
       {error && (
-        <span className="rounded bg-red-50 px-1.5 py-0.5 text-danger">
+        <span className="rounded bg-danger-subtle px-1.5 py-0.5 text-danger-fg">
           {error}
           {/* The one failure with a way out, and the tab is where the fix is. */}
           {error.includes("no Dockerfile") && onOpenPreviews && (

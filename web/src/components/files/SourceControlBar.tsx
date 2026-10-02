@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, CheckoutState } from "../../lib/api";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Field";
 
 /**
  * The editor's git corner: where the checkout stands, and the three verbs a
@@ -13,7 +15,7 @@ import { api, CheckoutState } from "../../lib/api";
  *
  * Shown only for the project checkout — a card's worktree already has its own
  * lifecycle (review, merge, PR), and offering push there would route around
- * it. Painted in the Files tab's IDE palette, the only place it appears.
+ * it. Painted in the app's tokens, like the Files tab that hosts it.
  */
 export function SourceControlBar({
   projectId,
@@ -82,57 +84,60 @@ export function SourceControlBar({
   const dirtyCount = state.dirty.length;
   const unpublished = state.ahead == null;
 
-  const btn =
-    "rounded border border-[#3c3c3c] px-2 py-0.5 text-[11px] text-[#cccccc] hover:bg-[#2a2d2e] disabled:opacity-40";
-
   return (
-    <div className="border-b border-[#3c3c3c] px-3 py-1.5 text-xs">
+    <div className="border-b border-border px-3 py-1.5 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1 font-mono text-[#cccccc]" title="Current branch">
+        <span className="flex items-center gap-1 font-mono text-fg" title="Current branch">
           ⎇ {state.branch ?? "detached"}
         </span>
         {dirtyCount > 0 && (
           <span
-            className="rounded-full bg-[#3a3100] px-2 py-0.5 text-[11px] text-[#e2c08d]"
+            className="rounded-full bg-warning-subtle px-2 py-0.5 text-[11px] text-warning-fg"
             title={state.dirty.map((d) => d.path).join("\n")}
           >
             {dirtyCount} changed
           </span>
         )}
         {!unpublished && (state.behind ?? 0) > 0 && (
-          <span className="text-[11px] text-[#8c8c8c]" title="Commits on the upstream you don't have">
+          <span className="text-[11px] text-fg-muted" title="Commits on the upstream you don't have">
             ↓{state.behind}
           </span>
         )}
         {!unpublished && (state.ahead ?? 0) > 0 && (
-          <span className="text-[11px] text-[#8c8c8c]" title="Your commits the upstream doesn't have">
+          <span className="text-[11px] text-fg-muted" title="Your commits the upstream doesn't have">
             ↑{state.ahead}
           </span>
         )}
 
         <span className="ml-auto flex items-center gap-1.5">
           {dirtyCount > 0 && !committing && (
-            <button onClick={() => setCommitting(true)} disabled={busy !== null} className={btn}>
+            <Button size="xs" variant="secondary" onClick={() => setCommitting(true)} disabled={busy !== null}>
               {busy === "commit" ? "Committing…" : "Commit…"}
-            </button>
+            </Button>
           )}
           {state.hasRemote && (
             <>
-              <button
-                onClick={() => run("pull", () => api.pullCheckout(projectId), "up to date")}
-                disabled={busy !== null || dirtyCount > 0}
+              {/* Titles on wrappers: a disabled kit Button takes no pointer
+                  events, and the title is what says why it is disabled. */}
+              <span
+                className="shrink-0"
                 title={
                   dirtyCount > 0
                     ? "Commit your changes first — pulling over an edited tree is how work gets tangled"
                     : "Fast-forward from the upstream"
                 }
-                className={btn}
               >
-                {busy === "pull" ? "Pulling…" : "↓ Pull"}
-              </button>
-              <button
-                onClick={() => run("push", () => api.pushCheckout(projectId), "pushed")}
-                disabled={busy !== null || (!unpublished && (state.ahead ?? 0) === 0)}
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => run("pull", () => api.pullCheckout(projectId), "up to date")}
+                  disabled={busy !== null || dirtyCount > 0}
+                >
+                  {busy === "pull" ? "Pulling…" : "↓ Pull"}
+                </Button>
+              </span>
+              <span
+                className="shrink-0"
                 title={
                   unpublished
                     ? "This branch has never been pushed — this publishes it"
@@ -140,10 +145,16 @@ export function SourceControlBar({
                       ? "Nothing to push"
                       : "Push your commits to the upstream"
                 }
-                className={btn}
               >
-                {busy === "push" ? "Pushing…" : unpublished ? "↑ Publish" : "↑ Push"}
-              </button>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => run("push", () => api.pushCheckout(projectId), "pushed")}
+                  disabled={busy !== null || (!unpublished && (state.ahead ?? 0) === 0)}
+                >
+                  {busy === "push" ? "Pushing…" : unpublished ? "↑ Publish" : "↑ Push"}
+                </Button>
+              </span>
             </>
           )}
         </span>
@@ -151,7 +162,7 @@ export function SourceControlBar({
 
       {committing && (
         <div className="mt-1.5 flex items-center gap-1.5">
-          <input
+          <Input
             autoFocus
             value={message}
             onChange={(e) => setMessage(e.target.value)}
@@ -160,15 +171,11 @@ export function SourceControlBar({
               if (e.key === "Escape") setCommitting(false);
             }}
             placeholder="Commit message…"
-            className="min-w-0 flex-1 rounded border border-[#0e639c] bg-[#3c3c3c] px-2 py-1 text-[#cccccc] outline-none placeholder:text-[#8c8c8c]"
+            className="min-w-0 flex-1"
           />
-          <button
-            onClick={commit}
-            disabled={!message.trim()}
-            className="rounded bg-[#0e639c] px-2.5 py-1 text-white hover:bg-[#1177bb] disabled:opacity-40"
-          >
+          <Button size="sm" variant="primary" onClick={commit} disabled={!message.trim()}>
             Commit
-          </button>
+          </Button>
         </div>
       )}
 
@@ -177,7 +184,7 @@ export function SourceControlBar({
           onClick={() => setNotice(null)}
           title="Dismiss"
           className={`mt-1.5 block w-full rounded px-2 py-1 text-left text-[11px] ${
-            notice.kind === "ok" ? "bg-[#2a2d2e] text-[#8c8c8c]" : "bg-[#5a1d1d]/40 text-[#f48771]"
+            notice.kind === "ok" ? "bg-panel text-fg-muted" : "bg-danger-subtle text-danger-fg"
           }`}
         >
           {notice.text}

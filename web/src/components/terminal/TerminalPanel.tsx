@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { useTheme } from "../../lib/theme";
+import { TERMINAL_THEME } from "../../theme/editorThemes";
+import { Button } from "../ui/Button";
 
 /**
  * A real shell in the project's folder — the user's own login shell, over a
@@ -17,42 +20,25 @@ import "@xterm/xterm/css/xterm.css";
  * tab never download the emulator.
  */
 
-/** The IDE palette the Files tab established — the terminal matches it. */
-const THEME = {
-  background: "#1e1e1e",
-  foreground: "#cccccc",
-  cursor: "#cccccc",
-  selectionBackground: "#264f78",
-  black: "#000000",
-  red: "#f48771",
-  green: "#89d185",
-  yellow: "#e2c08d",
-  blue: "#569cd6",
-  magenta: "#c586c0",
-  cyan: "#4ec9b0",
-  white: "#cccccc",
-  brightBlack: "#6e7681",
-  brightRed: "#f48771",
-  brightGreen: "#89d185",
-  brightYellow: "#e2c08d",
-  brightBlue: "#569cd6",
-  brightMagenta: "#c586c0",
-  brightCyan: "#4ec9b0",
-  brightWhite: "#ffffff",
-};
-
 export default function TerminalPanel({ projectId }: { projectId: string }) {
   const host = useRef<HTMLDivElement | null>(null);
   const [ended, setEnded] = useState(false);
   // Bumped by Restart: tears the whole effect down and opens a fresh shell.
   const [epoch, setEpoch] = useState(0);
+  // The terminal matches the editor: both follow the app's theme. Read through
+  // a ref at creation so a theme change recolours the live session below rather
+  // than tearing the shell down.
+  const { theme } = useTheme();
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  const termRef = useRef<Terminal | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
     setEnded(false);
 
     const term = new Terminal({
-      theme: THEME,
+      theme: TERMINAL_THEME[themeRef.current],
       fontSize: 12.5,
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace',
@@ -60,6 +46,7 @@ export default function TerminalPanel({ projectId }: { projectId: string }) {
       scrollback: 5000,
     });
     const fit = new FitAddon();
+    termRef.current = term;
     term.loadAddon(fit);
     term.open(host.current);
     fit.fit();
@@ -104,21 +91,28 @@ export default function TerminalPanel({ projectId }: { projectId: string }) {
       data.dispose();
       ws.close();
       term.dispose();
+      termRef.current = null;
     };
   }, [projectId, epoch]);
 
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = TERMINAL_THEME[theme];
+  }, [theme]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#1e1e1e]">
-      <div className="flex items-center gap-2 border-b border-[#3c3c3c] px-3 py-1.5 text-[11px] text-[#8c8c8c]">
+    <div className="flex h-full min-h-0 flex-col bg-panel">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[11px] text-fg-muted">
         <span className="size-1.5 rounded-full bg-tier-easy" />
         Your shell, in this project's folder. The session ends when you leave this tab.
         {ended && (
-          <button
+          <Button
+            size="xs"
+            variant="secondary"
             onClick={() => setEpoch((e) => e + 1)}
-            className="ml-auto rounded border border-[#3c3c3c] px-2 py-0.5 text-[#cccccc] hover:bg-[#2a2d2e]"
+            className="ml-auto"
           >
             Restart shell
-          </button>
+          </Button>
         )}
       </div>
       <div ref={host} className="min-h-0 flex-1 p-2" />

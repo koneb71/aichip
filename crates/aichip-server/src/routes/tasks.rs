@@ -89,7 +89,8 @@ async fn list(
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 t.start_when_unblocked, t.blocked_note,
                 a.name AS agent_name, a.color AS agent_color, a.status AS agent_status,
-                t.skill_id, sk.name AS skill_name,
+                t.skill_id, sk.name AS skill_name, t.goal_id,
+                (SELECT title FROM goals WHERE id = t.goal_id) AS goal_title,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 t.parent_id, parent.title AS parent_title,
                 COALESCE(kids.total, 0) AS child_count,
@@ -234,6 +235,8 @@ async fn list(
                 "agentName": r.get::<Option<String>, _>("agent_name"),
                 "skillId": r.get::<Option<Uuid>, _>("skill_id"),
                 "skillName": r.get::<Option<String>, _>("skill_name"),
+                "goalId": r.get::<Option<Uuid>, _>("goal_id"),
+                "goalTitle": r.get::<Option<String>, _>("goal_title"),
                 "agentColor": r.get::<Option<String>, _>("agent_color"),
                 "teamId": r.get::<Option<Uuid>, _>("team_id"),
                 "teamName": r.get::<Option<String>, _>("team_name"),
@@ -346,6 +349,9 @@ struct CreateTask {
     /// The person saw the forecast and starts anyway.
     #[serde(default)]
     acknowledge_forecast: bool,
+    /// The goal this card serves.
+    #[serde(default)]
+    goal_id: Option<Uuid>,
 }
 
 async fn create(
@@ -366,8 +372,11 @@ async fn create(
             .to_string()
     });
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked, goal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12,
+                 -- Only a goal of the project's own workspace.
+                 (SELECT g.id FROM goals g JOIN projects p ON p.workspace_id = g.workspace_id
+                   WHERE g.id = $13 AND p.id = $1)) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -381,10 +390,16 @@ async fn create(
     .bind(body.plan_first)
     .bind(body.effort.map(|e| e.as_str().to_string()))
     .bind(body.start_when_unblocked)
+    .bind(body.goal_id)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
     let task_id: Uuid = row.get("id");
+    // Handed to an agent that pulls its own work, and not started here: the
+    // agent hears about it now rather than at its next beat.
+    if let (Some(agent), false) = (body.agent_id, body.start) {
+        aichip_core::heartbeat::wake(&state.db, agent, "assigned", Some(task_id)).await;
+    }
     // Before the run is enqueued, for the same reason attachments are: the
     // prompt is assembled from whatever is bound when the run is picked up.
     link_articles(&state, task_id, &body.article_ids).await?;
@@ -432,12 +447,12 @@ async fn create(
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
-struct StartBody {
+pub(crate) struct StartBody {
     /// The person saw the forecast and starts anyway.
-    acknowledge_forecast: bool,
+    pub(crate) acknowledge_forecast: bool,
 }
 
-async fn start(
+pub(crate) async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     body: Option<Json<StartBody>>,
@@ -555,12 +570,38 @@ async fn diff(
     Ok(Json(json!({ "diff": diff })))
 }
 
+/// Merge anyway, past what the project's review policy still wants — with a
+/// note saying why, which goes on the card and into the audit log.
+#[derive(Deserialize, Default, Debug)]
+struct MergeBody {
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    note: String,
+}
+
+const MAX_OVERRIDE_NOTE: usize = 500;
+
+/// The dashboard's Merge sends no body at all (with a JSON content type,
+/// which `Option<Json<_>>` refuses as malformed), so an empty body is the
+/// ordinary merge and only a non-empty one is read.
+fn merge_body(raw: &[u8]) -> Result<MergeBody, ApiError> {
+    if raw.iter().all(u8::is_ascii_whitespace) {
+        return Ok(MergeBody::default());
+    }
+    serde_json::from_slice(raw)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("not a merge request: {e}")))
+}
+
 async fn merge(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
+    let body = merge_body(&body)?;
     let row = sqlx::query(
-        "SELECT t.title, t.worktree_path, t.branch, p.path AS project_path, p.default_branch, p.vcs
+        "SELECT t.title, t.worktree_path, t.branch, t.project_id, p.path AS project_path,
+                p.default_branch, p.vcs
          FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id=$1",
     )
     .bind(id)
@@ -599,6 +640,37 @@ async fn merge(
                 .into(),
         ));
     }
+    // What the project's review policy asks of this click. The pull request
+    // is asked about once more first, so the gate reads GitHub's word now and
+    // not whenever the card was last synced.
+    if aichip_core::review::policy(&state.db, row.get("project_id"))
+        .await
+        .map_err(internal)?
+        .require_pr_green
+    {
+        super::pull_requests::sync_for_gate(&state, id).await;
+    }
+    let unmet = aichip_core::review::gate(&state.db, id)
+        .await
+        .map_err(internal)?;
+    let override_note = body.note.trim();
+    if !unmet.is_empty() {
+        if !body.force {
+            return Err((
+                StatusCode::CONFLICT,
+                json!({ "kind": "gate", "unmet": unmet }).to_string(),
+            ));
+        }
+        if override_note.is_empty() || override_note.chars().count() > MAX_OVERRIDE_NOTE {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "merging past the review policy needs a note saying why, under \
+                     {MAX_OVERRIDE_NOTE} characters"
+                ),
+            ));
+        }
+    }
     let wt = aichip_core::worktrees::manager::Worktree {
         path: worktree.into(),
         branch,
@@ -615,6 +687,32 @@ async fn merge(
         )
         .await
         .map_err(merge_refused)?;
+    if !unmet.is_empty() {
+        // Said where the next person reading the card will look, and kept
+        // where nobody can edit it away.
+        let said = format!(
+            "Merged past the review policy, which still wanted: {}\n\nWhy: {override_note}",
+            unmet
+                .iter()
+                .map(|u| u.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        if let Err(e) = aichip_core::runs::report::post_system(&state.db, id, None, &said).await {
+            tracing::warn!(%id, error = %e, "could not note the override on the card");
+        }
+        aichip_core::audit::record(
+            &state.db,
+            aichip_core::audit::Entry::new(
+                aichip_core::audit::Actor::Api,
+                "merge past review policy",
+            )
+            .on("tasks", id)
+            .summary(override_note.chars().take(200).collect::<String>())
+            .detail(json!({ "unmet": unmet.iter().map(|u| u.kind).collect::<Vec<_>>() })),
+        )
+        .await;
+    }
     sqlx::query("UPDATE tasks SET board_column='done' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -809,6 +907,13 @@ pub(crate) struct MoveTask {
     /// Dropping it into In Progress after seeing the forecast.
     #[serde(default)]
     acknowledge_forecast: bool,
+    /// The goal it serves. Absent leaves it; null clears it.
+    #[serde(default, deserialize_with = "present")]
+    goal_id: Option<Option<Uuid>>,
+    /// With a new agent on a card that is running: stop the running agent and
+    /// hand the work over, this note being the new agent's brief.
+    #[serde(default)]
+    handoff_note: Option<String>,
 }
 
 impl MoveTask {
@@ -821,6 +926,15 @@ impl MoveTask {
     pub(crate) fn to_column(column: &str) -> Self {
         Self {
             board_column: Some(column.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Hand the card to an agent, leaving everything else alone.
+    pub(crate) fn assign(agent_id: Uuid) -> Self {
+        Self {
+            agent_id: Some(Some(agent_id)),
+            team_id: Some(None),
             ..Default::default()
         }
     }
@@ -910,9 +1024,24 @@ pub(crate) async fn move_task(
 
     let reassigning = body.agent_id.is_some() || body.team_id.is_some();
     if reassigning && run_active {
+        // To an agent, with a note: a handoff — the running agent is stopped
+        // and the new one continues in the same worktree. Anything else still
+        // waits for the run to be cancelled.
+        if let (Some(note), Some(Some(to)), None | Some(None)) =
+            (&body.handoff_note, body.agent_id, body.team_id)
+        {
+            require_same_workspace(&state, id, "agents", to).await?;
+            aichip_core::handoff::request(&state.orchestrator, id, to, note)
+                .await
+                .map_err(super::answer_refused)?;
+            tokio::spawn(state.orchestrator.clone().settle_handoff_soon(id));
+            return Ok(Json(json!({ "id": id, "handingOff": true })));
+        }
         return Err((
             StatusCode::CONFLICT,
-            "this card is being worked on — cancel the run before reassigning it".into(),
+            "this card is being worked on — cancel the run before reassigning it, or hand it \
+             over with a note"
+                .into(),
         ));
     }
 
@@ -948,6 +1077,9 @@ pub(crate) async fn move_task(
     if let Some(Some(skill_id)) = body.skill_id {
         require_same_workspace(&state, id, "skills", skill_id).await?;
     }
+    if let Some(Some(goal)) = body.goal_id {
+        super::goals::vet_card_goal(&state, id, goal).await?;
+    }
 
     // A move into "running" is a start, and the start must be vetted BEFORE
     // the column is written. Vet-after-update was tried and left a refused
@@ -980,7 +1112,8 @@ pub(crate) async fn move_task(
                           effort = CASE WHEN $11 THEN $12 ELSE effort END,
                           skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END,
                           prompt = coalesce($15, prompt),
-                          start_when_unblocked = coalesce($16, start_when_unblocked)
+                          start_when_unblocked = coalesce($16, start_when_unblocked),
+                          goal_id = CASE WHEN $17 THEN $18 ELSE goal_id END
          WHERE id = $1",
     )
     .bind(id)
@@ -999,9 +1132,15 @@ pub(crate) async fn move_task(
     .bind(body.skill_id.flatten())
     .bind(body.prompt.as_deref().map(str::trim))
     .bind(body.start_when_unblocked)
+    .bind(body.goal_id.is_some())
+    .bind(body.goal_id.flatten())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    // A card handed to an agent that pulls its own work: it hears now.
+    if let Some(Some(agent)) = agent_id {
+        aichip_core::heartbeat::wake(&state.db, agent, "assigned", Some(id)).await;
+    }
     // Filing a card in done is how a person says its work landed by hand.
     if body.board_column.as_deref() == Some("done") {
         state.orchestrator.landed(id).await;
@@ -1671,8 +1810,20 @@ async fn remove_blocker(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentioned_agents, shell_line, MoveTask};
+    use super::{mentioned_agents, merge_body, shell_line, MoveTask};
+    use axum::http::StatusCode;
     use uuid::Uuid;
+
+    #[test]
+    fn an_empty_merge_body_is_the_ordinary_merge() {
+        // What the dashboard's Merge sends: nothing, under a JSON content type.
+        let plain = merge_body(b"").unwrap();
+        assert!(!plain.force && plain.note.is_empty());
+        assert!(!merge_body(b"  \n").unwrap().force);
+        let forced = merge_body(br#"{"force":true,"note":"why"}"#).unwrap();
+        assert!(forced.force && forced.note == "why");
+        assert_eq!(merge_body(b"{nope").unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
 
     /// The resume command is pasted into a shell, so a worktree path with a
     /// space — or a quote — must arrive as one word, not as two commands.
@@ -2011,98 +2162,13 @@ async fn retry(
 /// the same rule CLAUDE.md states for OpenCode and `Reviewed`: a button that
 /// silently does a different, more expensive thing is worse than one that
 /// says why it can't.
-async fn resume_run(
+pub(crate) async fn resume_run(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query(
-        // `COALESCE(r.worktree_path, t.worktree_path)` mirrors what
-        // `execute_task_run` picks: a bake-off variant has its own checkout,
-        // everything else works in the card's.
-        "SELECT r.status, r.session_id, r.session_engine, r.engine, r.task_id,
-                r.chat_id, r.workflow_id, r.team_id, r.comment_id, r.kb_brief,
-                COALESCE(r.worktree_path, t.worktree_path) AS worktree_path,
-                p.vcs
-         FROM runs r
-         LEFT JOIN tasks t ON t.id = r.task_id
-         LEFT JOIN projects p ON p.id = t.project_id
-         WHERE r.id = $1",
-    )
-    .bind(run_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?
-    .ok_or((StatusCode::NOT_FOUND, "no such run".to_string()))?;
-
-    let engine_id: String = row.get("engine");
-    let engine = state.orchestrator.engine(&engine_id);
-    let worktree: Option<String> = row.get("worktree_path");
-    // The one part of the decision that has to touch the disk, done here so
-    // `resume::decide` stays pure. `drop_worktree` nulls the column, but a
-    // directory removed by hand leaves it set and pointing at nothing.
-    let cwd = if row.get::<Option<String>, _>("vcs").as_deref() != Some("git") {
-        aichip_core::runs::resume::Cwd::InPlace
-    } else {
-        match worktree.as_deref() {
-            Some(p) if std::path::Path::new(p).is_dir() => {
-                aichip_core::runs::resume::Cwd::Worktree(p)
-            }
-            _ => aichip_core::runs::resume::Cwd::Gone,
-        }
-    };
-
-    let status: String = row.get("status");
-    let session_id: Option<String> = row.get("session_id");
-    let session_engine: Option<String> = row.get("session_engine");
-    let prior = aichip_core::runs::resume::Prior {
-        status: aichip_shared::RunStatus::parse(&status)
-            .ok_or((StatusCode::CONFLICT, format!("this run is {status}")))?,
-        session_id: session_id.as_deref(),
-        session_engine: session_engine.as_deref(),
-        engine: &engine_id,
-        engine_can_resume: engine
-            .map(|e| e.capabilities().resume_sessions)
-            .unwrap_or(false),
-        cwd,
-        is_task_run: row.get::<Option<Uuid>, _>("task_id").is_some()
-            && row.get::<Option<Uuid>, _>("chat_id").is_none()
-            && row.get::<Option<Uuid>, _>("workflow_id").is_none()
-            && row.get::<Option<Uuid>, _>("team_id").is_none()
-            && row.get::<Option<Uuid>, _>("comment_id").is_none()
-            && row.get::<Option<String>, _>("kb_brief").is_none(),
-    };
-
-    let session = aichip_core::runs::resume::decide(&prior)
-        .map_err(|r| (StatusCode::CONFLICT, r.message()))?;
-
-    let task_id: Uuid = row
-        .get::<Option<Uuid>, _>("task_id")
-        .expect("checked above");
-    // Not `run_is_active`, which asks about the card: this asks whether
-    // anything at all is still working on it, the same guard Retry uses,
-    // because two engines in one worktree is the failure both prevent.
-    state
-        .orchestrator
-        .supersede_summary(task_id)
+    let (new_run, _) = aichip_core::runs::resume::resume_dead_run(&state.orchestrator, run_id)
         .await
-        .map_err(internal)?;
-    if run_is_active(&state, task_id).await? || step_is_live(&state, task_id).await? {
-        return Err((
-            StatusCode::CONFLICT,
-            "this card is already running — cancel it before resuming".into(),
-        ));
-    }
-
-    let new_run = state
-        .orchestrator
-        .resume_run(run_id, &session)
-        .await
-        .map_err(start_refused)?;
-    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
-        .bind(task_id)
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(json!({ "runId": new_run, "resumedFrom": run_id })))
 }
 
@@ -2203,31 +2269,9 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    // A paused agent's plan can be approved later; it is not run now.
-    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+    aichip_core::approvals::approve_task_plan(&state.orchestrator, run_id)
         .await
-        .map_err(super::run_refused)?;
-    let updated = sqlx::query(
-        "UPDATE runs SET plan_approved_at = now(), status = 'queued'
-         WHERE id = $1 AND status = 'awaiting_approval'",
-    )
-    .bind(run_id)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    // Re-queued rather than resumed in place: the planning dispatch already
-    // released its slot, so this takes a fresh one when the queue has room.
-    state
-        .orchestrator
-        .queue(run_id, 10)
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(json!({ "approved": true })))
 }
 
@@ -2242,45 +2286,9 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
-    // A paused agent's plan can be approved later; it is not run now.
-    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+    aichip_core::approvals::revise_task_plan(&state.orchestrator, run_id, &body.note)
         .await
-        .map_err(super::run_refused)?;
-    if body.note.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "say what to change — a rejection with no reason just burns another pass".into(),
-        ));
-    }
-    // The rejected plan stays on file: the next pass is shown it alongside the
-    // feedback, so it can answer the objection rather than start from nothing.
-    // A written-but-unapproved plan re-plans rather than runs, which is what
-    // makes leaving the row safe.
-    //
-    // The status check is in the WHERE clause rather than a separate read
-    // beforehand. Checking and then writing unconditionally leaves a window in
-    // which the run is approved and dispatched between the two, and this would
-    // then re-queue a run that was already working.
-    let updated = sqlx::query(
-        "UPDATE runs SET plan_note = $2, plan_edited = FALSE, status = 'queued'
-         WHERE id = $1 AND status = 'awaiting_approval'",
-    )
-    .bind(run_id)
-    .bind(body.note.trim())
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    state
-        .orchestrator
-        .queue(run_id, 10)
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(json!({ "revising": true })))
 }
 

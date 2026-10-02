@@ -1,0 +1,1 @@
+{"type":"result","subtype":"error_during_execution","uuid":"u0","session_id":"","is_error":true,"duration_ms":40,"duration_api_ms":0,"num_turns":0,"error":{"type":"FatalAuthenticationError","message":"No auth type is selected. Please configure an auth type in your settings or set an API key."}}

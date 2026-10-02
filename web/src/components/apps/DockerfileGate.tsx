@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api } from "../../lib/api";
+import { Button } from "../ui/Button";
 
 /**
  * The Dockerfile a container app builds from, when it is no longer aichip's.
@@ -54,26 +54,21 @@ export function DockerfileGate({
   };
 
   return (
-    <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
-      <div className="text-sm font-semibold text-amber-900">
+    <div className="mb-4 rounded-xl border border-warning/40 bg-warning-subtle p-4">
+      <div className="text-sm font-semibold text-warning-fg">
         This app's Dockerfile is not the one aichip wrote.
       </div>
-      <p className="mt-1 text-xs text-amber-900/80">
+      <p className="mt-1 text-xs text-warning-fg/80">
         It is what will be built, and its <span className="font-mono">RUN</span> lines execute
         on this machine, with the network. Read it before it does.
       </p>
-      <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-3 font-mono text-[11px]">
+      <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-panel p-3 font-mono text-[11px]">
         {state.text}
       </pre>
-      {error && <div className="mt-2 text-xs text-danger">{error}</div>}
-      <motion.button
-        whileTap={{ scale: 0.96 }}
-        onClick={approve}
-        disabled={busy}
-        className="mt-3 rounded-lg bg-amber-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-      >
+      {error && <div className="mt-2 text-xs text-danger-fg">{error}</div>}
+      <Button variant="primary" size="sm" onClick={approve} disabled={busy} className="mt-3">
         I have read it — build from this
-      </motion.button>
+      </Button>
     </div>
   );
 }

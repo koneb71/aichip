@@ -44,7 +44,16 @@ async fn list(State(state): State<AppState>) -> Json<Value> {
             })
         })
         .collect::<Vec<_>>();
-    Json(json!({ "engines": engines }))
+    // What "Default" in a picker resolves to, so a picker left on it can say
+    // before the click what the server would refuse after it. Null when only
+    // the test fixture is installed.
+    let default = state.orchestrator.default_engine();
+    let default = state
+        .orchestrator
+        .engine(&default)
+        .filter(|e| e.id() != "mock")
+        .map(|e| e.id());
+    Json(json!({ "engines": engines, "default": default }))
 }
 
 /// Models the local runtimes on this machine have pulled.

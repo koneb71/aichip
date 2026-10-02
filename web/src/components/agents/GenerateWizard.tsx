@@ -3,6 +3,9 @@ import { motion } from "framer-motion";
 import { AgentDraft, api, Tier, tierColor, tierSoft } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
 import { TIERS, TierPicker } from "../TierPicker";
+import { DEFAULT_AGENT_COLOR } from "../../lib/swatches";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
 
 type Phase = "describe" | "generating" | "review";
 
@@ -48,7 +51,7 @@ export function GenerateWizard({
         workspace_id: workspaceId,
         name: d.name,
         icon: d.icon ?? "bot",
-        color: d.color ?? "#4f46e5",
+        color: d.color ?? DEFAULT_AGENT_COLOR,
         description: d.description ?? "",
         system_prompt: d.system_prompt ?? "",
         model_tier: d.model_tier ?? "medium",
@@ -66,154 +69,126 @@ export function GenerateWizard({
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-6"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      width={672}
+      title="✦ Generate agents with AI"
+      description={
+        <>
+          Runs on your own Claude Code login. Drafts are yours to edit — nothing is
+          saved until you say so.
+        </>
+      }
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {phase === "review" ? "Done" : "Cancel"}
+          </Button>
+          {phase === "describe" && (
+            <Button variant="primary" onClick={generate} disabled={!description.trim()}>
+              Generate
+            </Button>
+          )}
+          {phase === "review" && (
+            <Button onClick={() => setPhase("describe")}>↻ Regenerate</Button>
+          )}
+        </>
+      }
     >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 20, scale: 0.98 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex max-h-[80vh] w-full max-w-2xl flex-col rounded-2xl border border-line bg-panel"
-      >
-        <div className="border-b border-line p-5">
-          <div className="text-base font-semibold">✦ Generate agents with AI</div>
-          <div className="mt-0.5 text-xs text-ink-dim">
-            Runs on your own Claude Code login. Drafts are yours to edit — nothing is
-            saved until you say so.
+      {phase === "describe" && (
+        <>
+          <textarea
+            autoFocus
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={4}
+            placeholder="Describe what you need… e.g. “a team that triages GitHub issues, fixes the easy ones, and drafts PRs with tests”"
+            className="w-full resize-none rounded-xl border border-border bg-panel px-3 py-2.5 text-sm outline-none focus:border-accent"
+          />
+          {/* Designing a team is one-shot judgement, which thinking time
+              serves better than model size — so this is worth choosing
+              rather than always paying for the largest one. The picker
+              names the model each tier resolves to, since "Complex" alone
+              does not tell you what you are about to spend. */}
+          <label className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
+            Designed by
+            <TierPicker value={tier} onChange={setTier} />
+          </label>
+          {error && (
+            <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
+              {error}
+            </div>
+          )}
+        </>
+      )}
+
+      {phase === "generating" && (
+        <div className="flex flex-col items-center gap-3 py-12">
+          <motion.div
+            className="h-8 w-8 rounded-full border-2 border-accent border-t-transparent"
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }}
+          />
+          <div className="text-sm text-fg-muted">
+            Designing your agents… this uses one Fable request.
           </div>
         </div>
+      )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {phase === "describe" && (
-            <>
+      {phase === "review" && (
+        <div className="flex flex-col gap-4">
+          {drafts.map((d, i) => (
+            <div key={i} className="rounded-xl border border-border p-4">
+              <div className="flex items-center gap-2">
+                <input
+                  value={d.name}
+                  onChange={(e) => editDraft(i, { name: e.target.value })}
+                  className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-2 py-1 text-sm font-semibold outline-none focus:border-accent"
+                />
+                <select
+                  value={d.model_tier ?? "medium"}
+                  onChange={(e) => editDraft(i, { model_tier: e.target.value as Tier })}
+                  className="rounded-lg border border-border px-2 py-1 text-xs"
+                  style={{
+                    background: tierSoft[(d.model_tier ?? "medium") as Tier],
+                    color: tierColor[(d.model_tier ?? "medium") as Tier],
+                  }}
+                >
+                  {TIERS.map((t) => (
+                    <option key={t} value={t}>
+                      {tierModel(t)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                value={d.description ?? ""}
+                onChange={(e) => editDraft(i, { description: e.target.value })}
+                className="mt-2 w-full rounded-lg border border-border bg-panel px-2 py-1 text-xs text-fg-muted outline-none focus:border-accent"
+              />
               <textarea
-                autoFocus
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={4}
-                placeholder="Describe what you need… e.g. “a team that triages GitHub issues, fixes the easy ones, and drafts PRs with tests”"
-                className="w-full resize-none rounded-xl border border-line bg-panel px-3 py-2.5 text-sm outline-none focus:border-accent"
+                value={d.system_prompt ?? ""}
+                onChange={(e) => editDraft(i, { system_prompt: e.target.value })}
+                rows={3}
+                className="mt-2 w-full resize-none rounded-lg border border-border bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent"
               />
-              {/* Designing a team is one-shot judgement, which thinking time
-                  serves better than model size — so this is worth choosing
-                  rather than always paying for the largest one. The picker
-                  names the model each tier resolves to, since "Complex" alone
-                  does not tell you what you are about to spend. */}
-              <label className="mt-3 flex items-center gap-2 text-xs text-ink-dim">
-                Designed by
-                <TierPicker value={tier} onChange={setTier} />
-              </label>
-              {error && (
-                <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-                  {error}
-                </div>
-              )}
-            </>
-          )}
-
-          {phase === "generating" && (
-            <div className="flex flex-col items-center gap-3 py-12">
-              <motion.div
-                className="h-8 w-8 rounded-full border-2 border-accent border-t-transparent"
-                animate={{ rotate: 360 }}
-                transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }}
-              />
-              <div className="text-sm text-ink-dim">
-                Designing your agents… this uses one Fable request.
+              <div className="mt-2 flex justify-end">
+                {saved.has(i) ? (
+                  <span className="text-sm text-tier-easy">✓ Saved</span>
+                ) : (
+                  <Button variant="primary" size="sm" onClick={() => saveDraft(i)}>
+                    Save agent
+                  </Button>
+                )}
               </div>
             </div>
-          )}
-
-          {phase === "review" && (
-            <div className="flex flex-col gap-4">
-              {drafts.map((d, i) => (
-                <div key={i} className="rounded-xl border border-line p-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      value={d.name}
-                      onChange={(e) => editDraft(i, { name: e.target.value })}
-                      className="min-w-0 flex-1 rounded-lg border border-line px-2 py-1 text-sm font-semibold outline-none focus:border-accent"
-                    />
-                    <select
-                      value={d.model_tier ?? "medium"}
-                      onChange={(e) => editDraft(i, { model_tier: e.target.value as Tier })}
-                      className="rounded-lg border border-line px-2 py-1 text-xs"
-                      style={{
-                        background: tierSoft[(d.model_tier ?? "medium") as Tier],
-                        color: tierColor[(d.model_tier ?? "medium") as Tier],
-                      }}
-                    >
-                      {TIERS.map((t) => (
-                        <option key={t} value={t}>
-                          {tierModel(t)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <input
-                    value={d.description ?? ""}
-                    onChange={(e) => editDraft(i, { description: e.target.value })}
-                    className="mt-2 w-full rounded-lg border border-line px-2 py-1 text-xs text-ink-dim outline-none focus:border-accent"
-                  />
-                  <textarea
-                    value={d.system_prompt ?? ""}
-                    onChange={(e) => editDraft(i, { system_prompt: e.target.value })}
-                    rows={3}
-                    className="mt-2 w-full resize-none rounded-lg border border-line px-2 py-1.5 text-xs outline-none focus:border-accent"
-                  />
-                  <div className="mt-2 flex justify-end">
-                    {saved.has(i) ? (
-                      <span className="text-sm text-tier-easy">✓ Saved</span>
-                    ) : (
-                      <motion.button
-                        whileTap={{ scale: 0.96 }}
-                        onClick={() => saveDraft(i)}
-                        className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
-                      >
-                        Save agent
-                      </motion.button>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {error && (
-                <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
-              )}
-            </div>
+          ))}
+          {error && (
+            <div className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
           )}
         </div>
-
-        <div className="flex justify-end gap-2 border-t border-line p-4">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
-            {phase === "review" ? "Done" : "Cancel"}
-          </button>
-          {phase === "describe" && (
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={generate}
-              disabled={!description.trim()}
-              className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Generate
-            </motion.button>
-          )}
-          {phase === "review" && (
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setPhase("describe")}
-              className="rounded-lg border border-line px-4 py-2 text-sm"
-            >
-              ↻ Regenerate
-            </motion.button>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
+      )}
+    </Dialog>
   );
 }

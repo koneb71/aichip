@@ -20,7 +20,17 @@ import ActivityPage from "./pages/ActivityPage";
 import ConnectionsPage from "./pages/ConnectionsPage";
 import SettingsPage from "./pages/SettingsPage";
 import TeamsPage from "./pages/TeamsPage";
+import InboxPage from "./pages/InboxPage";
+import AuditPage from "./pages/AuditPage";
+import OrgChartPage from "./pages/OrgChartPage";
+import GoalsPage from "./pages/GoalsPage";
+import { InboxProvider } from "./lib/inbox";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
+import { ThemeProvider } from "./lib/theme";
+import { TooltipProvider } from "./components/ui/Overlay";
+import { Toaster } from "./components/ui/Toast";
 
 // Reading a page must not download an editor. Only the edit route is lazy —
 // the editor is far larger than any single page view, and a wiki is read far
@@ -33,14 +43,18 @@ const PageEditor = React.lazy(() => import("./pages/knowledge/PageEditor"));
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <ThemeProvider>
+    <TooltipProvider>
     <WorkspaceProvider>
       <EnginesProvider>
       <ModelsProvider>
         <ActivityProvider>
+        <InboxProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="inbox" element={<InboxPage />} />
               <Route path="chat" element={<ChatPage />} />
               <Route path="research" element={<ResearchPage />} />
               <Route path="routines" element={<RoutinesPage />} />
@@ -60,7 +74,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={
                     <React.Suspense
                       fallback={
-                        <div className="p-8 text-sm text-ink-dim">Loading the editor…</div>
+                        <div className="p-8 text-sm text-fg-muted">Loading the editor…</div>
                       }
                     >
                       <PageEditor />
@@ -71,13 +85,20 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               </Route>
               <Route path="connections" element={<ConnectionsPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="audit" element={<AuditPage />} />
+              <Route path="org" element={<OrgChartPage />} />
+              <Route path="goals" element={<GoalsPage />} />
               <Route path="teams" element={<TeamsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
+        <Toaster />
+        </InboxProvider>
         </ActivityProvider>
       </ModelsProvider>
       </EnginesProvider>
     </WorkspaceProvider>
+    </TooltipProvider>
+    </ThemeProvider>
   </React.StrictMode>,
 );

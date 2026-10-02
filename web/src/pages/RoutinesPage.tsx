@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Project, Routine, RoutineDraft, RoutineRun } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
-import { EnginePicker } from "../lib/engines";
+import { EnginePicker, ToolsNote } from "../lib/engines";
 import { Icon } from "../components/ui/Icon";
+import { Button } from "../components/ui/Button";
 import { compile, describeCron, Preset, recognize, relative, WEEKDAYS } from "../lib/cron";
 
 /**
@@ -101,23 +102,24 @@ export default function RoutinesPage() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Routines</h1>
-          <p className="mt-1 text-xs text-ink-dim">
+          <p className="mt-1 text-xs text-fg-muted">
             A prompt that runs on a schedule — a morning brief in chat, a weekly research
             report, a recurring card on a board. Times are your local time; if your machine
             was asleep, a missed routine runs once on wake.
           </p>
         </div>
-        <button
+        <Button
+          variant="primary"
+          size="md"
           onClick={startNew}
-          className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] hover:brightness-110"
+          icon={<Icon name="plus" size={14} strokeWidth={2.5} />}
         >
-          <Icon name="plus" size={14} strokeWidth={2.5} />
           New routine
-        </button>
+        </Button>
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mt-4 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       {editing && (
@@ -135,7 +137,7 @@ export default function RoutinesPage() {
 
       <div className="mt-6 space-y-3">
         {routines.length === 0 && !editing && (
-          <div className="rounded-2xl border border-dashed border-line px-6 py-10 text-center text-sm text-ink-dim">
+          <div className="rounded-2xl border border-dashed border-border px-6 py-10 text-center text-sm text-fg-muted">
             Nothing scheduled yet. A routine can post into a chat thread every morning,
             file a research report every Friday, or start a board card every Monday.
           </div>
@@ -228,28 +230,28 @@ function RoutineCard({
     r.lastRunStatus && !["completed", "failed", "canceled"].includes(r.lastRunStatus);
 
   return (
-    <div className={`card-shadow rounded-2xl border border-line bg-panel p-4 ${r.enabled ? "" : "opacity-60"}`}>
+    <div className={`card-shadow rounded-2xl border border-border bg-panel p-4 ${r.enabled ? "" : "opacity-60"}`}>
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
               {KIND_LABEL[r.kind]}
             </span>
             <span className="truncate text-sm font-semibold">{r.name}</span>
             {r.projectName && (
-              <span className="truncate text-[11px] text-ink-dim">· {r.projectName}</span>
+              <span className="truncate text-[11px] text-fg-muted">· {r.projectName}</span>
             )}
             {r.kind === "watch" && r.url && (
-              <span className="truncate text-[11px] text-ink-dim" title={r.url}>
+              <span className="truncate text-[11px] text-fg-muted" title={r.url}>
                 · {hostOf(r.url)}
               </span>
             )}
             {!r.projectName && r.kind !== "task" && r.kind !== "watch" && (
-              <span className="text-[11px] text-ink-dim">· General</span>
+              <span className="text-[11px] text-fg-muted">· General</span>
             )}
           </div>
-          <p className="mt-1 line-clamp-2 text-xs text-ink-dim">{r.prompt}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-dim">
+          <p className="mt-1 line-clamp-2 text-xs text-fg-muted">{r.prompt}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-muted">
             <span className="flex items-center gap-1">
               <Icon name="clock" size={12} />
               {describeCron(r.cronExpr)}
@@ -260,55 +262,50 @@ function RoutineCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            onClick={runNow}
-            disabled={busy || !!live}
-            title={live ? "Already running" : "Fire once, without touching the schedule"}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs hover:border-ink-dim disabled:opacity-50"
-          >
-            {busy ? "Firing…" : "Run now"}
-          </button>
-          <button
-            onClick={onEdit}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs hover:border-ink-dim"
-          >
+          {/* On a wrapper: a disabled kit Button takes no pointer events. */}
+          <span className="shrink-0" title={live ? "Already running" : "Fire once, without touching the schedule"}>
+            <Button variant="secondary" size="sm" onClick={runNow} disabled={busy || !!live}>
+              {busy ? "Firing…" : "Run now"}
+            </Button>
+          </span>
+          <Button variant="secondary" size="sm" onClick={onEdit}>
             Edit
-          </button>
+          </Button>
           {/* The switch: on = scheduled, off = paused, bookmark reset on re-enable. */}
           <button
             onClick={toggle}
             role="switch"
             aria-checked={r.enabled}
             title={r.enabled ? "Pause the schedule" : "Resume the schedule"}
-            className={`relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-line"}`}
+            className={`ring-focus relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-border-strong"}`}
           >
             <span
-              className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left] ${r.enabled ? "left-[18px]" : "left-0.5"}`}
+              className={`absolute top-0.5 size-4 rounded-full shadow transition-[left] ${r.enabled ? "left-[18px] bg-on-accent" : "left-0.5 bg-panel"}`}
             />
           </button>
         </div>
       </div>
 
       <div className="mt-2 flex items-center gap-3 text-[11px]">
-        <button onClick={() => setOpen(!open)} className="text-ink-dim hover:text-ink">
+        <Button variant="ghost" size="xs" className="-ml-2" onClick={() => setOpen(!open)}>
           {open ? "Hide history" : "History"}
-        </button>
+        </Button>
         <ResultLink routine={r} />
-        <button onClick={remove} className="ml-auto text-ink-dim hover:text-danger">
+        <Button variant="ghost" size="xs" className="-mr-2 ml-auto" onClick={remove}>
           Delete
-        </button>
+        </Button>
       </div>
 
       {open && (
-        <div className="mt-2 space-y-1 border-t border-line pt-2">
-          {history === null && <div className="text-[11px] text-ink-dim">Loading…</div>}
+        <div className="mt-2 space-y-1 border-t border-border pt-2">
+          {history === null && <div className="text-[11px] text-fg-muted">Loading…</div>}
           {history?.length === 0 && (
-            <div className="text-[11px] text-ink-dim">Hasn't fired yet.</div>
+            <div className="text-[11px] text-fg-muted">Hasn't fired yet.</div>
           )}
           {history?.map((h) => (
             <div key={h.id} className="flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="text-ink-dim">{new Date(h.firedAt).toLocaleString()}</span>
-              {h.trigger === "manual" && <span className="text-ink-dim">(manual)</span>}
+              <span className="text-fg-muted">{new Date(h.firedAt).toLocaleString()}</span>
+              {h.trigger === "manual" && <span className="text-fg-muted">(manual)</span>}
               {h.error ? (
                 <span className="text-danger">didn't run: {h.error}</span>
               ) : (
@@ -316,7 +313,7 @@ function RoutineCard({
                   <StatusDot status={h.runStatus} />
                   <FiringLink run={h} routine={r} />
                   {h.costUsd != null && (
-                    <span className="text-ink-dim">${h.costUsd.toFixed(2)}</span>
+                    <span className="text-fg-muted">${h.costUsd.toFixed(2)}</span>
                   )}
                 </>
               )}
@@ -338,7 +335,7 @@ function LastOutcome({ routine: r }: { routine: Routine }) {
     );
   }
   if (r.lastRunStatus && !["completed", "failed", "canceled"].includes(r.lastRunStatus)) {
-    return <span className="text-accent">running now</span>;
+    return <span className="text-accent-fg">running now</span>;
   }
   if (r.lastRunStatus === "failed") {
     return <span className="text-danger">last run failed</span>;
@@ -352,7 +349,7 @@ function ResultLink({ routine: r }: { routine: Routine }) {
     return (
       <Link
         to={`/chat?project=${r.projectId ?? GENERAL}&chat=${r.chatId}`}
-        className="text-accent hover:underline"
+        className="text-accent-fg hover:underline"
       >
         Open thread
       </Link>
@@ -360,7 +357,7 @@ function ResultLink({ routine: r }: { routine: Routine }) {
   }
   if (r.kind === "task" && r.projectId) {
     return (
-      <Link to={`/projects/${r.projectId}`} className="text-accent hover:underline">
+      <Link to={`/projects/${r.projectId}`} className="text-accent-fg hover:underline">
         Open board
       </Link>
     );
@@ -371,14 +368,14 @@ function ResultLink({ routine: r }: { routine: Routine }) {
 function FiringLink({ run: h, routine: r }: { run: RoutineRun; routine: Routine }) {
   if (h.researchId) {
     return (
-      <Link to={`/research/${h.researchId}`} className="text-accent hover:underline">
+      <Link to={`/research/${h.researchId}`} className="text-accent-fg hover:underline">
         {h.researchTitle || "report"}
       </Link>
     );
   }
   if (h.taskId) {
     return (
-      <Link to={`/projects/${h.taskProjectId ?? r.projectId}`} className="text-accent hover:underline">
+      <Link to={`/projects/${h.taskProjectId ?? r.projectId}`} className="text-accent-fg hover:underline">
         {h.taskTitle || "card"}
       </Link>
     );
@@ -387,7 +384,7 @@ function FiringLink({ run: h, routine: r }: { run: RoutineRun; routine: Routine 
     return (
       <Link
         to={`/chat?project=${r.projectId ?? GENERAL}&chat=${h.chatId}`}
-        className="text-accent hover:underline"
+        className="text-accent-fg hover:underline"
       >
         thread
       </Link>
@@ -402,7 +399,7 @@ function StatusDot({ status }: { status: string | null }) {
       ? "bg-tier-easy"
       : status === "failed" || status === "canceled"
         ? "bg-danger"
-        : "bg-amber-400";
+        : "bg-warning";
   return <span className={`size-1.5 rounded-full ${color}`} title={status ?? "queued"} />;
 }
 
@@ -455,11 +452,15 @@ function Editor({
   const allowGeneral = d.kind !== "task";
 
   const set = (patch: Partial<RoutineDraft>) => setD((prev) => ({ ...prev, ...patch }));
+  // `manage` is not a kind this editor offers, but the list includes managers.
+  const kind: string = d.kind;
+  const toolsWhat =
+    kind === "manage" ? "a project manager" : kind === "chat" && d.projectId ? "the assistant" : null;
 
-  const field = "rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs";
+  const field = "rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs";
 
   return (
-    <div className="card-shadow mt-5 rounded-2xl border border-line bg-panel p-4">
+    <div className="card-shadow mt-5 rounded-2xl border border-border bg-panel p-4">
       <div className="text-sm font-semibold">{isNew ? "New routine" : `Edit ${draft.name}`}</div>
 
       <div className="mt-3 grid gap-3">
@@ -478,11 +479,11 @@ function Editor({
               key={k}
               onClick={() => set({ kind: k })}
               className={`rounded-xl border px-3 py-1.5 text-left text-xs ${
-                d.kind === k ? "border-accent bg-accent/5" : "border-line hover:border-ink-dim/40"
+                d.kind === k ? "border-accent bg-accent-subtle" : "border-border hover:border-fg-muted/40"
               }`}
             >
               <div className="font-semibold">{KIND_LABEL[k]}</div>
-              <div className="text-[10px] text-ink-dim">{KIND_BLURB[k]}</div>
+              <div className="text-[10px] text-fg-muted">{KIND_BLURB[k]}</div>
             </button>
           ))}
         </div>
@@ -579,7 +580,7 @@ function Editor({
             />
           )}
         </div>
-        <div className="text-[11px] text-ink-dim">
+        <div className="text-[11px] text-fg-muted">
           {preview === null && "…"}
           {preview?.valid === false && <span className="text-danger">That isn't a valid schedule.</span>}
           {preview?.valid && preview.next.length > 0 && (
@@ -587,7 +588,7 @@ function Editor({
           )}
         </div>
 
-        <label className="flex items-center gap-2 text-xs text-ink-dim">
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
           <input
             type="checkbox"
             checked={(d.catchUp ?? "run_once") === "run_once"}
@@ -627,12 +628,18 @@ function Editor({
             <option value="max">Max</option>
           </select>
         </div>
+        {/* Only the firings that are handed aichip's tools: a project manager
+            (listed here though it is edited on its board) and a chat that
+            stands in a project. A watch, or a chat with no project, never is. */}
+        {toolsWhat && <ToolsNote engine={d.engine ?? null} what={toolsWhat} inheritsDefault />}
 
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onCancel} className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim">
+          <Button variant="secondary" size="sm" onClick={onCancel}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
             onClick={() => onSave({ ...d, cronExpr })}
             disabled={
               !d.name.trim() ||
@@ -641,10 +648,9 @@ function Editor({
               (d.kind === "task" && !d.projectId) ||
               (d.kind === "watch" && !/^https?:\/\/\S{4,}$/.test((d.url ?? "").trim()))
             }
-            className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
           >
             {isNew ? "Create routine" : "Save changes"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

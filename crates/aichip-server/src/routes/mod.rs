@@ -2,6 +2,7 @@ pub mod activity;
 pub mod agents;
 pub mod apps;
 pub mod attachments;
+pub mod audit;
 pub mod budgets;
 pub mod chat;
 pub mod checks;
@@ -9,6 +10,8 @@ pub mod engines;
 pub mod files;
 pub mod fs;
 pub mod github;
+pub mod goals;
+pub mod inbox;
 pub mod kb;
 pub mod manager;
 pub mod mcp_servers;
@@ -18,6 +21,8 @@ pub mod projects;
 pub mod pull_requests;
 pub mod repo_map;
 pub mod research;
+pub mod reviews;
+pub mod revisions;
 pub mod routines;
 pub mod search;
 pub mod settings;
@@ -47,6 +52,8 @@ pub fn run_refused(e: anyhow::Error) -> ApiError {
         || e.is::<aichip_core::runs::follow_up::FollowUpRefusal>()
         || e.is::<aichip_core::agents::Unavailable>()
         || e.is::<aichip_core::budgets::OverBudget>()
+        || e.is::<aichip_core::runs::orchestrator::NoTools>()
+        || e.is::<aichip_core::runs::orchestrator::CantHonour>()
     {
         (axum::http::StatusCode::CONFLICT, e.to_string())
     } else {
@@ -63,6 +70,38 @@ pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
     }
 }
 
+/// The header a dashboard write carries. Its only job is to be un-settable by
+/// a cross-origin simple request: there is no CORS layer, so a preflight for
+/// it gets no `Access-Control-Allow-*` and the browser refuses to send the
+/// real request. The value is not a secret and is checked against nothing.
+/// Belt and braces behind the Origin check in `lib.rs`.
+pub const WRITE_HEADER: &str = "x-aichip-write";
+
+/// Refuse a write that did not come from the dashboard. `what` says what the
+/// endpoint does, so the refusal explains why it is gated.
+pub fn require_write(headers: &axum::http::HeaderMap, what: &str) -> Result<(), ApiError> {
+    if headers.contains_key(WRITE_HEADER) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("{what}, so it needs the {WRITE_HEADER} header"),
+        ))
+    }
+}
+
+/// An answer to something waiting on a person, refused — said in HTTP.
+pub fn answer_refused(e: aichip_core::approvals::Refusal) -> ApiError {
+    use aichip_core::approvals::Refusal;
+    match e {
+        Refusal::NotFound(m) => (StatusCode::NOT_FOUND, m),
+        Refusal::Conflict(m) => (StatusCode::CONFLICT, m),
+        Refusal::Invalid(m) => (StatusCode::BAD_REQUEST, m),
+        Refusal::Gated(e) => run_refused(e),
+        Refusal::Internal(e) => internal(e),
+    }
+}
+
 pub fn internal(e: impl std::fmt::Display) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
@@ -75,7 +114,12 @@ pub fn api_router() -> Router<AppState> {
         .merge(apps::router())
         .merge(tasks::router())
         .merge(checks::router())
+        .merge(reviews::router())
+        .merge(goals::router())
         .merge(budgets::router())
+        .merge(inbox::router())
+        .merge(audit::router())
+        .merge(revisions::router())
         .merge(agents::router())
         .merge(skills::router())
         .merge(teams::router())

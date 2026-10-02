@@ -1,86 +1,94 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import * as RD from "@radix-ui/react-dialog";
 import { Outlet, useLocation } from "react-router-dom";
-import { Sidebar } from "./components/sidebar/Sidebar";
+import { Sidebar } from "./components/shell/Sidebar";
+import { TopBar } from "./components/shell/TopBar";
+import { CommandPalette } from "./components/shell/CommandPalette";
 import { NARROW, useMediaQuery } from "./lib/useMediaQuery";
+import { readCollapsed, writeCollapsed } from "./lib/nav";
+import { CrumbsProvider } from "./lib/crumbs";
 
+/**
+ * Sidebar, top bar, page. On a wide screen the sidebar is docked and can fold
+ * to an icon rail; on a narrow one it is a drawer behind the top bar's menu
+ * button. ⌘K opens the palette from anywhere.
+ */
 export default function AppShell() {
   const narrow = useMediaQuery(NARROW);
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [palette, setPalette] = useState(false);
   const { pathname } = useLocation();
 
-  // Navigating is the whole reason the drawer was opened; leaving it over the
-  // destination would mean two taps to get anywhere.
+  // Navigating is why the drawer was opened; leaving it over the destination
+  // would mean two taps to get anywhere.
   useEffect(() => setNavOpen(false), [pathname]);
-
-  // Nothing to overlay once the sidebar is permanently visible again.
   useEffect(() => {
     if (!narrow) setNavOpen(false);
   }, [narrow]);
 
   useEffect(() => {
-    if (!navOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalette((p) => !p);
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navOpen]);
+  }, []);
 
-  if (!narrow) {
-    return (
-      <div className="grid h-full grid-cols-[240px_minmax(0,1fr)]">
-        <Sidebar />
-        <main className="min-h-0 min-w-0 overflow-hidden">
-          <RouteFade />
-        </main>
-      </div>
-    );
-  }
+  const toggle = useCallback(() => {
+    setCollapsed((c) => {
+      writeCollapsed(!c);
+      return !c;
+    });
+  }, []);
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-line bg-panel px-3 py-2">
-        <button
-          onClick={() => setNavOpen(true)}
-          aria-label="Open navigation"
-          aria-expanded={navOpen}
-          className="rounded-lg px-2 py-1 text-lg leading-none text-ink-dim hover:bg-panel-2 hover:text-ink"
-        >
-          ☰
-        </button>
-        <span className="text-base font-bold tracking-tight">
-          <span className="text-accent">ai</span>chip
-        </span>
-      </header>
-
-      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+  const page = (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <TopBar onOpenPalette={() => setPalette(true)} onOpenNav={narrow ? () => setNavOpen(true) : undefined} />
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden bg-bg">
         <RouteFade />
       </main>
-
-      {navOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-black/30"
-            onClick={() => setNavOpen(false)}
-          />
-          <div className="fixed inset-y-0 left-0 z-50 flex w-[260px] max-w-[85vw] flex-col">
-            <Sidebar onNavigate={() => setNavOpen(false)} />
-          </div>
-        </>
-      )}
     </div>
+  );
+
+  return (
+    <CrumbsProvider>
+      <div className="flex h-full min-h-0">
+        {!narrow && (
+          <div className={collapsed ? "w-14 shrink-0" : "w-[232px] shrink-0"}>
+            <Sidebar collapsed={collapsed} onToggle={toggle} />
+          </div>
+        )}
+        {page}
+      </div>
+
+      {narrow && (
+        <RD.Root open={navOpen} onOpenChange={setNavOpen}>
+          <RD.Portal>
+            <RD.Overlay className="fixed inset-0 z-40 bg-[color-mix(in_oklab,black_35%,transparent)] data-[state=open]:animate-[fade-in_var(--dur-fast)_var(--ease-out-soft)]" />
+            <RD.Content
+              className="fixed inset-y-0 left-0 z-50 w-[264px] max-w-[85vw] shadow-[var(--shadow-lg)] outline-none"
+              aria-describedby={undefined}
+            >
+              <RD.Title className="sr-only">Navigation</RD.Title>
+              <Sidebar onNavigate={() => setNavOpen(false)} />
+            </RD.Content>
+          </RD.Portal>
+        </RD.Root>
+      )}
+
+      <CommandPalette open={palette} onOpenChange={setPalette} />
+    </CrumbsProvider>
   );
 }
 
 /**
- * Cross-fade between routes.
- *
- * `mode="wait"` so the outgoing page is gone before the incoming one arrives —
- * overlapping them would mean two scroll containers on screen at once and a
- * visible height jump as the taller one collapses.
- *
- * Keyed on the *top* path segment, not the whole pathname: moving between two
- * cards inside one project should feel like the page updating, not like
- * leaving and arriving somewhere new.
+ * Cross-fade between routes, keyed on the top path segment: moving between two
+ * cards inside one project should feel like the page updating, not leaving.
  */
 function RouteFade() {
   const { pathname } = useLocation();

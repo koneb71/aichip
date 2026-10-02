@@ -50,7 +50,7 @@ export function AttachmentBar({
         onClick={() => input.current?.click()}
         disabled={disabled || full}
         title={full ? "Attachment limit reached" : "Attach images, PDFs or text files"}
-        className="rounded-lg px-1.5 py-1 text-sm text-ink-dim hover:bg-panel-2 hover:text-ink disabled:opacity-40"
+        className="rounded-lg px-1.5 py-1 text-sm text-fg-muted hover:bg-panel-2 hover:text-fg disabled:opacity-40"
       >
         📎
       </button>
@@ -62,7 +62,7 @@ export function AttachmentBar({
           animate={{ opacity: 1, scale: 1 }}
           title={item.error ?? `${item.name} · ${humanSize(item.size)}`}
           className={`flex min-w-0 max-w-[190px] items-center gap-1.5 rounded-lg border bg-panel-2 py-1 pl-1 pr-1.5 text-xs ${
-            item.status === "error" ? "border-danger text-danger" : "border-line text-ink-dim"
+            item.status === "error" ? "border-danger text-danger" : "border-border text-fg-muted"
           }`}
         >
           {item.previewUrl ? (
@@ -105,7 +105,7 @@ export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
             <img
               src={api.attachmentUrl(a.id)}
               alt={a.filename}
-              className="max-h-48 rounded-lg border border-line object-contain"
+              className="max-h-48 rounded-lg border border-border object-contain"
             />
           </a>
         ) : (
@@ -114,7 +114,7 @@ export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
             href={api.attachmentUrl(a.id)}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2 py-1 text-xs text-ink-dim hover:bg-panel-2"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-panel px-2 py-1 text-xs text-fg-muted hover:bg-panel-2"
           >
             <span>{glyph(a.kind)}</span>
             <span className="min-w-0 flex-1 truncate">{a.filename}</span>

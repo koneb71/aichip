@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, Effort, EffortSettings, EngineModels, LocalHosts, LocalModel, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
 import { AttentionSettings } from "../components/AttentionSettings";
+import { UnattendedSettings } from "../components/UnattendedSettings";
 import { Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
+import { Button } from "../components/ui/Button";
 import { tappable } from "../lib/motion";
 
 /**
@@ -139,10 +140,10 @@ export default function SettingsPage() {
         subtitle="Which model runs at each complexity tier. Tasks, agents and workflow steps all pick a tier — this is what those tiers mean."
       />
 
-      <h2 className="mt-7 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+      <h2 className="mt-7 text-sm font-semibold uppercase tracking-wider text-fg-muted">
         Permissions
       </h2>
-      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+      <p className="mt-1 max-w-xl text-sm text-fg-muted">
         How much new work is allowed to do before it stops to ask you.
       </p>
       <div className="mt-3 max-w-2xl space-y-2">
@@ -150,7 +151,7 @@ export default function SettingsPage() {
           <label
             key={m.id}
             className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${
-              perms.defaultMode === m.id ? "border-accent bg-accent/5" : "border-line bg-panel"
+              perms.defaultMode === m.id ? "border-accent bg-accent/5" : "border-border bg-panel"
             }`}
           >
             <input
@@ -165,39 +166,40 @@ export default function SettingsPage() {
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium">{m.label}</span>
-              <span className="mt-0.5 block text-xs text-ink-dim">{m.blurb}</span>
+              <span className="mt-0.5 block text-xs text-fg-muted">{m.blurb}</span>
             </span>
           </label>
         ))}
-        <p className="text-[11px] text-ink-dim">
+        <p className="text-[11px] text-fg-muted">
           Applies to cards created from now on. "Don't ask" also needs the project
           itself to opt in — that switch is on the project, next to its name.
         </p>
         {!!perms?.agentsOverriding && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
             <span className="font-semibold">
               {perms.agentsOverriding} agent{perms.agentsOverriding === 1 ? "" : "s"} set
               their own permission mode
             </span>{" "}
             — a card's agent overrides the setting above, so those runs will keep
             asking whatever you choose here.
-            <button
+            <Button
+              size="xs"
               onClick={async () => {
                 await api.applyPermissionsToAgents();
                 setPerms(await api.permissionSettings());
               }}
-              className="ml-2 rounded-lg border border-amber-400 bg-panel px-2.5 py-1 font-medium hover:bg-amber-100"
+              className="ml-2"
             >
               Make them follow this setting
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
-      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-fg-muted">
         Thinking
       </h2>
-      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+      <p className="mt-1 max-w-xl text-sm text-fg-muted">
         How hard the model works before it answers. Separate from which model —
         the same model can think for a second or for several minutes, and the
         second one costs a great deal more.
@@ -228,7 +230,7 @@ export default function SettingsPage() {
           />
         ))}
         {!stale && (
-          <p className="text-[11px] text-ink-dim">
+          <p className="text-[11px] text-fg-muted">
             The fallback, for any tier that doesn't set one of its own below. A
             card or its agent still outranks both. Resolved when a run starts
             rather than when a card is made, so raising this reaches work
@@ -236,7 +238,7 @@ export default function SettingsPage() {
           </p>
         )}
         {!!effort?.agentsOverriding && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
             <span className="font-semibold">
               {effort.agentsOverriding} agent
               {effort.agentsOverriding === 1 ? "" : "s"} set their own
@@ -252,21 +254,21 @@ export default function SettingsPage() {
           rather than beside the engine list, which would imply otherwise. */}
       <section className="mt-8">
         <h2 className="text-sm font-semibold">Local model runtimes</h2>
-        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-fg-muted">
           Ollama and LM Studio serve models on this machine. They are not engines — they hold
           no tools — but an engine that fronts them, like OpenCode, can use their models, and
           what they have pulled is offered in the model fields above. Leave a box empty for the
           default port.
         </p>
         {localError && (
-          <div className="mt-2 max-w-lg rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+          <div className="mt-2 max-w-lg rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
             {localError}
           </div>
         )}
         <div className="mt-3 flex flex-wrap gap-4">
           {(["ollama", "lmstudio"] as const).map((k) => (
             <label key={k} className="block">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
                 {k === "ollama" ? "Ollama" : "LM Studio"}
               </span>
               <input
@@ -280,12 +282,12 @@ export default function SettingsPage() {
                   const v = e.target.value.trim();
                   if (v !== (localHosts?.[k] ?? "")) void saveLocalHost({ [k]: v });
                 }}
-                className="w-64 rounded-lg border border-line bg-panel px-2.5 py-2 font-mono text-xs"
+                className="w-64 rounded-lg border border-border bg-panel px-2.5 py-2 font-mono text-xs"
               />
             </label>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-ink-dim">
+        <p className="mt-2 text-[11px] text-fg-muted">
           {localModels.length > 0
             ? `${localModels.length} model${localModels.length === 1 ? "" : "s"} found: ${localModels
                 .map((m) => m.id)
@@ -297,11 +299,12 @@ export default function SettingsPage() {
 
       <PreviewSettings />
       <AttentionSettings />
+      <UnattendedSettings />
 
-      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-fg-muted">
         Models
       </h2>
-      <p className="mt-1 max-w-2xl text-sm text-ink-dim">
+      <p className="mt-1 max-w-2xl text-sm text-fg-muted">
         A tier means a different model on each engine — "medium" can't name one
         model globally, since OpenCode has never heard of{" "}
         <code className="text-[11px]">claude-opus-5</code>.
@@ -312,7 +315,7 @@ export default function SettingsPage() {
             <div className="mb-2 flex flex-wrap items-baseline gap-2">
               <span className="text-sm font-semibold">{engine.label}</span>
               {!!engine.providers.length && (
-                <span className="text-[11px] text-ink-dim">
+                <span className="text-[11px] text-fg-muted">
                   signed in with {engine.providers.map((p) => p.name).join(", ")}
                 </span>
               )}
@@ -321,12 +324,12 @@ export default function SettingsPage() {
               {TIERS.map((tier) => (
                 <div
                   key={tier.key}
-                  className="card-shadow rounded-xl border border-line bg-panel p-4"
+                  className="card-shadow rounded-xl border border-border bg-panel p-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">{tier.label}</div>
-                      <div className="mt-0.5 text-xs text-ink-dim">{tier.when}</div>
+                      <div className="mt-0.5 text-xs text-fg-muted">{tier.when}</div>
                     </div>
                     {/* Kept on one line: a tier reads as a single choice, and
                         having the budget wrap under the model on some rows and
@@ -365,7 +368,7 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   {draft && (
-                    <div className="mt-2 text-[11px] text-ink-dim">
+                    <div className="mt-2 text-[11px] text-fg-muted">
                       {engine.choices.find(
                         (c) => c.id === draft[engine.id]?.[tier.key],
                       )?.blurb ??
@@ -390,22 +393,19 @@ export default function SettingsPage() {
       </div>
 
       {error && (
-        <div className="mt-3 max-w-2xl rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+        <div className="mt-3 max-w-2xl rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
           {error}
         </div>
       )}
 
       <div className="mt-4 flex max-w-2xl items-center gap-3">
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={save}
-          disabled={!dirty || busy}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Button variant="primary" onClick={save} disabled={!dirty || busy}>
           {busy ? "Saving…" : saved && !dirty ? "Saved" : "Save"}
-        </motion.button>
+        </Button>
         {settings && (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() =>
               setDraft(
                 Object.fromEntries(
@@ -413,12 +413,11 @@ export default function SettingsPage() {
                 ),
               )
             }
-            className="text-xs text-ink-dim hover:text-ink"
           >
             Reset to defaults
-          </button>
+          </Button>
         )}
-        <span className="text-[11px] text-ink-dim">
+        <span className="text-[11px] text-fg-muted">
           Runs already in flight keep the model they started with.
         </span>
       </div>
@@ -442,7 +441,7 @@ export default function SettingsPage() {
  */
 function StaleServer() {
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+    <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
       <span className="font-semibold">
         This server is older than this page.
       </span>{" "}
@@ -468,7 +467,7 @@ function EffortChoice({
   return (
     <label
       className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 ${
-        checked ? "border-accent bg-accent/5" : "border-line bg-panel"
+        checked ? "border-accent bg-accent/5" : "border-border bg-panel"
       }`}
     >
       <input
@@ -480,7 +479,7 @@ function EffortChoice({
       />
       <span className="min-w-0">
         <span className="block text-sm font-medium">{label}</span>
-        <span className="mt-0.5 block text-xs text-ink-dim">{blurb}</span>
+        <span className="mt-0.5 block text-xs text-fg-muted">{blurb}</span>
       </span>
     </label>
   );
@@ -504,7 +503,7 @@ function TierField({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="min-w-52 rounded-lg border border-line bg-panel px-2.5 py-2 text-sm"
+        className="min-w-52 rounded-lg border border-border bg-panel px-2.5 py-2 text-sm"
       >
         {engine.choices.map((c) => (
           <option key={c.id} value={c.id}>
@@ -525,7 +524,7 @@ function TierField({
         onChange={(e) => onChange(e.target.value)}
         spellCheck={false}
         placeholder="provider/model"
-        className="min-w-64 rounded-lg border border-line bg-panel px-2.5 py-2 font-mono text-xs"
+        className="min-w-64 rounded-lg border border-border bg-panel px-2.5 py-2 font-mono text-xs"
       />
       <datalist id={listId}>
         {engine.available.map((id) => (
@@ -545,7 +544,7 @@ function TierField({
         // warning about it would be telling the user off for the thing this
         // feature exists to make easy.
         !localModels.some((m) => m.id === value) && (
-          <span className="text-[10px] text-amber-700">
+          <span className="text-[10px] text-warning-fg">
             not in this install's model list
           </span>
         )}

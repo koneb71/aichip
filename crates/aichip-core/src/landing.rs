@@ -182,7 +182,29 @@ impl Orchestrator {
                 return;
             }
         };
+        crate::wake::raise(&self.db, task_id, None, crate::wake::Kind::Landed, "").await;
         for card in unblocked {
+            crate::wake::raise(
+                &self.db,
+                card.task_id,
+                None,
+                crate::wake::Kind::Unblocked,
+                "",
+            )
+            .await;
+            // Its agent, if it pulls its own work, hears about it now rather
+            // than at its next beat.
+            let agent: Option<Uuid> =
+                sqlx::query_scalar("SELECT agent_id FROM tasks WHERE id = $1")
+                    .bind(card.task_id)
+                    .fetch_optional(&self.db.pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten();
+            if let Some(agent) = agent {
+                crate::heartbeat::wake(&self.db, agent, "unblocked", Some(card.task_id)).await;
+            }
             // Started only after `land` committed: `enqueue_task` re-checks
             // the blockers on its own connection, and must see this one done.
             let outcome = if card.start {

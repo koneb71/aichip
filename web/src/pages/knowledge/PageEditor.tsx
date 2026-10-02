@@ -5,6 +5,7 @@ import { RichTextEditor } from "../../components/kb/RichTextEditor";
 import { IconPicker } from "../../components/kb/IconPicker";
 import { DiffBody } from "../../components/kb/PendingRevisionBanner";
 import { KnowledgeContext } from "./KnowledgeLayout";
+import { Button } from "../../components/ui/Button";
 
 /**
  * Editing a page.
@@ -131,11 +132,11 @@ export default function PageEditor() {
 
   if (!page) {
     return save.kind === "error" ? (
-      <div className="p-8 text-sm text-danger">
+      <div className="p-8 text-sm text-danger-fg">
         This page could not be loaded: {save.message}
       </div>
     ) : (
-      <div className="p-8 text-sm text-ink-dim">Loading…</div>
+      <div className="p-8 text-sm text-fg-muted">Loading…</div>
     );
   }
 
@@ -143,21 +144,18 @@ export default function PageEditor() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-6 py-6 lg:px-10">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <button
-            onClick={() => navigate(`/knowledge/${page.id}`)}
-            className="text-xs text-ink-dim hover:text-ink"
-          >
+          <Button variant="ghost" size="xs" onClick={() => navigate(`/knowledge/${page.id}`)}>
             ← Done
-          </button>
+          </Button>
           <SaveChip state={save} onReload={() => window.location.reload()} />
         </div>
 
         {save.kind === "conflict" && (
-          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50/60 p-4">
-            <div className="text-sm font-semibold text-amber-900">
+          <div className="mb-4 rounded-xl border border-warning/40 bg-warning-subtle p-4">
+            <div className="text-sm font-semibold text-warning-fg">
               This page changed while you were editing
             </div>
-            <p className="mt-1 text-xs text-amber-900/80">
+            <p className="mt-1 text-xs text-fg">
               Your version is safe — it is still in the editor below and will
               survive a reload.{" "}
               {save.diff
@@ -170,12 +168,14 @@ export default function PageEditor() {
                   "Their change went into the same revision yours started from, so there is no before-and-after to show."}
             </p>
             {save.diff && (
-              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-line bg-panel">
+              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-border bg-panel">
                 <DiffBody unified={save.diff.diff} />
               </div>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
-              <button
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={async () => {
                   // Take the newer revision as the base and re-save on top —
                   // deliberate, and the only thing that discards their edit.
@@ -185,19 +185,18 @@ export default function PageEditor() {
                   dirty.current = true;
                   await persist();
                 }}
-                className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
               >
                 Keep mine
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
                 onClick={() => {
                   localStorage.removeItem(DRAFT_KEY(page.id));
                   window.location.reload();
                 }}
-                className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-xs"
               >
                 Take theirs
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -218,7 +217,7 @@ export default function PageEditor() {
               setTitle(e.target.value);
             }}
             placeholder="Untitled"
-            className="min-w-0 flex-1 border-0 bg-transparent text-3xl font-bold tracking-tight outline-none placeholder:text-ink-dim/40"
+            className="min-w-0 flex-1 border-0 bg-transparent text-3xl font-bold tracking-tight outline-none text-fg placeholder:text-fg-subtle"
           />
         </div>
 
@@ -239,18 +238,18 @@ export default function PageEditor() {
 function SaveChip({ state, onReload }: { state: SaveState; onReload: () => void }) {
   switch (state.kind) {
     case "saving":
-      return <span className="text-xs text-ink-dim">Saving…</span>;
+      return <span className="text-xs text-fg-muted">Saving…</span>;
     case "saved":
-      return <span className="text-xs text-ink-dim">Saved</span>;
+      return <span className="text-xs text-fg-muted">Saved</span>;
     case "conflict":
       return (
-        <button onClick={onReload} className="text-xs font-medium text-amber-700">
+        <button onClick={onReload} className="ring-focus rounded text-xs font-medium text-warning-fg hover:underline">
           Changed elsewhere
         </button>
       );
     case "error":
-      return <span className="text-xs text-danger">{state.message}</span>;
+      return <span className="text-xs text-danger-fg">{state.message}</span>;
     default:
-      return <span className="text-xs text-ink-dim">Typing saves automatically</span>;
+      return <span className="text-xs text-fg-muted">Typing saves automatically</span>;
   }
 }

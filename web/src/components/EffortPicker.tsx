@@ -41,7 +41,7 @@ export function EffortPicker({
       value={value ?? ""}
       disabled={disabled}
       onChange={(e) => onChange((e.target.value || null) as Effort | null)}
-      className={`rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
+      className={`rounded-lg border border-border bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
     >
       <option value="">
         {inherited ? `Default (${inherited})` : "Default thinking"}

@@ -34,14 +34,14 @@ export function menuRenderer<T extends MenuItem>() {
       row.type = "button";
       row.className =
         "flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left " +
-        (i === selected ? "bg-accent/10 text-accent" : "hover:bg-panel-2");
+        (i === selected ? "bg-accent/10 text-accent-fg" : "hover:bg-panel-2");
       const name = document.createElement("span");
       name.className = "truncate text-xs font-medium";
       name.textContent = item.label;
       row.appendChild(name);
       if (item.hint) {
         const hint = document.createElement("span");
-        hint.className = "ml-auto shrink-0 text-[10px] text-ink-dim";
+        hint.className = "ml-auto shrink-0 text-[10px] text-fg-muted";
         hint.textContent = item.hint;
         row.appendChild(hint);
       }
@@ -75,7 +75,7 @@ export function menuRenderer<T extends MenuItem>() {
     onStart: (props: any) => {
       el = document.createElement("div");
       el.className =
-        "card-shadow fixed z-50 max-h-60 w-64 overflow-y-auto rounded-xl border border-line bg-panel p-1";
+        "card-shadow fixed z-50 max-h-60 w-64 overflow-y-auto rounded-xl border border-border bg-panel p-1";
       document.body.appendChild(el);
       items = props.items;
       selected = 0;

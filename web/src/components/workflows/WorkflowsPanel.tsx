@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { api, WorkflowDef, WorkflowRun } from "../../lib/api";
 import { RunGraphDrawer } from "./RunGraphDrawer";
 import { WorkflowEditor } from "./WorkflowEditor";
+import { Button } from "../ui/Button";
 
 export function WorkflowsPanel({ projectId }: { projectId: string }) {
   const [workflows, setWorkflows] = useState<WorkflowDef[]>([]);
@@ -48,31 +49,24 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-surface p-5">
+    <div className="h-full overflow-y-auto bg-bg p-5">
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold">Workflows</h2>
-        <span className="rounded-full bg-panel-2 px-2 py-0.5 text-xs text-ink-dim">
+        <span className="rounded-full bg-panel-2 px-2 py-0.5 text-xs text-fg-muted">
           {workflows.length}
         </span>
         <div className="ml-auto flex gap-2">
-          <button
-            onClick={sync}
-            className="rounded-lg border border-line bg-panel px-3 py-1.5 text-xs hover:bg-panel-2"
-          >
+          <Button variant="secondary" size="sm" onClick={sync}>
             Sync from repo
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setEditing("new")}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
-          >
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setEditing("new")}>
             + New workflow
-          </motion.button>
+          </Button>
         </div>
       </div>
 
       {notice && (
-        <div className="mt-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs text-ink-dim">
+        <div className="mt-3 rounded-lg border border-border bg-panel px-3 py-2 text-xs text-fg-muted">
           {notice}
         </div>
       )}
@@ -82,12 +76,12 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
           <motion.div
             layout
             key={w.id}
-            className="card-shadow rounded-xl border border-line bg-panel p-4"
+            className="card-shadow rounded-xl border border-border bg-panel p-4"
           >
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold">{w.name}</div>
-                <div className="mt-0.5 line-clamp-2 text-xs text-ink-dim">
+                <div className="mt-0.5 line-clamp-2 text-xs text-fg-muted">
                   {w.description || `${w.stepCount} steps`}
                 </div>
               </div>
@@ -102,54 +96,37 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
                     await api.setWorkflowEnabled(w.id, !w.enabled);
                     refresh();
                   }}
-                  className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-mono"
-                  style={
-                    w.enabled
-                      ? {
-                          background: "var(--color-tier-medium-soft)",
-                          color: "var(--color-tier-medium)",
-                        }
-                      : {
-                          background: "var(--color-panel-2)",
-                          color: "var(--color-ink-dim)",
-                        }
-                  }
+                  className={`ring-focus shrink-0 rounded-full px-2 py-0.5 text-[11px] font-mono ${
+                    w.enabled ? "bg-tier-medium-soft text-tier-medium" : "bg-panel-2 text-fg-muted"
+                  }`}
                 >
                   {w.enabled ? "⏱" : "⏸"} {w.cronExpr}
                 </button>
               )}
             </div>
             {w.error ? (
-              <div className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-[11px] text-danger">
+              <div className="mt-2 rounded-lg bg-danger-subtle px-2 py-1 text-[11px] text-danger-fg">
                 {w.error}
               </div>
             ) : (
-              <div className="mt-2 text-[11px] text-ink-dim">
+              <div className="mt-2 text-[11px] text-fg-muted">
                 {w.stepCount} steps
                 {w.nextRunAt && ` · next ${relativeTime(w.nextRunAt)}`}
                 {!w.nextRunAt && w.cronExpr && !w.enabled && " · paused"}
               </div>
             )}
             <div className="mt-3 flex gap-2">
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => runNow(w.id)}
-                disabled={!!w.error}
-                className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
-              >
+              <Button variant="primary" size="xs" onClick={() => runNow(w.id)} disabled={!!w.error}>
                 ▶ Run
-              </motion.button>
-              <button
-                onClick={() => setEditing(w)}
-                className="rounded-lg border border-line px-3 py-1 text-xs hover:bg-panel-2"
-              >
+              </Button>
+              <Button variant="secondary" size="xs" onClick={() => setEditing(w)}>
                 Edit
-              </button>
+              </Button>
             </div>
           </motion.div>
         ))}
         {workflows.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
+          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
             No workflows yet. Write one here, or drop YAML in
             <code className="mx-1 rounded bg-panel-2 px-1.5 py-0.5 text-xs">
               .aichip/workflows/
@@ -166,24 +143,24 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
             layout
             key={r.id}
             onClick={() => setOpenRun(r)}
-            className="card-shadow flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2.5 text-left"
+            className="card-shadow flex items-center gap-3 rounded-xl border border-border bg-panel px-4 py-2.5 text-left"
           >
             <StatusDot status={r.status} />
             <span className="text-sm font-medium">{r.workflowName}</span>
-            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-ink-dim">
+            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[11px] text-fg-muted">
               {r.trigger}
             </span>
-            <span className="text-xs text-ink-dim">{r.status.replace("_", " ")}</span>
+            <span className="text-xs text-fg-muted">{r.status.replace("_", " ")}</span>
             {r.costUsd != null && (
-              <span className="text-xs text-ink-dim">${r.costUsd.toFixed(3)}</span>
+              <span className="text-xs text-fg-muted">${r.costUsd.toFixed(3)}</span>
             )}
-            <span className="ml-auto text-xs text-ink-dim">
+            <span className="ml-auto text-xs text-fg-muted">
               {new Date(r.createdAt).toLocaleTimeString()}
             </span>
           </motion.button>
         ))}
         {runs.length === 0 && (
-          <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-ink-dim">
+          <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-fg-muted">
             No workflow runs yet.
           </div>
         )}
@@ -234,7 +211,7 @@ export function StatusDot({ status }: { status: string }) {
       : status === "failed"
         ? "var(--color-danger)"
         : status === "canceled"
-          ? "var(--color-ink-dim)"
+          ? "var(--color-fg-muted)"
           : "var(--color-tier-medium)";
   const live = status === "running" || status === "starting" || status === "queued";
   return live ? (

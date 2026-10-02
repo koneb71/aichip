@@ -165,13 +165,18 @@ fn parse_result(v: &Value) -> Vec<AichipEvent> {
         .unwrap_or_default()
         .to_string();
 
-    if rate_limit_signal(&result_text) || rate_limit_signal(subtype) {
+    // The text is only a rate-limit signal when the run failed. On success it
+    // is the model's last message — "returns 429 after five attempts" is a
+    // summary of rate-limiting work, and reading it as a limit held a
+    // finished run and ran it again, and again.
+    let failed = is_error || subtype.starts_with("error");
+    if rate_limit_signal(subtype) || (failed && rate_limit_signal(&result_text)) {
         return vec![AichipEvent::RateLimited {
             reset_at: None,
             message: result_text,
         }];
     }
-    if is_error || subtype.starts_with("error") {
+    if failed {
         return vec![AichipEvent::RunFailed {
             reason: if result_text.is_empty() {
                 format!("engine reported error ({subtype})")

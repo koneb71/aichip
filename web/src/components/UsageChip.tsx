@@ -47,8 +47,8 @@ export function UsageChip() {
           to="/activity"
           className={`block rounded-lg px-2 py-1.5 text-[11px] leading-snug transition-opacity hover:opacity-80 ${
             l.status === "blocked"
-              ? "bg-red-50 text-danger"
-              : "bg-amber-50 text-amber-900"
+              ? "bg-danger-subtle text-danger-fg"
+              : "bg-warning-subtle text-warning-fg"
           }`}
         >
           <span className="font-semibold">

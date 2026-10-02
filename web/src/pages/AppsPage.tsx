@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { api, type App } from "../lib/api";
 import { appState } from "../lib/apps";
@@ -8,7 +7,8 @@ import { NewAppModal } from "../components/apps/NewAppModal";
 import { RepoApps } from "../components/apps/RepoApps";
 import { Empty, Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Switch } from "../components/ui/Field";
 
 /**
  * The gallery.
@@ -53,7 +53,7 @@ export default function AppsPage() {
         subtitle="Small internal tools aichip builds and hosts for you, each with its own data and screens."
         actions={
           <>
-        <label className="ring-focus cursor-pointer rounded-xl border border-line bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-ink-dim/40 hover:bg-panel-2">
+        <label className={buttonClasses({ variant: "secondary", className: "cursor-pointer" })}>
           Import
           <input
             type="file"
@@ -76,20 +76,19 @@ export default function AppsPage() {
             }}
           />
         </label>
-        <motion.button
-          {...tappable}
+        <Button
+          variant="primary"
           onClick={() => setAdding(true)}
-          className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+          icon={<Icon name="plus" size={15} strokeWidth={2.5} />}
         >
-          <Icon name="plus" size={15} strokeWidth={2.5} />
           New app
-        </motion.button>
+        </Button>
           </>
         }
       />
 
       {error && (
-        <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-4 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -98,7 +97,7 @@ export default function AppsPage() {
           return (
             <div
               key={app.id}
-              className="card-shadow lift group flex flex-col rounded-2xl border border-line bg-panel p-4"
+              className="card-shadow lift group flex flex-col rounded-2xl border border-border bg-panel p-4"
               style={{ opacity: app.active ? 1 : 0.6 }}
             >
               <div className="flex items-start gap-3">
@@ -110,26 +109,23 @@ export default function AppsPage() {
                   >
                     {app.name}
                   </Link>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-ink-dim">{state.line}</p>
+                  <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{state.line}</p>
                 </div>
                 {/* A switch, not a delete. Off keeps every row — which is the
                     whole reason it is safe to use, and worth saying on the
                     tile rather than only in a confirmation nobody reads. */}
-                <button
-                  onClick={() => toggle(app)}
+                <span
                   title={app.active ? "Switch off. Keeps its data." : "Switch on"}
-                  className={
-                    "relative h-5 w-9 shrink-0 rounded-full transition-colors " +
-                    (app.active ? "bg-accent" : "bg-line")
-                  }
+                  className="inline-flex shrink-0"
                 >
-                  <span
-                    className="absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all"
-                    style={{ left: app.active ? "1.125rem" : "0.125rem" }}
+                  <Switch
+                    checked={app.active}
+                    onChange={() => toggle(app)}
+                    label={app.active ? "Switch off. Keeps its data." : "Switch on"}
                   />
-                </button>
+                </span>
               </div>
-              <div className="mt-3 flex items-center gap-2 text-[11px] text-ink-dim">
+              <div className="mt-3 flex items-center gap-2 text-[11px] text-fg-muted">
                 <span className="rounded bg-panel-2 px-1.5 py-0.5">
                   {app.runtime === "module" ? "module" : `container · ${app.runtime}`}
                 </span>
@@ -152,18 +148,16 @@ export default function AppsPage() {
 
       {active && <RepoApps workspaceId={active.id} onSynced={refresh} />}
 
-      <AnimatePresence>
-        {adding && active && (
-          <NewAppModal
-            workspaceId={active.id}
-            onClose={() => setAdding(false)}
-            onInstalled={() => {
-              setAdding(false);
-              refresh();
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {adding && active && (
+        <NewAppModal
+          workspaceId={active.id}
+          onClose={() => setAdding(false)}
+          onInstalled={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
+      )}
     </Page>
   );
 }

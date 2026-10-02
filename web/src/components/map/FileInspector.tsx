@@ -44,32 +44,32 @@ export function FileInspector({
       initial={{ opacity: 0, x: 8 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.15, ease: "easeOut" }}
-      className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-line bg-panel"
+      className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-panel"
     >
-      <div className="flex items-start gap-2 border-b border-line px-3 py-2">
+      <div className="flex items-start gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="break-all font-mono text-[11px] font-semibold">{path}</div>
         </div>
         <button
           onClick={onClose}
           title="Close"
-          className="ring-focus rounded px-1 text-xs text-ink-dim hover:text-ink"
+          className="ring-focus rounded px-1 text-xs text-fg-muted hover:text-fg"
         >
           ✕
         </button>
       </div>
 
-      <div className="flex gap-1.5 border-b border-line px-3 py-2">
+      <div className="flex gap-1.5 border-b border-border px-3 py-2">
         <button
           onClick={() => onOpenFile(path)}
-          className="ring-focus rounded-lg border border-line px-2 py-1 text-[11px] transition-colors hover:bg-panel-2"
+          className="ring-focus rounded-lg border border-border px-2 py-1 text-[11px] transition-colors hover:bg-panel-2"
         >
           Open in Files
         </button>
       </div>
 
       {error && <div className="px-3 py-3 text-[11px] text-danger">{error}</div>}
-      {!detail && !error && <div className="px-3 py-3 text-[11px] text-ink-dim">Reading…</div>}
+      {!detail && !error && <div className="px-3 py-3 text-[11px] text-fg-muted">Reading…</div>}
 
       {detail && (
         <div className="space-y-4 px-3 py-3">
@@ -101,10 +101,10 @@ export function FileInspector({
                 className="flex items-baseline gap-1.5 rounded px-1 py-0.5 text-[11px]"
               >
                 <span className="truncate font-mono">{s.name}</span>
-                <span className="shrink-0 rounded-full bg-panel-2 px-1 text-[9px] text-ink-dim">
+                <span className="shrink-0 rounded-full bg-panel-2 px-1 text-[9px] text-fg-muted">
                   {s.kind}
                 </span>
-                <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-dim">
+                <span className="ml-auto shrink-0 font-mono text-[10px] text-fg-muted">
                   :{s.line}
                 </span>
               </div>
@@ -116,12 +116,12 @@ export function FileInspector({
               only one of them is a problem. */}
           {detail.specifiers.length > 0 && (
             <details className="text-[11px]">
-              <summary className="cursor-pointer text-ink-dim">
+              <summary className="cursor-pointer text-fg-muted">
                 All {detail.specifiers.length} specifiers as written
               </summary>
               <div className="mt-1 space-y-0.5">
                 {detail.specifiers.map((s) => (
-                  <div key={s} className="truncate px-1 font-mono text-[10px] text-ink-dim">
+                  <div key={s} className="truncate px-1 font-mono text-[10px] text-fg-muted">
                     {s}
                   </div>
                 ))}
@@ -149,9 +149,9 @@ function Section({
     <div>
       <div className="mb-1 flex items-baseline gap-1.5">
         <span className="text-[11px] font-semibold">{title}</span>
-        <span className="text-[10px] text-ink-dim">{count}</span>
+        <span className="text-[10px] text-fg-muted">{count}</span>
       </div>
-      {count === 0 ? <div className="text-[10px] text-ink-dim">{empty}</div> : children}
+      {count === 0 ? <div className="text-[10px] text-fg-muted">{empty}</div> : children}
     </div>
   );
 }
@@ -173,7 +173,7 @@ function Row({
     >
       <span className="truncate font-mono">{path}</span>
       {weight > 1 && (
-        <span className="ml-auto shrink-0 text-[10px] text-ink-dim">×{weight}</span>
+        <span className="ml-auto shrink-0 text-[10px] text-fg-muted">×{weight}</span>
       )}
     </button>
   );

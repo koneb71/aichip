@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { api, type SchemaPlan } from "../../lib/api";
+import { Button } from "../ui/Button";
 
 /**
  * A change to an app's tables that destroys something, waiting to be read.
@@ -41,13 +41,13 @@ export function SchemaGate({
   const destructive = plan.statements.filter((s) => s.destructive);
 
   return (
-    <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
-      <div className="text-sm font-semibold text-amber-900">
+    <div className="mb-4 rounded-xl border border-warning/40 bg-warning-subtle p-4">
+      <div className="text-sm font-semibold text-warning-fg">
         {destructive.length === 1
           ? "This app wants to change its tables in a way that loses data."
           : `This app wants to make ${destructive.length} changes that lose data.`}
       </div>
-      <p className="mt-1 text-xs text-amber-900/80">
+      <p className="mt-1 text-xs text-warning-fg/80">
         Nothing has run. The manifest is saved, but its tables are still as they were.
       </p>
 
@@ -57,38 +57,29 @@ export function SchemaGate({
             key={i}
             className={
               "rounded-lg border p-2 " +
-              (s.destructive ? "border-amber-400 bg-white" : "border-line bg-white/60")
+              (s.destructive ? "border-warning/60 bg-panel" : "border-border bg-panel/60")
             }
           >
-            <div className="text-xs text-ink">
-              {s.destructive && <span className="mr-1 font-semibold text-danger">Destroys:</span>}
+            <div className="text-xs text-fg">
+              {s.destructive && <span className="mr-1 font-semibold text-danger-fg">Destroys:</span>}
               {s.why}
             </div>
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-ink-dim">
+            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-fg-muted">
               {s.sql}
             </pre>
           </div>
         ))}
       </div>
 
-      {error && <div className="mt-3 text-xs text-danger">{error}</div>}
+      {error && <div className="mt-3 text-xs text-danger-fg">{error}</div>}
 
       <div className="mt-4 flex items-center gap-2">
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={() => act(true)}
-          disabled={busy}
-          className="rounded-lg bg-amber-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-        >
+        <Button variant="danger" size="sm" onClick={() => act(true)} disabled={busy}>
           Run these
-        </motion.button>
-        <button
-          onClick={() => act(false)}
-          disabled={busy}
-          className="rounded-lg border border-amber-400 px-3 py-1.5 text-xs text-amber-900"
-        >
+        </Button>
+        <Button size="sm" onClick={() => act(false)} disabled={busy}>
           Leave the tables alone
-        </button>
+        </Button>
       </div>
     </div>
   );

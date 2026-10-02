@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { MoreHorizontal } from "lucide-react";
 import { api, type App, type ContainerState } from "../../lib/api";
 import { appOrigin, containerLine } from "../../lib/apps";
+import { Button, IconButton } from "../ui/Button";
+import { Menu } from "../ui/Overlay";
 
 /**
  * A container app, embedded.
@@ -34,26 +36,6 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolves, setResolves] = useState<boolean | null>(null);
-  const [menu, setMenu] = useState(false);
-
-  // A menu with no way out is a trap: the only affordance that dismisses it
-  // would otherwise be picking one of its items. Escape and a click anywhere
-  // else both close it, and the listeners exist only while it is open.
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(false);
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(false);
-    };
-    // Capture, so a click on the button itself still toggles before this runs
-    // on the next tick rather than fighting it.
-    window.addEventListener("click", close);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", key);
-    };
-  }, [menu]);
 
   const refresh = useCallback(
     () => api.appContainer(app.id).then(setState).catch(() => {}),
@@ -101,9 +83,6 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   };
 
   const url = status === "running" ? appOrigin(app.slug, window.location.port) : null;
-  // The menu only exists while something is running; a container that stopped
-  // on its own would otherwise leave it floating over a dead frame.
-  if (menu && status !== "running") setMenu(false);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -114,17 +93,17 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
           the app's. What moved into the menu is the *controls* — they are
           maintenance, and maintenance does not belong in the middle of a
           screen someone is using. */}
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-dim">
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-fg-muted">
         {url ? (
           <>
-            <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span className="size-1.5 rounded-full bg-success" />
             <span>
               running in this app&rsquo;s own container at{" "}
               <a
                 href={url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono hover:text-ink hover:underline"
+                className="font-mono hover:text-fg hover:underline"
               >
                 {url.replace(/^https?:\/\//, "")}
               </a>
@@ -135,64 +114,41 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
         )}
         <div className="flex-1" />
         {status !== "running" && (
-          <motion.button
-            whileTap={{ scale: 0.96 }}
+          <Button
+            size="sm"
             onClick={() => act(true)}
             disabled={busy || building || state?.docker.usable === false}
-            className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
           >
             {state?.preview?.canWake ? "Wake it" : "Build & run"}
-          </motion.button>
+          </Button>
         )}
+        {/* Only while something is running: the menu lives in the trigger,
+            so a container that stopped on its own takes the menu with it
+            rather than leaving it floating over a dead frame. Escape and a
+            click elsewhere close it (Radix). */}
         {status === "running" && (
-          <div className="relative">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setMenu((m) => !m);
-              }}
-              aria-haspopup="menu"
-              aria-expanded={menu}
-              aria-label="Container controls"
-              className="rounded px-1.5 py-0.5 hover:bg-line/40 hover:text-ink"
-            >
-              &#8943;
-            </button>
-            {menu && (
-              <div className="card-shadow absolute right-0 z-10 mt-1 w-36 rounded-lg border border-line bg-panel py-1 text-xs">
-                <button
-                  onClick={() => {
-                    setMenu(false);
-                    refresh();
-                  }}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40"
-                >
-                  Reload
-                </button>
-                <button
-                  onClick={() => {
-                    setMenu(false);
-                    act(false);
-                  }}
-                  disabled={busy}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40 disabled:opacity-50"
-                >
-                  Stop container
-                </button>
-              </div>
-            )}
-          </div>
+          <Menu
+            trigger={
+              <IconButton label="Container controls" size="xs">
+                <MoreHorizontal className="size-3.5" />
+              </IconButton>
+            }
+            items={[
+              { label: "Reload", onSelect: () => refresh() },
+              { label: "Stop container", onSelect: () => act(false), disabled: busy },
+            ]}
+          />
         )}
       </div>
 
       {state?.docker.usable === false && (
-        <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="mb-2 rounded-lg bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
           {state.docker.problem} Container apps need it; modules do not.
         </div>
       )}
 
       {resolves === false && (
-        <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="mb-2 rounded-lg bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
           This browser does not resolve <span className="font-mono">*.localhost</span> to your
           own machine, so a container app cannot be reached from it. Chrome and Firefox do.
           There is no fallback on purpose: serving every app from one address would give them
@@ -201,10 +157,10 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
       )}
 
       {error && (
-        <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
       {state?.preview?.error && (
-        <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-red-50 px-3 py-2 font-mono text-[11px] text-danger">
+        <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-danger-subtle px-3 py-2 font-mono text-[11px] text-danger-fg">
           {state.preview.error}
         </pre>
       )}
@@ -224,7 +180,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
           className="min-h-0 flex-1 bg-transparent"
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-line text-sm text-ink-dim">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border text-sm text-fg-muted">
           {building ? "Building…" : "Not running."}
         </div>
       )}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { api, RepoGraph, RepoIndexStatus, RepoSearchHit } from "../../lib/api";
 import { Icon } from "../ui/Icon";
+import { Button } from "../ui/Button";
 import { moduleOf } from "../../lib/repoGraph";
 import { GraphCanvas } from "./GraphCanvas";
 import { FileInspector } from "./FileInspector";
@@ -176,22 +177,22 @@ export function RepoMapPanel({
     // `min-w-0` matters: a React Flow pane reports its content width, and
     // without it this flex item widens the whole page into a sideways scroll.
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <div className="flex items-start gap-3 border-b border-line px-6 py-3">
+      <div className="flex items-start gap-3 border-b border-border px-6 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold">Map</h2>
-          <p className="mt-0.5 max-w-xl text-xs text-ink-dim">
+          <p className="mt-0.5 max-w-xl text-xs text-fg-muted">
             What this project is made of, read from the code itself and re-read
             whenever it changes. Click a module to open it; click a file to see
             what it would break.
           </p>
         </div>
-        <div className="flex shrink-0 rounded-lg border border-line p-0.5">
+        <div className="flex shrink-0 rounded-lg border border-border p-0.5">
           {(["graph", "list"] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
               className={`ring-focus rounded-md px-2.5 py-1 text-[11px] capitalize transition-colors ${
-                view === v ? "bg-panel-2 font-medium" : "text-ink-dim hover:text-ink"
+                view === v ? "bg-panel-2 font-medium" : "text-fg-muted hover:text-fg"
               }`}
             >
               {v}
@@ -200,9 +201,9 @@ export function RepoMapPanel({
         </div>
       </div>
 
-      <div className="border-b border-line px-6 py-2.5">
+      <div className="border-b border-border px-6 py-2.5">
         <div className="relative max-w-3xl">
-          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-dim">
+          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted">
             <Icon name="search" size={14} />
           </span>
           <input
@@ -214,24 +215,24 @@ export function RepoMapPanel({
                 : "Meaning search lights up when the first files are indexed…"
             }
             disabled={!searchable}
-            className="ring-focus w-full rounded-xl border border-line bg-panel py-2 pl-8 pr-2.5 text-xs outline-none transition-colors focus:border-accent disabled:opacity-60"
+            className="ring-focus w-full rounded-xl border border-border bg-panel py-2 pl-8 pr-2.5 text-xs outline-none transition-colors focus:border-accent disabled:opacity-60"
           />
         </div>
 
         {hits !== null && (
           <div className="mt-2 max-h-60 max-w-3xl space-y-1 overflow-y-auto">
             {searching && hits.length === 0 && (
-              <div className="text-[11px] text-ink-dim">Searching…</div>
+              <div className="text-[11px] text-fg-muted">Searching…</div>
             )}
             {/* A failed search that renders as "no results" reads as "your
                 code does not contain this", which is a different claim. */}
             {!searching && hitNote && (
-              <div className="rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger">
+              <div className="rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg">
                 Search did not run — {hitNote}
               </div>
             )}
             {!searching && !hitNote && hits.length === 0 && (
-              <div className="text-[11px] text-ink-dim">Nothing matches “{query.trim()}”.</div>
+              <div className="text-[11px] text-fg-muted">Nothing matches “{query.trim()}”.</div>
             )}
             {hits.map((h) => (
               <motion.button
@@ -242,23 +243,23 @@ export function RepoMapPanel({
                   setSelected(h.path);
                   onOpenFile?.(h.path);
                 }}
-                className="block w-full rounded-lg border border-line bg-panel px-3 py-2 text-left transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+                className="block w-full rounded-lg border border-border bg-panel px-3 py-2 text-left transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
               >
                 <div className="flex items-baseline gap-2">
                   <span className="truncate font-mono text-[11px]">{h.path}</span>
                   {h.line != null && (
-                    <span className="shrink-0 text-[10px] text-ink-dim">:{h.line}</span>
+                    <span className="shrink-0 text-[10px] text-fg-muted">:{h.line}</span>
                   )}
                   {h.symbol && (
-                    <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-ink-dim">
+                    <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-fg-muted">
                       {h.symbol}
                     </span>
                   )}
-                  <span className="ml-auto shrink-0 text-[10px] text-ink-dim">
+                  <span className="ml-auto shrink-0 text-[10px] text-fg-muted">
                     {Math.round(h.score * 100)}%
                   </span>
                 </div>
-                <pre className="mt-1 overflow-hidden whitespace-pre-wrap font-mono text-[10px] leading-snug text-ink-dim">
+                <pre className="mt-1 overflow-hidden whitespace-pre-wrap font-mono text-[10px] leading-snug text-fg-muted">
                   {h.excerpt.split("\n").slice(0, 3).join("\n")}
                 </pre>
               </motion.button>
@@ -293,7 +294,7 @@ export function RepoMapPanel({
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {status.note && nodes.length === 0 && (
-            <div className="rounded-xl border border-dashed border-line px-6 py-10 text-center text-xs text-ink-dim">
+            <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-xs text-fg-muted">
               {status.note}
             </div>
           )}
@@ -302,13 +303,13 @@ export function RepoMapPanel({
               <div key={name}>
                 <div className="mb-1.5 flex items-baseline gap-2">
                   <span className="font-mono text-xs font-semibold">{name}</span>
-                  <span className="text-[11px] text-ink-dim">
+                  <span className="text-[11px] text-fg-muted">
                     {group.length} file{group.length === 1 ? "" : "s"}
                   </span>
                 </div>
                 <table className="w-full text-[11px]">
                   <thead>
-                    <tr className="text-[10px] text-ink-dim">
+                    <tr className="text-[10px] text-fg-muted">
                       <th className="w-full text-left font-normal">File</th>
                       <th className="px-2 text-right font-normal" title="Files that import this">
                         in
@@ -339,11 +340,11 @@ export function RepoMapPanel({
                               </span>
                             </button>
                           </td>
-                          <td className="px-2 text-right tabular-nums text-ink-dim">
+                          <td className="px-2 text-right tabular-nums text-fg-muted">
                             {f.importedBy}
                           </td>
-                          <td className="px-2 text-right tabular-nums text-ink-dim">{f.imports}</td>
-                          <td className="pl-2 text-right tabular-nums text-ink-dim">{f.symbols}</td>
+                          <td className="px-2 text-right tabular-nums text-fg-muted">{f.imports}</td>
+                          <td className="pl-2 text-right tabular-nums text-fg-muted">{f.symbols}</td>
                         </tr>
                       ))}
                   </tbody>
@@ -355,7 +356,7 @@ export function RepoMapPanel({
       )}
 
       {/* The steady-state strip: ambient, not primary. */}
-      <div className="flex items-center gap-2 border-t border-line px-6 py-1.5 text-[11px] text-ink-dim">
+      <div className="flex items-center gap-2 border-t border-border px-6 py-1.5 text-[11px] text-fg-muted">
         <span
           className={`size-1.5 rounded-full ${
             unsettled ? "animate-pulse bg-tier-medium" : "bg-tier-easy"
@@ -384,14 +385,16 @@ export function RepoMapPanel({
           <span className="hidden sm:inline" title="Node size is how many files import it">
             size = imported-by
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={reindex}
             disabled={busy}
             title="Read the project again and rebuild the index"
-            className="ring-focus text-ink-dim hover:text-ink disabled:opacity-50"
+            className="-my-1 -mr-2"
           >
             {busy ? "Reading…" : "↻ Reindex"}
-          </button>
+          </Button>
         </span>
       </div>
     </div>
@@ -414,14 +417,14 @@ function Banners({
           ~35 MB, and every run after that it is reading the cached model
           off disk, which still takes a few seconds. */}
       {status.embedder.state === "downloading" && (
-        <div className="mt-2 max-w-3xl rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+        <div className="mt-2 max-w-3xl rounded-lg bg-warning-subtle px-2 py-1.5 text-[11px] text-warning-fg">
           Loading the embedding model — a few seconds, and ~35 MB the first time
           ever. The map below works now.
         </div>
       )}
       {status.embedder.state === "failed" && (
         <div
-          className="mt-2 max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger"
+          className="mt-2 max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg"
           title={status.embedder.detail}
         >
           The embedder failed — indexing retries on the next pass. The map still
@@ -429,7 +432,7 @@ function Banners({
         </div>
       )}
       {status.error && (
-        <div className="mt-2 max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger">
+        <div className="mt-2 max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg">
           Reading the project failed — {status.error.split("\n").slice(-1)[0]}
         </div>
       )}
@@ -437,7 +440,7 @@ function Banners({
         <button
           onClick={onDismiss}
           title="Dismiss"
-          className="mt-2 block w-full max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-left text-[11px] text-danger"
+          className="mt-2 block w-full max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-left text-[11px] text-danger-fg"
         >
           {error}
         </button>

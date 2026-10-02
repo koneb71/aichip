@@ -131,6 +131,13 @@ impl Engine for OpenCodeEngine {
             fixed_model_catalog: false,
             // Each step's `cost`, summed into the final event.
             reports_cost: true,
+            // Permission rules are config the CLI applies, but not verified against
+            // every tool a review would deny.
+            enforces_denied_tools: false,
+            // The config travels in `OPENCODE_CONFIG`, a file in aichip's
+            // scratch directory — never the run's folder.
+            mcp_tools: true,
+            auto_edit: true,
         }
     }
 

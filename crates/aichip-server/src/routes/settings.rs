@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(apply_to_agents),
         )
         .route("/settings/attention", get(get_attention).put(set_attention))
+        .route(
+            "/settings/unattended",
+            get(get_unattended).put(set_unattended),
+        )
 }
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
@@ -63,12 +67,19 @@ async fn get_models(State(state): State<AppState>) -> Json<Value> {
                 // OpenCode fronts 75+ providers, so its field is free text and
                 // the picker says so rather than offering a stale list.
                 "fixedCatalog": e.capabilities().fixed_model_catalog,
-                "choices": if e.capabilities().fixed_model_catalog {
-                    MODEL_CHOICES.iter().map(|m| json!({
+                // A fixed catalog is the engine's own when its install
+                // reported one — Gemini's aliases, Amp's modes — and Claude
+                // Code's, the one catalog aichip ships, when it did not.
+                "choices": match (e.capabilities().fixed_model_catalog, state.orchestrator.engine_info(e.id())) {
+                    (false, _) => vec![],
+                    (true, Some(info)) if !info.models.is_empty() => info
+                        .models
+                        .iter()
+                        .map(|id| json!({ "id": id, "label": id, "blurb": null }))
+                        .collect::<Vec<_>>(),
+                    (true, _) => MODEL_CHOICES.iter().map(|m| json!({
                         "id": m.id, "label": m.label, "blurb": m.blurb,
-                    })).collect::<Vec<_>>()
-                } else {
-                    vec![]
+                    })).collect::<Vec<_>>(),
                 },
                 // What this install can actually reach, straight from the CLI.
                 // Suggestions, not a whitelist: a local model the CLI doesn't
@@ -326,23 +337,43 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
     Ok(Json(json!({ "cleared": cleared })))
 }
 
+/// What aichip does about runs that stop showing signs of life. See
+/// `aichip_core::reaper`.
+async fn get_unattended(State(state): State<AppState>) -> Json<Value> {
+    let u = aichip_core::reaper::load(&state.db).await;
+    Json(json!({ "unattended": u, "maxSilenceMinutes": aichip_core::reaper::MAX_SILENCE_MINUTES }))
+}
+
+pub(crate) async fn set_unattended(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<aichip_core::reaper::Unattended>,
+) -> Result<Json<Value>, ApiError> {
+    super::require_write(&headers, "this decides when aichip stops and restarts runs")?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Unattended,
+        "unattended",
+    )
+    .await;
+    aichip_core::reaper::save(&state.db, body)
+        .await
+        .map_err(internal)?;
+    Ok(get_unattended(State(state)).await)
+}
+
 /// The most dangerous write in the app.
 ///
 /// The stored value is a shell command this server will execute, so anything
 /// that can reach this endpoint has remote code execution. It carries the same
-/// header gate the file-write path documents: there is no CORS layer, so a
-/// preflight for `x-aichip-write` gets no `Access-Control-Allow-*` and the
-/// browser refuses to send the real request. Belt and braces behind the Origin
-/// check in `lib.rs`.
-const WRITE_HEADER: &str = "x-aichip-write";
-
+/// header gate every dashboard write carries — see `super::require_write`.
 async fn get_attention(State(state): State<AppState>) -> Json<Value> {
     let a = aichip_core::attention::load(&state.db).await;
     Json(attention_json(&a, None))
 }
 
 #[derive(Deserialize)]
-struct AttentionBody {
+pub(crate) struct AttentionBody {
     enabled: Option<bool>,
     command: Option<String>,
     events: Option<Vec<String>>,
@@ -350,17 +381,15 @@ struct AttentionBody {
     wait_secs: Option<i64>,
 }
 
-async fn set_attention(
+pub(crate) async fn set_attention(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<AttentionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    if !headers.contains_key(WRITE_HEADER) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("this endpoint stores a command this machine will run, so it needs the {WRITE_HEADER} header"),
-        ));
-    }
+    super::require_write(
+        &headers,
+        "this endpoint stores a command this machine will run",
+    )?;
     let current = aichip_core::attention::load(&state.db).await;
     let next = aichip_core::attention::Attention {
         enabled: body.enabled.unwrap_or(current.enabled),
@@ -381,6 +410,12 @@ async fn set_attention(
     let warning = aichip_shared::looks_like_secret(&next.command)
         .map(|f| aichip_shared::secrets::refusal(&f));
 
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Attention,
+        "attention",
+    )
+    .await;
     let saved = aichip_core::attention::save(&state.db, next)
         .await
         .map_err(internal)?;

@@ -21,7 +21,7 @@ export function FieldInput({
   onChange: (v: unknown) => void;
 }) {
   const label = (
-    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
       {fieldLabel(field)}
       {field.required && !field.computed && <span className="ml-1 text-danger">*</span>}
       {field.computed && (
@@ -33,7 +33,7 @@ export function FieldInput({
   );
 
   const shared =
-    "w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm " +
+    "w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm " +
     "outline-none focus:border-accent disabled:opacity-60";
   const text = value === null || value === undefined ? "" : String(value);
 

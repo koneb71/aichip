@@ -10,6 +10,8 @@ import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { Markdown } from "../components/Markdown";
 import { isActive } from "../lib/runStatus";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Select } from "../components/ui/Field";
 
 /**
  * Deep research: ask a question about a project, watch the investigation,
@@ -116,10 +118,9 @@ export default function ResearchPage() {
 
   const rail = (
     <div className="flex min-h-0 flex-col gap-3 p-3">
-      <select
+      <Select
         value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
         title="General researches the web alone; pick a project to ground the answer in its repository"
       >
         <option value={GENERAL}>General — web only</option>
@@ -128,17 +129,17 @@ export default function ResearchPage() {
             {p.name}
           </option>
         ))}
-      </select>
+      </Select>
       <Link
         to={projectId ? `/research?project=${projectId}` : "/research"}
         onClick={() => setRailOpen(false)}
-        className="rounded-lg border border-line px-2 py-1.5 text-center text-sm text-ink-dim hover:bg-panel-2 hover:text-ink"
+        className={buttonClasses({ variant: "secondary", size: "md" })}
       >
         + New research
       </Link>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {list.length === 0 && (
-          <div className="px-2 py-2 text-xs text-ink-dim">Nothing researched yet.</div>
+          <div className="px-2 py-2 text-xs text-fg-muted">Nothing researched yet.</div>
         )}
         {list.map((r) => (
           <Link
@@ -178,15 +179,15 @@ export default function ResearchPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-5 py-10">
         <h1 className="text-[26px] font-bold leading-tight tracking-tight">Deep research</h1>
-        <p className="mt-1.5 text-sm leading-relaxed text-ink-dim">
+        <p className="mt-1.5 text-sm leading-relaxed text-fg-muted">
           {general
             ? "Ask anything. The agent searches the web, reads the sources, and writes a report that cites every claim."
             : "Ask a question about this project. The agent reads the repository first, then the web, and writes a report that cites both — every web claim with its URL, every repo claim with its file."}
         </p>
         {error && (
-          <div className="mt-4 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
+          <div className="mt-4 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">{error}</div>
         )}
-        <div className="mt-6 flex flex-col gap-2 rounded-xl border border-line bg-panel p-3 focus-within:border-accent">
+        <div className="mt-6 flex flex-col gap-2 rounded-xl border border-border bg-panel p-3 focus-within:border-accent">
           <textarea
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
@@ -207,14 +208,14 @@ export default function ResearchPage() {
             <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default engine" />
             <TierPicker value={tier} onChange={setTier} engine={engine ?? undefined} />
             <EffortPicker value={effort} onChange={setEffort} />
-            <motion.button
-              whileTap={{ scale: 0.95 }}
+            <Button
+              variant="primary"
               onClick={start}
               disabled={busy || !question.trim()}
-              className="ml-auto rounded-lg bg-accent px-4 py-1.5 text-sm text-white disabled:opacity-40"
+              className="ml-auto"
             >
               {busy ? "Starting…" : "Research"}
-            </motion.button>
+            </Button>
           </div>
         </div>
       </div>
@@ -226,11 +227,11 @@ export default function ResearchPage() {
       <div className="flex h-full min-h-0 flex-col">
         <button
           onClick={() => setRailOpen((o) => !o)}
-          className="border-b border-line px-4 py-2 text-left text-sm font-medium"
+          className="border-b border-border px-4 py-2 text-left text-sm font-medium"
         >
-          Research <span className="text-[10px] text-ink-dim">{railOpen ? "▴" : "▾"}</span>
+          Research <span className="text-[10px] text-fg-muted">{railOpen ? "▴" : "▾"}</span>
         </button>
-        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-line">{rail}</div>}
+        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-border">{rail}</div>}
         {main}
       </div>
     );
@@ -238,7 +239,7 @@ export default function ResearchPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)]">
-      <div className="min-h-0 overflow-hidden border-r border-line bg-panel">{rail}</div>
+      <div className="min-h-0 overflow-hidden border-r border-border bg-panel">{rail}</div>
       {main}
     </div>
   );
@@ -344,7 +345,7 @@ function ResearchView({
 
   if (!detail) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-ink-dim">
+      <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-fg-muted">
         {error ?? "Loading…"}
       </div>
     );
@@ -353,63 +354,54 @@ function ResearchView({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-5 py-8">
-        <div className="text-xs text-ink-dim">Research</div>
+        <div className="text-xs text-fg-muted">Research</div>
         <h1 className="mt-0.5 text-xl font-bold leading-tight tracking-tight">
           {detail.title || detail.question}
         </h1>
         {detail.title && (
-          <p className="mt-1 text-sm text-ink-dim">“{detail.question}”</p>
+          <p className="mt-1 text-sm text-fg-muted">“{detail.question}”</p>
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {live ? (
-            <button
-              onClick={cancel}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-danger hover:text-danger"
-            >
+            <Button variant="secondary" size="sm" onClick={cancel}>
               Cancel
-            </button>
+            </Button>
           ) : (
             <>
               {detail.reportMd &&
                 (detail.kbArticleId ? (
                   <Link
                     to={`/knowledge/${detail.kbArticleId}`}
-                    className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-surface"
+                    className="rounded-lg bg-tier-easy px-3 py-1.5 text-xs font-medium text-bg"
                   >
                     Open in knowledge base →
                   </Link>
                 ) : (
-                  <button
-                    onClick={saveToKb}
-                    disabled={saving}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                  >
+                  <Button variant="primary" size="sm" onClick={saveToKb} disabled={saving}>
                     {saving ? "Saving…" : "Save to knowledge base"}
-                  </button>
+                  </Button>
                 ))}
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={rerun}
-                className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim"
                 title="Ask again — the report is replaced by the new answer"
               >
                 ↻ Re-run
-              </button>
-              <button
-                onClick={remove}
-                className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger"
-              >
+              </Button>
+              <Button variant="danger" size="sm" onClick={remove} className="ml-auto">
                 Delete
-              </button>
+              </Button>
             </>
           )}
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">{error}</div>
         )}
         {!live && !detail.reportMd && detail.runError && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
             The run stopped: {detail.runError}
           </div>
         )}
@@ -486,7 +478,7 @@ function LiveInvestigation({
   return (
     <div className="mt-5 flex flex-col gap-3">
       {/* The phase line: one sentence, a pulse, and the clock. */}
-      <div className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2">
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-panel px-3 py-2">
         <motion.span
           animate={{ opacity: [0.4, 1, 0.4] }}
           transition={{ repeat: Infinity, duration: 1.6 }}
@@ -495,14 +487,14 @@ function LiveInvestigation({
           {phase.icon}
         </motion.span>
         <span className="text-sm font-medium">{phase.label}…</span>
-        <span className="ml-auto font-mono text-xs text-ink-dim">
+        <span className="ml-auto font-mono text-xs text-fg-muted">
           {mm}:{ss}
         </span>
       </div>
 
       {/* Counters, only once there is something to count. */}
       {tools.length > 0 && (
-        <div className="flex flex-wrap gap-2 text-[11px] text-ink-dim">
+        <div className="flex flex-wrap gap-2 text-[11px] text-fg-muted">
           {searches.length > 0 && (
             <span className="rounded-full bg-panel-2 px-2 py-0.5">
               {searches.length} {searches.length === 1 ? "search" : "searches"}
@@ -532,7 +524,7 @@ function LiveInvestigation({
                 key={`${e.seq}-${i}`}
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs"
+                className="self-start rounded-full border border-border bg-panel px-3 py-1 text-xs"
               >
                 🔎 “{String(args.query ?? "")}”
               </motion.div>
@@ -547,7 +539,7 @@ function LiveInvestigation({
                 rel="noreferrer"
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-accent hover:underline"
+                className="self-start rounded-full border border-border bg-panel px-3 py-1 text-xs text-accent-fg hover:underline"
               >
                 📖 {hostOf(url)}
               </motion.a>
@@ -565,7 +557,7 @@ function LiveInvestigation({
                 key={`${e.seq}-${i}`}
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="self-start rounded-full border border-line bg-panel px-3 py-1 font-mono text-[11px] text-ink-dim"
+                className="self-start rounded-full border border-border bg-panel px-3 py-1 font-mono text-[11px] text-fg-muted"
               >
                 📁 {label}
               </motion.div>
@@ -577,8 +569,8 @@ function LiveInvestigation({
 
       {/* The report, streaming in. */}
       {liveText && (
-        <div className="rounded-xl border border-line bg-panel p-4">
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-ink-dim">
+        <div className="rounded-xl border border-border bg-panel p-4">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-fg-muted">
             Draft
           </div>
           <div className="md">
@@ -637,7 +629,7 @@ function ReportView({ detail }: { detail: Detail }) {
   return (
     <div className="mt-5">
       {/* What this run was: the stats a person actually asks about. */}
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-dim">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
         {detail.runModel && (
           <span className="rounded-full bg-panel-2 px-2 py-0.5">{detail.runModel}</span>
         )}
@@ -655,12 +647,9 @@ function ReportView({ detail }: { detail: Detail }) {
             {sources.length} {sources.length === 1 ? "source" : "sources"}
           </span>
         )}
-        <button
-          onClick={copy}
-          className="ml-auto rounded-full border border-line px-2 py-0.5 hover:border-ink-dim hover:text-ink"
-        >
+        <Button variant="secondary" size="xs" onClick={copy} className="ml-auto">
           {copied ? "✓ Copied" : "Copy markdown"}
-        </button>
+        </Button>
       </div>
 
       {/* The bibliography, up front and clickable. */}
@@ -672,7 +661,7 @@ function ReportView({ detail }: { detail: Detail }) {
               href={s.url}
               target="_blank"
               rel="noreferrer"
-              className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-[11px] text-accent hover:underline"
+              className="rounded-full border border-border bg-panel px-2.5 py-0.5 text-[11px] text-accent-fg hover:underline"
             >
               {s.host}
             </a>
@@ -683,12 +672,12 @@ function ReportView({ detail }: { detail: Detail }) {
       {/* Sections, as jump pills — a TOC that earns its space only when the
           report actually has sections. */}
       {headings.length > 1 && (
-        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border pt-3">
           {headings.map((h, i) => (
             <button
               key={`${h}-${i}`}
               onClick={() => jumpTo(i)}
-              className="rounded-lg bg-panel-2 px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+              className="rounded-lg bg-panel-2 px-2.5 py-1 text-[11px] text-fg-muted hover:text-fg"
             >
               {h}
             </button>
