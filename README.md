@@ -27,6 +27,8 @@ safe.
   needed: the binary on your `PATH` is already logged in, and Eren just starts it.
 - **Everything is local.** Postgres runs under `~/.eren`, the code index and document
   embeddings are computed on your machine, and nothing is sent anywhere Eren controls.
+  The dashboard answers only this machine unless you open it to your network — and then
+  every other device needs its [access link](#using-eren-from-other-devices).
 - **The review surface is git.** A board task runs in an isolated worktree, so the thing
   you approve is an ordinary diff on an ordinary branch, and the thing you reject costs
   you a deleted branch rather than an undo.
@@ -47,7 +49,8 @@ safe.
 - [A tour](#a-tour) — the board, review, the inbox, agents and organisation, unattended
   work, budgets, chat and research, knowledge, apps, previews, the dashboard
 - [Engines](#engines)
-- [Settings and environment variables](#settings-and-environment-variables)
+- [Settings and environment variables](#settings-and-environment-variables) — including
+  [using Eren from your phone or another computer](#using-eren-from-other-devices)
 - [Upgrading from aichip to Eren](#upgrading-from-aichip-to-eren)
 - [Database](#database)
 - [Running in Docker](#running-in-docker)
@@ -132,6 +135,11 @@ no subcommand. It takes two flags:
 
 - `--port <n>` — listen somewhere other than 4820.
 - `--headless` — don't try to open a browser.
+
+To use it from a phone, tablet or another computer on your network as well, start it with
+`EREN_BIND=0.0.0.0 EREN_ALLOWED_HOSTS=<this machine's address> eren serve` and open the
+access link it prints on each device once — see
+[using Eren from other devices](#using-eren-from-other-devices).
 
 `doctor` ends with `All good. Start with: eren serve` when git and at least one engine are
 present, and exits non-zero otherwise. For each engine it finds it also says what that
@@ -422,7 +430,9 @@ for any other write to the table. Three things feed it:
   the input**;
 - Eren's own actions: a routine firing, a run reaped, a hand-over, an automatic check.
 
-It records `api`, not "a person": there is no login, and any local process can call the API.
+It records `api`, not "a person": there is no login — on this machine any local process can
+call the API, and from another device anything holding the
+[access token](#using-eren-from-other-devices) can.
 Agent and system entries are pruned after 90 days; API entries are kept. The page filters
 and exports CSV (`GET /api/audit.csv`). A single card's merged story — runs, comments,
 reviews, checks and audit entries in order — is `GET /api/tasks/{id}/timeline`, shown on
@@ -1049,7 +1059,8 @@ GitHub — **Audit log**, **Settings**).
   would break in the theme nobody checked.
 - **A command palette** on ⌘K / Ctrl+K: jump to any page, search projects, cards, agents,
   teams, workflows and goals, switch theme, and the handful of common actions.
-- It works at phone width, with the navigation behind a menu.
+- It works at phone width, with the navigation behind a menu — open it on your phone through
+  the [access link](#using-eren-from-other-devices).
 
 The dashboard talks to the server through one client (`web/src/lib/api.ts`) and one
 WebSocket (`web/src/lib/ws.ts`). The server persists every event to Postgres before it
