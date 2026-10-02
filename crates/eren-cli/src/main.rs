@@ -484,6 +484,9 @@ fn max_concurrent() -> usize {
 }
 
 async fn doctor() -> anyhow::Result<()> {
+    // First, like `serve`: the person running a check after upgrading should
+    // see the move and any renamed variables here, not on the next start.
+    adopt_legacy_state()?;
     // Compliance invariant: we probe tools by RUNNING them, never by
     // inspecting their config or credential files. That is exactly what
     // `Engine::detect` does, which is why this loops the registry rather than
