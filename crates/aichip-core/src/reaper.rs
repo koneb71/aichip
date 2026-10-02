@@ -21,7 +21,6 @@ use crate::db::Db;
 use crate::runs::orchestrator::Orchestrator;
 use aichip_shared::RunStatus;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -36,22 +35,13 @@ pub const MAX_AUTO_RESUMES: i64 = 2;
 pub const MAX_SILENCE_MINUTES: i64 = 240;
 
 /// The "Unattended runs" setting.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Unattended {
     /// Stop a run that has said nothing for this long. 0 is off.
     pub silence_minutes: i64,
     /// Pick a lost or silenced run back up by itself.
     pub auto_resume: bool,
-}
-
-impl Default for Unattended {
-    fn default() -> Self {
-        Self {
-            silence_minutes: 0,
-            auto_resume: false,
-        }
-    }
 }
 
 impl Unattended {

@@ -330,12 +330,6 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
     Ok(Json(json!({ "cleared": cleared })))
 }
 
-/// The most dangerous write in the app.
-///
-/// The stored value is a shell command this server will execute, so anything
-/// that can reach this endpoint has remote code execution. It carries the same
-/// header gate every dashboard write carries — see `super::require_write`.
-
 /// What aichip does about runs that stop showing signs of life. See
 /// `aichip_core::reaper`.
 async fn get_unattended(State(state): State<AppState>) -> Json<Value> {
@@ -361,6 +355,11 @@ pub(crate) async fn set_unattended(
     Ok(get_unattended(State(state)).await)
 }
 
+/// The most dangerous write in the app.
+///
+/// The stored value is a shell command this server will execute, so anything
+/// that can reach this endpoint has remote code execution. It carries the same
+/// header gate every dashboard write carries — see `super::require_write`.
 async fn get_attention(State(state): State<AppState>) -> Json<Value> {
     let a = aichip_core::attention::load(&state.db).await;
     Json(attention_json(&a, None))
