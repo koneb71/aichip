@@ -116,13 +116,14 @@ unauthenticated agent runner is a decision rather than a side effect.
 The container image sets `EREN_BIND=0.0.0.0` and `EREN_TRUST_NETWORK=1`, because inside a
 container the port is only reachable through an explicit mapping, and the host's browser
 arrives through Docker's gateway rather than from loopback. `docker-compose.yml` therefore
-publishes every port — Eren's, Postgres's and MinIO's — on `127.0.0.1` only, and sets
+publishes every port — Eren's, Postgres's and the object store's — on `127.0.0.1` only, and sets
 `EREN_ACCESS_TOKEN=off` for Eren. Docker's default is every interface; if you remove the
 `127.0.0.1:`, leave the token on, or you are publishing an unauthenticated agent runner — and
 either way a database with a default password.
 
 The databases deserve that sentence. The compose Postgres defaults to a well-known password
-(`POSTGRES_PASSWORD` in `.env.example`), and the compose MinIO to well-known root credentials
+(`POSTGRES_PASSWORD` in `.env.example`), and the compose object store (RustFS, in the
+`storage` profile) to well-known root credentials
 (`EREN_S3_ACCESS_KEY` / `EREN_S3_SECRET_KEY`). Write access to Eren's database is code execution
 on your machine: it holds the MCP servers an agent is launched with, the attention hook command,
 and the projects' check commands, all of which Eren runs. Keep both on loopback, and change the

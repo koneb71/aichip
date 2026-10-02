@@ -118,8 +118,9 @@ Optional:
   repository, and finishing a card as a pull request. Everything else works without it, and
   `doctor` reports a missing `gh` as a note, not a failure.
 - **Docker**, for branch previews and container apps, for running Postgres yourself, or for
-  the MinIO bucket below. Nothing else needs it.
-- **MinIO or any S3-compatible store**, only for files pasted into knowledge-base pages.
+  the object storage below. Nothing else needs it.
+- **Any S3-compatible store** (compose ships RustFS), only for files pasted into
+  knowledge-base pages.
   Without one the wiki still works; uploads are refused with a message saying why.
 - **Node's `npx`**, only to install Agent Skills from a registry.
 
@@ -917,7 +918,7 @@ instructions, and says whether a person has published it. Runs can also search a
 pages themselves with the `search_kb` and `read_article` tools.
 
 **Storage.** Page text lives in Postgres and is fully searchable. Images and files pasted
-into a page (up to 25 MB each) go to MinIO or any S3-compatible endpoint, so a screenshot
+into a page (up to 25 MB each) go to any S3-compatible endpoint, so a screenshot
 doesn't end up in every database backup. Eren does not read a `.env` file itself — the
 variables have to be in the environment of the `eren serve` process:
 
@@ -925,8 +926,18 @@ variables have to be in the environment of the `eren serve` process:
 export EREN_S3_ENDPOINT=http://127.0.0.1:9100
 export EREN_S3_ACCESS_KEY=eren
 export EREN_S3_SECRET_KEY=eren-dev-secret
-docker compose up -d minio      # compose gives MinIO the same two keys as its root login
+docker compose --profile storage up -d   # RustFS, given the same two keys as its root login
 ```
+
+Compose's object store is [RustFS](https://rustfs.com), pinned to a release, with its console
+on `http://127.0.0.1:9101`. It used to be MinIO, which no longer publishes its image —
+`minio/minio` is gone from Docker Hub. Anything that speaks S3 with path-style addressing
+works the same; point `EREN_S3_ENDPOINT` at it.
+
+**Attachments uploaded to the old MinIO** stay where they were: in Eren's old `aichip-minio`
+volume, which compose no longer mounts and nothing deletes. If you have the MinIO image cached
+locally, start it against that volume and copy the bucket across with any S3 tool, for
+example `rclone sync old:aichip new:eren`; the keys are the same on both.
 
 The bucket is created on boot. Without these variables the wiki still works — you just
 can't attach files, and the upload endpoint says so.
@@ -1216,7 +1227,8 @@ profile from before the rename keeps working; when both are set, the Eren name w
 
 Compose reads a few more, which Eren itself does not read: `EREN_PROJECTS_DIR`, `EREN_PORT`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `UID`, `GID`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
-`POSTGRES_PORT`, `MINIO_PORT` and `MINIO_CONSOLE_PORT`. See
+`POSTGRES_PORT`, `S3_PORT` and `S3_CONSOLE_PORT` (`MINIO_PORT` and `MINIO_CONSOLE_PORT` are
+still read). See
 [Running in Docker](#running-in-docker).
 
 ### Using Eren from other devices
@@ -1327,7 +1339,7 @@ working.
   on the first load of the dashboard; a value already saved under the new name wins.
 
 **Docker Compose keeps its old names on purpose.** Eren's compose file still names the
-volumes `aichip-pgdata`, `aichip-minio` and `aichip-state` (Eren keeps these), and still
+volumes `aichip-pgdata` and `aichip-state` (Eren keeps these), and still
 defaults the Postgres role, password and database to `aichip` (Eren keeps these too). They
 name data that already exists: a volume is found by its name, and the Postgres image creates
 its role and database only when the volume is new — renaming either would leave an existing
@@ -1336,7 +1348,7 @@ volume is now mounted at `/home/eren/.eren`, and the Dockerfile links the old
 `/home/aichip/.aichip` path to Eren's new one, so paths stored before the rename still resolve.
 Compose also falls back to `AICHIP_PROJECTS_DIR`, `AICHIP_PORT`, `AICHIP_MAX_CONCURRENT` (Eren's
 old names) and the old `AICHIP_S3_*` keys when the `EREN_*` ones are unset; with neither set,
-MinIO's root login defaults to the credentials Eren used before the rename too.
+the object store's root login defaults to the credentials Eren used before the rename too.
 
 **The GitHub repository is being renamed to Eren as well.** GitHub redirects the old
 URLs, so existing clones, links and remotes keep working; update your remote with
@@ -1394,7 +1406,7 @@ runs everything, dashboard, orchestrator and agents, in containers, reachable at
 as a normal user. Only Claude Code is installed in it; other engines would need adding to
 the image.
 
-Every port the compose file publishes — Eren, Postgres, MinIO — is bound to `127.0.0.1`
+Every port the compose file publishes — Eren, Postgres, object storage — is bound to `127.0.0.1`
 on the host. Inside the container Eren binds `0.0.0.0` (the image sets `EREN_BIND` and
 `EREN_TRUST_NETWORK=1`, because the container's own loopback is not the host's); what is
 actually reachable is decided by the port mapping. Your browser reaches the container through
