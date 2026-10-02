@@ -134,6 +134,7 @@ impl Scheduler {
         self.orchestrator.settle_handoffs().await;
         self.orchestrator.reap().await;
         self.orchestrator.drain_wakeups().await;
+        self.orchestrator.heartbeats().await;
         self.prune_ledger().await;
         self.tick_workflows().await?;
         self.tick_routines().await

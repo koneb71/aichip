@@ -261,7 +261,7 @@ impl Orchestrator {
             }
         };
         for routine_id in due {
-            match self.may_wake_routine(routine_id).await {
+            match self.may_wake_manager(routine_id).await {
                 Ok(true) => {
                     if let Err(e) = crate::routines::fire(&self.db, self, routine_id, "wake").await
                     {
@@ -274,14 +274,16 @@ impl Orchestrator {
         }
     }
 
-    async fn may_wake_routine(&self, routine_id: Uuid) -> anyhow::Result<bool> {
+    /// Idle thread, cooldown passed, early passes left today. Also asked by a
+    /// manager agent's heartbeat, whose passes count against the same cap.
+    pub(crate) async fn may_wake_manager(&self, routine_id: Uuid) -> anyhow::Result<bool> {
         let r = sqlx::query(
             "SELECT rt.cooldown_secs, rt.max_passes_per_day,
                     EXISTS (SELECT 1 FROM runs WHERE chat_id = rt.chat_id
                                AND status NOT IN ('completed','failed','canceled')) AS busy,
                     (SELECT max(rr.fired_at) FROM routine_runs rr WHERE rr.routine_id = rt.id) AS last_pass,
                     (SELECT count(*) FROM routine_runs rr WHERE rr.routine_id = rt.id
-                        AND rr.trigger = 'wake'
+                        AND rr.trigger IN ('wake', 'heartbeat')
                         AND rr.fired_at >= date_trunc('day', now())) AS passes_today
                FROM routines rt WHERE rt.id = $1",
         )

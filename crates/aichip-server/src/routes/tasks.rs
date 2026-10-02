@@ -395,6 +395,11 @@ async fn create(
     .await
     .map_err(internal)?;
     let task_id: Uuid = row.get("id");
+    // Handed to an agent that pulls its own work, and not started here: the
+    // agent hears about it now rather than at its next beat.
+    if let (Some(agent), false) = (body.agent_id, body.start) {
+        aichip_core::heartbeat::wake(&state.db, agent, "assigned", Some(task_id)).await;
+    }
     // Before the run is enqueued, for the same reason attachments are: the
     // prompt is assembled from whatever is bound when the run is picked up.
     link_articles(&state, task_id, &body.article_ids).await?;
@@ -1132,6 +1137,10 @@ pub(crate) async fn move_task(
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    // A card handed to an agent that pulls its own work: it hears now.
+    if let Some(Some(agent)) = agent_id {
+        aichip_core::heartbeat::wake(&state.db, agent, "assigned", Some(id)).await;
+    }
     // Filing a card in done is how a person says its work landed by hand.
     if body.board_column.as_deref() == Some("done") {
         state.orchestrator.landed(id).await;

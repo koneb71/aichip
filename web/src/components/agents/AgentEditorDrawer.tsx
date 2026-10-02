@@ -6,6 +6,7 @@ import { useTierModel } from "../../lib/models";
 import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../lib/engines";
 import { TIERS } from "../TierPicker";
 import { AgentAvailability } from "./AgentAvailability";
+import { HeartbeatLog } from "./HeartbeatLog";
 
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
@@ -195,6 +196,7 @@ export function AgentEditorDrawer({
               On a heartbeat it starts its next unblocked card from the backlog — through the Start button's own
               checks, so budgets, limits and Full Auto still apply. With nothing to do it records an idle beat, at no cost.
             </p>
+            <HeartbeatLog agentId={agent.id} />
           </Field>
         )}
         <Field label="Color">

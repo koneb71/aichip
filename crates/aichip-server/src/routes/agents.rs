@@ -23,6 +23,32 @@ pub fn router() -> Router<AppState> {
         .route("/agents/{id}/memories", get(memories))
         .route("/agent-memories/{id}", axum::routing::delete(forget))
         .route("/workspaces/{id}/org-chart", get(org_chart))
+        .route("/agents/{id}/heartbeats", get(heartbeats))
+        .route("/workspaces/{id}/heartbeats", get(workspace_heartbeats))
+}
+
+/// An agent's recent heartbeats: what each one did.
+async fn heartbeats(
+    State(state): State<AppState>,
+    Path(agent): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let beats = aichip_core::heartbeat::recent(&state.db, agent, 50)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "beats": beats })))
+}
+
+/// Beats across the workspace that started or fired something.
+async fn workspace_heartbeats(
+    State(state): State<AppState>,
+    Path(workspace): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let beats = aichip_core::heartbeat::recent_in(&state.db, workspace, 20)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "beats": beats.into_iter().map(|(agent, b)| json!({ "agent": agent, "beat": b })).collect::<Vec<_>>()
+    })))
 }
 
 /// The workspace's agents as a reporting tree, with what each is doing.

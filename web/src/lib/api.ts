@@ -1753,6 +1753,17 @@ const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+/** One heartbeat: what an agent that pulls its own work did when it checked in. */
+export interface Beat {
+  at: string;
+  reason: "timer" | "wake";
+  outcome: "started" | "fired" | "idle" | "busy" | "held" | "paused";
+  taskId: string | null;
+  taskTitle: string | null;
+  projectId: string | null;
+  detail: string;
+}
+
 /** What aichip does about runs that stop showing signs of life. See `aichip_core::reaper`. */
 export interface Unattended {
   /** Stop a run that has said nothing for this long. 0 is off. */
@@ -2809,6 +2820,10 @@ export const api = {
         runs: number;
       }>(r),
     ),
+  agentHeartbeats: (agentId: string) =>
+    fetch(`/api/agents/${agentId}/heartbeats`).then((r) => json<{ beats: Beat[] }>(r)),
+  workspaceHeartbeats: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/heartbeats`).then((r) => json<{ beats: { agent: string; beat: Beat }[] }>(r)),
   orgChart: (workspaceId: string) =>
     fetch(`/api/workspaces/${workspaceId}/org-chart`).then((r) => json<{ nodes: OrgNode[]; maxDepth: number }>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>

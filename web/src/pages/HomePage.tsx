@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, PlanLimit, Project, Routine, Task } from "../lib/api";
+import { api, Beat, PlanLimit, Project, Routine, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useActivity } from "../lib/activity";
 import { KIND_LABEL, useInbox } from "../lib/inbox";
@@ -13,7 +13,7 @@ import { Card, gradientFor, Item, Page, Stagger } from "../components/ui/Surface
 import { PageHeader } from "../components/ui/Layout";
 import { buttonClasses } from "../components/ui/Button";
 import { Badge, StatusDot } from "../components/ui/Badge";
-import { ArrowRight, CalendarClock, ChevronRight, CheckCheck, Coins, FolderPlus, Hand, Play, Plus } from "lucide-react";
+import { ArrowRight, CalendarClock, ChevronRight, CheckCheck, Coins, FolderPlus, Hand, HeartPulse, Play, Plus } from "lucide-react";
 
 /**
  * The page you land on: what is happening, what is waiting for you, and what it
@@ -35,6 +35,7 @@ export default function HomePage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [limits, setLimits] = useState<PlanLimit[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [beats, setBeats] = useState<{ agent: string; beat: Beat }[]>([]);
   // The budget that runs out soonest at this rate, if any does before it resets.
   const [burnout, setBurnout] = useState<{ name: string; at: string } | null>(null);
   useEffect(() => {
@@ -50,6 +51,7 @@ export default function HomePage() {
     api.tasks({ workspaceId: active.id }).then((r) => setTasks(r.tasks)).catch(() => {});
     api.usage().then((r) => setLimits(r.limits)).catch(() => {});
     api.routines(active.id).then((r) => setRoutines(r.routines)).catch(() => {});
+    api.workspaceHeartbeats(active.id).then((r) => setBeats(r.beats)).catch(() => {});
   }, [active]);
 
   const live = activity?.live ?? [];
@@ -262,6 +264,25 @@ export default function HomePage() {
               </ul>
             )}
           </Panel>
+
+          {/* Agents that pull their own work, and what they last picked up.
+              Only once there is something to show. */}
+          {beats.length > 0 && (
+            <Panel title="Heartbeats" action={<SoftLink to="/org">org chart</SoftLink>}>
+              <ul className="space-y-2 px-4 pb-4">
+                {beats.slice(0, 5).map(({ agent, beat }, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs">
+                    <HeartPulse className="size-3.5 shrink-0 text-danger-fg" aria-hidden />
+                    <span className="shrink-0 font-medium">{agent}</span>
+                    <span className="min-w-0 truncate text-fg-muted">
+                      {beat.outcome === "started" ? `picked up “${beat.taskTitle ?? "a card"}”` : beat.outcome === "fired" ? "ran its manager pass" : `held — ${beat.detail}`}
+                    </span>
+                    <span className="ml-auto shrink-0 text-fg-subtle">{new Date(beat.at).toLocaleTimeString([], { timeStyle: "short" })}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
 
           {/* Only for people who have routines — Home must not advertise
               features at someone who came to see their work. */}

@@ -15,6 +15,7 @@ pub mod fence;
 pub mod github;
 pub mod goals;
 pub mod handoff;
+pub mod heartbeat;
 pub mod inbox;
 pub mod kb;
 pub mod landing;
