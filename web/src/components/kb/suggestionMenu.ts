@@ -41,7 +41,7 @@ export function menuRenderer<T extends MenuItem>() {
       row.appendChild(name);
       if (item.hint) {
         const hint = document.createElement("span");
-        hint.className = "ml-auto shrink-0 text-[10px] text-ink-dim";
+        hint.className = "ml-auto shrink-0 text-[10px] text-fg-muted";
         hint.textContent = item.hint;
         row.appendChild(hint);
       }
@@ -75,7 +75,7 @@ export function menuRenderer<T extends MenuItem>() {
     onStart: (props: any) => {
       el = document.createElement("div");
       el.className =
-        "card-shadow fixed z-50 max-h-60 w-64 overflow-y-auto rounded-xl border border-line bg-panel p-1";
+        "card-shadow fixed z-50 max-h-60 w-64 overflow-y-auto rounded-xl border border-border bg-panel p-1";
       document.body.appendChild(el);
       items = props.items;
       selected = 0;

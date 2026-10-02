@@ -68,7 +68,7 @@ export function PageTree({
 
   if (pages.length === 0) {
     return (
-      <div className="px-2 py-8 text-center text-xs text-ink-dim">
+      <div className="px-2 py-8 text-center text-xs text-fg-muted">
         <span className="mb-2 flex justify-center opacity-50">
           <Icon name="knowledge" size={22} />
         </span>
@@ -121,7 +121,7 @@ function Row({
       <button
         onClick={onToggle}
         aria-label={open ? "Collapse" : "Expand"}
-        className={`grid w-4 shrink-0 place-items-center text-ink-dim transition-transform duration-200 ${
+        className={`grid w-4 shrink-0 place-items-center text-fg-muted transition-transform duration-200 ${
           node.childCount > 0 ? "" : "invisible"
         } ${open ? "rotate-90" : ""}`}
       >
@@ -130,7 +130,7 @@ function Row({
       <NavLink
         to={`/knowledge/${node.id}`}
         className={`ring-focus min-w-0 flex-1 truncate rounded py-1.5 text-sm transition-colors ${
-          active ? "font-semibold text-accent-fg" : "hover:text-ink"
+          active ? "font-semibold text-accent-fg" : "hover:text-fg"
         }`}
       >
         <span className="mr-1.5">{node.icon || "▦"}</span>
@@ -154,13 +154,13 @@ function Row({
         />
       )}
       {node.status === "draft" && (
-        <span className="shrink-0 text-[9px] text-ink-dim">draft</span>
+        <span className="shrink-0 text-[9px] text-fg-muted">draft</span>
       )}
 
       <button
         onClick={onCreateChild}
         title="Add a page inside this one"
-        className="shrink-0 px-1 text-xs text-ink-dim opacity-0 group-hover:opacity-100 hover:text-accent-fg"
+        className="shrink-0 px-1 text-xs text-fg-muted opacity-0 group-hover:opacity-100 hover:text-accent-fg"
       >
         +
       </button>

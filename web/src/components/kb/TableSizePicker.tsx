@@ -101,7 +101,7 @@ export function TableSizePicker({
         onClick={() => setOpen((v) => !v)}
         title="Insert a table"
         className={`rounded-md px-2 py-1 text-xs ${
-          open ? "bg-accent/10 text-accent-fg" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
+          open ? "bg-accent/10 text-accent-fg" : "text-fg-muted hover:bg-panel-2 hover:text-fg"
         }`}
       >
         ▦
@@ -113,7 +113,7 @@ export function TableSizePicker({
           <div
             ref={popRef}
             style={{ transform: `translateX(${shift}px)` }}
-            className="card-shadow absolute left-0 top-full z-20 mt-1 rounded-xl border border-line bg-panel p-2"
+            className="card-shadow absolute left-0 top-full z-20 mt-1 rounded-xl border border-border bg-panel p-2"
           >
             <div
               ref={boxRef}
@@ -138,16 +138,16 @@ export function TableSizePicker({
                     onMouseEnter={() => move(r, c)}
                     onClick={() => pick(r, c)}
                     className={`h-4 w-4 rounded-[3px] border ${
-                      on ? "border-accent bg-accent/25" : "border-line bg-panel-2"
+                      on ? "border-accent bg-accent/25" : "border-border bg-panel-2"
                     }`}
                   />
                 );
               })}
             </div>
 
-            <div className="mt-2 text-center text-[11px] text-ink-dim">
+            <div className="mt-2 text-center text-[11px] text-fg-muted">
               {hover.r && hover.c ? (
-                <span className="font-medium text-ink">
+                <span className="font-medium text-fg">
                   {hover.r} × {hover.c}
                 </span>
               ) : (
@@ -155,7 +155,7 @@ export function TableSizePicker({
               )}
             </div>
 
-            <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 border-t border-line pt-1.5 text-[11px] text-ink-dim">
+            <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 border-t border-border pt-1.5 text-[11px] text-fg-muted">
               <input
                 type="checkbox"
                 checked={header}

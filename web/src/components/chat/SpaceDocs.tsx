@@ -84,14 +84,14 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-col gap-1.5 border-t border-line pt-3">
+    <div className="flex min-h-0 flex-col gap-1.5 border-t border-border pt-3">
       <div className="flex items-center justify-between px-1">
-        <span className="text-xs font-medium text-ink-dim">Documents</span>
+        <span className="text-xs font-medium text-fg-muted">Documents</span>
         <button
           onClick={reindex}
           disabled={busy}
           title="Re-scan the folder and refresh the search index"
-          className="text-[11px] text-ink-dim hover:text-ink disabled:opacity-50"
+          className="text-[11px] text-fg-muted hover:text-fg disabled:opacity-50"
         >
           ↻ Reindex
         </button>
@@ -133,7 +133,7 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
         }}
         onClick={() => fileRef.current?.click()}
         className={`cursor-pointer rounded-lg border border-dashed px-2 py-2 text-center text-[11px] ${
-          dragging ? "border-accent bg-accent/5 text-accent-fg" : "border-line text-ink-dim hover:border-ink-dim"
+          dragging ? "border-accent bg-accent/5 text-accent-fg" : "border-border text-fg-muted hover:border-fg-muted"
         }`}
       >
         {busy ? "Uploading…" : "Drop documents here, or click to pick"}
@@ -163,14 +163,14 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
             <button
               onClick={() => remove(d.id)}
               title="Delete this document"
-              className="shrink-0 px-1 text-[11px] text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+              className="shrink-0 px-1 text-[11px] text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
             >
               ✕
             </button>
           </div>
         ))}
         {docs.length === 0 && (
-          <div className="px-1.5 py-1 text-[11px] text-ink-dim">
+          <div className="px-1.5 py-1 text-[11px] text-fg-muted">
             No documents yet. The chat retrieves from what you drop here.
           </div>
         )}
@@ -189,7 +189,7 @@ function StatusDot({ doc }: { doc: SpaceDocument }) {
       case "failed":
         return ["bg-danger", doc.error ?? "indexing failed"];
       default:
-        return ["bg-ink-dim/40", "readable by the assistant, not searchable"];
+        return ["bg-fg-muted/40", "readable by the assistant, not searchable"];
     }
   })();
   return <span title={title} className={`h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />;

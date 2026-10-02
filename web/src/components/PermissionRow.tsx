@@ -28,12 +28,12 @@ export function PermissionRow({
       animate={{ opacity: 1, scale: 1 }}
       className="rounded-xl border border-amber-300 bg-panel px-3 py-2.5"
     >
-      {context && <div className="mb-1 truncate text-xs text-ink-dim">{context}</div>}
+      {context && <div className="mb-1 truncate text-xs text-fg-muted">{context}</div>}
       <div className="text-sm font-medium text-amber-700">
         Allow <span className="font-mono">{toolName}</span>?
       </div>
       {summary && (
-        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-ink">
+        <pre className="mt-1.5 max-h-32 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-xs text-fg">
           {summary}
         </pre>
       )}
@@ -41,14 +41,14 @@ export function PermissionRow({
         <motion.button
           whileTap={{ scale: 0.95 }}
           onClick={() => onAnswer(true)}
-          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-surface"
+          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-bg"
         >
           Allow
         </motion.button>
         <motion.button
           whileTap={{ scale: 0.95 }}
           onClick={() => onAnswer(false)}
-          className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:border-danger hover:text-danger"
+          className="rounded-lg border border-border px-3.5 py-1.5 text-xs hover:border-danger hover:text-danger"
         >
           Deny
         </motion.button>

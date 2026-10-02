@@ -146,7 +146,7 @@ export function NewTaskModal({
         // Drop anywhere in the modal, not just on the prompt box.
         {...att.dropProps}
         className={`card-shadow max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border bg-panel p-5 sm:p-6 ${
-          att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
+          att.dragging ? "border-accent ring-2 ring-accent/30" : "border-border"
         }`}
       >
         <div className="mb-4 text-lg font-semibold">New task · {project.name}</div>
@@ -155,7 +155,7 @@ export function NewTaskModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Task title"
-          className="mb-3 w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          className="mb-3 w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
         />
         <div className="relative mb-2">
           {mention.node}
@@ -174,7 +174,7 @@ export function NewTaskModal({
             }}
             placeholder="Describe what the agent should do… (@ to reference a file)"
             rows={5}
-            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </div>
         <div className="mb-4">
@@ -195,7 +195,7 @@ export function NewTaskModal({
 
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Complexity → model
             </div>
             <div className="flex gap-1.5">
@@ -206,8 +206,8 @@ export function NewTaskModal({
                 onClick={() => setTier("auto")}
                 className="flex-1 rounded-lg border px-2 py-1.5 text-xs"
                 style={{
-                  borderColor: tier === "auto" ? "var(--color-accent)" : "var(--color-line)",
-                  color: tier === "auto" ? "var(--color-accent)" : "var(--color-ink-dim)",
+                  borderColor: tier === "auto" ? "var(--color-accent)" : "var(--color-border)",
+                  color: tier === "auto" ? "var(--color-accent)" : "var(--color-fg-muted)",
                 }}
               >
                 auto
@@ -219,9 +219,9 @@ export function NewTaskModal({
                   onClick={() => setTier(t)}
                   className="flex-1 rounded-lg border px-2 py-1.5 text-xs capitalize"
                   style={{
-                    borderColor: tier === t ? tierColor[t] : "var(--color-line)",
+                    borderColor: tier === t ? tierColor[t] : "var(--color-border)",
                     background: tier === t ? tierSoft[t] : "transparent",
-                    color: tier === t ? tierColor[t] : "var(--color-ink-dim)",
+                    color: tier === t ? tierColor[t] : "var(--color-fg-muted)",
                   }}
                 >
                   {t}
@@ -233,7 +233,7 @@ export function NewTaskModal({
             </div>
           </div>
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Assign to
             </div>
             <AssigneePicker
@@ -249,7 +249,7 @@ export function NewTaskModal({
             just be a question nobody in this workspace can answer yet. */}
         {skills.some((s) => s.enabled) && (
           <div className="mb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               How
             </div>
             <SkillPicker value={skillId} skills={skills} onChange={setSkillId} />
@@ -258,7 +258,7 @@ export function NewTaskModal({
 
         {!!engines && engines.length > 1 && (
           <div className="mb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
               Run on
             </div>
             <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default" />
@@ -266,7 +266,7 @@ export function NewTaskModal({
         )}
 
         <div className="mb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
             Thinking
           </div>
           <EffortPicker value={effort} onChange={setEffort} />
@@ -297,7 +297,7 @@ export function NewTaskModal({
           />
           <span className="min-w-0">
             <span className="block font-medium">Plan first</span>
-            <span className="block text-xs text-ink-dim">
+            <span className="block text-xs text-fg-muted">
               The agent writes down what it intends to do and stops. You confirm
               it, rewrite it, or send it back — then work starts.
             </span>
@@ -331,16 +331,16 @@ export function NewTaskModal({
           </div>
         )}
 
-        {estimate && !ask && <div className="mb-2 text-right text-[11px] text-ink-dim">{estimate}</div>}
+        {estimate && !ask && <div className="mb-2 text-right text-[11px] text-fg-muted">{estimate}</div>}
 
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
+          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg">
             Cancel
           </button>
           <button
             onClick={() => submit(false)}
             disabled={busy || ask !== null}
-            className="rounded-lg border border-line px-4 py-2 text-sm hover:bg-panel-2"
+            className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-panel-2"
           >
             Add to backlog
           </button>

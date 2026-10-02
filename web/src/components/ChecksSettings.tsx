@@ -26,7 +26,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
       .catch((e) => setError(String(e)));
   }, [projectId, loads]);
 
-  if (!draft) return <p className="text-[11px] text-ink-dim">{error ?? "Loading…"}</p>;
+  if (!draft) return <p className="text-[11px] text-fg-muted">{error ?? "Loading…"}</p>;
 
   const dirty = JSON.stringify(draft) !== saved;
   const setCommand = (i: number, patch: Partial<CheckCommand>) =>
@@ -49,7 +49,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
     }
   };
 
-  const input = "rounded-lg border border-line bg-panel px-2 py-1 text-xs outline-none focus:border-accent";
+  const input = "rounded-lg border border-border bg-panel px-2 py-1 text-xs outline-none focus:border-accent";
 
   return (
     <div className="space-y-2">
@@ -69,7 +69,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
           />
           <button
             onClick={() => setDraft({ ...draft, commands: draft.commands.filter((_, j) => j !== i) })}
-            className="px-1 text-ink-dim hover:text-danger"
+            className="px-1 text-fg-muted hover:text-danger"
             title="Remove this check"
           >
             ✕
@@ -78,12 +78,12 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
       ))}
       <button
         onClick={() => setDraft({ ...draft, commands: [...draft.commands, { name: "", command: "" }] })}
-        className="text-xs text-ink-dim hover:text-ink"
+        className="text-xs text-fg-muted hover:text-fg"
       >
         + Add a check
       </button>
 
-      <div className="flex flex-wrap items-center gap-3 text-xs text-ink-dim">
+      <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
         <label className="flex items-center gap-1.5">
           Time limit
           <input
@@ -121,7 +121,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
       </div>
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</p>}
-      <p className="text-[11px] leading-relaxed text-ink-dim/80">
+      <p className="text-[11px] leading-relaxed text-fg-muted/80">
         They run in the card's worktree when an agent finishes. Because they execute code the agent may
         have just changed, they start by themselves — and fix failures by themselves — only after a{" "}
         <b>Full Auto</b> run, where the agent already had a shell; otherwise the card offers a Run checks

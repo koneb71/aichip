@@ -38,7 +38,7 @@ export function IconPicker({
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="card-shadow absolute left-0 top-full z-20 mt-1 w-64 rounded-xl border border-line bg-panel p-2"
+          className="card-shadow absolute left-0 top-full z-20 mt-1 w-64 rounded-xl border border-border bg-panel p-2"
         >
           <div className="grid grid-cols-8 gap-0.5">
             {ICONS.map((icon) => (
@@ -59,7 +59,7 @@ export function IconPicker({
               onChange("");
               setOpen(false);
             }}
-            className="mt-1 w-full rounded-lg px-2 py-1 text-left text-xs text-ink-dim hover:bg-panel-2"
+            className="mt-1 w-full rounded-lg px-2 py-1 text-left text-xs text-fg-muted hover:bg-panel-2"
           >
             Remove
           </button>

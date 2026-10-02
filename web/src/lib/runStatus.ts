@@ -59,7 +59,7 @@ export function statusColor(status?: string | null): string {
       return "var(--color-danger)";
     case "canceled":
     case "skipped":
-      return "var(--color-ink-dim)";
+      return "var(--color-fg-muted)";
     case "awaiting_approval":
     case "waiting_permission":
       return "#d97706"; // amber: blocked on the user

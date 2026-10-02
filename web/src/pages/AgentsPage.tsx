@@ -103,7 +103,7 @@ export default function AgentsPage() {
                   </span>
                 </div>
               </div>
-              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-fg-muted">
                 {a.description || "No description yet."}
               </p>
             </Card>
@@ -122,10 +122,10 @@ export default function AgentsPage() {
 
       {retired.length > 0 && (
         <details className="mt-8">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-ink-dim">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-fg-muted">
             Retired · {retired.length}
           </summary>
-          <p className="mt-1 text-[11px] text-ink-dim">
+          <p className="mt-1 text-[11px] text-fg-muted">
             No new work and gone from pickers; their runs and comments still name them.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -133,7 +133,7 @@ export default function AgentsPage() {
               <button
                 key={a.id}
                 onClick={() => setEditing(a)}
-                className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-dim hover:bg-panel-2"
+                className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-xs text-fg-muted hover:bg-panel-2"
               >
                 <span className="size-2 rounded-full opacity-50" style={{ background: a.color }} />
                 {a.name}

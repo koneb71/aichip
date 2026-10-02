@@ -71,7 +71,7 @@ export function ProjectSettings({
         className="card-shadow max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">Project settings</h3>
-        <p className="mt-0.5 truncate font-mono text-[11px] text-ink-dim">{project.path}</p>
+        <p className="mt-0.5 truncate font-mono text-[11px] text-fg-muted">{project.path}</p>
 
         <Field label="Name">
           <div className="flex gap-2">
@@ -79,12 +79,12 @@ export function ProjectSettings({
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={busy}
-              className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
             />
             <button
               onClick={() => save({ name: name.trim() })}
               disabled={busy || !name.trim() || name === project.name}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-40"
+              className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-fg-muted disabled:opacity-40"
             >
               Rename
             </button>
@@ -101,12 +101,12 @@ export function ProjectSettings({
                 value={branch}
                 onChange={(e) => setBranch(e.target.value)}
                 disabled={busy}
-                className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm outline-none focus:border-accent disabled:opacity-60"
+                className="min-w-0 flex-1 rounded-lg border border-border bg-bg px-2 py-1.5 font-mono text-sm outline-none focus:border-accent disabled:opacity-60"
               />
               <button
                 onClick={() => save({ default_branch: branch.trim() })}
                 disabled={busy || !branch.trim() || branch === project.defaultBranch}
-                className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-40"
+                className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-fg-muted disabled:opacity-40"
               >
                 Save
               </button>
@@ -130,7 +130,7 @@ export function ProjectSettings({
                 save({ default_tier: (e.target.value || null) as TierChoice | null })
               }
               disabled={busy}
-              className="rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-60"
+              className="rounded-lg border border-border bg-panel px-2 py-1 text-xs disabled:opacity-60"
             >
               <option value="">Model: inherit</option>
               <option value="auto">auto</option>
@@ -146,7 +146,7 @@ export function ProjectSettings({
                 save({ default_effort: (e.target.value || null) as Effort | null })
               }
               disabled={busy}
-              className="rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-60"
+              className="rounded-lg border border-border bg-panel px-2 py-1 text-xs disabled:opacity-60"
             >
               <option value="">Effort: inherit</option>
               <option value="low">low</option>
@@ -174,12 +174,12 @@ export function ProjectSettings({
           </div>
         )}
 
-        <div className="mt-5 border-t border-line pt-4">
+        <div className="mt-5 border-t border-border pt-4">
           {!confirmUnload ? (
             <button
               onClick={() => setConfirmUnload(true)}
               disabled={busy}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger disabled:opacity-50"
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-danger hover:text-danger disabled:opacity-50"
             >
               Unload this project
             </button>
@@ -217,7 +217,7 @@ export function ProjectSettings({
         </div>
 
         <div className="mt-4">
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Done
           </button>
         </div>
@@ -237,11 +237,11 @@ function Field({
 }) {
   return (
     <div className="mt-4">
-      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </span>
       {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-dim/80">{hint}</p>}
+      {hint && <p className="mt-1 text-[11px] text-fg-muted/80">{hint}</p>}
     </div>
   );
 }

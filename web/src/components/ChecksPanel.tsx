@@ -72,14 +72,14 @@ export function ChecksPanel({
   return (
     <div className="text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold uppercase tracking-wide text-[11px] text-ink-dim">Checks</span>
+        <span className="font-semibold uppercase tracking-wide text-[11px] text-fg-muted">Checks</span>
         {latest ? (
-          <span className="text-ink-dim">
+          <span className="text-fg-muted">
             {summary(latest)}
             {latest.finishedAt && <> · {latest.startedBy === "auto" ? "ran by themselves" : "you ran these"}</>}
           </span>
         ) : (
-          <span className="text-ink-dim">not run on this card yet</span>
+          <span className="text-fg-muted">not run on this card yet</span>
         )}
         <div className="ml-auto flex gap-2">
           {failing && (
@@ -96,7 +96,7 @@ export function ChecksPanel({
             <button
               onClick={() => act("run")}
               disabled={busy || active || acting !== null}
-              className="rounded-md border border-line px-2 py-0.5 text-[11px] hover:bg-panel-2 disabled:opacity-40"
+              className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel-2 disabled:opacity-40"
             >
               {acting === "run" ? "Starting…" : latest ? "Run again" : "Run checks"}
             </button>
@@ -117,12 +117,12 @@ export function ChecksPanel({
                 >
                   <span className={ok ? "text-tier-easy" : "text-danger"}>{ok ? "✓" : "✗"}</span>
                   <span className="font-medium">{r.name}</span>
-                  <span className="text-ink-dim">{resultVerdict(r)}</span>
-                  <span className="ml-auto tabular-nums text-ink-dim">{duration(Math.round(r.ms / 1000))}</span>
+                  <span className="text-fg-muted">{resultVerdict(r)}</span>
+                  <span className="ml-auto tabular-nums text-fg-muted">{duration(Math.round(r.ms / 1000))}</span>
                 </button>
                 {open === key && (
                   <div className="mt-1">
-                    <code className="block px-1 text-[11px] text-ink-dim">$ {r.command}</code>
+                    <code className="block px-1 text-[11px] text-fg-muted">$ {r.command}</code>
                     <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-panel-2 p-2 font-mono text-[11px] leading-relaxed">
                       {r.outputTail || "(no output)"}
                     </pre>
@@ -145,7 +145,7 @@ export function ChecksPanel({
       {latest?.error && <RunError reason={latest.error} className="mt-2" />}
       {error && <RunError reason={error} className="mt-2" />}
       {configured && !latest && (
-        <p className="mt-1 text-[11px] text-ink-dim">
+        <p className="mt-1 text-[11px] text-fg-muted">
           Checks start by themselves only after a Full Auto run, because they execute code the agent may
           have changed. Run them when you're ready.
         </p>

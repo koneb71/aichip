@@ -88,25 +88,25 @@ export function GenerateModal({
         transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 20, scale: 0.98 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-lg rounded-2xl border border-line bg-panel p-6"
+        className="card-shadow w-full max-w-lg rounded-2xl border border-border bg-panel p-6"
       >
         <div className="text-lg font-semibold">
           {articleId ? "Ask an agent to revise this page" : "Ask an agent to write it"}
         </div>
-        <p className="mt-1 text-sm text-ink-dim">
+        <p className="mt-1 text-sm text-fg-muted">
           It reads the repository first and writes only what it can verify there.
           {articleId
             ? " You get a proposal to accept or reject — this page does not change on its own."
             : " You get a draft to correct — nothing is published on your behalf."}
         </p>
 
-        <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-ink-dim">
+        <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-fg-muted">
           Repository
         </label>
         <select
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
-          className="mt-1.5 w-full rounded-lg border border-line bg-panel px-2.5 py-2 text-sm"
+          className="mt-1.5 w-full rounded-lg border border-border bg-panel px-2.5 py-2 text-sm"
         >
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
@@ -115,7 +115,7 @@ export function GenerateModal({
           ))}
         </select>
 
-        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-ink-dim">
+        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-fg-muted">
           {articleId ? "What should change?" : "What should it cover?"}
         </label>
         <textarea
@@ -127,7 +127,7 @@ export function GenerateModal({
               ? "The rollback section is out of date — we use make rollback now"
               : "How the queue works and what happens when a run is rate limited"
           }
-          className="mt-1.5 w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+          className="mt-1.5 w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
         />
 
         <div className="mt-3">
@@ -141,7 +141,7 @@ export function GenerateModal({
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
+          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg">
             Cancel
           </button>
           <motion.button

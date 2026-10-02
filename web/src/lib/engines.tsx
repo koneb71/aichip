@@ -18,6 +18,11 @@ export interface EngineCapabilities {
   reports_cost: boolean;
   /** Holds a pass to read-only. Required of a reviewer's engine. */
   enforces_denied_tools: boolean;
+  /** Can be handed aichip's tools for one run. Required by the chat
+   *  assistant, a project manager and a team. */
+  mcp_tools: boolean;
+  /** Can edit without also being handed a shell. */
+  auto_edit: boolean;
 }
 
 export interface EngineDescriptor {
@@ -66,7 +71,16 @@ export function permissionBlocker(
   if (mode === "reviewed" && !engine.capabilities.interactive_permissions) {
     return `${engine.label} can't stop to ask you mid-run — headless it rejects every prompt instead.`;
   }
+  if (mode === "auto_edit" && engine.capabilities.auto_edit === false) {
+    return `${engine.label} has no setting that allows edits without also allowing commands.`;
+  }
   return null;
+}
+
+/** Why this engine can't do work that lives on aichip's tools, or null. */
+export function toolsBlocker(engine: EngineDescriptor | undefined, what: string): string | null {
+  if (!engine || engine.capabilities.mcp_tools !== false) return null;
+  return `${engine.label} can't be handed aichip's tools for one run, and ${what} works through them.`;
 }
 
 /**
@@ -93,7 +107,7 @@ export function EnginePicker({
     <select
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
-      className={`rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs ${className}`}
+      className={`rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs ${className}`}
     >
       {inheritLabel && <option value="">{inheritLabel}</option>}
       {engines.map((e) => (

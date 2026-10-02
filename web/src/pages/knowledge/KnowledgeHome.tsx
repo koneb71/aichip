@@ -54,10 +54,10 @@ export default function KnowledgeHome() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-2 line-clamp-3 text-xs leading-relaxed text-ink-dim">
+                  <div className="mt-2 line-clamp-3 text-xs leading-relaxed text-fg-muted">
                     {a.summary || "Empty"}
                   </div>
-                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-ink-dim/80">
+                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-fg-muted/80">
                     <Icon name="clock" size={12} />
                     {new Date(a.updatedAt).toLocaleDateString()}
                     {/* Worth saying on the card rather than only inside: a page

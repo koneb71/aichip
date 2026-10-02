@@ -72,7 +72,7 @@ export function QuestionCard({
           <div key={qi}>
             <div className="flex items-baseline gap-1.5">
               {q.header && (
-                <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-ink-dim">
+                <span className="shrink-0 rounded-full bg-panel-2 px-1.5 text-[10px] text-fg-muted">
                   {q.header}
                 </span>
               )}
@@ -90,12 +90,12 @@ export function QuestionCard({
                     className={`ring-focus rounded-lg border px-2.5 py-1 text-left text-xs transition-colors disabled:opacity-50 ${
                       on
                         ? "border-accent bg-accent/10 font-medium text-accent-fg"
-                        : "border-line hover:border-accent/50 hover:bg-panel-2"
+                        : "border-border hover:border-accent/50 hover:bg-panel-2"
                     }`}
                   >
                     <span className="block">{o.label}</span>
                     {o.description && (
-                      <span className="block max-w-56 truncate text-[10px] font-normal text-ink-dim">
+                      <span className="block max-w-56 truncate text-[10px] font-normal text-fg-muted">
                         {o.description}
                       </span>
                     )}
@@ -119,7 +119,7 @@ export function QuestionCard({
         )}
         {/* The escape hatch, said out loud. Without it the card reads as the
             only way to reply, and somebody picks the least wrong option. */}
-        <span className="text-[10px] text-ink-dim">
+        <span className="text-[10px] text-fg-muted">
           {oneShot
             ? "Pick one — or answer in your own words below, that works too"
             : "or answer in your own words below — that works too"}

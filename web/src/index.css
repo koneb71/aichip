@@ -24,21 +24,17 @@
 
   /* Surfaces, back to front. */
   --color-bg: #f7f7f8;
-  --color-surface: #f7f7f8;
   --color-panel: #ffffff;
   --color-panel-2: #f2f2f4;
   --color-raised: #ffffff;
 
   /* Lines. */
-  --color-line: #e5e5e9;
   --color-border: #e5e5e9;
   --color-border-strong: #d2d2d8;
 
   /* Text. `fg-subtle` is for placeholders and decoration, never for words a
    * person has to read. */
-  --color-ink: #17171c;
   --color-fg: #17171c;
-  --color-ink-dim: #5f5f6b;
   --color-fg-muted: #5f5f6b;
   --color-fg-subtle: #8e8e99;
 
@@ -102,18 +98,14 @@
   color-scheme: dark;
 
   --color-bg: #0d0e11;
-  --color-surface: #0d0e11;
   --color-panel: #141519;
   --color-panel-2: #1b1c21;
   --color-raised: #1d1e24;
 
-  --color-line: #26272e;
   --color-border: #26272e;
   --color-border-strong: #363741;
 
-  --color-ink: #ececf1;
   --color-fg: #ececf1;
-  --color-ink-dim: #a0a0ac;
   --color-fg-muted: #a0a0ac;
   --color-fg-subtle: #6c6c78;
 
@@ -457,9 +449,9 @@ h1, h2, h3 {
   text-decoration: underline;
 }
 .md blockquote {
-  border-left: 3px solid var(--color-line);
+  border-left: 3px solid var(--color-border);
   padding-left: 0.75em;
-  color: var(--color-ink-dim);
+  color: var(--color-fg-muted);
 }
 /* Scroll container, because a table's min-content width is the sum of its
  * columns and no wrap rule can talk it down. */
@@ -473,12 +465,12 @@ h1, h2, h3 {
 }
 .md th,
 .md td {
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--color-border);
   padding: 0.25em 0.6em;
 }
 .md hr {
   border: none;
-  border-top: 1px solid var(--color-line);
+  border-top: 1px solid var(--color-border);
   margin: 0.6em 0;
 }
 
@@ -496,8 +488,8 @@ h1, h2, h3 {
 .kb li { margin: .3em 0; }
 .kb a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
 .kb blockquote {
-  border-left: 3px solid var(--color-line);
-  padding-left: .9em; margin: 1em 0; color: var(--color-ink-dim);
+  border-left: 3px solid var(--color-border);
+  padding-left: .9em; margin: 1em 0; color: var(--color-fg-muted);
 }
 .kb code {
   font-family: var(--font-mono); font-size: .88em;
@@ -511,13 +503,13 @@ h1, h2, h3 {
 /* Tables and embeds scroll inside themselves; a wide one must never make the
    whole page scroll sideways. */
 .kb table { border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
-.kb th, .kb td { border: 1px solid var(--color-line); padding: .4rem .7rem; text-align: left; }
+.kb th, .kb td { border: 1px solid var(--color-border); padding: .4rem .7rem; text-align: left; }
 .kb th { background: var(--color-panel-2); font-weight: 600; }
 .kb img { max-width: 100%; height: auto; border-radius: .5rem; margin: .8em 0; }
 .kb iframe { max-width: 100%; border: 0; border-radius: .5rem; margin: .8em 0; }
 .kb figure { margin: 1em 0; }
-.kb figcaption { font-size: .85em; color: var(--color-ink-dim); margin-top: .3em; }
-.kb hr { border: 0; border-top: 1px solid var(--color-line); margin: 1.6em 0; }
+.kb figcaption { font-size: .85em; color: var(--color-fg-muted); margin-top: .3em; }
+.kb hr { border: 0; border-top: 1px solid var(--color-border); margin: 1.6em 0; }
 
 /* The editing surface. Shares `.kb` with the read view so what you type looks
    like what gets published — the single most useful property of a WYSIWYG
@@ -531,7 +523,7 @@ h1, h2, h3 {
   float: left;
   height: 0;
   pointer-events: none;
-  color: var(--color-ink-dim);
+  color: var(--color-fg-muted);
 }
 
 /* Page links, in both the editor and the read view. */
@@ -577,7 +569,7 @@ h1, h2, h3 {
   content: "☐";
   flex: 0 0 auto;
   line-height: 1.5;
-  color: var(--color-ink-dim);
+  color: var(--color-fg-muted);
 }
 .kb:not(.kb-editor) ul[data-type="taskList"] li[data-checked="true"]::before {
   content: "☑";
@@ -595,7 +587,7 @@ h1, h2, h3 {
 /* A finished item should read as finished at a glance. */
 .kb ul[data-type="taskList"] li[data-checked="true"] > p,
 .kb ul[data-type="taskList"] li[data-checked="true"] > div {
-  color: var(--color-ink-dim);
+  color: var(--color-fg-muted);
   text-decoration: line-through;
 }
 
@@ -605,7 +597,7 @@ h1, h2, h3 {
 }
 
 .kb details {
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--color-border);
   border-radius: .6rem;
   padding: .5rem .75rem;
   margin: .9em 0;
@@ -614,7 +606,7 @@ h1, h2, h3 {
   cursor: pointer; font-weight: 600; list-style: none;
 }
 .kb details > summary::-webkit-details-marker { display: none; }
-.kb details > summary::before { content: "▸ "; color: var(--color-ink-dim); }
+.kb details > summary::before { content: "▸ "; color: var(--color-fg-muted); }
 .kb details[open] > summary::before { content: "▾ "; }
 
 /* Syntax highlighting. A restrained palette — a code block in a document is

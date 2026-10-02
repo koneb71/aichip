@@ -65,12 +65,12 @@ export function RunGraphDrawer({
       animate={{ x: 0 }}
       exit={{ x: 720 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[720px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[720px] flex-col border-l border-border bg-panel"
     >
-      <div className="flex items-start gap-3 border-b border-line p-5">
+      <div className="flex items-start gap-3 border-b border-border p-5">
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-semibold">{run.workflowName}</div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-ink-dim">
+          <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
             <StatusDot status={run.status} />
             <span>{run.status.replace("_", " ")}</span>
             <span>· {run.trigger}</span>
@@ -84,7 +84,7 @@ export function RunGraphDrawer({
                 key={v}
                 onClick={() => setView(v)}
                 className={`rounded-md px-2.5 py-1 text-xs capitalize ${
-                  view === v ? "bg-panel font-medium shadow-sm" : "text-ink-dim"
+                  view === v ? "bg-panel font-medium shadow-sm" : "text-fg-muted"
                 }`}
               >
                 {v}
@@ -92,7 +92,7 @@ export function RunGraphDrawer({
             ))}
           </div>
         )}
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">
+        <button onClick={onClose} className="text-fg-muted hover:text-fg">
           ✕
         </button>
       </div>
@@ -116,16 +116,16 @@ export function RunGraphDrawer({
             <motion.div
               initial={{ y: 40, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              className="max-h-56 overflow-y-auto border-t border-line bg-panel p-4"
+              className="max-h-56 overflow-y-auto border-t border-border bg-panel p-4"
             >
-              <div className="mb-1 font-mono text-xs text-ink-dim">
+              <div className="mb-1 font-mono text-xs text-fg-muted">
                 {steps.find((s) => s.id === expanded)?.stepKey}
               </div>
               <div className="text-sm">
                 {steps.find((s) => s.id === expanded)?.output ? (
                   <Markdown>{steps.find((s) => s.id === expanded)!.output!}</Markdown>
                 ) : (
-                  <span className="text-xs text-ink-dim">No output yet.</span>
+                  <span className="text-xs text-fg-muted">No output yet.</span>
                 )}
               </div>
             </motion.div>
@@ -140,18 +140,18 @@ export function RunGraphDrawer({
         {Object.entries(groups).map(([base, attempts], groupIndex) => (
           <div key={base}>
             {groupIndex > 0 && (
-              <div className="ml-[9px] h-4 w-px bg-line" aria-hidden />
+              <div className="ml-[9px] h-4 w-px bg-border" aria-hidden />
             )}
-            <div className="rounded-xl border border-line bg-panel-2/50 p-3">
+            <div className="rounded-xl border border-border bg-panel-2/50 p-3">
               <div className="flex items-center gap-2">
                 <StatusDot status={groupStatus(attempts)} />
                 <span className="font-mono text-sm font-medium">{base}</span>
                 {attempts.length > 1 && (
-                  <span className="rounded-full bg-panel px-2 py-0.5 text-[11px] text-ink-dim">
+                  <span className="rounded-full bg-panel px-2 py-0.5 text-[11px] text-fg-muted">
                     {attempts.length} attempts in parallel
                   </span>
                 )}
-                <span className="ml-auto text-[11px] text-ink-dim">
+                <span className="ml-auto text-[11px] text-fg-muted">
                   {duration(attempts)}
                 </span>
               </div>
@@ -165,7 +165,7 @@ export function RunGraphDrawer({
                     <div className="flex items-center gap-2">
                       <StatusDot status={s.status} />
                       <span className="font-mono text-xs">{s.stepKey}</span>
-                      <span className="ml-auto text-[11px] text-ink-dim">
+                      <span className="ml-auto text-[11px] text-fg-muted">
                         {expanded === s.id ? "hide output" : "show output"}
                       </span>
                     </div>
@@ -173,12 +173,12 @@ export function RunGraphDrawer({
                       <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
-                        className="mt-2 border-t border-line pt-2 text-sm"
+                        className="mt-2 border-t border-border pt-2 text-sm"
                       >
                         {s.output ? (
                           <Markdown>{s.output}</Markdown>
                         ) : (
-                          <span className="text-xs text-ink-dim">No output yet.</span>
+                          <span className="text-xs text-fg-muted">No output yet.</span>
                         )}
                       </motion.div>
                     )}
@@ -189,7 +189,7 @@ export function RunGraphDrawer({
           </div>
         ))}
         {steps.length === 0 && (
-          <div className="text-sm text-ink-dim">
+          <div className="text-sm text-fg-muted">
             Waiting for the first step to start…
           </div>
         )}

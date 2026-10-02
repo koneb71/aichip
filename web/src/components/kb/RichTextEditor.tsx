@@ -179,10 +179,10 @@ export function RichTextEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editor]);
 
-  if (!editor) return <div className="p-4 text-sm text-ink-dim">Loading the editor…</div>;
+  if (!editor) return <div className="p-4 text-sm text-fg-muted">Loading the editor…</div>;
 
   return (
-    <div className="rounded-xl border border-line bg-panel">
+    <div className="rounded-xl border border-border bg-panel">
       <Toolbar editor={editor} upload={upload} />
       <EditorContent editor={editor} />
       <StatusBar editor={editor} />
@@ -217,7 +217,7 @@ function StatusBar({ editor }: { editor: Editor }) {
   // Matches MAX_PAGE_CHARS in crates/aichip-core/src/kb/mod.rs.
   const over = chars > 6000;
   return (
-    <div className="flex items-center gap-3 border-t border-line px-3 py-1.5 text-[10px] text-ink-dim">
+    <div className="flex items-center gap-3 border-t border-border px-3 py-1.5 text-[10px] text-fg-muted">
       <span>
         {words} {words === 1 ? "word" : "words"} · {chars.toLocaleString()} characters
       </span>

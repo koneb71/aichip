@@ -78,13 +78,13 @@ export function PublishModal({
         className="card-shadow w-full max-w-lg rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">Publish to GitHub</h3>
-        <p className="mt-1 text-xs text-ink-dim">
+        <p className="mt-1 text-xs text-fg-muted">
           Creates the repository under your own <code className="font-mono">gh</code> login and
           pushes what is here. Pull requests, issue import and check status work afterwards.
         </p>
 
         <label className="mt-4 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Repository name
           </span>
           <input
@@ -92,12 +92,12 @@ export function PublishModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
         </label>
 
         <div className="mt-3">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Who can see it
           </span>
           <div className="flex gap-2">
@@ -121,12 +121,12 @@ export function PublishModal({
         {/* The whole answer to "what is about to happen", in one line, before
             anything leaves this machine. */}
         {name.trim() && (
-          <p className="mt-3 text-[11px] text-ink-dim">
+          <p className="mt-3 text-[11px] text-fg-muted">
             Will create{" "}
-            <span className="font-mono text-ink">
+            <span className="font-mono text-fg">
               {owner ? `${owner}/${name.trim()}` : name.trim()}
             </span>{" "}
-            as <span className={isPublic ? "font-medium text-amber-700" : "text-ink"}>
+            as <span className={isPublic ? "font-medium text-amber-700" : "text-fg"}>
               {isPublic ? "public" : "private"}
             </span>
             {project && <> from {project.path}</>}.
@@ -159,7 +159,7 @@ export function PublishModal({
           <button
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg px-3 py-1.5 text-xs text-ink-dim disabled:opacity-50"
+            className="rounded-lg px-3 py-1.5 text-xs text-fg-muted disabled:opacity-50"
           >
             Cancel
           </button>
@@ -187,11 +187,11 @@ function Choice({
       onClick={onPick}
       disabled={disabled}
       className={`flex-1 rounded-lg border px-3 py-2 text-left disabled:opacity-60 ${
-        on ? "border-accent bg-accent/5" : "border-line hover:border-ink-dim"
+        on ? "border-accent bg-accent/5" : "border-border hover:border-fg-muted"
       }`}
     >
       <div className="text-xs font-medium">{label}</div>
-      <div className="text-[11px] text-ink-dim">{hint}</div>
+      <div className="text-[11px] text-fg-muted">{hint}</div>
     </button>
   );
 }

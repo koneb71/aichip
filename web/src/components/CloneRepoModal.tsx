@@ -135,13 +135,13 @@ export function CloneRepoModal({
         className="card-shadow w-full max-w-lg rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">Clone from GitHub</h3>
-        <p className="mt-1 text-xs text-ink-dim">
+        <p className="mt-1 text-xs text-fg-muted">
           Cloned with your own <code className="font-mono">gh</code> login — aichip holds no
           credential and never asks for one.
         </p>
 
         <label className="mt-4 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Repository
           </span>
           <input
@@ -153,25 +153,25 @@ export function CloneRepoModal({
             }}
             disabled={busy}
             placeholder="owner/repo, or https://github.com/owner/repo"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
         </label>
 
         <div className="mt-3">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Location
           </span>
           <div className="flex items-center gap-2">
             {/* Shown rather than assumed. It used to be the folder aichip
                 browses from, silently — so the only way to find out where a
                 repository had gone was to go looking for it. */}
-            <span className="min-w-0 flex-1 truncate rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-xs text-ink-dim">
+            <span className="min-w-0 flex-1 truncate rounded-lg border border-border bg-bg px-2 py-1.5 font-mono text-xs text-fg-muted">
               {parent ?? "…"}
             </span>
             <button
               onClick={() => setBrowsing(true)}
               disabled={busy}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-50"
+              className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-fg-muted disabled:opacity-50"
             >
               Change
             </button>
@@ -179,7 +179,7 @@ export function CloneRepoModal({
         </div>
 
         <label className="mt-3 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Folder name <span className="font-normal normal-case">— optional</span>
           </span>
           <input
@@ -187,14 +187,14 @@ export function CloneRepoModal({
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
             placeholder={defaultName || "the repository's own name"}
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
         </label>
 
         {/* The whole answer to "where will this end up", in one line, before
             anything is downloaded. */}
         {parent && (name.trim() || defaultName) && (
-          <p className="mt-2 truncate font-mono text-[11px] text-ink-dim">
+          <p className="mt-2 truncate font-mono text-[11px] text-fg-muted">
             → {parent.replace(/\/$/, "")}/{name.trim() || defaultName}
           </p>
         )}
@@ -206,7 +206,7 @@ export function CloneRepoModal({
         )}
 
         {id && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-ink-dim">
+          <div className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
             <span className="size-1.5 animate-pulse rounded-full bg-accent" />
             Cloning… this can take a while for a large repository.
           </div>
@@ -221,7 +221,7 @@ export function CloneRepoModal({
           >
             {busy ? "Cloning…" : "Clone"}
           </motion.button>
-          <button onClick={cancel} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={cancel} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             {busy ? "Stop and discard" : "Cancel"}
           </button>
         </div>

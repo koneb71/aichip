@@ -67,7 +67,7 @@ export function BaseStatus({
     return (
       <div className="text-xs">
         {busy ? (
-          <p className="text-ink-dim">
+          <p className="text-fg-muted">
             Resolving conflicts with {base} in {merging.join(", ")}…
           </p>
         ) : (
@@ -94,7 +94,7 @@ export function BaseStatus({
   return (
     <div className="text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-ink-dim">
+        <span className="text-fg-muted">
           {status.behind === 0
             ? `Up to date with ${base}.`
             : `${status.behind} ${status.behind === 1 ? "commit" : "commits"} behind ${base}.`}
@@ -105,14 +105,14 @@ export function BaseStatus({
             onClick={update}
             disabled={busy || acting}
             className={`ml-auto rounded-md px-2 py-0.5 text-[11px] disabled:opacity-40 ${
-              conflicted ? "bg-accent font-medium text-white" : "border border-line hover:bg-panel-2"
+              conflicted ? "bg-accent font-medium text-white" : "border border-border hover:bg-panel-2"
             }`}
           >
             {acting ? "Updating…" : `Update from ${base}`}
           </button>
         )}
       </div>
-      {note && <p className="mt-1 text-ink-dim">{note}</p>}
+      {note && <p className="mt-1 text-fg-muted">{note}</p>}
       {error && <RunError reason={error} className="mt-2" />}
     </div>
   );

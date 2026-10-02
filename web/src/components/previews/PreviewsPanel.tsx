@@ -99,7 +99,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">Previews</h2>
-          <p className="mt-0.5 max-w-xl text-xs text-ink-dim">
+          <p className="mt-0.5 max-w-xl text-xs text-fg-muted">
             Each card's branch, built and running so you can look at it rather
             than read its diff. They run on this machine and on loopback only.
           </p>
@@ -107,7 +107,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
         {/* "of {maxLive}" is a workspace-wide budget, and saying so stops the
             number reading as a per-project one that another project can
             silently eat. */}
-        <span className="text-xs text-ink-dim" title="Across every project, not just this one">
+        <span className="text-xs text-fg-muted" title="Across every project, not just this one">
           {live} of {maxLive} running everywhere · {size(disk)} of images
           {reclaimable > 0 && (
             <>
@@ -140,7 +140,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                 whileTap={{ scale: 0.96 }}
                 onClick={() => act("base", () => api.startBasePreview(projectId))}
                 disabled={busy === "base"}
-                className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
+                className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-border/40 disabled:opacity-50"
               >
                 Build &amp; run
               </motion.button>
@@ -177,7 +177,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                       )
                     }
                     disabled={busy === r.id}
-                    className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
+                    className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-border/40 disabled:opacity-50"
                   >
                     {r.status === "stopped" ? "Start" : r.canWake ? "Wake" : "Try again"}
                   </button>
@@ -192,7 +192,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                       )
                     }
                     disabled={busy === r.id}
-                    className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
+                    className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-border/40 disabled:opacity-50"
                   >
                     Stop
                   </button>
@@ -202,7 +202,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
                     error message at all. */}
                 <button
                   onClick={() => setShowing(showing === r.id ? null : r.id)}
-                  className="rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+                  className="rounded-lg px-1.5 py-1 text-xs text-fg-muted hover:text-fg"
                 >
                   {showing === r.id ? "hide logs" : "logs"}
                 </button>
@@ -220,7 +220,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
         ))}
 
         {rows.length === 0 && (
-          <p className="text-xs text-ink-dim">
+          <p className="text-xs text-fg-muted">
             Nothing running. Open a card and press Build &amp; run, or start the
             base branch above.
           </p>
@@ -228,10 +228,10 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
       </div>
 
       <div className="mt-6 max-w-3xl">
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           How this gets built
         </div>
-        <p className="mb-1.5 text-xs text-ink-dim">
+        <p className="mb-1.5 text-xs text-fg-muted">
           Used when a branch has no Dockerfile and no compose file of its own. An
           agent reads the project and decides which it needs; you read that
           before anything builds it.
@@ -257,20 +257,20 @@ function Row({
   action: React.ReactNode;
 }) {
   return (
-    <div className="card-shadow flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-panel p-3">
+    <div className="card-shadow flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-panel p-3">
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate text-sm font-semibold">{title}</span>
           {[badge, badge2].filter(Boolean).map((b) => (
             <span
               key={b}
-              className="rounded-md bg-line/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-dim"
+              className="rounded-md bg-border/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-muted"
             >
               {b}
             </span>
           ))}
         </div>
-        <div className="mt-0.5 text-[11px] text-ink-dim">{subtitle}</div>
+        <div className="mt-0.5 text-[11px] text-fg-muted">{subtitle}</div>
       </div>
       {action}
     </div>

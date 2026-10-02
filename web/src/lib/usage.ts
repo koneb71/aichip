@@ -75,7 +75,7 @@ export function statusTone(status: string): { text: string; bg: string; dot: str
     case "warning":
       return { text: "text-amber-900", bg: "bg-amber-50", dot: "bg-amber-500" };
     default:
-      return { text: "text-ink-dim", bg: "bg-panel", dot: "bg-emerald-500" };
+      return { text: "text-fg-muted", bg: "bg-panel", dot: "bg-emerald-500" };
   }
 }
 

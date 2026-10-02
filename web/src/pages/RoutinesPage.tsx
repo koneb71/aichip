@@ -101,7 +101,7 @@ export default function RoutinesPage() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Routines</h1>
-          <p className="mt-1 text-xs text-ink-dim">
+          <p className="mt-1 text-xs text-fg-muted">
             A prompt that runs on a schedule — a morning brief in chat, a weekly research
             report, a recurring card on a board. Times are your local time; if your machine
             was asleep, a missed routine runs once on wake.
@@ -135,7 +135,7 @@ export default function RoutinesPage() {
 
       <div className="mt-6 space-y-3">
         {routines.length === 0 && !editing && (
-          <div className="rounded-2xl border border-dashed border-line px-6 py-10 text-center text-sm text-ink-dim">
+          <div className="rounded-2xl border border-dashed border-border px-6 py-10 text-center text-sm text-fg-muted">
             Nothing scheduled yet. A routine can post into a chat thread every morning,
             file a research report every Friday, or start a board card every Monday.
           </div>
@@ -228,28 +228,28 @@ function RoutineCard({
     r.lastRunStatus && !["completed", "failed", "canceled"].includes(r.lastRunStatus);
 
   return (
-    <div className={`card-shadow rounded-2xl border border-line bg-panel p-4 ${r.enabled ? "" : "opacity-60"}`}>
+    <div className={`card-shadow rounded-2xl border border-border bg-panel p-4 ${r.enabled ? "" : "opacity-60"}`}>
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+            <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
               {KIND_LABEL[r.kind]}
             </span>
             <span className="truncate text-sm font-semibold">{r.name}</span>
             {r.projectName && (
-              <span className="truncate text-[11px] text-ink-dim">· {r.projectName}</span>
+              <span className="truncate text-[11px] text-fg-muted">· {r.projectName}</span>
             )}
             {r.kind === "watch" && r.url && (
-              <span className="truncate text-[11px] text-ink-dim" title={r.url}>
+              <span className="truncate text-[11px] text-fg-muted" title={r.url}>
                 · {hostOf(r.url)}
               </span>
             )}
             {!r.projectName && r.kind !== "task" && r.kind !== "watch" && (
-              <span className="text-[11px] text-ink-dim">· General</span>
+              <span className="text-[11px] text-fg-muted">· General</span>
             )}
           </div>
-          <p className="mt-1 line-clamp-2 text-xs text-ink-dim">{r.prompt}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-dim">
+          <p className="mt-1 line-clamp-2 text-xs text-fg-muted">{r.prompt}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-muted">
             <span className="flex items-center gap-1">
               <Icon name="clock" size={12} />
               {describeCron(r.cronExpr)}
@@ -264,13 +264,13 @@ function RoutineCard({
             onClick={runNow}
             disabled={busy || !!live}
             title={live ? "Already running" : "Fire once, without touching the schedule"}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs hover:border-ink-dim disabled:opacity-50"
+            className="rounded-lg border border-border px-2.5 py-1 text-xs hover:border-fg-muted disabled:opacity-50"
           >
             {busy ? "Firing…" : "Run now"}
           </button>
           <button
             onClick={onEdit}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs hover:border-ink-dim"
+            className="rounded-lg border border-border px-2.5 py-1 text-xs hover:border-fg-muted"
           >
             Edit
           </button>
@@ -280,7 +280,7 @@ function RoutineCard({
             role="switch"
             aria-checked={r.enabled}
             title={r.enabled ? "Pause the schedule" : "Resume the schedule"}
-            className={`relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-line"}`}
+            className={`relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-border"}`}
           >
             <span
               className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left] ${r.enabled ? "left-[18px]" : "left-0.5"}`}
@@ -290,25 +290,25 @@ function RoutineCard({
       </div>
 
       <div className="mt-2 flex items-center gap-3 text-[11px]">
-        <button onClick={() => setOpen(!open)} className="text-ink-dim hover:text-ink">
+        <button onClick={() => setOpen(!open)} className="text-fg-muted hover:text-fg">
           {open ? "Hide history" : "History"}
         </button>
         <ResultLink routine={r} />
-        <button onClick={remove} className="ml-auto text-ink-dim hover:text-danger">
+        <button onClick={remove} className="ml-auto text-fg-muted hover:text-danger">
           Delete
         </button>
       </div>
 
       {open && (
-        <div className="mt-2 space-y-1 border-t border-line pt-2">
-          {history === null && <div className="text-[11px] text-ink-dim">Loading…</div>}
+        <div className="mt-2 space-y-1 border-t border-border pt-2">
+          {history === null && <div className="text-[11px] text-fg-muted">Loading…</div>}
           {history?.length === 0 && (
-            <div className="text-[11px] text-ink-dim">Hasn't fired yet.</div>
+            <div className="text-[11px] text-fg-muted">Hasn't fired yet.</div>
           )}
           {history?.map((h) => (
             <div key={h.id} className="flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="text-ink-dim">{new Date(h.firedAt).toLocaleString()}</span>
-              {h.trigger === "manual" && <span className="text-ink-dim">(manual)</span>}
+              <span className="text-fg-muted">{new Date(h.firedAt).toLocaleString()}</span>
+              {h.trigger === "manual" && <span className="text-fg-muted">(manual)</span>}
               {h.error ? (
                 <span className="text-danger">didn't run: {h.error}</span>
               ) : (
@@ -316,7 +316,7 @@ function RoutineCard({
                   <StatusDot status={h.runStatus} />
                   <FiringLink run={h} routine={r} />
                   {h.costUsd != null && (
-                    <span className="text-ink-dim">${h.costUsd.toFixed(2)}</span>
+                    <span className="text-fg-muted">${h.costUsd.toFixed(2)}</span>
                   )}
                 </>
               )}
@@ -456,10 +456,10 @@ function Editor({
 
   const set = (patch: Partial<RoutineDraft>) => setD((prev) => ({ ...prev, ...patch }));
 
-  const field = "rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs";
+  const field = "rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs";
 
   return (
-    <div className="card-shadow mt-5 rounded-2xl border border-line bg-panel p-4">
+    <div className="card-shadow mt-5 rounded-2xl border border-border bg-panel p-4">
       <div className="text-sm font-semibold">{isNew ? "New routine" : `Edit ${draft.name}`}</div>
 
       <div className="mt-3 grid gap-3">
@@ -478,11 +478,11 @@ function Editor({
               key={k}
               onClick={() => set({ kind: k })}
               className={`rounded-xl border px-3 py-1.5 text-left text-xs ${
-                d.kind === k ? "border-accent bg-accent/5" : "border-line hover:border-ink-dim/40"
+                d.kind === k ? "border-accent bg-accent/5" : "border-border hover:border-fg-muted/40"
               }`}
             >
               <div className="font-semibold">{KIND_LABEL[k]}</div>
-              <div className="text-[10px] text-ink-dim">{KIND_BLURB[k]}</div>
+              <div className="text-[10px] text-fg-muted">{KIND_BLURB[k]}</div>
             </button>
           ))}
         </div>
@@ -579,7 +579,7 @@ function Editor({
             />
           )}
         </div>
-        <div className="text-[11px] text-ink-dim">
+        <div className="text-[11px] text-fg-muted">
           {preview === null && "…"}
           {preview?.valid === false && <span className="text-danger">That isn't a valid schedule.</span>}
           {preview?.valid && preview.next.length > 0 && (
@@ -587,7 +587,7 @@ function Editor({
           )}
         </div>
 
-        <label className="flex items-center gap-2 text-xs text-ink-dim">
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
           <input
             type="checkbox"
             checked={(d.catchUp ?? "run_once") === "run_once"}
@@ -629,7 +629,7 @@ function Editor({
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onCancel} className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-ink-dim">
+          <button onClick={onCancel} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:border-fg-muted">
             Cancel
           </button>
           <button

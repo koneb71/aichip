@@ -41,8 +41,8 @@ export function StepInspector({
   const parallel = step.parallel ?? 1;
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto border-l border-line bg-panel">
-      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+    <div className="flex h-full flex-col overflow-y-auto border-l border-border bg-panel">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-sm font-semibold">Step</span>
         <button onClick={onDelete} className="text-xs text-danger hover:underline">
           Delete
@@ -56,7 +56,7 @@ export function StepInspector({
             onChange={(e) => setDraftId(e.target.value)}
             onBlur={commitId}
             onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            className="w-full rounded-lg border border-line px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
           />
         </Field>
 
@@ -66,7 +66,7 @@ export function StepInspector({
             onChange={(e) => patch({ prompt: e.target.value })}
             rows={8}
             placeholder="What should this step do?"
-            className="w-full resize-none rounded-lg border border-line px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full resize-none rounded-lg border border-border px-2.5 py-1.5 text-sm outline-none focus:border-accent"
           />
           {steps.length > 1 && (
             <InsertOutput steps={steps} current={step} onInsert={(t) => patch({ prompt: step.prompt + t })} />
@@ -81,8 +81,8 @@ export function StepInspector({
                 onClick={() => patch({ model: step.model === t ? undefined : t })}
                 className="flex-1 rounded-lg border px-2 py-1.5 text-xs capitalize"
                 style={{
-                  borderColor: step.model === t ? tierColor[t] : "var(--color-line)",
-                  color: step.model === t ? tierColor[t] : "var(--color-ink-dim)",
+                  borderColor: step.model === t ? tierColor[t] : "var(--color-border)",
+                  color: step.model === t ? tierColor[t] : "var(--color-fg-muted)",
                 }}
               >
                 {t}
@@ -109,7 +109,7 @@ export function StepInspector({
           <select
             value={step.agent ?? ""}
             onChange={(e) => patch({ agent: e.target.value || undefined })}
-            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm"
+            className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm"
           >
             <option value="">None</option>
             {agents.map((a) => (
@@ -158,7 +158,7 @@ export function StepInspector({
                   {n}
                   <button
                     onClick={() => patch({ needs: step.needs.filter((x) => x !== n) })}
-                    className="text-ink-dim hover:text-danger"
+                    className="text-fg-muted hover:text-danger"
                   >
                     ✕
                   </button>
@@ -189,7 +189,7 @@ function InsertOutput({
   const candidates = steps.filter((s) => s.id !== current.id);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1">
-      <span className="text-[11px] text-ink-dim">Insert output:</span>
+      <span className="text-[11px] text-fg-muted">Insert output:</span>
       {candidates.map((s) => {
         const many = (s.parallel ?? 1) > 1;
         const token = `{{ steps.${s.id}.${many ? "outputs" : "output"} }}`;
@@ -198,7 +198,7 @@ function InsertOutput({
             key={s.id}
             onClick={() => onInsert(token)}
             title={token}
-            className="rounded-full border border-line px-1.5 py-0.5 font-mono text-[10px] hover:border-accent hover:text-accent-fg"
+            className="rounded-full border border-border px-1.5 py-0.5 font-mono text-[10px] hover:border-accent hover:text-accent-fg"
           >
             {s.id}
           </button>
@@ -219,11 +219,11 @@ function Field({
 }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </div>
       {children}
-      {hint && <div className="mt-1 text-[11px] text-ink-dim/80">{hint}</div>}
+      {hint && <div className="mt-1 text-[11px] text-fg-muted/80">{hint}</div>}
     </div>
   );
 }
@@ -238,7 +238,7 @@ function Toggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-ink-dim">
+    <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-fg-muted">
       <input
         type="checkbox"
         checked={checked}

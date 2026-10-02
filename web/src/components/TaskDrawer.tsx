@@ -844,7 +844,7 @@ export function TaskDrawer({
           />
           <span className="min-w-0">
             <span className="block font-medium">Plan first</span>
-            <span className="block text-[11px] text-ink-dim">
+            <span className="block text-[11px] text-fg-muted">
               Write a plan and stop, so you can confirm or rewrite it before
               anything changes.
             </span>
@@ -898,14 +898,14 @@ export function TaskDrawer({
           {/* Where "Default" actually came from. Silent when the card sets it
               itself, since the picker already says so. */}
           {task.effortSource === "agent" && (
-            <span className="text-[11px] text-ink-dim">
+            <span className="text-[11px] text-fg-muted">
               {task.agentName
                 ? `set by the ${task.agentName} agent, which outranks this card`
                 : "set by its agent, which outranks this card"}
             </span>
           )}
           {task.effortSource === "tier" && (
-            <span className="text-[11px] text-ink-dim">
+            <span className="text-[11px] text-fg-muted">
               from the {task.modelTier} tier on {task.engine}
             </span>
           )}
@@ -1090,13 +1090,13 @@ function Permissions({ task }: { task: Task }) {
 
   return (
     <div className="mt-3 flex items-baseline gap-2 text-[11px]">
-      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="font-semibold uppercase tracking-wide text-fg-muted">
         Permission
       </span>
-      <span className={asks ? "text-ink" : "text-tier-easy"}>{says}</span>
+      <span className={asks ? "text-fg" : "text-tier-easy"}>{says}</span>
       {/* Naming the source is the whole point — it turns "why is this asking me"
           into a place to go and change it. */}
-      <span className="text-ink-dim">· {from}</span>
+      <span className="text-fg-muted">· {from}</span>
     </div>
   );
 }
@@ -1124,19 +1124,19 @@ function EpicPanel({
   if (!parent && children.length === 0) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       {parent && (
         <button
           onClick={() => onOpenTask?.(parent)}
           disabled={!onOpenTask}
-          className="text-[11px] text-ink-dim hover:text-accent-fg disabled:hover:text-ink-dim"
+          className="text-[11px] text-fg-muted hover:text-accent-fg disabled:hover:text-fg-muted"
         >
           ↳ part of <span className="font-medium">{parent.title}</span>
         </button>
       )}
       {children.length > 0 && (
         <>
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Sub-tasks · {children.filter((c) => resolved(c)).length} of {children.length} done
           </div>
           <div className="space-y-1">
@@ -1145,15 +1145,15 @@ function EpicPanel({
                 key={child.id}
                 onClick={() => onOpenTask?.(child)}
                 disabled={!onOpenTask}
-                className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-line"
+                className="flex w-full items-center gap-2 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-left text-xs hover:border-accent disabled:hover:border-border"
               >
                 <span className="min-w-0 flex-1 truncate">{child.title}</span>
                 {child.agentName && (
-                  <span className="shrink-0 text-[10px] text-ink-dim">{child.agentName}</span>
+                  <span className="shrink-0 text-[10px] text-fg-muted">{child.agentName}</span>
                 )}
                 <span
                   className={`shrink-0 text-[10px] ${
-                    child.stepStatus === "failed" ? "text-danger" : "text-ink-dim"
+                    child.stepStatus === "failed" ? "text-danger" : "text-fg-muted"
                   }`}
                 >
                   {child.stepStatus === "failed" ? "failed" : child.boardColumn}
@@ -1218,10 +1218,10 @@ function DiffView({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <button onClick={onBack} className="text-xs text-ink-dim hover:text-ink">
+        <button onClick={onBack} className="text-xs text-fg-muted hover:text-fg">
           ← back to stream
         </button>
-        <span className="text-[11px] text-ink-dim">Click a line to comment on it</span>
+        <span className="text-[11px] text-fg-muted">Click a line to comment on it</span>
       </div>
 
       {sent && (
@@ -1244,13 +1244,13 @@ function DiffView({
                     ? "text-red-400"
                     : line.kind === "hunk"
                       ? "text-tier-medium"
-                      : "text-ink-dim"
+                      : "text-fg-muted"
               }`}
             >
-              <span className="w-8 shrink-0 select-none text-right text-ink-dim/50">
+              <span className="w-8 shrink-0 select-none text-right text-fg-muted/50">
                 {line.newLine ?? ""}
               </span>
-              <span className="w-3 shrink-0 select-none text-ink-dim opacity-0 group-hover:opacity-100">
+              <span className="w-3 shrink-0 select-none text-fg-muted opacity-0 group-hover:opacity-100">
                 {isCommentable(line) ? "+" : ""}
               </span>
               <span className="whitespace-pre">{line.text || " "}</span>
@@ -1258,7 +1258,7 @@ function DiffView({
 
             {openAt === i && (
               <div className="my-1 rounded-lg border border-accent/40 bg-panel p-2.5 font-sans">
-                <div className="text-[11px] text-ink-dim">
+                <div className="text-[11px] text-fg-muted">
                   {line.file ?? "this change"}
                   {line.newLine ? ` · line ${line.newLine}` : ""}
                 </div>
@@ -1268,7 +1268,7 @@ function DiffView({
                   onChange={(e) => setNote(e.target.value)}
                   rows={2}
                   placeholder="What's wrong with this?"
-                  className="mt-1.5 w-full resize-none rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                  className="mt-1.5 w-full resize-none rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
@@ -1281,7 +1281,7 @@ function DiffView({
                   <button
                     onClick={() => submit(false)}
                     disabled={busy || !note.trim()}
-                    className="rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-50"
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-50"
                   >
                     Just comment
                   </button>
@@ -1290,7 +1290,7 @@ function DiffView({
                       setOpenAt(null);
                       setNote("");
                     }}
-                    className="px-2 text-xs text-ink-dim hover:text-ink"
+                    className="px-2 text-xs text-fg-muted hover:text-fg"
                   >
                     Cancel
                   </button>
@@ -1354,9 +1354,9 @@ function Description({
   if (!text.trim() && draft === null) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Description
         </span>
         {draft === null && (
@@ -1368,7 +1368,7 @@ function Description({
                 ? "The agent is working from this brief — cancel the run to rewrite it"
                 : "Edit the card's brief; the next run uses the new text"
             }
-            className="text-[11px] text-ink-dim hover:text-accent-fg disabled:opacity-40 disabled:hover:text-ink-dim"
+            className="text-[11px] text-fg-muted hover:text-accent-fg disabled:opacity-40 disabled:hover:text-fg-muted"
           >
             Edit
           </button>
@@ -1415,7 +1415,7 @@ function Description({
                 setDraft(null);
                 setError(null);
               }}
-              className="rounded-lg border border-line px-2.5 py-1 text-[11px] hover:border-ink-dim"
+              className="rounded-lg border border-border px-2.5 py-1 text-[11px] hover:border-fg-muted"
             >
               Cancel
             </button>
@@ -1499,8 +1499,8 @@ function StatusMover({
   };
 
   return (
-    <div className="border-b border-line px-5 py-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+    <div className="border-b border-border px-5 py-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         Status
       </div>
       <div className="flex w-fit flex-wrap gap-0.5 rounded-xl bg-panel-2 p-0.5">
@@ -1523,7 +1523,7 @@ function StatusMover({
               className={`relative rounded-lg px-2.5 py-1 text-xs transition-colors ${
                 current
                   ? "font-semibold text-accent-fg"
-                  : "text-ink-dim hover:text-ink disabled:opacity-40"
+                  : "text-fg-muted hover:text-fg disabled:opacity-40"
               }`}
             >
               {/* One pill sliding between segments, like the page tabs — the
@@ -1540,7 +1540,7 @@ function StatusMover({
           );
         })}
       </div>
-      {estimate && !ask && <div className="mt-1.5 text-[11px] text-ink-dim">Starting it: {estimate}</div>}
+      {estimate && !ask && <div className="mt-1.5 text-[11px] text-fg-muted">Starting it: {estimate}</div>}
       {ask && (
         <div className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
           {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
@@ -1585,12 +1585,12 @@ function Setup({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-b border-line">
+    <div className="border-b border-border">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-panel-2/50"
       >
-        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Setup
         </span>
         {/* Animated with `animate` on mounted elements rather than
@@ -1600,14 +1600,14 @@ function Setup({
         <motion.span
           animate={{ opacity: open ? 0 : 1 }}
           transition={{ duration: 0.15 }}
-          className="min-w-0 truncate text-[11px] text-ink-dim/80"
+          className="min-w-0 truncate text-[11px] text-fg-muted/80"
         >
           {summary}
         </motion.span>
         <motion.span
           animate={{ rotate: open ? 90 : 0 }}
           transition={springy}
-          className="ml-auto shrink-0 text-ink-dim"
+          className="ml-auto shrink-0 text-fg-muted"
         >
           ›
         </motion.span>
@@ -1686,15 +1686,15 @@ function Blockers({
   if (blockers.length === 0 && candidates.length === 0 && !task.blockedNote) return null;
 
   return (
-    <div className="border-b border-line px-5 py-3">
+    <div className="border-b border-border px-5 py-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Blocked by
         </span>
         {!adding && candidates.length > 0 && (
           <button
             onClick={() => setAdding(true)}
-            className="text-[11px] text-ink-dim hover:text-accent-fg"
+            className="text-[11px] text-fg-muted hover:text-accent-fg"
           >
             + Add
           </button>
@@ -1708,7 +1708,7 @@ function Blockers({
       )}
 
       {blockers.length === 0 && !adding && !task.blockedNote && (
-        <div className="text-[11px] text-ink-dim/70">
+        <div className="text-[11px] text-fg-muted/70">
           Nothing — this card can start any time.
         </div>
       )}
@@ -1756,7 +1756,7 @@ function Blockers({
       {/* Only while something still blocks it: once they have all landed,
           starting is a click away and there is nothing left to wait for. */}
       {blockers.some((b) => b.boardColumn !== "done") && task.boardColumn === "backlog" && (
-        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-fg-muted">
           <input
             type="checkbox"
             checked={task.startWhenUnblocked}
@@ -1773,7 +1773,7 @@ function Blockers({
           defaultValue=""
           onChange={(e) => e.target.value && add(e.target.value)}
           onBlur={() => setAdding(false)}
-          className="mt-1.5 w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-xs"
+          className="mt-1.5 w-full rounded-lg border border-border bg-panel px-2 py-1.5 text-xs"
         >
           <option value="" disabled>
             Which card must land first?

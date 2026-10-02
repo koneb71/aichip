@@ -105,7 +105,7 @@ export function ArticlePicker({
   return (
     <div>
       {!compact && (
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Read first
         </div>
       )}
@@ -121,7 +121,7 @@ export function ArticlePicker({
             <span className="max-w-48 truncate">{a.title}</span>
             <button
               onClick={() => toggle(a.id)}
-              className="text-ink-dim hover:text-danger"
+              className="text-fg-muted hover:text-danger"
               title="Remove"
             >
               ✕
@@ -130,7 +130,7 @@ export function ArticlePicker({
         ))}
         <button
           onClick={() => setOpen((v) => !v)}
-          className="ring-focus select-none rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent-fg"
+          className="ring-focus select-none rounded-lg border border-dashed border-border px-2 py-1 text-xs text-fg-muted hover:border-accent hover:text-accent-fg"
         >
           {open ? "Done" : chosen.length ? "+ article" : "+ knowledge-base article"}
         </button>
@@ -149,7 +149,7 @@ export function ArticlePicker({
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="relative z-20 mt-2 rounded-xl border border-line bg-panel p-2"
+          className="relative z-20 mt-2 rounded-xl border border-border bg-panel p-2"
         >
           <div className="mb-1.5 flex items-center gap-1.5">
             <input
@@ -157,19 +157,19 @@ export function ArticlePicker({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search the knowledge base…"
-              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs outline-none focus:border-accent"
             />
             <button
               onClick={() => setOpen(false)}
               title="Close"
               aria-label="Close the knowledge-base picker"
-              className="ring-focus shrink-0 rounded-lg px-1.5 py-1 text-xs text-ink-dim hover:text-ink"
+              className="ring-focus shrink-0 rounded-lg px-1.5 py-1 text-xs text-fg-muted hover:text-fg"
             >
               ✕
             </button>
           </div>
           {matches.length === 0 ? (
-            <div className="px-2 py-3 text-center text-xs text-ink-dim">
+            <div className="px-2 py-3 text-center text-xs text-fg-muted">
               {query ? "Nothing matches." : "Everything is already attached."}
             </div>
           ) : (
@@ -196,12 +196,12 @@ export function ArticlePicker({
                       </span>
                     )}
                   </span>
-                  <span className="line-clamp-1 text-[11px] text-ink-dim">{a.summary}</span>
+                  <span className="line-clamp-1 text-[11px] text-fg-muted">{a.summary}</span>
                 </button>
               ))}
             </div>
           )}
-          <p className="mt-1 px-2 text-[10px] text-ink-dim">
+          <p className="mt-1 px-2 text-[10px] text-fg-muted">
             Attached articles are put in front of the agent before it starts.
             Attach the one that matters, not everything.
           </p>

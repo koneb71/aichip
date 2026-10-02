@@ -117,7 +117,7 @@ export function AppView({
       <div className="mb-3 flex items-center gap-3">
         {title && <h2 className="text-sm font-semibold">{title}</h2>}
         {view.kind !== "chart" && (
-          <span className="text-xs text-ink-dim">
+          <span className="text-xs text-fg-muted">
             {total} {total === 1 ? "row" : "rows"}
           </span>
         )}
@@ -127,14 +127,14 @@ export function AppView({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={`Search ${fieldLabel(model.fields.find((f) => f.name === searchable)!).toLowerCase()}…`}
-            className="w-48 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-accent"
+            className="w-48 rounded-lg border border-border bg-bg px-2 py-1 text-xs outline-none focus:border-accent"
           />
         )}
         {view.kind !== "chart" && (
           <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={() => setEditing("new")}
-            className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40"
+            className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-border/40"
           >
             Add
           </motion.button>
@@ -171,17 +171,17 @@ export function AppView({
           <button
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={!window.hasPrevious}
-            className="rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
+            className="rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
           >
             Previous
           </button>
-          <span className="text-ink-dim">
+          <span className="text-fg-muted">
             {window.from}–{window.to} of {window.total}
           </span>
           <button
             onClick={() => setPage((p) => p + 1)}
             disabled={!window.hasNext}
-            className="rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
+            className="rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
           >
             Next
           </button>
@@ -214,7 +214,7 @@ export function AppView({
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
+    <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
       {children}
     </div>
   );
@@ -237,14 +237,14 @@ function ListView({
   return (
     // The table scrolls inside its own box rather than pushing the page wide:
     // an app with twelve columns must not make the dashboard scroll sideways.
-    <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-line">
+    <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border">
       <table className="w-full text-left text-xs">
         <thead className="sticky top-0 bg-panel-2">
           <tr>
             {columns.map((c) => {
               const f = model.fields.find((x) => x.name === c);
               return (
-                <th key={c} className="whitespace-nowrap px-3 py-2 font-semibold text-ink-dim">
+                <th key={c} className="whitespace-nowrap px-3 py-2 font-semibold text-fg-muted">
                   {f ? fieldLabel(f) : c}
                 </th>
               );
@@ -256,7 +256,7 @@ function ListView({
             <tr
               key={String(row.id)}
               onClick={() => onOpen(row)}
-              className="cursor-pointer border-t border-line hover:bg-line/30"
+              className="cursor-pointer border-t border-border hover:bg-border/30"
             >
               {columns.map((c) => (
                 <td key={c} className="px-3 py-2">
@@ -311,7 +311,7 @@ function KanbanView({
       <div className="flex gap-3">
         {columns.map(([key, group]) => (
           <div key={key} className="w-64 shrink-0 rounded-xl bg-panel-2 p-2">
-            <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
               <span>{key}</span>
               <span>{group.length}</span>
             </div>
@@ -320,13 +320,13 @@ function KanbanView({
                 <button
                   key={String(row.id)}
                   onClick={() => onOpen(row)}
-                  className="card-shadow rounded-lg bg-panel p-2 text-left text-xs hover:bg-line/30"
+                  className="card-shadow rounded-lg bg-panel p-2 text-left text-xs hover:bg-border/30"
                 >
                   <div className="font-medium">
                     {cellText(row[titleField ?? ""], "text") || "Untitled"}
                   </div>
                   {(view.spec.fields ?? []).map((f) => (
-                    <div key={f} className="mt-1 text-ink-dim">
+                    <div key={f} className="mt-1 text-fg-muted">
                       {cellText(row[f], model.fields.find((x) => x.name === f)?.type ?? "text")}
                     </div>
                   ))}
@@ -352,8 +352,8 @@ function ChartView({
 
   const shape = view.spec.shape ?? "bar";
   return (
-    <div className="rounded-xl border border-line p-4">
-      <div className="mb-3 text-[11px] uppercase tracking-wide text-ink-dim">
+    <div className="rounded-xl border border-border p-4">
+      <div className="mb-3 text-[11px] uppercase tracking-wide text-fg-muted">
         {view.spec.measure} by {view.spec.groupBy}
       </div>
       {shape === "line" ? (
@@ -388,10 +388,10 @@ function BarChart({ buckets, values }: { buckets: Bucket[]; values: number[] }) 
     <div className="flex flex-col gap-2">
       {buckets.map((b, i) => (
         <div key={`${b.bucket}-${i}`} className="flex items-center gap-2 text-xs">
-          <div className="w-32 shrink-0 truncate text-ink-dim" title={b.bucket ?? ""}>
+          <div className="w-32 shrink-0 truncate text-fg-muted" title={b.bucket ?? ""}>
             {b.bucket || "—"}
           </div>
-          <div className="h-4 min-w-0 flex-1 rounded bg-line/40">
+          <div className="h-4 min-w-0 flex-1 rounded bg-border/40">
             <div
               className="h-4 rounded"
               style={{
@@ -438,7 +438,7 @@ function LineChart({ buckets, values }: { buckets: Bucket[]; values: number[] })
           </circle>
         ))}
       </svg>
-      <div className="mt-1 flex justify-between text-[11px] text-ink-dim">
+      <div className="mt-1 flex justify-between text-[11px] text-fg-muted">
         <span className="truncate">{buckets[0]?.bucket || "—"}</span>
         {buckets.length > 1 && (
           <span className="truncate">{buckets[buckets.length - 1]?.bucket || "—"}</span>
@@ -484,9 +484,9 @@ function PieChart({ buckets, values }: { buckets: Bucket[]; values: number[] }) 
               className="h-2.5 w-2.5 shrink-0 rounded-sm"
               style={{ background: SERIES[i % SERIES.length] }}
             />
-            <span className="min-w-0 truncate text-ink-dim">{b.bucket || "—"}</span>
+            <span className="min-w-0 truncate text-fg-muted">{b.bucket || "—"}</span>
             <span className="tabular-nums">{b.value ?? "—"}</span>
-            <span className="text-ink-dim">
+            <span className="text-fg-muted">
               {((values[i] / total) * 100).toFixed(0)}%
             </span>
           </div>
@@ -640,7 +640,7 @@ function RowEditor({
             expression runs here, in the browser, which is why there are two
             implementations of the language and one shared corpus. */}
         {(form.spec.buttons ?? []).length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
             {(form.spec.buttons ?? []).map((name) => {
               const action = manifest.actions.find((a) => a.name === name);
               if (!action || !showIf(action.showIf, record, now)) return null;
@@ -651,7 +651,7 @@ function RowEditor({
                   onClick={() => press(action.name)}
                   disabled={busy || !row?.id}
                   title={row?.id ? undefined : "Save the record first."}
-                  className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
+                  className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-border/40 disabled:opacity-50"
                 >
                   {action.label}
                 </motion.button>
@@ -685,7 +685,7 @@ function RowEditor({
           >
             Save
           </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Cancel
           </button>
           <div className="flex-1" />

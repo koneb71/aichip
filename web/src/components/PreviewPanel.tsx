@@ -73,11 +73,11 @@ export function PreviewPanel({
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-      <span className="font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="font-semibold uppercase tracking-wide text-fg-muted">
         Preview
       </span>
 
-      {building && <span className="text-ink-dim">building…</span>}
+      {building && <span className="text-fg-muted">building…</span>}
 
       {live && url && (
         <>
@@ -102,7 +102,7 @@ export function PreviewPanel({
           whileTap={{ scale: 0.96 }}
           onClick={start}
           disabled={busy || (!!docker && !docker.usable)}
-          className="rounded-lg border border-line px-2 py-0.5 hover:bg-line/40 disabled:opacity-50"
+          className="rounded-lg border border-border px-2 py-0.5 hover:bg-border/40 disabled:opacity-50"
         >
           {preview?.canWake ? "Wake it" : "Build & run"}
         </motion.button>
@@ -113,7 +113,7 @@ export function PreviewPanel({
       {onOpenPreviews && (
         <button
           onClick={onOpenPreviews}
-          className="text-ink-dim hover:text-ink hover:underline"
+          className="text-fg-muted hover:text-fg hover:underline"
         >
           all previews
         </button>

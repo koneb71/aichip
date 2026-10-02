@@ -101,7 +101,7 @@ export function PullRequestPanel({
             whileTap={{ scale: 0.96 }}
             onClick={() => act(false)}
             disabled={busy}
-            className="rounded-lg border border-line px-3 py-1.5 hover:border-ink-dim disabled:opacity-50"
+            className="rounded-lg border border-border px-3 py-1.5 hover:border-fg-muted disabled:opacity-50"
           >
             {busy
               ? "Working…"
@@ -126,7 +126,7 @@ export function PullRequestPanel({
             <button
               onClick={refresh}
               disabled={busy}
-              className="text-ink-dim hover:text-ink disabled:opacity-50"
+              className="text-fg-muted hover:text-fg disabled:opacity-50"
               // The age is the honest part: this is what gh said when asked,
               // not what is true right now.
               title="Ask GitHub again"
@@ -140,7 +140,7 @@ export function PullRequestPanel({
       {/* A card that cannot do this says why, quietly, instead of showing a
           button that would only fail. */}
       {!canOpen && refusal && (
-        <p className="text-[11px] text-ink-dim">
+        <p className="text-[11px] text-fg-muted">
           {refusal}
           {refusal.includes("Connections") && (
             <>

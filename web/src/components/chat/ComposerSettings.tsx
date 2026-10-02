@@ -65,7 +65,7 @@ export function ComposerSettings({
       <button
         onClick={() => setOpen((o) => !o)}
         disabled={disabled}
-        className="flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] text-ink-dim hover:bg-line/40 hover:text-ink disabled:opacity-50"
+        className="flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] text-fg-muted hover:bg-border/40 hover:text-fg disabled:opacity-50"
       >
         {summary.join(" · ")}
         <span className={`transition-transform ${open ? "rotate-180" : ""}`}>⌄</span>
@@ -80,7 +80,7 @@ export function ComposerSettings({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
-              className="card-shadow absolute bottom-full left-0 z-20 mb-2 w-64 space-y-2 rounded-xl border border-line bg-panel p-3"
+              className="card-shadow absolute bottom-full left-0 z-20 mb-2 w-64 space-y-2 rounded-xl border border-border bg-panel p-3"
             >
               {manyEngines && (
                 <Row label="Run on">
@@ -104,7 +104,7 @@ export function ComposerSettings({
                     and the person could not find it, which is the same as it
                     not working. */}
                 <div className="mt-2">
-                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
                     Or one specific model
                   </span>
                   <input
@@ -112,11 +112,11 @@ export function ComposerSettings({
                     onChange={(e) => onModelId(e.target.value)}
                     spellCheck={false}
                     placeholder="leave empty to use the tier"
-                    className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[11px]"
+                    className="w-full rounded-lg border border-border bg-panel px-2 py-1.5 font-mono text-[11px]"
                   />
                   {localModels.length > 0 && (
                     <div className="mt-1.5">
-                      <span className="text-[10px] text-ink-dim">
+                      <span className="text-[10px] text-fg-muted">
                         On this machine — click to use:
                       </span>
                       <div className="mt-1 flex flex-wrap gap-1">
@@ -129,7 +129,7 @@ export function ComposerSettings({
                             className={`ring-focus max-w-full truncate rounded-lg border px-1.5 py-0.5 font-mono text-[10px] ${
                               modelId === m.id
                                 ? "border-accent bg-accent/10 text-accent-fg"
-                                : "border-line text-ink-dim hover:border-accent/50"
+                                : "border-border text-fg-muted hover:border-accent/50"
                             }`}
                           >
                             {m.name}
@@ -138,7 +138,7 @@ export function ComposerSettings({
                       </div>
                       {/* Said once, here, because "why is Ollama not in Run on"
                           is the question this layout provokes. */}
-                      <p className="mt-1 text-[10px] leading-relaxed text-ink-dim">
+                      <p className="mt-1 text-[10px] leading-relaxed text-fg-muted">
                         Served by Ollama or LM Studio and run through OpenCode — pick that engine
                         above.
                       </p>
@@ -154,7 +154,7 @@ export function ComposerSettings({
               <Row label="Thinking">
                 <EffortPicker value={effort} onChange={onEffort} />
               </Row>
-              <p className="text-[11px] text-ink-dim">
+              <p className="text-[11px] text-fg-muted">
                 Sticks to this conversation, not just the next message.
               </p>
             </motion.div>
@@ -168,7 +168,7 @@ export function ComposerSettings({
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </div>
       {children}

@@ -63,11 +63,11 @@ export function GitSync({
   const behind = state.behind ?? 0;
   const ahead = state.ahead ?? 0;
   const btn =
-    "shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent-fg disabled:opacity-40 disabled:hover:border-line disabled:hover:text-ink-dim";
+    "shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-fg-muted transition-colors hover:border-accent hover:text-accent-fg disabled:opacity-40 disabled:hover:border-border disabled:hover:text-fg-muted";
 
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 font-mono text-[11px] text-ink-dim" title="Current branch">
+      <span className="shrink-0 font-mono text-[11px] text-fg-muted" title="Current branch">
         ⎇ {state.branch}
       </span>
       {dirty > 0 && (
@@ -120,7 +120,7 @@ export function GitSync({
           onClick={() => setNotice(null)}
           title={notice.text}
           className={`min-w-0 max-w-[200px] truncate text-[11px] ${
-            notice.kind === "ok" ? "text-ink-dim" : "text-danger"
+            notice.kind === "ok" ? "text-fg-muted" : "text-danger"
           }`}
         >
           {notice.text}

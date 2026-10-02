@@ -130,13 +130,13 @@ export function AgentEditorDrawer({
       animate={{ x: 0 }}
       exit={{ x: 480 }}
       transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-line bg-panel"
+      className="card-shadow fixed inset-y-0 right-0 z-30 flex w-full max-w-[480px] flex-col border-l border-border bg-panel"
     >
-      <div className="flex items-center justify-between border-b border-line p-5">
+      <div className="flex items-center justify-between border-b border-border p-5">
         <div className="text-base font-semibold">
           {agent ? `Edit ${agent.name}` : "New agent"}
         </div>
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">
+        <button onClick={onClose} className="text-fg-muted hover:text-fg">
           ✕
         </button>
       </div>
@@ -147,7 +147,7 @@ export function AgentEditorDrawer({
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </Field>
         {agent && (
@@ -158,7 +158,7 @@ export function AgentEditorDrawer({
                 maxLength={80}
                 placeholder="e.g. Backend lead"
                 onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
               />
             </Field>
             <Field label="Reports to">
@@ -166,7 +166,7 @@ export function AgentEditorDrawer({
                 value={reportsTo}
                 onChange={(e) => setReportsTo(e.target.value)}
                 aria-label="Reports to"
-                className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
               >
                 <option value="">Nobody — top of the chart</option>
                 {colleagues.map((a) => (
@@ -184,7 +184,7 @@ export function AgentEditorDrawer({
               value={heartbeat}
               onChange={(e) => setHeartbeat(e.target.value)}
               aria-label="Heartbeat"
-              className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
+              className="w-full rounded-lg border border-border bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
             >
               <option value="">Off — it works only when given a card</option>
               <option value="300">Every 5 minutes</option>
@@ -192,7 +192,7 @@ export function AgentEditorDrawer({
               <option value="3600">Every hour</option>
               <option value="14400">Every 4 hours</option>
             </select>
-            <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">
+            <p className="mt-1 text-[11px] leading-relaxed text-fg-muted">
               On a heartbeat it starts its next unblocked card from the backlog — through the Start button's own
               checks, so budgets, limits and Full Auto still apply. With nothing to do it records an idle beat, at no cost.
             </p>
@@ -206,7 +206,7 @@ export function AgentEditorDrawer({
                 key={c}
                 onClick={() => setColor(c)}
                 className="h-7 w-7 rounded-full border-2"
-                style={{ background: c, borderColor: color === c ? "var(--color-ink)" : "transparent" }}
+                style={{ background: c, borderColor: color === c ? "var(--color-fg)" : "transparent" }}
               />
             ))}
           </div>
@@ -215,7 +215,7 @@ export function AgentEditorDrawer({
           <input
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </Field>
         <Field label="System prompt">
@@ -223,7 +223,7 @@ export function AgentEditorDrawer({
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             rows={7}
-            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
             placeholder="Role, approach, output standards…"
           />
         </Field>
@@ -235,8 +235,8 @@ export function AgentEditorDrawer({
                 onClick={() => setTier(t)}
                 className="flex-1 rounded-lg border px-3 py-2 text-sm capitalize"
                 style={{
-                  borderColor: tier === t ? tierColor[t] : "var(--color-line)",
-                  color: tier === t ? tierColor[t] : "var(--color-ink-dim)",
+                  borderColor: tier === t ? tierColor[t] : "var(--color-border)",
+                  color: tier === t ? tierColor[t] : "var(--color-fg-muted)",
                 }}
               >
                 {t}
@@ -250,7 +250,7 @@ export function AgentEditorDrawer({
             <button
               onClick={() => setEffort("")}
               className={`rounded-lg border px-2 py-1.5 text-xs ${
-                effort === "" ? "border-accent text-accent-fg" : "border-line text-ink-dim"
+                effort === "" ? "border-accent text-accent-fg" : "border-border text-fg-muted"
               }`}
             >
               default
@@ -260,28 +260,28 @@ export function AgentEditorDrawer({
                 key={e}
                 onClick={() => setEffort(e)}
                 className={`flex-1 rounded-lg border px-1 py-1.5 text-xs ${
-                  effort === e ? "border-accent text-accent-fg" : "border-line text-ink-dim"
+                  effort === e ? "border-accent text-accent-fg" : "border-border text-fg-muted"
                 }`}
               >
                 {e}
               </button>
             ))}
           </div>
-          <div className="mt-1 text-[11px] text-ink-dim">
+          <div className="mt-1 text-[11px] text-fg-muted">
             How hard this agent thinks before answering. Separate from the model —
             more thinking is usually cheaper than a bigger model.
           </div>
         </Field>
         <Field label="Limits">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">at a time</span>
-            <input value={maxDaily} onChange={(e) => setMaxDaily(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">runs a day</span>
-            <input value={cooldown} onChange={(e) => setCooldown(e.target.value)} inputMode="numeric" placeholder="—" className="w-16 rounded-lg border border-line bg-panel px-2 py-1.5" />
-            <span className="text-ink-dim">seconds' rest between runs</span>
+            <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-border bg-panel px-2 py-1.5" />
+            <span className="text-fg-muted">at a time</span>
+            <input value={maxDaily} onChange={(e) => setMaxDaily(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-border bg-panel px-2 py-1.5" />
+            <span className="text-fg-muted">runs a day</span>
+            <input value={cooldown} onChange={(e) => setCooldown(e.target.value)} inputMode="numeric" placeholder="—" className="w-16 rounded-lg border border-border bg-panel px-2 py-1.5" />
+            <span className="text-fg-muted">seconds' rest between runs</span>
           </div>
-          <div className="mt-1.5 text-[11px] text-ink-dim">
+          <div className="mt-1.5 text-[11px] text-fg-muted">
             Empty is no limit. Work over a limit waits its turn in the queue rather than failing.
           </div>
         </Field>
@@ -299,14 +299,14 @@ export function AgentEditorDrawer({
                 className={`rounded-lg border px-3 py-2 text-sm ${
                   preset === value
                     ? "border-accent text-accent-fg"
-                    : "border-line text-ink-dim"
+                    : "border-border text-fg-muted"
                 }`}
               >
                 {label}
               </button>
             ))}
           </div>
-          <div className="mt-1 text-[11px] text-ink-dim">
+          <div className="mt-1 text-[11px] text-fg-muted">
             An agent's own setting overrides the workspace default for any card it
             runs. Leave it on "Workspace default" unless this agent specifically
             needs more or less freedom than the rest.
@@ -320,7 +320,7 @@ export function AgentEditorDrawer({
               {servers.map((s) => (
                 <label
                   key={s.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2.5 hover:bg-panel-2"
+                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-2.5 hover:bg-panel-2"
                 >
                   <input
                     type="checkbox"
@@ -336,7 +336,7 @@ export function AgentEditorDrawer({
                   />
                   <span className="min-w-0 text-xs">
                     <span className="font-medium">{s.name}</span>
-                    <span className="mt-0.5 block truncate text-ink-dim">
+                    <span className="mt-0.5 block truncate text-fg-muted">
                       {s.transport === "stdio"
                         ? [s.command, ...s.args].join(" ")
                         : s.url}
@@ -345,7 +345,7 @@ export function AgentEditorDrawer({
                 </label>
               ))}
             </div>
-            <div className="mt-1.5 text-[11px] text-ink-dim">
+            <div className="mt-1.5 text-[11px] text-fg-muted">
               Tools from these servers become available to this agent on every run.
             </div>
           </Field>
@@ -356,7 +356,7 @@ export function AgentEditorDrawer({
         {agent && <MemorySection agentId={agent.id} />}
       </div>
 
-      <div className="flex items-center justify-between border-t border-line p-4">
+      <div className="flex items-center justify-between border-t border-border p-4">
         {agent && !agent.builtin ? (
           <button
             onClick={remove}
@@ -398,7 +398,7 @@ function MemorySection({ agentId }: { agentId: string }) {
   return (
     <Field label={`Memory (${memories.length})`}>
       {memories.length === 0 ? (
-        <div className="text-xs text-ink-dim">
+        <div className="text-xs text-fg-muted">
           Nothing yet — memories appear as this agent completes tasks and
           answers mentions, and are fed into its next runs.
         </div>
@@ -407,10 +407,10 @@ function MemorySection({ agentId }: { agentId: string }) {
           {memories.map((m) => (
             <div
               key={m.id}
-              className="group flex items-start gap-2 rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-xs"
+              className="group flex items-start gap-2 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs"
             >
               <div className="min-w-0 flex-1">
-                <div className="text-[10px] text-ink-dim">
+                <div className="text-[10px] text-fg-muted">
                   {new Date(m.ts).toLocaleDateString()} · {m.projectName ?? "all projects"} ·{" "}
                   {m.kind.replace("_", " ")}
                 </div>
@@ -419,7 +419,7 @@ function MemorySection({ agentId }: { agentId: string }) {
               <button
                 onClick={() => api.forgetMemory(m.id).then(refresh)}
                 title="Forget"
-                className="shrink-0 text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+                className="shrink-0 text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
               >
                 ✕
               </button>
@@ -434,7 +434,7 @@ function MemorySection({ agentId }: { agentId: string }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </div>
       {children}
@@ -455,7 +455,7 @@ function EngineField({
   return (
     <Field label="Engine">
       <EnginePicker value={engine} onChange={onChange} inheritLabel="Whatever the card says" />
-      <div className="mt-1 text-[11px] text-ink-dim">
+      <div className="mt-1 text-[11px] text-fg-muted">
         Which CLI this agent runs on. Pinning one is worth it when the agent
         depends on something only that engine does.
       </div>

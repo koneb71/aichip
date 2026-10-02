@@ -57,14 +57,14 @@ export function SchemaGate({
             key={i}
             className={
               "rounded-lg border p-2 " +
-              (s.destructive ? "border-amber-400 bg-white" : "border-line bg-white/60")
+              (s.destructive ? "border-amber-400 bg-white" : "border-border bg-white/60")
             }
           >
-            <div className="text-xs text-ink">
+            <div className="text-xs text-fg">
               {s.destructive && <span className="mr-1 font-semibold text-danger">Destroys:</span>}
               {s.why}
             </div>
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-ink-dim">
+            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-fg-muted">
               {s.sql}
             </pre>
           </div>

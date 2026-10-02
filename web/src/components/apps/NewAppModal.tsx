@@ -104,7 +104,7 @@ export function NewAppModal({
         className="card-shadow flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">New app</h3>
-        <p className="mt-1 text-xs text-ink-dim">
+        <p className="mt-1 text-xs text-fg-muted">
           Every app declares models, which become real tables. What draws it is the runtime.
         </p>
 
@@ -116,8 +116,8 @@ export function NewAppModal({
               className={
                 "rounded-lg border px-2.5 py-1 text-xs " +
                 (runtime === r.id
-                  ? "border-accent bg-accent/10 font-medium text-ink"
-                  : "border-line text-ink-dim hover:bg-line/40")
+                  ? "border-accent bg-accent/10 font-medium text-fg"
+                  : "border-border text-fg-muted hover:bg-border/40")
               }
             >
               {r.label}
@@ -126,13 +126,13 @@ export function NewAppModal({
           {/* Said at the moment of choosing rather than on the failed build:
               a container app on a machine without Docker installs fine and
               then never runs, which looks like a bug in the app. */}
-          <span className="ml-2 min-w-0 flex-1 truncate text-[11px] text-ink-dim">
+          <span className="ml-2 min-w-0 flex-1 truncate text-[11px] text-fg-muted">
             {runtimeBlurb(runtime)}
           </span>
         </div>
 
         <div className="mt-4">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             What is it for
           </span>
           <div className="flex gap-2">
@@ -143,13 +143,13 @@ export function NewAppModal({
                 if (e.key === "Enter" && !writing) generate();
               }}
               placeholder="track my spending by category"
-              className="flex-1 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
+              className="flex-1 rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
             />
             <motion.button
               whileTap={{ scale: 0.96 }}
               onClick={generate}
               disabled={writing || busy}
-              className="shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-line/40 disabled:opacity-50"
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-border/40 disabled:opacity-50"
             >
               {writing ? "Writing…" : "Write it for me"}
             </motion.button>
@@ -157,14 +157,14 @@ export function NewAppModal({
         </div>
 
         <label className="mt-3 flex min-h-0 flex-1 flex-col">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Manifest
           </span>
           <textarea
             value={manifest}
             onChange={(e) => setManifest(e.target.value)}
             spellCheck={false}
-            className="min-h-[18rem] flex-1 resize-none rounded-lg border border-line bg-surface p-3 font-mono text-xs outline-none focus:border-accent"
+            className="min-h-[18rem] flex-1 resize-none rounded-lg border border-border bg-bg p-3 font-mono text-xs outline-none focus:border-accent"
           />
         </label>
 
@@ -175,7 +175,7 @@ export function NewAppModal({
         )}
 
         {runtime !== "module" && (
-          <label className="mt-3 flex items-center gap-2 text-xs text-ink-dim">
+          <label className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
             <input
               type="checkbox"
               checked={polish}
@@ -194,7 +194,7 @@ export function NewAppModal({
           >
             {busy ? "Installing…" : "Install"}
           </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Cancel
           </button>
         </div>

@@ -37,10 +37,10 @@ export function PageToc({ html }: { html: string }) {
 
   return (
     <nav className="sticky top-6">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         On this page
       </div>
-      <ul className="space-y-1 border-l border-line">
+      <ul className="space-y-1 border-l border-border">
         {headings.map((h) => (
           <li key={h.id} style={{ paddingLeft: h.level === 3 ? 20 : 10 }}>
             <a
@@ -49,7 +49,7 @@ export function PageToc({ html }: { html: string }) {
                 e.preventDefault();
                 document.getElementById(h.id)?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="block truncate text-xs text-ink-dim hover:text-accent-fg"
+              className="block truncate text-xs text-fg-muted hover:text-accent-fg"
             >
               {h.text}
             </a>

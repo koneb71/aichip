@@ -112,11 +112,11 @@ export function PlanReviewPanel({
 
   if (!awaiting) {
     return (
-      <div className="border-b border-line px-5 py-3">
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <div className="border-b border-border px-5 py-3">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
           Approved plan{plan.edited ? " (edited)" : ""}
         </div>
-        <div className="max-h-64 overflow-y-auto rounded-xl border border-line bg-panel-2 px-3 py-2 text-sm">
+        <div className="max-h-64 overflow-y-auto rounded-xl border border-border bg-panel-2 px-3 py-2 text-sm">
           <Markdown>{plan.content}</Markdown>
         </div>
       </div>
@@ -127,7 +127,7 @@ export function PlanReviewPanel({
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="border-b border-line bg-amber-50/40 px-5 py-3"
+      className="border-b border-border bg-amber-50/40 px-5 py-3"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
@@ -135,7 +135,7 @@ export function PlanReviewPanel({
         </span>
         <button
           onClick={() => setDraft(editing ? null : plan.content!)}
-          className="text-[11px] text-ink-dim hover:text-ink"
+          className="text-[11px] text-fg-muted hover:text-fg"
         >
           {editing ? "Cancel edit" : "Edit"}
         </button>
@@ -147,10 +147,10 @@ export function PlanReviewPanel({
           onChange={(e) => setDraft(e.target.value)}
           rows={16}
           spellCheck={false}
-          className="w-full resize-y rounded-xl border border-line bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent"
+          className="w-full resize-y rounded-xl border border-border bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent"
         />
       ) : (
-        <div className="max-h-80 overflow-y-auto rounded-xl border border-line bg-panel px-3 py-2 text-sm">
+        <div className="max-h-80 overflow-y-auto rounded-xl border border-border bg-panel px-3 py-2 text-sm">
           <Markdown>{plan.content}</Markdown>
         </div>
       )}
@@ -169,7 +169,7 @@ export function PlanReviewPanel({
             onChange={(e) => setNote(e.target.value)}
             rows={3}
             placeholder="What's wrong with it? The next pass gets this plus the plan above."
-            className="w-full resize-none rounded-xl border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full resize-none rounded-xl border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
           <div className="mt-2 flex gap-2">
             <motion.button
@@ -178,13 +178,13 @@ export function PlanReviewPanel({
               onClick={() =>
                 act("revise", () => api.reviseTaskPlan(runId, note.trim()))
               }
-              className="rounded-lg border border-line px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
+              className="rounded-lg border border-border px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
             >
               {busy === "revise" ? "Sending…" : "Send it back"}
             </motion.button>
             <button
               onClick={() => setAsking(false)}
-              className="text-xs text-ink-dim hover:text-ink"
+              className="text-xs text-fg-muted hover:text-fg"
             >
               Cancel
             </button>
@@ -207,7 +207,7 @@ export function PlanReviewPanel({
           <button
             onClick={() => setAsking(true)}
             disabled={!!busy}
-            className="rounded-lg border border-line px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
+            className="rounded-lg border border-border px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
           >
             Ask for changes
           </button>

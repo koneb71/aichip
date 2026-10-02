@@ -69,13 +69,13 @@ export function RepoApps({
   return (
     <div className="mt-8">
       <div className="mb-2 flex items-center gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
           From a repository
         </span>
         <select
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
-          className="rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-accent"
+          className="rounded-lg border border-border bg-bg px-2 py-1 text-xs outline-none focus:border-accent"
         >
           <option value="">Choose a project…</option>
           {projects.map((p) => (
@@ -84,7 +84,7 @@ export function RepoApps({
             </option>
           ))}
         </select>
-        <span className="text-[11px] text-ink-dim">
+        <span className="text-[11px] text-fg-muted">
           Anything committed under <span className="font-mono">.aichip/apps/</span>.
         </span>
       </div>
@@ -94,7 +94,7 @@ export function RepoApps({
       )}
 
       {found?.length === 0 && (
-        <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-ink-dim">
+        <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-fg-muted">
           This project has no apps in <span className="font-mono">.aichip/apps/</span>. Export one
           as <strong>Share</strong> and commit its manifest there to offer it to everyone working
           on this repository.
@@ -105,11 +105,11 @@ export function RepoApps({
         {(found ?? []).map((a) => (
           <div
             key={a.dir}
-            className="flex items-center gap-3 rounded-lg border border-line px-3 py-2 text-xs"
+            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-xs"
           >
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{a.name}</div>
-              <div className="truncate text-[11px] text-ink-dim">
+              <div className="truncate text-[11px] text-fg-muted">
                 {a.error ? (
                   <span className="text-danger">{a.error}</span>
                 ) : (
@@ -131,7 +131,7 @@ export function RepoApps({
                     ? "Replace the installed app's manifest. Its rows are kept."
                     : "Install it here."
               }
-              className="shrink-0 rounded-lg border border-line px-2 py-1 hover:bg-line/40 disabled:opacity-40"
+              className="shrink-0 rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
             >
               {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
             </motion.button>

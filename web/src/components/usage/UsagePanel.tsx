@@ -66,7 +66,7 @@ export function UsagePanel() {
 
   if (loaded && live.length === 0 && events.length === 0) {
     return (
-      <p className="text-sm text-ink-dim">
+      <p className="text-sm text-fg-muted">
         Nothing heard yet. Your CLI reports where your plan stands as it works,
         so this fills in after the first run — aichip asks Anthropic nothing.
       </p>
@@ -82,15 +82,15 @@ export function UsagePanel() {
       </div>
 
       {patterns.length > 0 && (
-        <div className="card-shadow rounded-xl border border-line bg-panel p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
+        <div className="card-shadow rounded-xl border border-border bg-panel p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-fg-muted">
             Last {days} days
           </h3>
           <ul className="mt-3 space-y-2">
             {patterns.map((p) => (
               <li key={p.limitType} className="flex items-baseline justify-between gap-4 text-sm">
                 <span className="font-medium">{windowLabel(p.limitType)}</span>
-                <span className="text-right text-xs text-ink-dim">
+                <span className="text-right text-xs text-fg-muted">
                   {p.daysPinched === 0 ? (
                     <>never tight on {p.daysSeen} {p.daysSeen === 1 ? "day" : "days"} of running</>
                   ) : (
@@ -108,8 +108,8 @@ export function UsagePanel() {
       )}
 
       {events.length > 0 && (
-        <div className="card-shadow rounded-xl border border-line bg-panel p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
+        <div className="card-shadow rounded-xl border border-border bg-panel p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-fg-muted">
             What changed
           </h3>
           <ul className="mt-3 space-y-1.5">
@@ -119,9 +119,9 @@ export function UsagePanel() {
                 <li key={i} className="flex items-baseline gap-2 text-xs">
                   <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${tone.dot}`} />
                   <span className="font-medium">{windowLabel(e.limitType)}</span>
-                  <span className="text-ink-dim">{transition(e.previous, e.status)}</span>
+                  <span className="text-fg-muted">{transition(e.previous, e.status)}</span>
                   {e.usingOverage && <span className="text-amber-700">· paid overage</span>}
-                  <span className="ml-auto shrink-0 text-ink-dim">
+                  <span className="ml-auto shrink-0 text-fg-muted">
                     {new Date(e.observedAt).toLocaleString(undefined, {
                       month: "short",
                       day: "numeric",
@@ -136,7 +136,7 @@ export function UsagePanel() {
         </div>
       )}
 
-      <p className="text-xs leading-relaxed text-ink-dim">
+      <p className="text-xs leading-relaxed text-fg-muted">
         Your CLI prints this as it works and aichip keeps what it said — no
         credential, and nothing asked of Anthropic. So it is as fresh as your
         last run, and there is no percentage because the CLI does not report
@@ -150,7 +150,7 @@ function LimitCard({ limit, now }: { limit: PlanLimit; now: number }) {
   const tone = statusTone(limit.status);
   const reset = resetIn(limit.resetsAt, now);
   return (
-    <div className={`card-shadow rounded-xl border border-line p-4 ${tone.bg}`}>
+    <div className={`card-shadow rounded-xl border border-border p-4 ${tone.bg}`}>
       <div className="flex items-center gap-2">
         <span className={`size-2 rounded-full ${tone.dot}`} />
         <span className="text-sm font-semibold">{windowLabel(limit.limitType)}</span>
@@ -158,11 +158,11 @@ function LimitCard({ limit, now }: { limit: PlanLimit; now: number }) {
           {statusLabel(limit.status)}
         </span>
       </div>
-      <div className="mt-2 text-xs text-ink-dim">
+      <div className="mt-2 text-xs text-fg-muted">
         {reset ? <>Turns over {reset}</> : <>No reset time reported</>}
         {limit.usingOverage && <> · on paid overage</>}
       </div>
-      <div className="mt-1 text-[11px] text-ink-dim">
+      <div className="mt-1 text-[11px] text-fg-muted">
         as of {new Date(limit.updatedAt).toLocaleString(undefined, {
           month: "short",
           day: "numeric",

@@ -139,9 +139,9 @@ export function WorkflowEditor({
         exit={{ y: 20, scale: 0.98 }}
         transition={{ type: "spring", stiffness: 380, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-line bg-panel sm:h-[86vh] sm:rounded-2xl sm:border"
+        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-border bg-panel sm:h-[86vh] sm:rounded-2xl sm:border"
       >
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-3 sm:px-5">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-5">
           <input
             value={meta.name}
             onChange={(e) => setMeta({ ...meta, name: e.target.value })}
@@ -152,7 +152,7 @@ export function WorkflowEditor({
             onChange={(e) => setMeta({ ...meta, schedule: e.target.value || undefined })}
             placeholder="no schedule"
             title="Cron schedule, e.g. 0 3 * * *"
-            className="w-32 rounded-lg border border-line px-2 py-1 font-mono text-xs outline-none focus:border-accent"
+            className="w-32 rounded-lg border border-border px-2 py-1 font-mono text-xs outline-none focus:border-accent"
           />
 
           <div className="ml-auto flex gap-1 rounded-lg bg-panel-2 p-0.5">
@@ -161,7 +161,7 @@ export function WorkflowEditor({
                 key={v}
                 onClick={v === "yaml" ? showYaml : showCanvas}
                 className={`rounded-md px-3 py-1 text-xs capitalize ${
-                  view === v ? "bg-panel font-medium shadow-sm" : "text-ink-dim"
+                  view === v ? "bg-panel font-medium shadow-sm" : "text-fg-muted"
                 }`}
               >
                 {v}
@@ -171,7 +171,7 @@ export function WorkflowEditor({
           {view === "canvas" && (
             <button
               onClick={addStep}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel-2"
+              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-panel-2"
             >
               + Step
             </button>
@@ -196,12 +196,12 @@ export function WorkflowEditor({
                 value={rawYaml}
                 onChange={(e) => setRawYaml(e.target.value)}
                 spellCheck={false}
-                className="h-full w-full resize-none bg-surface p-5 font-mono text-xs leading-relaxed outline-none"
+                className="h-full w-full resize-none bg-bg p-5 font-mono text-xs leading-relaxed outline-none"
               />
             )}
           </div>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line lg:border-t-0">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-border lg:border-t-0">
           {selected && view === "canvas" ? (
             <StepInspector
               step={selected}
@@ -214,8 +214,8 @@ export function WorkflowEditor({
               }}
             />
           ) : (
-            <aside className="min-h-0 overflow-y-auto border-line p-4 lg:border-l">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+            <aside className="min-h-0 overflow-y-auto border-border p-4 lg:border-l">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
                 {view === "canvas" ? "Workflow" : "Preview"}
               </div>
               {view === "canvas" ? (
@@ -227,19 +227,19 @@ export function WorkflowEditor({
                     }
                     rows={3}
                     placeholder="What does this workflow do?"
-                    className="mt-2 w-full resize-none rounded-lg border border-line px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+                    className="mt-2 w-full resize-none rounded-lg border border-border px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                   />
-                  <p className="mt-4 text-xs leading-relaxed text-ink-dim">
+                  <p className="mt-4 text-xs leading-relaxed text-fg-muted">
                     Drag from a node's right handle to another node's left handle to make it
                     run after. Click a node to edit it. Select an edge and press Delete to
                     unlink.
                   </p>
-                  <pre className="mt-4 max-h-64 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-[10px] leading-relaxed text-ink-dim">
+                  <pre className="mt-4 max-h-64 overflow-auto rounded-lg bg-panel-2 p-2 font-mono text-[10px] leading-relaxed text-fg-muted">
                     {yaml}
                   </pre>
                 </>
               ) : (
-                <p className="mt-2 text-xs leading-relaxed text-ink-dim">
+                <p className="mt-2 text-xs leading-relaxed text-fg-muted">
                   This YAML is what gets saved and committed. Switching back to Canvas
                   re-reads it — comments are not preserved through a canvas edit.
                 </p>
@@ -255,7 +255,7 @@ export function WorkflowEditor({
           </div>
         )}
 
-        <footer className="flex items-center justify-between border-t border-line p-4">
+        <footer className="flex items-center justify-between border-t border-border p-4">
           {workflow ? (
             <button
               onClick={async () => {
@@ -272,7 +272,7 @@ export function WorkflowEditor({
           <div className="flex gap-2">
             <button
               onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink"
+              className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg"
             >
               Cancel
             </button>

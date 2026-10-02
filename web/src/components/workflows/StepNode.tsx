@@ -19,7 +19,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
   const tierModel = useTierModel();
   const { step, status, attempts } = data;
   const tier = IS_TIER.has(step.model ?? "") ? (step.model as Tier) : undefined;
-  const accent = tier ? tierColor[tier] : "var(--color-ink-dim)";
+  const accent = tier ? tierColor[tier] : "var(--color-fg-muted)";
   const running = status === "running" || status === "starting";
   const parallel = step.parallel ?? 1;
 
@@ -33,7 +33,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
           ? "var(--color-accent)"
           : status
             ? statusColor(status)
-            : "var(--color-line)",
+            : "var(--color-border)",
         boxShadow: running
           ? `0 0 0 3px ${statusColor(status!)}22`
           : "0 1px 2px rgba(16,17,20,0.06)",
@@ -42,7 +42,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2.5 !w-2.5 !border-2 !border-panel !bg-ink-dim"
+        className="!h-2.5 !w-2.5 !border-2 !border-panel !bg-fg-muted"
       />
 
       <div className="flex items-center gap-1.5">
@@ -52,7 +52,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
         </span>
         {parallel > 1 && (
           <span
-            className="shrink-0 rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-ink-dim"
+            className="shrink-0 rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-fg-muted"
             title={`${parallel} attempts run in parallel`}
           >
             ×{parallel}
@@ -60,7 +60,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
         )}
       </div>
 
-      <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-ink-dim">
+      <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-fg-muted">
         {step.prompt.trim() || "No prompt yet"}
       </p>
 
@@ -74,7 +74,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
           </span>
         )}
         {step.model && !tier && (
-          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-dim">
+          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
             {step.model}
           </span>
         )}
@@ -85,7 +85,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
         )}
         {step.session === "continue" && (
           <span
-            className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-ink-dim"
+            className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-fg-muted"
             title="Resumes the previous step's session"
           >
             ↻ session
@@ -93,14 +93,14 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
         )}
         {step.isolatedWorktrees && parallel > 1 && (
           <span
-            className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-ink-dim"
+            className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-fg-muted"
             title="Each attempt gets its own worktree"
           >
             isolated
           </span>
         )}
         {attempts != null && attempts > 1 && (
-          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-ink-dim">
+          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-fg-muted">
             {attempts} attempts
           </span>
         )}
@@ -109,7 +109,7 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2.5 !w-2.5 !border-2 !border-panel !bg-ink-dim"
+        className="!h-2.5 !w-2.5 !border-2 !border-panel !bg-fg-muted"
       />
     </motion.div>
   );
@@ -122,7 +122,7 @@ export function statusColor(status: string): string {
     case "failed":
       return "var(--color-danger)";
     case "canceled":
-      return "var(--color-ink-dim)";
+      return "var(--color-fg-muted)";
     default:
       return "var(--color-tier-medium)";
   }

@@ -179,7 +179,7 @@ export default function ChatPage() {
       <select
         value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 text-sm"
+        className="w-full rounded-lg border border-border bg-panel px-2 py-1.5 text-sm"
         title="General is not connected to any project. A space is a folder of documents; a project is a repository."
       >
         <option value={GENERAL}>General — no project</option>
@@ -209,7 +209,7 @@ export default function ChatPage() {
       {spaceDraft === null ? (
         <button
           onClick={() => setSpaceDraft("")}
-          className="rounded-lg border border-dashed border-line px-2 py-1.5 text-sm text-ink-dim hover:border-ink-dim hover:text-ink"
+          className="rounded-lg border border-dashed border-border px-2 py-1.5 text-sm text-fg-muted hover:border-fg-muted hover:text-fg"
           title="A space is a folder of documents this chat can read — no repository, no board"
         >
           + New space
@@ -230,13 +230,13 @@ export default function ChatPage() {
       )}
       <button
         onClick={startNewChat}
-        className="rounded-lg border border-line px-2 py-1.5 text-sm text-ink-dim hover:bg-panel-2 hover:text-ink"
+        className="rounded-lg border border-border px-2 py-1.5 text-sm text-fg-muted hover:bg-panel-2 hover:text-fg"
       >
         + New conversation
       </button>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && (
-          <div className="px-2 py-2 text-xs text-ink-dim">No conversations yet.</div>
+          <div className="px-2 py-2 text-xs text-fg-muted">No conversations yet.</div>
         )}
         {chats.map((c) => (
           <div
@@ -271,7 +271,7 @@ export default function ChatPage() {
                 title="Double-click to rename"
               >
                 {c.title}
-                <span className="ml-1.5 text-[10px] text-ink-dim">{c.messageCount}</span>
+                <span className="ml-1.5 text-[10px] text-fg-muted">{c.messageCount}</span>
               </button>
             )}
             <button
@@ -280,14 +280,14 @@ export default function ChatPage() {
                 setRenameDraft(c.title);
               }}
               title="Rename"
-              className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-ink group-hover:opacity-100"
+              className="shrink-0 px-1 text-xs text-fg-muted opacity-0 hover:text-fg group-hover:opacity-100"
             >
               ✎
             </button>
             <button
               onClick={() => removeChat(c.id)}
               title="Delete conversation"
-              className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+              className="shrink-0 px-1 text-xs text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
             >
               ✕
             </button>
@@ -326,12 +326,12 @@ export default function ChatPage() {
       <div className="flex h-full min-h-0 flex-col">
         <button
           onClick={() => setRailOpen((o) => !o)}
-          className="border-b border-line px-4 py-2 text-left text-sm font-medium"
+          className="border-b border-border px-4 py-2 text-left text-sm font-medium"
         >
           {chats.find((c) => c.id === chatId)?.title ?? "Conversations"}{" "}
-          <span className="text-[10px] text-ink-dim">{railOpen ? "▴" : "▾"}</span>
+          <span className="text-[10px] text-fg-muted">{railOpen ? "▴" : "▾"}</span>
         </button>
-        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-line">{rail}</div>}
+        {railOpen && <div className="max-h-64 overflow-y-auto border-b border-border">{rail}</div>}
         {thread}
       </div>
     );
@@ -339,7 +339,7 @@ export default function ChatPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)]">
-      <div className="min-h-0 overflow-hidden border-r border-line bg-panel">{rail}</div>
+      <div className="min-h-0 overflow-hidden border-r border-border bg-panel">{rail}</div>
       {thread}
     </div>
   );

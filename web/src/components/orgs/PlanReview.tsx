@@ -85,7 +85,7 @@ export function PlanReview({
             specialists={specialists.map((m) => m.name)}
             color={
               run.roster.find((m) => m.name === assignment.assignee)?.color ??
-              "var(--color-ink-dim)"
+              "var(--color-fg-muted)"
             }
             onChanged={onChanged}
           />
@@ -93,7 +93,7 @@ export function PlanReview({
       </AnimatePresence>
 
       {assignments.length === 0 && (
-        <div className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-dim">
+        <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-fg-muted">
           Every assignment was removed. Approving now would do nothing.
         </div>
       )}
@@ -102,15 +102,15 @@ export function PlanReview({
         <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
       )}
 
-      <div className="sticky bottom-0 flex items-center gap-2 border-t border-line bg-panel pt-2">
-        <span className="text-[11px] text-ink-dim">
+      <div className="sticky bottom-0 flex items-center gap-2 border-t border-border bg-panel pt-2">
+        <span className="text-[11px] text-fg-muted">
           {assignments.length} assignment{assignments.length === 1 ? "" : "s"} ·{" "}
           {new Set(assignments.map((a) => a.assignee)).size} on it
         </span>
         <button
           onClick={() => act("reject")}
           disabled={!!busy}
-          className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs hover:border-danger hover:text-danger"
+          className="ml-auto rounded-lg border border-border px-3 py-1.5 text-xs hover:border-danger hover:text-danger"
         >
           Cancel run
         </button>
@@ -163,20 +163,20 @@ function PlanRow({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
-      className="rounded-xl border border-line bg-panel p-2.5"
+      className="rounded-xl border border-border bg-panel p-2.5"
     >
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-ink-dim">{index + 1}</span>
+        <span className="text-[11px] text-fg-muted">{index + 1}</span>
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => title !== assignment.title && save({ title })}
-          className="min-w-0 flex-1 rounded border border-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-line focus:border-accent"
+          className="min-w-0 flex-1 rounded border border-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-border focus:border-accent"
         />
         <button
           onClick={() => api.dropAssignment(runId, assignment.id).then(onChanged)}
           title="Remove this assignment"
-          className="text-ink-dim hover:text-danger"
+          className="text-fg-muted hover:text-danger"
         >
           ✕
         </button>
@@ -190,24 +190,24 @@ function PlanRow({
           style={{ background: color }}
         >
           {specialists.map((name) => (
-            <option key={name} value={name} className="bg-panel text-ink">
+            <option key={name} value={name} className="bg-panel text-fg">
               {name}
             </option>
           ))}
         </select>
         {assignment.size && (
-          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-ink-dim">
+          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 text-[10px] text-fg-muted">
             {assignment.size}
           </span>
         )}
         {assignment.dependsOn.length > 0 && (
-          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-dim">
+          <span className="rounded-full bg-panel-2 px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
             after {assignment.dependsOn.join(", ")}
           </span>
         )}
         <button
           onClick={() => setOpen((o) => !o)}
-          className="ml-auto text-[10px] text-ink-dim hover:text-ink"
+          className="ml-auto text-[10px] text-fg-muted hover:text-fg"
         >
           {open ? "hide brief" : "brief"}
         </button>
@@ -226,10 +226,10 @@ function PlanRow({
               onChange={(e) => setBrief(e.target.value)}
               onBlur={() => brief !== assignment.brief && save({ brief })}
               rows={5}
-              className="mt-2 w-full resize-none rounded-lg border border-line px-2 py-1.5 text-[11px] outline-none focus:border-accent"
+              className="mt-2 w-full resize-none rounded-lg border border-border px-2 py-1.5 text-[11px] outline-none focus:border-accent"
             />
             {assignment.doneWhen.length > 0 && (
-              <ul className="mt-1.5 space-y-0.5 text-[10px] text-ink-dim">
+              <ul className="mt-1.5 space-y-0.5 text-[10px] text-fg-muted">
                 {assignment.doneWhen.map((d, i) => (
                   <li key={i}>✓ {d}</li>
                 ))}

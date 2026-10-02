@@ -46,19 +46,19 @@ export function PreviewSettings() {
 
   return (
     <>
-      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
+      <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-fg-muted">
         Previews
       </h2>
-      <p className="mt-1 max-w-xl text-sm text-ink-dim">
+      <p className="mt-1 max-w-xl text-sm text-fg-muted">
         Running a card's branch so you can look at it. Each one holds memory and
         CPU on this machine — the same machine your editor is on.
       </p>
       <div className="mt-3 max-w-2xl space-y-3">
-        <div className="card-shadow rounded-xl border border-line bg-panel p-4">
+        <div className="card-shadow rounded-xl border border-border bg-panel p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">How many at once</div>
-              <div className="mt-0.5 text-xs text-ink-dim">
+              <div className="mt-0.5 text-xs text-fg-muted">
                 Each preview is capped at 2 GB and 2 CPUs. {live} running now.
               </div>
             </div>
@@ -68,16 +68,16 @@ export function PreviewSettings() {
               max={20}
               value={maxLive}
               onChange={(e) => save({ max: Number(e.target.value) })}
-              className="w-20 rounded-lg border border-line bg-panel px-2 py-1 text-sm"
+              className="w-20 rounded-lg border border-border bg-panel px-2 py-1 text-sm"
             />
           </div>
         </div>
 
-        <div className="card-shadow rounded-xl border border-line bg-panel p-4">
+        <div className="card-shadow rounded-xl border border-border bg-panel p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Stop after idle</div>
-              <div className="mt-0.5 text-xs text-ink-dim">
+              <div className="mt-0.5 text-xs text-fg-muted">
                 {/* The kept image is the whole reason this is safe to do
                     automatically, so it is the thing worth saying. */}
                 Minutes with nobody looking. The image is kept, so coming back
@@ -90,19 +90,19 @@ export function PreviewSettings() {
               max={1440}
               value={idle}
               onChange={(e) => save({ idle: Number(e.target.value) })}
-              className="w-20 rounded-lg border border-line bg-panel px-2 py-1 text-sm"
+              className="w-20 rounded-lg border border-border bg-panel px-2 py-1 text-sm"
             />
           </div>
         </div>
 
         {!!disk && (
-          <div className="card-shadow rounded-xl border border-line bg-panel p-4">
+          <div className="card-shadow rounded-xl border border-border bg-panel p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">
                   {gb(disk.bytes)} of preview images
                 </div>
-                <div className="mt-0.5 text-xs text-ink-dim">
+                <div className="mt-0.5 text-xs text-fg-muted">
                   {disk.reclaimable > 0
                     ? `${disk.reclaimable} belong to previews that aren't running. Reclaiming turns their next start back into a full rebuild.`
                     : "Nothing to reclaim — every image here belongs to a running preview."}
@@ -119,7 +119,7 @@ export function PreviewSettings() {
                     setBusy(false);
                   }
                 }}
-                className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-40"
+                className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-border/40 disabled:opacity-40"
               >
                 Reclaim
               </button>

@@ -52,10 +52,10 @@ export function MovePicker({
         animate={{ y: 0, scale: 1, opacity: 1 }}
         transition={{ type: "spring", stiffness: 220, damping: 26 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-md rounded-2xl border border-line bg-panel p-5"
+        className="card-shadow w-full max-w-md rounded-2xl border border-border bg-panel p-5"
       >
         <div className="text-base font-semibold">Move this page</div>
-        <p className="mt-1 text-xs text-ink-dim">
+        <p className="mt-1 text-xs text-fg-muted">
           Its own children move with it. Pages it contains aren't listed — a page
           cannot live inside itself.
         </p>
@@ -90,7 +90,7 @@ export function MovePicker({
         <div className="mt-4 flex justify-end">
           <button
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink"
+            className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg"
           >
             Cancel
           </button>

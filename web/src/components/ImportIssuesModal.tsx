@@ -85,7 +85,7 @@ export function ImportIssuesModal({
         className="card-shadow flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">
-          Import issues{repo && <span className="ml-2 font-mono text-xs text-ink-dim">{repo}</span>}
+          Import issues{repo && <span className="ml-2 font-mono text-xs text-fg-muted">{repo}</span>}
         </h3>
 
         {/* Said before anything is ticked, because it changes what "read this
@@ -98,10 +98,10 @@ export function ImportIssuesModal({
           </p>
         )}
 
-        {loading && <p className="mt-4 text-xs text-ink-dim">Asking GitHub…</p>}
-        {refusal && <p className="mt-4 text-xs text-ink-dim">{refusal}</p>}
+        {loading && <p className="mt-4 text-xs text-fg-muted">Asking GitHub…</p>}
+        {refusal && <p className="mt-4 text-xs text-fg-muted">{refusal}</p>}
         {!loading && !refusal && issues.length === 0 && (
-          <p className="mt-4 text-xs text-ink-dim">No open issues.</p>
+          <p className="mt-4 text-xs text-fg-muted">No open issues.</p>
         )}
 
         <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
@@ -111,7 +111,7 @@ export function ImportIssuesModal({
               <div
                 key={issue.number}
                 className={`rounded-lg border px-3 py-2 ${
-                  done ? "border-line bg-panel-2 opacity-60" : "border-line"
+                  done ? "border-border bg-panel-2 opacity-60" : "border-border"
                 }`}
               >
                 <div className="flex items-start gap-2">
@@ -124,20 +124,20 @@ export function ImportIssuesModal({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                      <span className="font-mono text-xs text-ink-dim">#{issue.number}</span>
+                      <span className="font-mono text-xs text-fg-muted">#{issue.number}</span>
                       {/* Plain text. React escapes it; nothing renders it as markup. */}
                       <span className="min-w-0 break-words font-medium">{issue.title}</span>
                       {issue.author && (
-                        <span className="text-[11px] text-ink-dim">by @{issue.author}</span>
+                        <span className="text-[11px] text-fg-muted">by @{issue.author}</span>
                       )}
-                      {done && <span className="text-[11px] text-ink-dim">· already a card</span>}
+                      {done && <span className="text-[11px] text-fg-muted">· already a card</span>}
                     </div>
                     {issue.labels.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {issue.labels.map((l) => (
                           <span
                             key={l}
-                            className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-ink-dim"
+                            className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted"
                           >
                             {l}
                           </span>
@@ -153,7 +153,7 @@ export function ImportIssuesModal({
                     {open === issue.number && (
                       // Monospace, plain, scroll-capped: this is the text that
                       // becomes a prompt, shown as text.
-                      <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-2 font-mono text-[11px] leading-relaxed text-ink-dim">
+                      <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-bg p-2 font-mono text-[11px] leading-relaxed text-fg-muted">
                         {issue.body || "(no description)"}
                       </pre>
                     )}
@@ -162,7 +162,7 @@ export function ImportIssuesModal({
                     href={issue.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="shrink-0 text-[11px] text-ink-dim hover:text-ink"
+                    className="shrink-0 text-[11px] text-fg-muted hover:text-fg"
                   >
                     open ↗
                   </a>
@@ -189,11 +189,11 @@ export function ImportIssuesModal({
                 ? "Choose issues to import"
                 : `Import ${chosen.size} as ${chosen.size === 1 ? "a card" : "cards"}`}
           </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Cancel
           </button>
           {importable.length > 0 && (
-            <span className="ml-auto text-[11px] text-ink-dim">
+            <span className="ml-auto text-[11px] text-fg-muted">
               {importable.length} not yet imported
             </span>
           )}

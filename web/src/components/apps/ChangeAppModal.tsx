@@ -56,7 +56,7 @@ export function ChangeAppModal({
         className="card-shadow w-full max-w-lg rounded-2xl bg-panel p-5"
       >
         <h3 className="text-sm font-semibold">Change {app.name}</h3>
-        <p className="mt-1 text-xs text-ink-dim">
+        <p className="mt-1 text-xs text-fg-muted">
           {app.runtime === "module"
             ? "An agent rewrites this app's manifest in a worktree."
             : "An agent changes this app's source in a worktree."}
@@ -71,10 +71,10 @@ export function ChangeAppModal({
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) start();
           }}
           placeholder="add a notes field and show it in the list"
-          className="mt-3 h-28 w-full resize-none rounded-lg border border-line bg-surface p-3 text-sm outline-none focus:border-accent"
+          className="mt-3 h-28 w-full resize-none rounded-lg border border-border bg-bg p-3 text-sm outline-none focus:border-accent"
         />
 
-        <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-ink-dim">
+        <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-fg-muted">
           This lands on its own when the card finishes — there is no review step,
           because the diff <em>is</em> the app. You can undo the most recent change
           from the history below.
@@ -96,7 +96,7 @@ export function ChangeAppModal({
           >
             {busy ? "Starting…" : "Start"}
           </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Cancel
           </button>
         </div>

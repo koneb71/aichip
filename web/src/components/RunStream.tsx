@@ -25,7 +25,7 @@ export function RunStream({
   const shown = stepId ? events.filter((e) => eventStep(e) === stepId) : events;
 
   if (shown.length === 0) {
-    return <div className="text-sm text-ink-dim">{empty}</div>;
+    return <div className="text-sm text-fg-muted">{empty}</div>;
   }
   return (
     <div className="flex flex-col gap-2">
@@ -100,7 +100,7 @@ function EventRow({ event }: { event: StreamEvent }) {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className={`${base} text-xs text-ink-dim`}
+          className={`${base} text-xs text-fg-muted`}
         >
           ▶ session started {String(event.model ?? "")}
         </motion.div>
@@ -120,7 +120,7 @@ function EventRow({ event }: { event: StreamEvent }) {
         <motion.div
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          className={`${base} border border-line font-mono text-xs text-ink-dim`}
+          className={`${base} border border-border font-mono text-xs text-fg-muted`}
         >
           ⚙ {String(event.tool_name)}{" "}
           <span className="opacity-70">{JSON.stringify(event.input).slice(0, 140)}</span>
@@ -130,7 +130,7 @@ function EventRow({ event }: { event: StreamEvent }) {
       return (
         <div
           className={`${base} font-mono text-xs ${
-            event.is_error ? "text-red-400" : "text-ink-dim/80"
+            event.is_error ? "text-red-400" : "text-fg-muted/80"
           }`}
         >
           ↳ {String(event.summary).slice(0, 200)}
@@ -140,13 +140,13 @@ function EventRow({ event }: { event: StreamEvent }) {
     // trace so the transcript stays readable.
     case "permission_requested":
       return (
-        <div className={`${base} text-xs text-ink-dim`}>
+        <div className={`${base} text-xs text-fg-muted`}>
           ⏸ asked to run {String(event.tool_name)}
         </div>
       );
     case "permission_resolved":
       return (
-        <div className={`${base} text-xs text-ink-dim`}>
+        <div className={`${base} text-xs text-fg-muted`}>
           {event.allowed ? "✓ you allowed it" : "✗ you denied it"}
         </div>
       );
@@ -200,7 +200,7 @@ export function ActivityLine({
   const what = lastActivity(events, stepId);
   if (!what) return null;
   return (
-    <div className={`flex min-w-0 items-center gap-1.5 text-[11px] text-ink-dim ${className}`}>
+    <div className={`flex min-w-0 items-center gap-1.5 text-[11px] text-fg-muted ${className}`}>
       {live && (
         <motion.span
           className="h-1 w-1 shrink-0 rounded-full bg-tier-medium"

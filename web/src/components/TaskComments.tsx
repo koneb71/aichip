@@ -109,7 +109,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {comments.length === 0 && pending === 0 && (
-          <div className="px-1 py-6 text-center text-sm text-ink-dim">
+          <div className="px-1 py-6 text-center text-sm text-fg-muted">
             No comments yet. Mention an agent with @ to ask it something — it
             reads the repo before answering.
           </div>
@@ -119,7 +119,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
             <CommentRow key={c.id + c.ts} comment={c} />
           ))}
           {pending > 0 && (
-            <div className="flex items-center gap-2 text-xs text-ink-dim">
+            <div className="flex items-center gap-2 text-xs text-fg-muted">
               <motion.span
                 className="h-2 w-2 rounded-full bg-accent"
                 animate={{ opacity: [0.3, 1, 0.3] }}
@@ -143,7 +143,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
-              className="absolute bottom-full left-0 right-0 z-20 mb-1 rounded-xl border border-line bg-panel p-1 shadow-lg"
+              className="absolute bottom-full left-0 right-0 z-20 mb-1 rounded-xl border border-border bg-panel p-1 shadow-lg"
             >
               {candidates.map((a, i) => (
                 <button
@@ -162,7 +162,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
                     style={{ background: a.color }}
                   />
                   <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                  <span className="shrink-0 truncate text-[11px] text-ink-dim">
+                  <span className="shrink-0 truncate text-[11px] text-fg-muted">
                     {a.description}
                   </span>
                 </button>
@@ -182,7 +182,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-xl border border-line bg-panel px-3 py-2 focus-within:border-accent">
+        <div className="flex items-end gap-2 rounded-xl border border-border bg-panel px-3 py-2 focus-within:border-accent">
           <textarea
             ref={boxRef}
             value={draft}
@@ -237,7 +237,7 @@ function CommentRow({ comment }: { comment: TaskComment }) {
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        className="self-center px-2 text-center text-[11px] text-ink-dim"
+        className="self-center px-2 text-center text-[11px] text-fg-muted"
       >
         {comment.content}
       </motion.div>
@@ -253,7 +253,7 @@ function CommentRow({ comment }: { comment: TaskComment }) {
         {/* A note written against the diff says so, or it reads as a general
             remark once you have scrolled away from the code. */}
         {comment.filePath && (
-          <div className="mb-1 truncate text-right font-mono text-[11px] text-ink-dim">
+          <div className="mb-1 truncate text-right font-mono text-[11px] text-fg-muted">
             {comment.filePath}
             {comment.line ? `:${comment.line}` : ""}
           </div>
@@ -270,7 +270,7 @@ function CommentRow({ comment }: { comment: TaskComment }) {
       animate={{ opacity: 1, y: 0 }}
       className="max-w-[92%] self-start"
     >
-      <div className="mb-1 flex items-center gap-1.5 text-[11px] text-ink-dim">
+      <div className="mb-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
         <span
           className="h-2 w-2 rounded-full"
           style={{ background: comment.agentColor ?? "#9ca3af" }}

@@ -88,8 +88,8 @@ function Canvas({
             source: need,
             target: step.id,
             animated: active === "running" || active === "starting",
-            style: { stroke: "var(--color-line)", strokeWidth: 1.5 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-ink-dim)" },
+            style: { stroke: "var(--color-border)", strokeWidth: 1.5 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-fg-muted)" },
           };
         }),
       ),
@@ -172,9 +172,9 @@ function Canvas({
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         proOptions={{ hideAttribution: true }}
-        className="bg-surface"
+        className="bg-bg"
       >
-        <Background gap={16} size={1} color="var(--color-line)" />
+        <Background gap={16} size={1} color="var(--color-border)" />
         <Controls showInteractive={false} className="!shadow-none" />
       </ReactFlow>
 
@@ -184,7 +184,7 @@ function Canvas({
         </div>
       )}
       {steps.length === 0 && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-ink-dim">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-fg-muted">
           No steps yet — add one to start building.
         </div>
       )}

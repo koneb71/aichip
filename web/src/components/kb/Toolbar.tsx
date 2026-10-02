@@ -69,7 +69,7 @@ export function Toolbar({
   };
 
   return (
-    <div className="sticky top-0 z-10 rounded-t-xl border-b border-line bg-panel">
+    <div className="sticky top-0 z-10 rounded-t-xl border-b border-border bg-panel">
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5">
         <BlockPicker editor={editor} />
         <Divider />
@@ -185,7 +185,7 @@ export function Toolbar({
           </P>
         </Group>
 
-        <span className="ml-auto hidden pr-1 text-[10px] text-ink-dim sm:block">
+        <span className="ml-auto hidden pr-1 text-[10px] text-fg-muted sm:block">
           / for blocks · @ to link a page
         </span>
       </div>
@@ -205,8 +205,8 @@ export function Toolbar({
 function TableBar({ editor }: { editor: Editor }) {
   const c = () => editor.chain().focus();
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-t border-line bg-panel-2 px-2 py-1">
-      <span className="mr-1 text-[10px] uppercase tracking-wide text-ink-dim">Table</span>
+    <div className="flex flex-wrap items-center gap-0.5 border-t border-border bg-panel-2 px-2 py-1">
+      <span className="mr-1 text-[10px] uppercase tracking-wide text-fg-muted">Table</span>
       <P onClick={() => c().addRowBefore().run()} title="Add a row above">↑+</P>
       <P onClick={() => c().addRowAfter().run()} title="Add a row below">↓+</P>
       <P onClick={() => c().deleteRow().run()} title="Delete this row">−row</P>
@@ -248,7 +248,7 @@ function BlockPicker({ editor }: { editor: Editor }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
       >
         {current} <span className="text-[8px]">▾</span>
       </button>
@@ -256,7 +256,7 @@ function BlockPicker({ editor }: { editor: Editor }) {
         <>
           {/* Click-away, so the menu doesn't strand itself open. */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="card-shadow absolute left-0 top-full z-20 mt-1 w-44 rounded-xl border border-line bg-panel p-1">
+          <div className="card-shadow absolute left-0 top-full z-20 mt-1 w-44 rounded-xl border border-border bg-panel p-1">
             {[
               ["Text", () => c().setParagraph().run()],
               ["Title", () => c().toggleHeading({ level: 1 }).run()],
@@ -287,7 +287,7 @@ function BlockPicker({ editor }: { editor: Editor }) {
 const Group = ({ children }: { children: React.ReactNode }) => (
   <div className="flex items-center gap-0.5">{children}</div>
 );
-const Divider = () => <span className="mx-1 h-4 w-px shrink-0 bg-line" />;
+const Divider = () => <span className="mx-1 h-4 w-px shrink-0 bg-border" />;
 
 /** A plain action button. */
 function P({
@@ -307,7 +307,7 @@ function P({
       onClick={onClick}
       title={title}
       disabled={disabled}
-      className="rounded-md px-2 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+      className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
     >
       {children}
     </button>
@@ -338,7 +338,7 @@ function T({
       title={title}
       onClick={() => go(ed.chain().focus()).run()}
       className={`rounded-md px-2 py-1 text-xs ${cls} ${
-        active ? "bg-accent/10 text-accent-fg" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
+        active ? "bg-accent/10 text-accent-fg" : "text-fg-muted hover:bg-panel-2 hover:text-fg"
       }`}
     >
       {children}

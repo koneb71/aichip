@@ -135,7 +135,7 @@ export default function PageEditor() {
         This page could not be loaded: {save.message}
       </div>
     ) : (
-      <div className="p-8 text-sm text-ink-dim">Loading…</div>
+      <div className="p-8 text-sm text-fg-muted">Loading…</div>
     );
   }
 
@@ -145,7 +145,7 @@ export default function PageEditor() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <button
             onClick={() => navigate(`/knowledge/${page.id}`)}
-            className="text-xs text-ink-dim hover:text-ink"
+            className="text-xs text-fg-muted hover:text-fg"
           >
             ← Done
           </button>
@@ -170,7 +170,7 @@ export default function PageEditor() {
                   "Their change went into the same revision yours started from, so there is no before-and-after to show."}
             </p>
             {save.diff && (
-              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-line bg-panel">
+              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-border bg-panel">
                 <DiffBody unified={save.diff.diff} />
               </div>
             )}
@@ -194,7 +194,7 @@ export default function PageEditor() {
                   localStorage.removeItem(DRAFT_KEY(page.id));
                   window.location.reload();
                 }}
-                className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-xs"
+                className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs"
               >
                 Take theirs
               </button>
@@ -218,7 +218,7 @@ export default function PageEditor() {
               setTitle(e.target.value);
             }}
             placeholder="Untitled"
-            className="min-w-0 flex-1 border-0 bg-transparent text-3xl font-bold tracking-tight outline-none placeholder:text-ink-dim/40"
+            className="min-w-0 flex-1 border-0 bg-transparent text-3xl font-bold tracking-tight outline-none placeholder:text-fg-muted/40"
           />
         </div>
 
@@ -239,9 +239,9 @@ export default function PageEditor() {
 function SaveChip({ state, onReload }: { state: SaveState; onReload: () => void }) {
   switch (state.kind) {
     case "saving":
-      return <span className="text-xs text-ink-dim">Saving…</span>;
+      return <span className="text-xs text-fg-muted">Saving…</span>;
     case "saved":
-      return <span className="text-xs text-ink-dim">Saved</span>;
+      return <span className="text-xs text-fg-muted">Saved</span>;
     case "conflict":
       return (
         <button onClick={onReload} className="text-xs font-medium text-amber-700">
@@ -251,6 +251,6 @@ function SaveChip({ state, onReload }: { state: SaveState; onReload: () => void 
     case "error":
       return <span className="text-xs text-danger">{state.message}</span>;
     default:
-      return <span className="text-xs text-ink-dim">Typing saves automatically</span>;
+      return <span className="text-xs text-fg-muted">Typing saves automatically</span>;
   }
 }

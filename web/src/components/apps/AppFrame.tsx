@@ -114,7 +114,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
           the app's. What moved into the menu is the *controls* — they are
           maintenance, and maintenance does not belong in the middle of a
           screen someone is using. */}
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-dim">
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-fg-muted">
         {url ? (
           <>
             <span className="size-1.5 rounded-full bg-emerald-500" />
@@ -124,7 +124,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
                 href={url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono hover:text-ink hover:underline"
+                className="font-mono hover:text-fg hover:underline"
               >
                 {url.replace(/^https?:\/\//, "")}
               </a>
@@ -139,7 +139,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
             whileTap={{ scale: 0.96 }}
             onClick={() => act(true)}
             disabled={busy || building || state?.docker.usable === false}
-            className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
+            className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-border/40 disabled:opacity-50"
           >
             {state?.preview?.canWake ? "Wake it" : "Build & run"}
           </motion.button>
@@ -154,18 +154,18 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
               aria-haspopup="menu"
               aria-expanded={menu}
               aria-label="Container controls"
-              className="rounded px-1.5 py-0.5 hover:bg-line/40 hover:text-ink"
+              className="rounded px-1.5 py-0.5 hover:bg-border/40 hover:text-fg"
             >
               &#8943;
             </button>
             {menu && (
-              <div className="card-shadow absolute right-0 z-10 mt-1 w-36 rounded-lg border border-line bg-panel py-1 text-xs">
+              <div className="card-shadow absolute right-0 z-10 mt-1 w-36 rounded-lg border border-border bg-panel py-1 text-xs">
                 <button
                   onClick={() => {
                     setMenu(false);
                     refresh();
                   }}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40"
+                  className="block w-full px-3 py-1.5 text-left hover:bg-border/40"
                 >
                   Reload
                 </button>
@@ -175,7 +175,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
                     act(false);
                   }}
                   disabled={busy}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-line/40 disabled:opacity-50"
+                  className="block w-full px-3 py-1.5 text-left hover:bg-border/40 disabled:opacity-50"
                 >
                   Stop container
                 </button>
@@ -224,7 +224,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
           className="min-h-0 flex-1 bg-transparent"
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-line text-sm text-ink-dim">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border text-sm text-fg-muted">
           {building ? "Building…" : "Not running."}
         </div>
       )}

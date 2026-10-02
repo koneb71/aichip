@@ -53,7 +53,7 @@ export function AssigneePicker({
         value={assigneeValue(value)}
         disabled={disabled}
         onChange={(e) => onChange(parseAssignee(e.target.value))}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm disabled:opacity-50"
+        className="w-full rounded-lg border border-border bg-panel px-2 py-2 text-sm disabled:opacity-50"
       >
         <option value="">Nobody in particular</option>
         {offered.length > 0 && (
@@ -77,10 +77,10 @@ export function AssigneePicker({
         )}
       </select>
       {disabled && disabledReason ? (
-        <div className="mt-1 text-[11px] text-ink-dim">{disabledReason}</div>
+        <div className="mt-1 text-[11px] text-fg-muted">{disabledReason}</div>
       ) : (
         team && (
-          <div className="mt-1 text-[11px] text-ink-dim">
+          <div className="mt-1 text-[11px] text-fg-muted">
             {team.pattern === "org"
               ? "The manager will split this up and delegate it."
               : `Runs as a ${team.pattern}; the model tier is ignored.`}

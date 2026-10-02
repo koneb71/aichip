@@ -16,7 +16,7 @@ import type { StopTone } from "../../lib/runStatus";
 const TONE: Record<StopTone, string> = {
   danger: "bg-red-50 text-danger",
   amber: "bg-amber-50 text-amber-800",
-  note: "bg-panel-2 text-ink-dim",
+  note: "bg-panel-2 text-fg-muted",
 };
 
 export function RunError({

@@ -61,7 +61,7 @@ export function ModuleNode({ data }: { data: MapNodeData }) {
         width: size,
         height: size,
         background: node.expanded ? "transparent" : tint.bg,
-        borderColor: focused ? "var(--color-accent)" : "var(--color-line)",
+        borderColor: focused ? "var(--color-accent)" : "var(--color-border)",
         borderStyle: node.expanded ? "dashed" : "solid",
         opacity: dimmed ? 0.25 : 1,
       }}
@@ -70,11 +70,11 @@ export function ModuleNode({ data }: { data: MapNodeData }) {
       <Anchors />
       <div className="px-2">
         <div className="font-mono text-[11px] font-semibold leading-tight">{node.label}</div>
-        <div className="mt-0.5 text-[10px] text-ink-dim">
+        <div className="mt-0.5 text-[10px] text-fg-muted">
           {node.files} file{node.files === 1 ? "" : "s"}
         </div>
         {!node.expanded && (
-          <div className="mt-1 text-[10px] text-ink-dim">
+          <div className="mt-1 text-[10px] text-fg-muted">
             ← {node.importedBy} · {node.imports} →
           </div>
         )}

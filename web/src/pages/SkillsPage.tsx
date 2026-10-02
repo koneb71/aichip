@@ -67,7 +67,7 @@ export default function SkillsPage() {
           <motion.button
             {...tappable}
             onClick={() => setInstalling(true)}
-            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent-fg"
+            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-border px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent-fg"
           >
             Add from a registry
           </motion.button>
@@ -102,17 +102,17 @@ export default function SkillsPage() {
                     @{s.name}
                   </span>
                   {!s.enabled && (
-                    <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-ink-dim">
+                    <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted">
                       off
                     </span>
                   )}
                 </div>
               </div>
-              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-ink-dim">
+              <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-fg-muted">
                 {s.description || "no description yet"}
               </p>
               {s.sourceRepo && (
-                <p className="mt-2 truncate font-mono text-[10px] text-ink-dim">
+                <p className="mt-2 truncate font-mono text-[10px] text-fg-muted">
                   mirrors {s.sourceRepo}
                 </p>
               )}
@@ -231,7 +231,7 @@ function SkillEditor({
         transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ scale: 0.97, y: 8 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow-lg my-8 w-full max-w-2xl rounded-2xl border border-line bg-panel p-5"
+        className="card-shadow-lg my-8 w-full max-w-2xl rounded-2xl border border-border bg-panel p-5"
       >
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-sm font-semibold">Skill</h3>
@@ -242,7 +242,7 @@ function SkillEditor({
               disabled={busy}
               onChange={(e) => save({ enabled: e.target.checked })}
             />
-            <span className={draft.enabled ? "text-ink" : "text-ink-dim"}>
+            <span className={draft.enabled ? "text-fg" : "text-fg-muted"}>
               {draft.enabled ? "In use" : "Off"}
             </span>
           </label>
@@ -254,7 +254,7 @@ function SkillEditor({
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             onBlur={() => draft.name !== skill.name && save()}
             disabled={busy}
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 font-mono text-sm outline-none focus:border-accent"
           />
         </Field>
 
@@ -265,7 +265,7 @@ function SkillEditor({
             onBlur={() => save()}
             disabled={busy}
             placeholder="how we cut a release"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
           />
         </Field>
 
@@ -277,7 +277,7 @@ function SkillEditor({
             disabled={busy}
             rows={8}
             placeholder={"Name the steps, in order.\nSay what the finished thing looks like.\nSay when to stop and ask."}
-            className="w-full resize-y rounded-lg border border-line bg-surface p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
+            className="w-full resize-y rounded-lg border border-border bg-bg p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
           />
         </Field>
 
@@ -295,15 +295,15 @@ function SkillEditor({
             disabled={busy}
             rows={3}
             placeholder="never force-push; never edit files outside src/"
-            className="w-full resize-y rounded-lg border border-line bg-surface p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
+            className="w-full resize-y rounded-lg border border-border bg-bg p-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
           />
         </Field>
 
-        <div className="mt-5 rounded-xl border border-line bg-surface p-3">
+        <div className="mt-5 rounded-xl border border-border bg-bg p-3">
           <div className="text-xs font-medium">Try it</div>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
+          <p className="mt-0.5 text-[11px] leading-relaxed text-fg-muted">
             Runs the skill against one harmless prompt, with{" "}
-            <span className="font-medium text-ink">no tools, no repository and no worktree</span> —
+            <span className="font-medium text-fg">no tools, no repository and no worktree</span> —
             so whatever it says to do, there is nothing here to do it to. This tells you how
             the skill reads, not what it would do to your files.
           </p>
@@ -312,12 +312,12 @@ function SkillEditor({
               value={tryPrompt}
               onChange={(e) => setTryPrompt(e.target.value)}
               placeholder="Describe what you would do for: bump the version to 2.1"
-              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent"
             />
             <button
               onClick={runTry}
               disabled={trying || !tryPrompt.trim()}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs hover:border-ink-dim disabled:opacity-40"
+              className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-fg-muted disabled:opacity-40"
             >
               {trying ? "Trying…" : "Try it"}
             </button>
@@ -330,10 +330,10 @@ function SkillEditor({
               <details className="mt-1.5">
                 {/* Half of what a test tells you is whether the skill says what
                     you thought it said. */}
-                <summary className="cursor-pointer text-[11px] text-ink-dim">
+                <summary className="cursor-pointer text-[11px] text-fg-muted">
                   what it was actually sent
                 </summary>
-                <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-panel p-2 font-mono text-[10px] text-ink-dim">
+                <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-panel p-2 font-mono text-[10px] text-fg-muted">
                   {result.prompt}
                 </pre>
               </details>
@@ -348,7 +348,7 @@ function SkillEditor({
         )}
 
         <div className="mt-4 flex items-center gap-2">
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-ink-dim">
+          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
             Done
           </button>
           <button
@@ -356,14 +356,14 @@ function SkillEditor({
               await api.deleteSkill(skill.id);
               onDeleted();
             }}
-            className="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim hover:border-danger hover:text-danger"
+            className="ml-auto rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-danger hover:text-danger"
           >
             Delete
           </button>
         </div>
 
-        <p className="mt-3 text-[11px] leading-relaxed text-ink-dim">
-          <span className="font-medium text-ink">No secrets here.</span> This text goes into
+        <p className="mt-3 text-[11px] leading-relaxed text-fg-muted">
+          <span className="font-medium text-fg">No secrets here.</span> This text goes into
           a prompt, so a save containing something key-shaped is refused.
         </p>
       </motion.div>
@@ -382,11 +382,11 @@ function Field({
 }) {
   return (
     <div className="mt-4">
-      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
         {label}
       </span>
       {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-dim/80">{hint}</p>}
+      {hint && <p className="mt-1 text-[11px] text-fg-muted/80">{hint}</p>}
     </div>
   );
 }
@@ -461,7 +461,7 @@ function InstallFromRegistry({
         className="card-shadow max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-panel p-5"
       >
         <h2 className="text-sm font-semibold">Add skills from a registry</h2>
-        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
           Installs an Agent Skill with <code className="font-mono">npx skills</code>. The files
           land in the project you pick and are committed, which is what lets a card's worktree
           see them; each skill is also mirrored into this library so you can{" "}
@@ -469,13 +469,13 @@ function InstallFromRegistry({
         </p>
 
         <label className="mt-4 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Install into
           </span>
           <select
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -486,16 +486,16 @@ function InstallFromRegistry({
         </label>
 
         <label className="mt-3 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             Repository
           </span>
           <input
             value={reference}
             onChange={(e) => setReference(e.target.value)}
             placeholder="vercel-labs/agent-skills"
-            className="w-full rounded-lg border border-line bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-panel px-2.5 py-1.5 font-mono text-sm outline-none focus:border-accent"
           />
-          <span className="mt-1 block text-[11px] text-ink-dim">
+          <span className="mt-1 block text-[11px] text-fg-muted">
             owner/repo, or a link from github.com or skills.sh.
           </span>
         </label>
@@ -518,9 +518,9 @@ function InstallFromRegistry({
               {result.committed ? " and committed them." : " — but the commit did not happen, so a card's worktree will not see them yet."}
             </p>
             {result.skills.map((s) => (
-              <div key={s.name} className="rounded-lg border border-line p-2.5">
+              <div key={s.name} className="rounded-lg border border-border p-2.5">
                 <div className="font-mono text-xs font-semibold">@{s.name}</div>
-                <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-dim">{s.description}</p>
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-fg-muted">{s.description}</p>
                 {s.bundled.length > 0 && (
                   <p className="mt-1 text-[11px] text-amber-700">
                     ships {s.bundled.length} file{s.bundled.length === 1 ? "" : "s"}:{" "}
@@ -536,7 +536,7 @@ function InstallFromRegistry({
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2 border-t border-line pt-3">
+        <div className="mt-4 flex items-center gap-2 border-t border-border pt-3">
           <button
             onClick={install}
             disabled={busy || !projectId || !reference.trim()}
@@ -547,12 +547,12 @@ function InstallFromRegistry({
           <button
             onClick={onClose}
             disabled={busy}
-            className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-40"
+            className="ring-focus rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-40"
           >
             {result ? "Done" : "Cancel"}
           </button>
           {busy && (
-            <span className="text-[11px] text-ink-dim">
+            <span className="text-[11px] text-fg-muted">
               fetching the package, then the repository — this takes a moment
             </span>
           )}

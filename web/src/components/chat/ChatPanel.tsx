@@ -89,8 +89,8 @@ export function ChatPanel({
   return (
     // `lg:border-r` only: the divider separates the docked column from the
     // board, and reads as a stray line when the panel is a narrow-screen tab.
-    <div className="flex h-full min-h-0 min-w-0 flex-col border-line bg-panel lg:border-r">
-      <div className="relative border-b border-line px-4 py-3">
+    <div className="flex h-full min-h-0 min-w-0 flex-col border-border bg-panel lg:border-r">
+      <div className="relative border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setPickerOpen((o) => !o)}
@@ -100,17 +100,17 @@ export function ChatPanel({
             <span className="truncate text-sm font-semibold">
               {chats.find((c) => c.id === chatId)?.title ?? "Assistant"}
             </span>
-            <span className="shrink-0 text-[10px] text-ink-dim">▾</span>
+            <span className="shrink-0 text-[10px] text-fg-muted">▾</span>
           </button>
           <button
             onClick={startNewChat}
             title="New conversation"
-            className="ml-auto shrink-0 rounded-lg border border-line px-2 py-0.5 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+            className="ml-auto shrink-0 rounded-lg border border-border px-2 py-0.5 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
           >
             + New
           </button>
         </div>
-        <div className="text-[11px] text-ink-dim">
+        <div className="text-[11px] text-fg-muted">
           Asks your own Claude Code to plan &amp; launch tasks
         </div>
         {listError && (
@@ -132,10 +132,10 @@ export function ChatPanel({
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
-                className="absolute left-3 right-3 top-full z-20 max-h-72 overflow-y-auto rounded-xl border border-line bg-panel p-1 shadow-lg"
+                className="absolute left-3 right-3 top-full z-20 max-h-72 overflow-y-auto rounded-xl border border-border bg-panel p-1 shadow-lg"
               >
                 {chats.length === 0 && (
-                  <div className="px-2 py-2 text-xs text-ink-dim">No conversations yet.</div>
+                  <div className="px-2 py-2 text-xs text-fg-muted">No conversations yet.</div>
                 )}
                 {chats.map((c) => (
                   <div
@@ -149,12 +149,12 @@ export function ChatPanel({
                       className="min-w-0 flex-1 truncate text-left"
                     >
                       {c.title}
-                      <span className="ml-1.5 text-[10px] text-ink-dim">{c.messageCount}</span>
+                      <span className="ml-1.5 text-[10px] text-fg-muted">{c.messageCount}</span>
                     </button>
                     <button
                       onClick={() => removeChat(c.id)}
                       title="Delete conversation"
-                      className="shrink-0 px-1 text-xs text-ink-dim opacity-0 hover:text-danger group-hover:opacity-100"
+                      className="shrink-0 px-1 text-xs text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
                     >
                       ✕
                     </button>

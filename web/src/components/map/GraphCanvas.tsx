@@ -91,20 +91,20 @@ export function GraphCanvas({
           // Edges are SVG paths React Flow owns; a Tailwind stroke class on
           // them does nothing, so colour goes through `style`.
           style: {
-            stroke: e.cyclic ? "var(--color-danger)" : "var(--color-ink-dim)",
+            stroke: e.cyclic ? "var(--color-danger)" : "var(--color-fg-muted)",
             strokeWidth: e.width,
             strokeDasharray: e.cyclic ? "4 3" : undefined,
             opacity: lit ? 0.55 : 0.06,
           },
           label: e.weight > 1 ? String(e.weight) : undefined,
-          labelStyle: { fontSize: 9, fill: "var(--color-ink-dim)" },
+          labelStyle: { fontSize: 9, fill: "var(--color-fg-muted)" },
           labelBgStyle: { fill: "var(--color-panel)" },
           labelShowBg: true,
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 12,
             height: 12,
-            color: e.cyclic ? "var(--color-danger)" : "var(--color-ink-dim)",
+            color: e.cyclic ? "var(--color-danger)" : "var(--color-fg-muted)",
           },
         };
       }),
@@ -151,9 +151,9 @@ export function GraphCanvas({
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
           proOptions={{ hideAttribution: true }}
-          className="bg-surface"
+          className="bg-bg"
         >
-          <Background gap={16} size={1} color="var(--color-line)" />
+          <Background gap={16} size={1} color="var(--color-border)" />
           <Controls showInteractive={false} className="!shadow-none" />
         </ReactFlow>
 
@@ -164,7 +164,7 @@ export function GraphCanvas({
           </div>
         )}
         {files.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-ink-dim">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-fg-muted">
             Nothing read yet.
           </div>
         )}

@@ -109,19 +109,19 @@ export function FolderBrowserModal({
         transition={{ type: "spring", stiffness: 220, damping: 26 }}
         exit={{ y: 20, scale: 0.98 }}
         onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex max-h-[80vh] w-full max-w-xl flex-col sm:max-h-[70vh] rounded-2xl border border-line bg-panel"
+        className="card-shadow flex max-h-[80vh] w-full max-w-xl flex-col sm:max-h-[70vh] rounded-2xl border border-border bg-panel"
       >
-        <div className="border-b border-line p-4">
+        <div className="border-b border-border p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="text-base font-semibold">{title}</div>
             <button
               onClick={() => setNewName(newName === null ? "" : null)}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
+              className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
             >
               + New folder
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-ink-dim">
+          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fg-muted">
             <button onClick={() => load()} className="hover:text-accent-fg">
               ~
             </button>
@@ -145,16 +145,16 @@ export function FolderBrowserModal({
               e.preventDefault();
               createFolder();
             }}
-            className="flex items-center gap-2 border-b border-line px-4 py-2.5"
+            className="flex items-center gap-2 border-b border-border px-4 py-2.5"
           >
-            <span className="text-xs text-ink-dim">New folder in {listing?.path ?? "…"}</span>
+            <span className="text-xs text-fg-muted">New folder in {listing?.path ?? "…"}</span>
             <input
               autoFocus
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && setNewName(null)}
               placeholder="my-project"
-              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1 text-sm outline-none focus:border-accent"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-2.5 py-1 text-sm outline-none focus:border-accent"
             />
             <button
               type="submit"
@@ -170,7 +170,7 @@ export function FolderBrowserModal({
           {listing?.parent && (
             <button
               onClick={() => load(listing.parent!)}
-              className="w-full rounded-lg px-3 py-1.5 text-left text-sm text-ink-dim hover:bg-panel-2"
+              className="w-full rounded-lg px-3 py-1.5 text-left text-sm text-fg-muted hover:bg-panel-2"
             >
               ← ..
             </button>
@@ -181,7 +181,7 @@ export function FolderBrowserModal({
               onClick={() => load(d.path)}
               className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm hover:bg-panel-2"
             >
-              <span className="text-ink-dim">▸</span>
+              <span className="text-fg-muted">▸</span>
               <span className="min-w-0 flex-1 truncate">{d.name}</span>
               {d.isGitRepo && (
                 <span className="rounded-full bg-tier-easy-soft px-2 py-0.5 text-[11px] text-tier-easy">
@@ -191,7 +191,7 @@ export function FolderBrowserModal({
             </button>
           ))}
           {listing && listing.dirs.length === 0 && (
-            <div className="p-3 text-sm text-ink-dim">
+            <div className="p-3 text-sm text-fg-muted">
               No subfolders here — use this folder, or create one.
             </div>
           )}
@@ -214,8 +214,8 @@ export function FolderBrowserModal({
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-line p-4">
-          <div className="min-w-0 flex-1 truncate text-xs text-ink-dim">
+        <div className="flex items-center justify-between border-t border-border p-4">
+          <div className="min-w-0 flex-1 truncate text-xs text-fg-muted">
             {listing?.path}
             {listing && !listing.isGitRepo && !noVcs && initialisesGit && (
               <span className="ml-1 opacity-80">· git will be initialized here</span>

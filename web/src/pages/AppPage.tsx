@@ -53,7 +53,7 @@ export default function AppPage() {
   }, [refresh]);
 
   if (!app) {
-    return <div className="p-6 text-sm text-ink-dim">{error ?? "Loading…"}</div>;
+    return <div className="p-6 text-sm text-fg-muted">{error ?? "Loading…"}</div>;
   }
 
   const manifest = app.declares;
@@ -99,11 +99,11 @@ export default function AppPage() {
         <span className="text-xl leading-none">{app.icon}</span>
         <div className="min-w-0">
           <h1 className="truncate text-xl font-bold tracking-tight">{app.name}</h1>
-          <p className="truncate text-xs text-ink-dim">{app.summary}</p>
+          <p className="truncate text-xs text-fg-muted">{app.summary}</p>
         </div>
         <div className="flex-1" />
         {!app.active && (
-          <span className="rounded bg-panel-2 px-2 py-1 text-[11px] text-ink-dim">
+          <span className="rounded bg-panel-2 px-2 py-1 text-[11px] text-fg-muted">
             Switched off
           </span>
         )}
@@ -114,7 +114,7 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, false)}
           download
           title="The app, with empty tables — what you send someone."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
         >
           Share
         </a>
@@ -122,20 +122,20 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, true)}
           download
           title="The app and everything in it — what you carry to another machine."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
         >
           Export with data
         </a>
         <Link
           to={`/projects/${app.projectId}`}
           title="This app's own folder, in the files editor."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
         >
           Files
         </Link>
         <button
           onClick={() => setPerms((p) => !p)}
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
         >
           Permissions
         </button>
@@ -148,7 +148,7 @@ export default function AppPage() {
         </motion.button>
         <button
           onClick={() => setEditing(editing === null ? app.manifest : null)}
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
         >
           {editing === null ? "Manifest" : "Close"}
         </button>
@@ -197,7 +197,7 @@ export default function AppPage() {
             value={editing}
             onChange={(e) => setEditing(e.target.value)}
             spellCheck={false}
-            className="min-h-0 flex-1 resize-none rounded-xl border border-line bg-surface p-3 font-mono text-xs outline-none focus:border-accent"
+            className="min-h-0 flex-1 resize-none rounded-xl border border-border bg-bg p-3 font-mono text-xs outline-none focus:border-accent"
           />
           <div className="mt-3 flex items-center gap-2">
             <motion.button
@@ -208,7 +208,7 @@ export default function AppPage() {
             >
               Save
             </motion.button>
-            <span className="text-xs text-ink-dim">
+            <span className="text-xs text-fg-muted">
               New tables and columns apply themselves. Anything that would lose data waits for
               you.
             </span>
@@ -223,7 +223,7 @@ export default function AppPage() {
                   key={t.view}
                   onClick={() => setScreen(t.view)}
                   className={`ring-focus relative rounded-lg px-3 py-1.5 text-xs transition-colors ${
-                    screen === t.view ? "text-ink" : "text-ink-dim hover:text-ink"
+                    screen === t.view ? "text-fg" : "text-fg-muted hover:text-fg"
                   }`}
                 >
                   {screen === t.view && (
@@ -266,7 +266,7 @@ export default function AppPage() {
             />
           ) : (
             !app.manifestError && (
-              <div className="rounded-xl border border-dashed border-line p-8 text-center text-sm text-ink-dim">
+              <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
                 This app declares no views yet. Its tables exist — add a view to the manifest to
                 see them.
               </div>

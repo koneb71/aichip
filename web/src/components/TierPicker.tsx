@@ -40,7 +40,7 @@ export function TierPicker({
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value as Tier)}
-      className={`rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
+      className={`rounded-lg border border-border bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
     >
       {TIERS.map((t) => (
         <option key={t} value={t}>
@@ -81,7 +81,7 @@ export function CardTierPicker({
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value as TierChoice)}
-      className={`rounded-lg border border-line bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
+      className={`rounded-lg border border-border bg-panel px-2 py-1 text-xs disabled:opacity-50 ${className}`}
     >
       <option value="auto">Auto · picked per task</option>
       {TIERS.map((t) => (

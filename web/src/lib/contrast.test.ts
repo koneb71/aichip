@@ -66,7 +66,7 @@ const PAIRS: [string, string[]][] = [
   ["info-fg", ["info-subtle", "panel"]],
   ["tier-easy", ["tier-easy-soft", "panel"]],
   // Text on a solid tier-easy fill: the permission prompt's Allow button.
-  ["surface", ["tier-easy"]],
+  ["bg", ["tier-easy"]],
   ["tier-medium", ["tier-medium-soft", "panel"]],
   ["tier-complex", ["tier-complex-soft", "panel"]],
   ...(["indigo", "violet", "sky", "mint", "amber", "rose", "slate"] as const).map(

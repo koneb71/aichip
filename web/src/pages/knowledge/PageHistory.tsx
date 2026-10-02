@@ -52,11 +52,11 @@ export default function PageHistory() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-6 py-6 lg:px-10">
-        <Link to={`/knowledge/${pageId}`} className="text-xs text-ink-dim hover:text-ink">
+        <Link to={`/knowledge/${pageId}`} className="text-xs text-fg-muted hover:text-fg">
           ← Back to the page
         </Link>
         <h1 className="mt-3 text-2xl font-bold tracking-tight">History</h1>
-        <p className="mt-1 text-sm text-ink-dim">
+        <p className="mt-1 text-sm text-fg-muted">
           Every version this page has had, including the ones that were turned
           down. Restoring writes a new revision rather than rewinding — history
           is a record of what happened.
@@ -68,7 +68,7 @@ export default function PageHistory() {
               key={r.seq}
               layout
               className={`rounded-xl border bg-panel p-3 ${
-                selected === r.seq ? "border-accent" : "border-line"
+                selected === r.seq ? "border-accent" : "border-border"
               }`}
             >
               <div className="flex flex-wrap items-center gap-2">
@@ -79,29 +79,29 @@ export default function PageHistory() {
                   <span className="text-sm font-medium">
                     {r.authorKind === "agent" ? "◆" : "●"} Revision {r.seq}
                   </span>
-                  <span className="ml-2 text-xs text-ink-dim">{r.title}</span>
+                  <span className="ml-2 text-xs text-fg-muted">{r.title}</span>
                 </button>
                 <StateBadge revision={r} />
-                <span className="text-[11px] text-ink-dim">
+                <span className="text-[11px] text-fg-muted">
                   {new Date(r.createdAt).toLocaleString()}
                 </span>
               </div>
 
               {r.note && (
-                <div className="mt-1 text-xs italic text-ink-dim">“{r.note}”</div>
+                <div className="mt-1 text-xs italic text-fg-muted">“{r.note}”</div>
               )}
 
               {selected === r.seq && (
                 <div className="mt-3">
                   {diff && (
                     <>
-                      <div className="mb-1.5 text-[11px] text-ink-dim">
+                      <div className="mb-1.5 text-[11px] text-fg-muted">
                         {diff.from === null
                           ? "against an empty page"
                           : `against revision ${diff.from}`}{" "}
                         · +{diff.added} −{diff.removed}
                       </div>
-                      <div className="max-h-80 overflow-auto rounded-lg border border-line">
+                      <div className="max-h-80 overflow-auto rounded-lg border border-border">
                         <DiffBody unified={diff.diff} />
                       </div>
                     </>
@@ -128,7 +128,7 @@ export default function PageHistory() {
                         </button>
                         <button
                           onClick={() => setConfirming(null)}
-                          className="text-ink-dim hover:text-ink"
+                          className="text-fg-muted hover:text-fg"
                         >
                           Cancel
                         </button>
@@ -136,7 +136,7 @@ export default function PageHistory() {
                     ) : (
                       <button
                         onClick={() => setConfirming(r.seq)}
-                        className="mt-2 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel-2"
+                        className="mt-2 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-panel-2"
                       >
                         Restore this version
                       </button>
@@ -171,7 +171,7 @@ function StateBadge({ revision }: { revision: Revision }) {
       className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
         revision.state === "pending"
           ? "bg-amber-100 text-amber-800"
-          : "bg-panel-2 text-ink-dim"
+          : "bg-panel-2 text-fg-muted"
       }`}
     >
       {label}

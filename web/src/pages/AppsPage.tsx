@@ -53,7 +53,7 @@ export default function AppsPage() {
         subtitle="Small internal tools aichip builds and hosts for you, each with its own data and screens."
         actions={
           <>
-        <label className="ring-focus cursor-pointer rounded-xl border border-line bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-ink-dim/40 hover:bg-panel-2">
+        <label className="ring-focus cursor-pointer rounded-xl border border-border bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-fg-muted/40 hover:bg-panel-2">
           Import
           <input
             type="file"
@@ -98,7 +98,7 @@ export default function AppsPage() {
           return (
             <div
               key={app.id}
-              className="card-shadow lift group flex flex-col rounded-2xl border border-line bg-panel p-4"
+              className="card-shadow lift group flex flex-col rounded-2xl border border-border bg-panel p-4"
               style={{ opacity: app.active ? 1 : 0.6 }}
             >
               <div className="flex items-start gap-3">
@@ -110,7 +110,7 @@ export default function AppsPage() {
                   >
                     {app.name}
                   </Link>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-ink-dim">{state.line}</p>
+                  <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{state.line}</p>
                 </div>
                 {/* A switch, not a delete. Off keeps every row — which is the
                     whole reason it is safe to use, and worth saying on the
@@ -120,7 +120,7 @@ export default function AppsPage() {
                   title={app.active ? "Switch off. Keeps its data." : "Switch on"}
                   className={
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors " +
-                    (app.active ? "bg-accent" : "bg-line")
+                    (app.active ? "bg-accent" : "bg-border")
                   }
                 >
                   <span
@@ -129,7 +129,7 @@ export default function AppsPage() {
                   />
                 </button>
               </div>
-              <div className="mt-3 flex items-center gap-2 text-[11px] text-ink-dim">
+              <div className="mt-3 flex items-center gap-2 text-[11px] text-fg-muted">
                 <span className="rounded bg-panel-2 px-1.5 py-0.5">
                   {app.runtime === "module" ? "module" : `container · ${app.runtime}`}
                 </span>

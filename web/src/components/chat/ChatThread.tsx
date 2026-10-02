@@ -375,7 +375,7 @@ export function ChatThread({
           "",
           <>
           {messages.length === 0 && !activeRunId && (
-            <div className="mt-8 px-4 text-center text-sm text-ink-dim">
+            <div className="mt-8 px-4 text-center text-sm text-fg-muted">
               Describe what you want done — e.g. “fix the flaky login test and
               open it for review”. The assistant creates tasks on the board and
               keeps you posted here. Type <span className="font-medium">@</span> to
@@ -426,14 +426,14 @@ export function ChatThread({
         </div>
       )}
 
-      <div className="relative border-t border-line p-3" {...(general ? {} : att.dropProps)}>
+      <div className="relative border-t border-border p-3" {...(general ? {} : att.dropProps)}>
         {wrap(
           "relative",
           <>
           {!general && mention.node}
           <div
             className={`flex flex-col gap-1.5 rounded-xl border bg-panel px-3 py-2 focus-within:border-accent ${
-              att.dragging ? "border-accent ring-2 ring-accent/30" : "border-line"
+              att.dragging ? "border-accent ring-2 ring-accent/30" : "border-border"
             }`}
           >
             {/* Above the textarea, not beside it: what the assistant will be
@@ -509,7 +509,7 @@ export function ChatThread({
                   disabled={stopping}
                   title="Stop — keeps what it has said so far"
                   aria-label="Stop the assistant"
-                  className="rounded-lg bg-ink px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                  className="rounded-lg bg-fg px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
                 >
                   ■
                 </motion.button>
@@ -558,7 +558,7 @@ export function ChatThread({
                   className={`ring-focus rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
                     planMode
                       ? "bg-accent/10 font-medium text-accent-fg"
-                      : "text-ink-dim hover:bg-line/40 hover:text-ink"
+                      : "text-fg-muted hover:bg-border/40 hover:text-fg"
                   }`}
                 >
                   ◷ Plan{planMode ? " mode" : ""}
@@ -605,7 +605,7 @@ function Message({
                 key={a.id}
                 to={`/knowledge/${a.id}`}
                 title="Knowledge-base page given to the assistant for this message"
-                className="ring-focus max-w-56 truncate rounded-lg border border-accent/40 bg-accent/5 px-2 py-0.5 text-[11px] text-ink-dim hover:text-ink"
+                className="ring-focus max-w-56 truncate rounded-lg border border-accent/40 bg-accent/5 px-2 py-0.5 text-[11px] text-fg-muted hover:text-fg"
               >
                 ▦ {a.title}
               </Link>
@@ -645,7 +645,7 @@ function Message({
           assistant's session still holds the rest, so saying so is what makes
           "carry on" an obvious next message rather than a guess. */}
       {message.stopped && (
-        <div className="mt-1.5 border-t border-line pt-1 text-[10px] text-ink-dim">
+        <div className="mt-1.5 border-t border-border pt-1 text-[10px] text-fg-muted">
           ■ You stopped this — the assistant had more to say.
         </div>
       )}
@@ -678,14 +678,14 @@ function PlanActions({
 
   if (message.planOutcome === "approved") {
     return (
-      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-fg-muted">
         ✓ Approved — carried out below.
       </div>
     );
   }
   if (message.planOutcome === "superseded") {
     return (
-      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-ink-dim">
+      <div className="mt-2 border-t border-accent/20 pt-1.5 text-[11px] text-fg-muted">
         Replaced by a later plan.
       </div>
     );
@@ -700,7 +700,7 @@ function PlanActions({
           value={editing}
           onChange={(e) => setEditing(e.target.value)}
           rows={Math.min(16, Math.max(4, editing.split("\n").length))}
-          className="ring-focus w-full resize-y rounded-lg border border-line bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
+          className="ring-focus w-full resize-y rounded-lg border border-border bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
         />
         <div className="mt-1.5 flex gap-1.5">
           <button
@@ -711,7 +711,7 @@ function PlanActions({
           </button>
           <button
             onClick={() => setEditing(null)}
-            className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+            className="ring-focus rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:text-fg"
           >
             Cancel
           </button>
@@ -730,11 +730,11 @@ function PlanActions({
       </button>
       <button
         onClick={() => setEditing(message.content)}
-        className="ring-focus rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-dim hover:text-ink"
+        className="ring-focus rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:text-fg"
       >
         Edit first
       </button>
-      <span className="text-[10px] text-ink-dim">or just say what to change</span>
+      <span className="text-[10px] text-fg-muted">or just say what to change</span>
     </div>
   );
 }
@@ -796,7 +796,7 @@ function ToolChip({ name, input }: { name: string; input: unknown }) {
     <motion.div
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-ink-dim"
+      className="self-start rounded-full border border-border bg-panel px-3 py-1 text-xs text-fg-muted"
     >
       ⚙ {label}
     </motion.div>
@@ -809,7 +809,7 @@ function Thinking() {
       {[0, 1, 2].map((i) => (
         <motion.span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-ink-dim"
+          className="h-1.5 w-1.5 rounded-full bg-fg-muted"
           animate={{ opacity: [0.3, 1, 0.3] }}
           transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.2 }}
         />

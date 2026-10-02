@@ -58,12 +58,12 @@ export function Stat({
         {value}
       </div>
       <div className="mt-1.5 truncate text-xs text-fg-muted">{label}</div>
-      {hint && <div className="mt-0.5 truncate text-[10px] text-ink-dim/80">{hint}</div>}
+      {hint && <div className="mt-0.5 truncate text-[10px] text-fg-muted/80">{hint}</div>}
       {/* The arrow only appears on a tile that goes somewhere, and only under
           the pointer — a permanent one on every tile is four arrows competing
           with the numbers they sit beside. */}
       {to && (
-        <span className="absolute right-3.5 top-3.5 text-ink-dim opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+        <span className="absolute right-3.5 top-3.5 text-fg-muted opacity-0 transition-opacity duration-200 group-hover:opacity-100">
           <Icon name="chevronRight" size={15} />
         </span>
       )}

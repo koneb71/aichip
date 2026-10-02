@@ -82,11 +82,11 @@ export function RecipeGate({
           whileTap={{ scale: 0.96 }}
           onClick={propose}
           disabled={busy}
-          className="rounded-lg border border-line px-2.5 py-1 text-xs font-medium hover:bg-line/40 disabled:opacity-50"
+          className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-border/40 disabled:opacity-50"
         >
           {busy ? "Reading the project…" : "Write one for me"}
         </motion.button>
-        <div className="mt-1 text-[11px] text-ink-dim">
+        <div className="mt-1 text-[11px] text-fg-muted">
           An agent reads this project and decides what it needs — a Dockerfile if
           one container will do, a compose stack if it genuinely won't. You read
           it before anything is built.
@@ -106,10 +106,10 @@ export function RecipeGate({
   return (
     <div className="mt-1.5 space-y-1.5">
       <div className="flex flex-wrap items-baseline gap-2 text-[11px]">
-        <span className="rounded-md bg-line/60 px-1.5 py-0.5 uppercase tracking-wide text-ink-dim">
+        <span className="rounded-md bg-border/60 px-1.5 py-0.5 uppercase tracking-wide text-fg-muted">
           {recipe.kind === "compose" ? "compose stack" : "dockerfile"}
         </span>
-        <span className="text-ink-dim">
+        <span className="text-fg-muted">
           {recipe.kind === "compose"
             ? "The agent decided one container isn't enough. Its declared host ports are ignored — the preview publishes one, on loopback."
             : "The agent decided one container serves this."}
@@ -127,7 +127,7 @@ export function RecipeGate({
         onChange={(e) => setDraft(e.target.value)}
         spellCheck={false}
         rows={Math.min(18, Math.max(6, draft.split("\n").length))}
-        className="w-full resize-y rounded-lg border border-line bg-panel px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none focus:border-accent"
+        className="w-full resize-y rounded-lg border border-border bg-panel px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none focus:border-accent"
       />
       <div className="flex flex-wrap items-center gap-2">
         <motion.button
@@ -141,12 +141,12 @@ export function RecipeGate({
         <button
           onClick={propose}
           disabled={busy}
-          className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-line/40 disabled:opacity-50"
+          className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-border/40 disabled:opacity-50"
         >
           Ask again
         </button>
         {approved && !changed && recipe.edited && (
-          <span className="text-[11px] text-ink-dim">you rewrote this one</span>
+          <span className="text-[11px] text-fg-muted">you rewrote this one</span>
         )}
       </div>
       {error && (

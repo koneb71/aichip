@@ -34,7 +34,7 @@ export default function ProjectsPage() {
             <motion.button
               {...tappable}
               onClick={() => setParams({ new: "clone" })}
-              className="ring-focus rounded-xl border border-line bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
+              className="ring-focus rounded-xl border border-border bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
             >
               Clone from GitHub
             </motion.button>
@@ -62,8 +62,8 @@ export default function ProjectsPage() {
               </div>
               <div className="p-4">
                 <div className="truncate text-sm font-semibold">{p.name}</div>
-                <div className="mt-1 truncate text-xs text-ink-dim">{p.path}</div>
-                <div className="mt-2.5 text-[11px] text-ink-dim">
+                <div className="mt-1 truncate text-xs text-fg-muted">{p.path}</div>
+                <div className="mt-2.5 text-[11px] text-fg-muted">
                   {p.vcs === "git" ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-panel-2 px-2 py-0.5">
                       base: {p.defaultBranch}

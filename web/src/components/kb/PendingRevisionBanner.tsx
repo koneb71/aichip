@@ -81,7 +81,7 @@ export function PendingRevisionBanner({
         </span>
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-xs text-ink-dim hover:text-ink"
+          className="text-xs text-fg-muted hover:text-fg"
         >
           {expanded ? "Hide the diff" : "Show the diff"}
         </button>
@@ -97,7 +97,7 @@ export function PendingRevisionBanner({
       )}
 
       {expanded && diff && (
-        <div className="mt-3 max-h-96 overflow-auto rounded-lg border border-line bg-panel">
+        <div className="mt-3 max-h-96 overflow-auto rounded-lg border border-border bg-panel">
           <DiffBody unified={diff.diff} />
         </div>
       )}
@@ -116,7 +116,7 @@ export function PendingRevisionBanner({
             onChange={(e) => setNote(e.target.value)}
             rows={2}
             placeholder="What was wrong with it? Kept on the page's history."
-            className="w-full resize-none rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
           <div className="mt-2 flex gap-2">
             <button
@@ -126,13 +126,13 @@ export function PendingRevisionBanner({
                   api.discardRevision(pageId, revision.seq, note.trim()),
                 )
               }
-              className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
+              className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
             >
               {busy === "discard" ? "Discarding…" : "Discard it"}
             </button>
             <button
               onClick={() => setAsking(false)}
-              className="text-xs text-ink-dim hover:text-ink"
+              className="text-xs text-fg-muted hover:text-fg"
             >
               Cancel
             </button>
@@ -153,14 +153,14 @@ export function PendingRevisionBanner({
           <button
             disabled={!!busy}
             onClick={() => act("edit", () => api.acceptRevision(pageId, revision.seq))}
-            className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
+            className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
           >
             Accept and edit
           </button>
           <button
             disabled={!!busy}
             onClick={() => setAsking(true)}
-            className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
+            className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
           >
             Discard
           </button>
@@ -184,7 +184,7 @@ export function DiffBody({ unified }: { unified: string }) {
               : l.kind === "del"
                 ? "bg-red-50 text-red-900"
                 : l.kind === "meta" || l.kind === "hunk"
-                  ? "text-ink-dim"
+                  ? "text-fg-muted"
                   : ""
           }
         >
