@@ -99,6 +99,13 @@ services:
       # Your code, at the same path inside and out — see the volume below.
       EREN_BROWSE_ROOT: ${EREN_PROJECTS_DIR:-${AICHIP_PROJECTS_DIR:-/workspace}}
       EREN_MAX_CONCURRENT: ${EREN_MAX_CONCURRENT:-${AICHIP_MAX_CONCURRENT:-2}}
+      # Off by default here: the port below is published on the host's
+      # loopback only, so the one browser that can reach it is yours, and it
+      # arrives through Docker's gateway rather than from 127.0.0.1 — which
+      # the token would otherwise ask to sign in. Publish the port wider and
+      # leave this unset, and every other device needs Eren's access link.
+      EREN_ACCESS_TOKEN: ${EREN_ACCESS_TOKEN:-off}
+      EREN_ALLOWED_HOSTS: ${EREN_ALLOWED_HOSTS:-}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     ports:
       # Loopback on the host, whatever the container binds inside. Eren has

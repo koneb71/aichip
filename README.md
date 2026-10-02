@@ -1171,8 +1171,10 @@ does not read a `.env` file — only Docker Compose does.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `EREN_BIND` | `127.0.0.1` | Address the dashboard listens on. Eren has no login, so anything but loopback is refused at startup unless `EREN_TRUST_NETWORK` is also set. An address that does not parse falls back to loopback. |
-| `EREN_TRUST_NETWORK` | unset | Set to anything but empty or `0` to acknowledge that a non-loopback `EREN_BIND` makes this machine's agents reachable by anyone who can reach the port. An SSH tunnel is the safer way in. |
+| `EREN_BIND` | `127.0.0.1` | Address the dashboard listens on. Anything but loopback (`0.0.0.0` for every interface) turns on the access token, so other devices need the access link — see [using Eren from other devices](#using-eren-from-other-devices). An address that does not parse falls back to loopback. |
+| `EREN_ALLOWED_HOSTS` | unset | Names other devices reach this machine by, separated by commas: `192.168.1.20`, `mybox.local`. Without one, the Host check refuses every other device. No ports, paths or wildcards. |
+| `EREN_ACCESS_TOKEN` | generated | The token other devices must present when Eren listens beyond loopback. Unset, Eren makes a random one and keeps it in `~/.eren/access_token`; set it to choose your own (16+ letters, digits, `-_.~`), or to `off` for no token — which then also needs `EREN_TRUST_NETWORK`. |
+| `EREN_TRUST_NETWORK` | unset | Set to anything but empty or `0` to acknowledge running beyond loopback **without** a token (`EREN_ACCESS_TOKEN=off`), where anyone who can reach the port can use this machine's agents. Not needed with the token on. |
 | `EREN_MAX_CONCURRENT` | `2` | How many agent processes run at once. Higher values burn through a subscription's rolling rate limits faster. |
 | `EREN_WEB_DIST` | `web/dist` | Where the dashboard build is served from, relative to the working directory unless absolute. |
 | `EREN_BROWSE_ROOT` | `$HOME` | The only tree the folder browser may show. In a container, point it at wherever your code is mounted. |
@@ -1198,6 +1200,33 @@ Compose reads a few more, which Eren itself does not read: `EREN_PROJECTS_DIR`, 
 `CLAUDE_CODE_OAUTH_TOKEN`, `UID`, `GID`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
 `POSTGRES_PORT`, `MINIO_PORT` and `MINIO_CONSOLE_PORT`. See
 [Running in Docker](#running-in-docker).
+
+### Using Eren from other devices
+
+To open the dashboard on a phone, tablet or another computer on your network:
+
+```bash
+EREN_BIND=0.0.0.0 EREN_ALLOWED_HOSTS=192.168.1.20 eren serve
+```
+
+with `192.168.1.20` replaced by this machine's address (if you leave `EREN_ALLOWED_HOSTS`
+out, `eren serve` prints its best guess). It then logs an **access link** for each allowed
+name — `http://192.168.1.20:4820/?access=<token>`. Open it once on each device: Eren keeps
+the token in a cookie and takes it out of the address bar, and the device is remembered from
+then on. Bookmark `http://192.168.1.20:4820` rather than the link.
+
+- **This machine never needs the token.** Who is local is decided by the connection's address,
+  not by anything a request says, so the agent CLIs Eren starts and the browser here carry on
+  exactly as before.
+- **Scripts** on another machine send `Authorization: Bearer <token>`.
+- **Signing every device out**: delete `~/.eren/access_token` and restart; a new token is made.
+  Set `EREN_ACCESS_TOKEN` instead to choose the token yourself.
+- **Previews and apps** open on names under `localhost`, which another device resolves to
+  itself, so they are only reachable from this machine.
+- The token protects the dashboard over plain HTTP: anyone who can watch your network traffic
+  can read it. That is fine on a home network you trust. On anything else, or to reach it away
+  from home, put Eren behind a private network such as Tailscale (and allow the name it gives
+  this machine), or use an SSH tunnel and leave `EREN_BIND` alone.
 
 ### Variables Eren sets on processes it starts
 
@@ -1350,8 +1379,12 @@ the image.
 Every port the compose file publishes — Eren, Postgres, MinIO — is bound to `127.0.0.1`
 on the host. Inside the container Eren binds `0.0.0.0` (the image sets `EREN_BIND` and
 `EREN_TRUST_NETWORK=1`, because the container's own loopback is not the host's); what is
-actually reachable is decided by the port mapping. Eren has no authentication, so from
-another machine use an SSH tunnel rather than widening the mapping.
+actually reachable is decided by the port mapping. Your browser reaches the container through
+Docker's gateway rather than from its loopback, so the compose file turns the access token
+off (`EREN_ACCESS_TOKEN=off`) — the `127.0.0.1` mapping is what keeps it private. To use it
+from other devices, publish the port wider, set `EREN_ACCESS_TOKEN` (or leave it unset to
+have one generated inside the container's state volume) and `EREN_ALLOWED_HOSTS`, and open
+the access link from `docker compose logs eren`.
 
 **Know what you're trading.** The token is a real credential sitting in a file, valid
 until you revoke it, rather than a keychain entry scoped to your machine. Eren itself

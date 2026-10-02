@@ -28,7 +28,7 @@
 ///
 /// Named without their prefix, because each is read under two names (see
 /// [`crate::brand::var`]) and both have to go: [`own_secrets`] spells them out.
-pub const OWN_SECRETS: &[&str] = &["S3_ACCESS_KEY", "S3_SECRET_KEY"];
+pub const OWN_SECRETS: &[&str] = &["S3_ACCESS_KEY", "S3_SECRET_KEY", "ACCESS_TOKEN"];
 
 /// Every variable name [`OWN_SECRETS`] can be set under.
 pub fn own_secrets() -> impl Iterator<Item = String> {

@@ -159,8 +159,19 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         .and_then(|b| b.parse().ok())
         .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
     let acknowledged = eren_server::network_trusted();
-    match eren_server::exposure(bind, acknowledged) {
-        eren_server::Exposure::Local => {}
+    // Both read now, so a typo is refused before anything starts.
+    let hosts = eren_server::access::parse_hosts(
+        &eren_shared::brand::var("ALLOWED_HOSTS").unwrap_or_default(),
+    )
+    .map_err(|e| anyhow::anyhow!("EREN_ALLOWED_HOSTS: {e}"))?;
+    let token_setting =
+        eren_server::access::token_setting(eren_shared::brand::var("ACCESS_TOKEN").as_deref())
+            .map_err(|e| anyhow::anyhow!("{}: {e}", eren_server::ACCESS_TOKEN))?;
+    let wants_token = token_setting != eren_server::access::TokenSetting::Off;
+    let token_in_file = token_setting == eren_server::access::TokenSetting::Generated;
+    let exposure = eren_server::exposure(bind, acknowledged, wants_token);
+    match exposure {
+        eren_server::Exposure::Local | eren_server::Exposure::Protected => {}
         eren_server::Exposure::Network => {
             tracing::warn!(
                 %bind,
@@ -178,6 +189,16 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
 
     // Before the managed Postgres starts, while nothing in the folder is open.
     adopt_legacy_state()?;
+
+    // After the home folder is where it belongs, because the token lives in it.
+    let token = match (exposure, token_setting) {
+        (eren_server::Exposure::Protected, eren_server::access::TokenSetting::Given(t)) => Some(t),
+        (eren_server::Exposure::Protected, _) => Some(eren_server::access::load_or_create_token(
+            &eren_shared::brand::home().join("access_token"),
+        )?),
+        _ => None,
+    };
+    let access = std::sync::Arc::new(eren_server::access::Access::new(hosts, token));
     let home = eren_shared::brand::home();
     tokio::fs::create_dir_all(&home).await?;
 
@@ -356,6 +377,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         permissions,
         storage,
         file_writes: Default::default(),
+        access: access.clone(),
     };
     let app = eren_server::app(state);
 
@@ -363,10 +385,18 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // The address it is actually on, not an assumed loopback one.
     tracing::info!("eren dashboard: http://{}:{port}", displayable(bind));
+    if !bind.is_loopback() {
+        announce_network_access(bind, port, &access, token_in_file);
+    }
     // The address it actually bound, not the hardcoded loopback the MCP base
     // uses — a spawned CLI is on this machine, but the person reading the push
-    // on their phone is not, and a loopback link can never answer them.
-    eren_core::attention::set_dashboard_url(format!("http://{}:{port}", displayable(bind)));
+    // on their phone is not, and a loopback link can never answer them. The
+    // first allowed name is the one they reach it by, when there is one.
+    let reachable = match (bind.is_loopback(), access.hosts().first()) {
+        (false, Some(host)) => host.clone(),
+        _ => displayable(bind),
+    };
+    eren_core::attention::set_dashboard_url(format!("http://{reachable}:{port}"));
 
     if !headless {
         let _ = env_guard::command("open")
@@ -374,8 +404,60 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
             .spawn();
     }
 
-    axum::serve(listener, app).await?;
+    // With the peer's address, which is what decides whether a caller is this
+    // machine — see `eren_server::access`.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
+}
+
+/// Tell the person who bound wide how other devices get in — or why they
+/// will not yet.
+fn announce_network_access(
+    bind: std::net::IpAddr,
+    port: u16,
+    access: &eren_server::access::Access,
+    token_in_file: bool,
+) {
+    if access.hosts().is_empty() {
+        // Without a name to answer to, every other device is refused by the
+        // Host check, which looks like a broken server from the other side.
+        let suggestion = if bind.is_unspecified() {
+            eren_server::access::guess_lan_address()
+        } else {
+            Some(bind)
+        };
+        match suggestion {
+            Some(ip) => tracing::warn!(
+                "other devices will be refused until Eren is told the name they use: \
+                 set EREN_ALLOWED_HOSTS={} (this machine's address on your network, \
+                 as far as Eren can tell)",
+                displayable(ip)
+            ),
+            None => tracing::warn!(
+                "other devices will be refused until Eren is told the name they use: \
+                 set EREN_ALLOWED_HOSTS to this machine's address on your network"
+            ),
+        }
+    }
+    if let Some(token) = access.token() {
+        for host in access.hosts() {
+            tracing::info!(
+                "to use Eren from another device, open this link there once: \
+                 http://{host}:{port}/?{}={token}",
+                eren_server::access::QUERY
+            );
+        }
+        if token_in_file {
+            tracing::info!(
+                "the access token is in {} — delete it and restart to sign every device out",
+                eren_shared::brand::home().join("access_token").display()
+            );
+        }
+    }
 }
 
 /// How to spell a bind address in a URL somebody can click.
