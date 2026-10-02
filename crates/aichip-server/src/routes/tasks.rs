@@ -957,6 +957,15 @@ pub(crate) async fn move_task(
         body.board_column.as_deref() == Some("running") && current == "backlog" && !run_active;
     if starting {
         vet_task(&state, id).await?;
+        // Every refusal the start could meet is met here, before the column
+        // moves: a spent budget found by `enqueue_task` after the write would
+        // leave the card In Progress with nothing running.
+        let scope = aichip_core::budgets::scope_of_task(&state.db, id)
+            .await
+            .map_err(internal)?;
+        aichip_core::budgets::check(&state.db, &scope, true)
+            .await
+            .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
         ask_about_cost(&state, id, body.acknowledge_forecast).await?;
     }
 
@@ -1235,7 +1244,10 @@ async fn post_comment(
             Ok(run_id) => run_ids.push(run_id),
             // The comment is posted and the other agents still answer; the
             // thread says why this one does not.
-            Err(e) if e.is::<aichip_core::agents::Unavailable>() => {
+            Err(e)
+                if e.is::<aichip_core::agents::Unavailable>()
+                    || e.is::<aichip_core::budgets::OverBudget>() =>
+            {
                 aichip_core::runs::report::post_system(&state.db, task_id, None, &e.to_string())
                     .await
                     .map_err(internal)?;

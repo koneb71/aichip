@@ -330,7 +330,7 @@ export function NewTaskModal({
           </button>
           <button
             onClick={() => submit(false)}
-            disabled={busy}
+            disabled={busy || ask !== null}
             className="rounded-lg border border-line px-4 py-2 text-sm hover:bg-panel-2"
           >
             Add to backlog
@@ -338,7 +338,7 @@ export function NewTaskModal({
           <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={() => submit(true)}
-            disabled={busy}
+            disabled={busy || ask !== null}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           >
             {planFirst ? "Plan it" : "Start now"}

@@ -147,13 +147,15 @@ enum Phase {
 
 impl Orchestrator {
     /// Drop from a batch the assignments whose member is already at its
-    /// `max_concurrent` — counting the ones this batch would add.
+    /// `max_concurrent` — counting the ones this batch would add — or whose
+    /// own budget is spent. A spent budget on the first assignment ends the
+    /// run, saying so: the team cannot make progress without it.
     async fn within_limits(
         &self,
         batch: Vec<usize>,
         pending: &[Assignment],
         workers: &[Member],
-    ) -> Vec<usize> {
+    ) -> Result<Vec<usize>, crate::budgets::OverBudget> {
         let mut room: HashMap<Uuid, i64> = HashMap::new();
         let mut kept = Vec::with_capacity(batch.len());
         for (position, index) in batch.into_iter().enumerate() {
@@ -161,6 +163,16 @@ impl Orchestrator {
                 kept.push(index);
                 continue;
             };
+            let own = crate::budgets::Scope {
+                agent: Some(member.agent_id),
+                ..Default::default()
+            };
+            if let Err(over) = crate::budgets::check(&self.db, &own, false).await {
+                if position == 0 {
+                    return Err(over);
+                }
+                continue;
+            }
             let left = match room.get(&member.agent_id) {
                 Some(left) => Some(*left),
                 None => crate::agents::room(&self.db, member.agent_id)
@@ -177,7 +189,7 @@ impl Orchestrator {
                 None => kept.push(index),
             }
         }
-        kept
+        Ok(kept)
     }
 
     /// Queue an organization run for a goal.
@@ -771,7 +783,13 @@ impl Orchestrator {
             // A specialist at its limit of runs at once sits out the rest of
             // this batch. The first assignment always goes, so the team never
             // stalls waiting on itself.
-            let batch = self.within_limits(batch, &pending, &workers).await;
+            let batch = match self.within_limits(batch, &pending, &workers).await {
+                Ok(batch) => batch,
+                Err(over) => {
+                    aborted = Some(over.to_string());
+                    break;
+                }
+            };
             let completed: Vec<&Assignment> =
                 all.iter().filter(|a| a.status == "completed").collect();
 

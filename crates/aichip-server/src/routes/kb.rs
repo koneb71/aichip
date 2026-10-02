@@ -987,7 +987,7 @@ async fn generate(
             body.parent_id,
         )
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(super::refused_or(StatusCode::BAD_REQUEST))?;
     // The article id as well as the run id: the page row exists immediately,
     // so the caller can navigate to it and watch it fill in.
     let article_id: Option<Uuid> =
@@ -1031,7 +1031,7 @@ async fn regenerate(
             None,
         )
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(super::refused_or(StatusCode::BAD_REQUEST))?;
     Ok(Json(json!({ "runId": run_id })))
 }
 

@@ -54,6 +54,15 @@ pub fn run_refused(e: anyhow::Error) -> ApiError {
     }
 }
 
+/// [`run_refused`] for a door whose other failures are the caller's fault
+/// (a 400) rather than a fault: a refusal still reads as a 409.
+pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
+    move |e| match run_refused(e) {
+        (StatusCode::INTERNAL_SERVER_ERROR, message) => (status, message),
+        refused => refused,
+    }
+}
+
 pub fn internal(e: impl std::fmt::Display) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }

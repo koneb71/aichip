@@ -446,6 +446,7 @@ async fn call_tool(
                 crate::routes::tasks::vet_task(state, task_id)
                     .await
                     .map_err(|(_, message)| message)?;
+                vet_spend(state, task_id).await?;
                 // Recorded only once the card is definitely going to start —
                 // after the vet, before the enqueue. Recording it earlier
                 // burned a unit of the cap on a card the vet then refused,
@@ -504,6 +505,7 @@ async fn call_tool(
             crate::routes::tasks::vet_task(state, task_id)
                 .await
                 .map_err(|(_, message)| message)?;
+            vet_spend(state, task_id).await?;
             let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
             vet_manager_start(state, pass.as_ref(), Some(task_id)).await?;
             if let Some(pass) = &pass {
@@ -1074,6 +1076,28 @@ async fn record_if_pass(state: &AppState, chat_id: Uuid, kind: &str, task_id: Uu
 /// The refusals are written at the model: it is mid-tool-call and needs to
 /// know what to do instead, which in both cases is "leave it in the backlog
 /// and say so", not "try a different tool".
+/// The budget questions, asked before a start is recorded so a refusal
+/// neither burns a unit of a manager pass's cap nor tells its log the card
+/// started. A spent budget refuses; a start that could overrun one is a
+/// person's call, never the assistant's — it stays in the backlog.
+async fn vet_spend(state: &AppState, task_id: Uuid) -> Result<(), String> {
+    let scope = aichip_core::budgets::scope_of_task(&state.db, task_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    aichip_core::budgets::check(&state.db, &scope, true)
+        .await
+        .map_err(|e| e.to_string())?;
+    match aichip_core::budgets::forecast_check(&state.db, task_id, false)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Ok(()) => Ok(()),
+        Err(ask) => Err(format!(
+            "{ask} — the card is in the backlog; a person has to choose to start it"
+        )),
+    }
+}
+
 async fn vet_manager_start(
     state: &AppState,
     pass: Option<&aichip_core::manager::Pass>,

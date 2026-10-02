@@ -56,8 +56,19 @@ export function AgentEditorDrawer({
 
   const save = async () => {
     if (!name.trim() || busy) return;
-    setBusy(true);
     setError(null);
+    let limits: { max_concurrent: number | null; max_daily_runs: number | null; cooldown_secs: number | null };
+    try {
+      limits = {
+        max_concurrent: limit(maxConcurrent, "At a time"),
+        max_daily_runs: limit(maxDaily, "Runs a day"),
+        cooldown_secs: limit(cooldown, "Rest between runs"),
+      };
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+      return;
+    }
+    setBusy(true);
     const body = {
       workspace_id: workspaceId,
       name: name.trim(),
@@ -68,9 +79,7 @@ export function AgentEditorDrawer({
       permission_preset: preset,
       effort: effort || null,
       engine,
-      max_concurrent: limit(maxConcurrent),
-      max_daily_runs: limit(maxDaily),
-      cooldown_secs: limit(cooldown),
+      ...limits,
     };
     try {
       // A new agent has no id until it exists, so the server list is saved
@@ -398,8 +407,11 @@ function EngineWarning({ engine, preset }: { engine: string | null; preset: stri
   );
 }
 
-/** A limit field: a positive whole number, or no limit. */
-function limit(s: string): number | null {
-  const n = Math.round(Number(s));
-  return s.trim() === "" || !Number.isFinite(n) || n <= 0 ? null : n;
+/** A limit field: empty is no limit; anything else must be a positive whole
+ *  number, or the save says so — a typo must never quietly lift a limit. */
+function limit(s: string, what: string): number | null {
+  if (s.trim() === "") return null;
+  const n = Number(s.trim());
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`${what}: \u201c${s}\u201d is not a positive whole number`);
+  return n;
 }

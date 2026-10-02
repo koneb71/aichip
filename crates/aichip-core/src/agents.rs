@@ -268,7 +268,14 @@ pub async fn hold_for_limits(
     .await?;
     let Some(row) = row else { return Ok(None) };
     let agent: Uuid = row.get("id");
-    let load = load_of(db, agent, row.get("name"), row.get("workspace_id")).await?;
+    let load = load_of(
+        db,
+        agent,
+        row.get("name"),
+        row.get("workspace_id"),
+        Some(run_id),
+    )
+    .await?;
     Ok(wait_for(
         &row.get::<String, _>("name"),
         Limits {
@@ -292,23 +299,35 @@ pub async fn room(db: &Db, agent_id: Uuid) -> anyhow::Result<Option<i64>> {
     let Some(max) = row.get::<Option<i32>, _>("max_concurrent") else {
         return Ok(None);
     };
-    let load = load_of(db, agent_id, row.get("name"), row.get("workspace_id")).await?;
+    let load = load_of(db, agent_id, row.get("name"), row.get("workspace_id"), None).await?;
     Ok(Some((i64::from(max) - load.live).max(0)))
 }
 
-async fn load_of(db: &Db, agent: Uuid, name: String, workspace: Uuid) -> anyhow::Result<Load> {
+/// `except` is the run being asked about: never its own competition, and —
+/// when it already started once — not counted against today twice.
+async fn load_of(
+    db: &Db,
+    agent: Uuid,
+    name: String,
+    workspace: Uuid,
+    except: Option<Uuid>,
+) -> anyhow::Result<Load> {
     let row = sqlx::query(
         "SELECT
+            -- Live: executing, or claimed a moment ago and about to (its queue
+            -- row gone, its status not yet moved on).
             (SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
               WHERE COALESCE(r.agent_id, t.agent_id) = $1 AND r.team_id IS NULL
-                AND r.workflow_id IS NULL
-                AND r.status IN ('starting', 'running', 'waiting_permission'))
+                AND r.workflow_id IS NULL AND r.id IS DISTINCT FROM $4
+                AND (r.status IN ('starting', 'running', 'waiting_permission')
+                     OR (r.status = 'queued' AND r.started_at IS NOT NULL
+                         AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.run_id = r.id))))
           + (SELECT count(*) FROM steps s JOIN runs r ON r.id = s.run_id
                LEFT JOIN projects p ON p.id = r.project_id
               WHERE s.assignee = $2 AND s.status IN ('starting', 'running', 'waiting_permission')
                 AND (p.workspace_id IS NULL OR p.workspace_id = $3)) AS live,
             (SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
-              WHERE COALESCE(r.agent_id, t.agent_id) = $1
+              WHERE COALESCE(r.agent_id, t.agent_id) = $1 AND r.id IS DISTINCT FROM $4
                 AND r.started_at >= date_trunc('day', now())) AS today,
             (SELECT EXTRACT(EPOCH FROM now() - max(r.finished_at))::bigint
                FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
@@ -317,6 +336,7 @@ async fn load_of(db: &Db, agent: Uuid, name: String, workspace: Uuid) -> anyhow:
     .bind(agent)
     .bind(&name)
     .bind(workspace)
+    .bind(except)
     .fetch_one(&db.pool)
     .await?;
     Ok(Load {

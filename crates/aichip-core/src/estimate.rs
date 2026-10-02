@@ -38,18 +38,18 @@ pub async fn for_task(
     tier: Option<&str>,
     engine: &str,
 ) -> anyhow::Result<Option<Estimate>> {
-    // Narrowest first; each arm is a literal, every value bound.
-    let rungs: [(&'static str, &str); 3] = [
-        (
-            "project",
-            "t.project_id = $1 AND r.tier_resolved IS NOT DISTINCT FROM $2 AND r.engine = $3",
-        ),
-        (
-            "tier",
-            "r.tier_resolved IS NOT DISTINCT FROM $2 AND r.engine = $3",
-        ),
-        ("engine", "r.engine = $3"),
-    ];
+    // Narrowest first; each arm is a literal, every value bound. With no
+    // tier given (an `auto` card), any tier is evidence: the project rung
+    // means "this project on this engine", and the tier rung, which would
+    // then be the engine rung, is skipped.
+    let mut rungs: Vec<(&'static str, &str)> = vec![(
+        "project",
+        "t.project_id = $1 AND ($2::text IS NULL OR r.tier_resolved = $2) AND r.engine = $3",
+    )];
+    if tier.is_some() {
+        rungs.push(("tier", "r.tier_resolved = $2 AND r.engine = $3"));
+    }
+    rungs.push(("engine", "r.engine = $3"));
     for (basis, filter) in rungs {
         let row = sqlx::query(&format!(
             "SELECT COUNT(*) AS runs,
@@ -140,8 +140,13 @@ pub fn burn_at(standing: &Standing, now: DateTime<Utc>) -> Option<Burn> {
         }
         let rate = used / elapsed;
         let left = (limit - used).max(0.0);
-        let at = now + chrono::Duration::seconds((left / rate) as i64);
-        let runs_out_at = (at < standing.window_end).then_some(at);
+        // Compared against the window before any date is made: a trickle
+        // against a large cap projects so far out that the instant itself
+        // would not fit in a timestamp.
+        let secs = left / rate;
+        let window_left = (standing.window_end - now).num_seconds() as f64;
+        let runs_out_at = (secs.is_finite() && secs < window_left)
+            .then(|| now + chrono::Duration::seconds(secs as i64));
         let sooner = match (&soonest, runs_out_at) {
             (None, _) => true,
             (
@@ -220,6 +225,13 @@ mod tests {
     #[test]
     fn a_slow_week_lasts_the_window() {
         let (s, now) = standing(40.0, 1.0, 24, 168);
+        assert_eq!(burn_at(&s, now).unwrap().runs_out_at, None);
+    }
+
+    #[test]
+    fn a_trickle_against_a_huge_cap_lasts_the_window_rather_than_panicking() {
+        let (mut s, now) = standing(1e12, 0.0, 600, 720);
+        s.used.usd = 1e-6;
         assert_eq!(burn_at(&s, now).unwrap().runs_out_at, None);
     }
 

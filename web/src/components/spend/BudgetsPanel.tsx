@@ -246,7 +246,11 @@ function BudgetForm({
       scopeKind === "workspace"
         ? api.workspaces().then((r) => r.workspaces)
         : scopeKind === "project"
-          ? api.projects(ws).then((r) => r.projects)
+          ? // Apps are projects too, and generating one costs real money.
+            Promise.all([api.projects(ws), api.apps(ws)]).then(([p, a]) => [
+              ...p.projects,
+              ...a.apps.map((app) => ({ id: app.projectId, name: `${app.name} (app)` })),
+            ])
           : scopeKind === "agent"
             ? api.agents(ws).then((r) => r.agents)
             : scopeKind === "team"
@@ -255,23 +259,40 @@ function BudgetForm({
     load.then((o) => setOptions(o.map((x) => ({ id: x.id, name: x.name })))).catch(() => setOptions([]));
   }, [active, scopeKind]);
 
-  const num = (s: string) => (s.trim() === "" ? null : Number(s));
+  /** Empty is "not set"; anything else must be a number, or the save says so
+   *  — a typo must never quietly remove a cap. */
+  const num = (s: string, what: string): number | null => {
+    if (s.trim() === "") return null;
+    const n = Number(s.trim().replace(/^\$/, ""));
+    if (!Number.isFinite(n)) throw new Error(`${what}: \u201c${s}\u201d is not a number`);
+    return n;
+  };
 
   const save = async () => {
     setError(null);
-    const body: BudgetBody = {
+    let body: BudgetBody;
+    try {
+      const warnPercent = num(warn, "Warn at") ?? 80;
+      if (warnPercent < 1 || warnPercent > 100) throw new Error("Warn at: between 1 and 100");
+      const tokenCap = num(tokens, "Output tokens");
+      const runCap = num(runs, "Runs");
+      body = {
       name,
       scope_kind: scopeKind,
       scope_id: scopeKind === "machine" ? null : scopeId || null,
       window_kind: windowKind,
-      cap_usd: num(usd),
-      cap_output_tokens: num(tokens) == null ? null : Math.round(num(tokens)!),
-      cap_runs: num(runs) == null ? null : Math.round(num(runs)!),
-      warn_percent: Math.round(Number(warn) || 80),
+      cap_usd: num(usd, "Dollars"),
+      cap_output_tokens: tokenCap == null ? null : Math.round(tokenCap),
+      cap_runs: runCap == null ? null : Math.round(runCap),
+      warn_percent: Math.round(warnPercent),
       on_exceed: stop ? "stop" : "hold",
-      confirm_above_usd: num(confirmAbove),
+      confirm_above_usd: num(confirmAbove, "Ask above"),
       enabled,
-    };
+      };
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+      return;
+    }
     try {
       if (p) await api.updateBudget(p.id, body);
       else await api.createBudget(body);
@@ -358,6 +379,12 @@ function BudgetForm({
         <input type="checkbox" checked={stop} onChange={(e) => setStop(e.target.checked)} className="accent-accent" />
         Also stop a run in flight when it crosses the token cap (otherwise only new work is held)
       </label>
+      {stop && (
+        <p className="mt-1 pl-6 text-[11px] text-ink-dim">
+          Each run is measured against what was left when it started, so runs going at the same time can
+          together pass the cap by up to their combined size.
+        </p>
+      )}
       <label className="mt-1 flex cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-accent" />
         On

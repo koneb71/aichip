@@ -31,7 +31,25 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::db::Db;
-use crate::spend::PROJECT_JOIN;
+
+/// Every way a run belongs to a project. Wider than the spend page's join on
+/// purpose: a research run, a knowledge-base article and a comment reply each
+/// name their project their own way, and a budget that cannot see them would
+/// let them spend past it — and would never hold them either.
+const RUN_JOIN: &str = "
+    LEFT JOIN tasks         t  ON t.id  = r.task_id
+    LEFT JOIN workflows     w  ON w.id  = r.workflow_id
+    LEFT JOIN chats         c  ON c.id  = r.chat_id
+    LEFT JOIN researches    rs ON rs.id = r.research_id
+    LEFT JOIN task_comments cm ON cm.id = r.comment_id
+    LEFT JOIN tasks         ct ON ct.id = cm.task_id
+    LEFT JOIN projects      p  ON p.id  = COALESCE(r.project_id, t.project_id, w.project_id,
+                                               c.project_id, r.kb_project_id, rs.project_id,
+                                               ct.project_id)";
+
+/// The run's workspace, given `RUN_JOIN`. A general chat or a research run
+/// with no project carries it on its own row.
+const RUN_WORKSPACE: &str = "COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id)";
 
 /// What a policy covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -253,12 +271,12 @@ pub struct Scope {
 /// The scope of an existing run: its card's, or its own.
 pub async fn scope_of_run(db: &Db, run_id: Uuid) -> anyhow::Result<Scope> {
     let row = sqlx::query(&format!(
-        "SELECT COALESCE(p.workspace_id, c.workspace_id) AS workspace, p.id AS project,
+        "SELECT {RUN_WORKSPACE} AS workspace, p.id AS project,
                 COALESCE(r.agent_id, t.agent_id) AS agent, COALESCE(r.team_id, t.team_id) AS team,
                 (SELECT rr.routine_id FROM routine_runs rr
                   WHERE rr.run_id = r.id OR (r.task_id IS NOT NULL AND rr.task_id = r.task_id)
                   ORDER BY rr.fired_at DESC LIMIT 1) AS routine
-           FROM runs r {PROJECT_JOIN}
+           FROM runs r {RUN_JOIN}
           WHERE r.id = $1"
     ))
     .bind(run_id)
@@ -278,6 +296,33 @@ pub async fn scope_of_task(db: &Db, task_id: Uuid) -> anyhow::Result<Scope> {
           WHERE t.id = $1",
     )
     .bind(task_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(scope_from).unwrap_or_default())
+}
+
+/// The scope a chat's next turn would have.
+pub async fn scope_of_chat(db: &Db, chat_id: Uuid) -> anyhow::Result<Scope> {
+    let row = sqlx::query(
+        "SELECT COALESCE(p.workspace_id, c.workspace_id) AS workspace, p.id AS project,
+                NULL::uuid AS agent, NULL::uuid AS team, NULL::uuid AS routine
+           FROM chats c LEFT JOIN projects p ON p.id = c.project_id
+          WHERE c.id = $1",
+    )
+    .bind(chat_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(scope_from).unwrap_or_default())
+}
+
+/// The scope a research run would have.
+pub async fn scope_of_research(db: &Db, research_id: Uuid) -> anyhow::Result<Scope> {
+    let row = sqlx::query(
+        "SELECT rs.workspace_id AS workspace, rs.project_id AS project,
+                NULL::uuid AS agent, NULL::uuid AS team, NULL::uuid AS routine
+           FROM researches rs WHERE rs.id = $1",
+    )
+    .bind(research_id)
     .fetch_optional(&db.pool)
     .await?;
     Ok(row.map(scope_from).unwrap_or_default())
@@ -367,7 +412,8 @@ pub async fn window(db: &Db, kind: WindowKind) -> anyhow::Result<(DateTime<Utc>,
 ///
 /// Dollars count only what engines reported — a run with no price adds
 /// nothing to `usd` and everything to `output_tokens`. Runs are counted once
-/// they start; a run still queued has spent nothing.
+/// claimed from the queue (`claim_next` stamps `started_at` as it hands one
+/// out); a run still waiting has spent nothing.
 pub async fn usage(db: &Db, policy: &Policy, since: DateTime<Utc>) -> anyhow::Result<Usage> {
     let used = if policy.scope_kind == ScopeKind::Agent {
         agent_usage(db, policy.scope_id, since).await?
@@ -375,7 +421,7 @@ pub async fn usage(db: &Db, policy: &Policy, since: DateTime<Utc>) -> anyhow::Re
         // Each arm is a literal: the scope id is always bound, never written in.
         let filter = match policy.scope_kind {
             ScopeKind::Machine => "TRUE",
-            ScopeKind::Workspace => "COALESCE(p.workspace_id, c.workspace_id) = $2",
+            ScopeKind::Workspace => "COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $2",
             ScopeKind::Project => "p.id = $2",
             ScopeKind::Team => "COALESCE(r.team_id, t.team_id) = $2",
             ScopeKind::Routine => {
@@ -389,7 +435,7 @@ pub async fn usage(db: &Db, policy: &Policy, since: DateTime<Utc>) -> anyhow::Re
             "SELECT COALESCE(SUM(r.cost_usd), 0) AS usd,
                     COALESCE(SUM(r.output_tokens), 0)::bigint AS tokens,
                     COUNT(*) FILTER (WHERE r.started_at IS NOT NULL) AS runs
-               FROM runs r {PROJECT_JOIN}
+               FROM runs r {RUN_JOIN}
               WHERE COALESCE(r.finished_at, r.started_at, r.created_at) >= $1 AND {filter}"
         ))
         .bind(since)
@@ -435,7 +481,7 @@ async fn agent_usage(db: &Db, agent: Option<Uuid>, since: DateTime<Utc>) -> anyh
              SELECT s.cost_usd, s.output_tokens, s.started_at IS NOT NULL
                FROM steps s
                JOIN agents a ON a.id = $2 AND s.assignee = a.name
-               JOIN runs r ON r.id = s.run_id {PROJECT_JOIN}
+               JOIN runs r ON r.id = s.run_id {RUN_JOIN}
               WHERE p.workspace_id = a.workspace_id
                 AND COALESCE(s.finished_at, s.started_at, r.created_at) >= $1
            ) work"
@@ -480,6 +526,18 @@ pub async fn standing(db: &Db, policy: Policy) -> anyhow::Result<Standing> {
 /// its warning line or is spent, an incident is written and the attention
 /// hook told — once, however many times this is asked.
 pub async fn check(db: &Db, scope: &Scope, with_machine: bool) -> Result<(), OverBudget> {
+    check_claim(db, scope, with_machine, false).await
+}
+
+/// [`check`] for a queued run being claimed. A run that already started once
+/// — a rate-limit hold coming back — was counted when it first started, so it
+/// is not held by its own count: one fewer run is held against the cap.
+pub async fn check_claim(
+    db: &Db,
+    scope: &Scope,
+    with_machine: bool,
+    already_counted: bool,
+) -> Result<(), OverBudget> {
     let policies = match policies_for(db, scope, with_machine).await {
         Ok(p) => p,
         Err(e) => {
@@ -489,6 +547,11 @@ pub async fn check(db: &Db, scope: &Scope, with_machine: bool) -> Result<(), Ove
     };
     for policy in policies {
         let standing = match standing(db, policy.clone()).await {
+            Ok(mut s) if already_counted && s.used.runs > 0 => {
+                s.used.runs -= 1;
+                s.verdict = evaluate(&s.policy, &s.used);
+                s
+            }
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(policy = %policy.name, error = %e, "budget read failed; letting the work through");
@@ -600,8 +663,13 @@ async fn record_once(db: &Db, standing: &Standing, kind: &str) -> bool {
 
 /// How far a run may go before a `stop` policy halts it: the smallest token
 /// headroom among the policies covering it, with the policy's name.
-pub async fn token_headroom(db: &Db, run_id: Uuid) -> Option<(i64, String)> {
-    let scope = scope_of_run(db, run_id).await.ok()?;
+pub async fn token_headroom(db: &Db, run_id: Uuid, step_id: Option<Uuid>) -> Option<(i64, String)> {
+    let mut scope = scope_of_run(db, run_id).await.ok()?;
+    // A team's or workflow's step is its member's work: that agent's own
+    // budget covers it too.
+    if let Some(step) = step_id {
+        scope.agent = scope.agent.or(step_agent(db, step).await);
+    }
     let policies = policies_for(db, &scope, true).await.ok()?;
     let mut tightest: Option<(i64, String)> = None;
     for policy in policies.into_iter().filter(|p| p.stops_in_flight) {
@@ -759,6 +827,20 @@ pub async fn forecast_check(
         .await?;
     }
     Ok(Ok(()))
+}
+
+/// The agent a team step is assigned to, by its name in the run's workspace.
+pub async fn step_agent(db: &Db, step_id: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar(&format!(
+        "SELECT a.id FROM steps s JOIN runs r ON r.id = s.run_id {RUN_JOIN}
+           JOIN agents a ON a.name = s.assignee AND a.workspace_id = {RUN_WORKSPACE}
+          WHERE s.id = $1"
+    ))
+    .bind(step_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Let go of every queued run a policy was holding — after an override, an
@@ -1058,6 +1140,143 @@ mod db_tests {
         assert_eq!(status, "failed");
         assert!(reason.unwrap_or_default().contains("stopped by budget"));
 
+        t.finish().await;
+    }
+
+    /// A comment reply, a KB article and a general research reach their
+    /// workspace through their own rows, not `runs.task_id` — and each still
+    /// counts against it, and is held by it.
+    #[tokio::test]
+    async fn work_that_reaches_its_workspace_sideways_still_counts() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, project) = t.project(dir.path(), true).await;
+        let card = t.card(project, "asked about").await;
+        let cap = policy(&t, "workspace", Some(ws), "cap_runs", "hold").await;
+        sqlx::query("UPDATE budget_policies SET cap_runs = 10 WHERE id = $1")
+            .bind(cap)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let comment: Uuid = sqlx::query_scalar(
+            "INSERT INTO task_comments (task_id, author, content)
+             VALUES ($1, 'you', '@ada why?') RETURNING id",
+        )
+        .bind(card)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let research: Uuid = sqlx::query_scalar(
+            "INSERT INTO researches (question, workspace_id) VALUES ('why?', $1) RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let mut runs = Vec::new();
+        for (column, id) in [
+            ("comment_id", comment),
+            ("kb_project_id", project),
+            ("research_id", research),
+        ] {
+            // `column` is one of the three literals above.
+            let run: Uuid = sqlx::query_scalar(&format!(
+                "INSERT INTO runs ({column}, status, trigger, engine, started_at)
+                 VALUES ($1, 'completed', 'manual', 'mock', now()) RETURNING id"
+            ))
+            .bind(id)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+            runs.push(run);
+        }
+
+        let p = get(&t.db, cap).await.unwrap().unwrap();
+        let since = window(&t.db, p.window_kind).await.unwrap().0;
+        let used = usage(&t.db, &p, since).await.unwrap();
+        assert_eq!(
+            used.runs, 3,
+            "each of the three counts against its workspace"
+        );
+        for run in runs {
+            let scope = scope_of_run(&t.db, run).await.unwrap();
+            assert_eq!(scope.workspace, Some(ws), "and each is held by it");
+        }
+        t.finish().await;
+    }
+
+    /// A run that already started — a rate limit sending it back to the
+    /// queue — was counted then. Coming back, it is not held by its own
+    /// count, even when that count is what fills the cap.
+    #[tokio::test]
+    async fn a_run_back_from_a_rate_limit_is_not_held_by_its_own_count() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let _orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), true).await;
+        let card = t.card(project, "throttled").await;
+        policy(&t, "machine", None, "cap_runs", "hold").await;
+        let run: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine, started_at)
+             VALUES ($1, 'queued', 'manual', 'mock', now()) RETURNING id",
+        )
+        .bind(card)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO queue (run_id) VALUES ($1)")
+            .bind(run)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        t.until(
+            "the throttled run to come back and finish",
+            "SELECT status = 'completed' FROM runs WHERE id = $1",
+            run,
+        )
+        .await;
+        t.finish().await;
+    }
+
+    /// A team run or workflow is counted the moment it is claimed. Between
+    /// its own steps it asks again whether it may spend more — and a run cap
+    /// it fills exactly is not a reason to stop it halfway. One more run
+    /// past the cap is.
+    #[tokio::test]
+    async fn a_run_that_fills_a_run_cap_still_finishes_its_own_steps() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), true).await;
+        let card = t.card(project, "team work").await;
+        policy(&t, "machine", None, "cap_runs", "hold").await;
+        let insert = "INSERT INTO runs (task_id, status, trigger, engine, started_at)
+                      VALUES ($1, 'running', 'manual', 'mock', now()) RETURNING id";
+        let run: Uuid = sqlx::query_scalar(insert)
+            .bind(card)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        orchestrator
+            .budget_allows_more(run)
+            .await
+            .expect("its own count does not stop it");
+
+        let _other: Uuid = sqlx::query_scalar(insert)
+            .bind(card)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert!(
+            orchestrator.budget_allows_more(run).await.is_err(),
+            "another run past the cap does"
+        );
         t.finish().await;
     }
 

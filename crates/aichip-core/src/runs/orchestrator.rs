@@ -796,6 +796,14 @@ impl Orchestrator {
     /// Create a run for a chat turn. Chat runs outrank task runs in the
     /// queue (priority 20 vs 10) so the assistant feels responsive.
     pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
+        // The assistant spends like anything else: a spent workspace or
+        // project says so on the message, not by leaving the turn queued.
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_chat(&self.db, chat_id).await?,
+            true,
+        )
+        .await?;
         let row = sqlx::query(
             "INSERT INTO runs (chat_id, status, trigger, engine)
              VALUES ($1, 'queued', 'chat', $2) RETURNING id",
@@ -822,6 +830,17 @@ impl Orchestrator {
         engine: &str,
     ) -> anyhow::Result<Uuid> {
         crate::agents::assert_can_run(&self.db, &[agent_id]).await?;
+        let task: Option<Uuid> =
+            sqlx::query_scalar("SELECT task_id FROM task_comments WHERE id = $1")
+                .bind(comment_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
+        let mut scope = match task {
+            Some(task) => crate::budgets::scope_of_task(&self.db, task).await?,
+            None => crate::budgets::Scope::default(),
+        };
+        scope.agent = Some(agent_id);
+        crate::budgets::check(&self.db, &scope, true).await?;
         let row = sqlx::query(
             "INSERT INTO runs (comment_id, agent_id, status, trigger, engine)
              VALUES ($1, $2, 'queued', 'comment', $3) RETURNING id",
@@ -1495,31 +1514,32 @@ impl Orchestrator {
         {
             return self.claim_head().await;
         }
-        // A machine-wide budget holds everything, as the daily cap always
-        // did. `check` notifies once per window, not once per tick.
-        if crate::budgets::check(&self.db, &crate::budgets::Scope::default(), true)
-            .await
-            .is_err()
-        {
-            return Ok(None);
-        }
-        // A narrower one holds only the runs it covers, until its window
-        // turns — and the next run in line is asked instead, so one spent
-        // project does not stop every other. Bounded, so a queue full of
-        // held runs costs a few reads per tick, not one per row.
+        // A spent budget holds the runs it covers until its window turns —
+        // and the next run in line is asked instead, so one spent project
+        // does not stop every other. A machine-wide one covers every run, so
+        // it holds them all, as the daily cap always did; it is asked per
+        // run rather than once up front because a run coming back from a
+        // rate limit was counted when it first started and must not be held
+        // by its own count. Bounded, so a queue full of held runs costs a
+        // few reads per tick, not one per row.
         for _ in 0..8 {
             let mut tx = self.db.pool.begin().await?;
-            let Some(run_id) = sqlx::query_scalar::<_, Uuid>(
-                "SELECT run_id FROM queue
-                  WHERE not_before IS NULL OR not_before <= now()
-                  ORDER BY priority DESC, enqueued_at ASC
-                  FOR UPDATE SKIP LOCKED LIMIT 1",
+            let Some(candidate) = sqlx::query(
+                "SELECT q.run_id, r.started_at IS NOT NULL AS counted
+                   FROM queue q JOIN runs r ON r.id = q.run_id
+                  WHERE q.not_before IS NULL OR q.not_before <= now()
+                  ORDER BY q.priority DESC, q.enqueued_at ASC
+                  FOR UPDATE OF q SKIP LOCKED LIMIT 1",
             )
             .fetch_optional(&mut *tx)
             .await?
             else {
                 return Ok(None);
             };
+            let run_id: Uuid = candidate.get("run_id");
+            // Started once already — a rate-limit hold coming back — and so
+            // already counted against any run cap.
+            let counted: bool = candidate.get("counted");
             let scope = crate::budgets::scope_of_run(&self.db, run_id)
                 .await
                 .unwrap_or_default();
@@ -1544,12 +1564,22 @@ impl Orchestrator {
                 tx.commit().await?;
                 continue;
             }
-            match crate::budgets::check(&self.db, &scope, false).await {
+            match crate::budgets::check_claim(&self.db, &scope, true, counted).await {
                 Ok(()) => {
                     sqlx::query("DELETE FROM queue WHERE run_id = $1")
                         .bind(run_id)
                         .execute(&mut *tx)
                         .await?;
+                    // Counted from this moment, not from when its process
+                    // starts a few seconds on: the next claim, a moment away,
+                    // must already see it against a run cap or a daily limit.
+                    sqlx::query(
+                        "UPDATE runs SET started_at = COALESCE(started_at, now())
+                          WHERE id = $1 AND status = 'queued'",
+                    )
+                    .bind(run_id)
+                    .execute(&mut *tx)
+                    .await?;
                     tx.commit().await?;
                     return Ok(Some(run_id));
                 }
@@ -1580,18 +1610,30 @@ impl Orchestrator {
         let scope = crate::budgets::scope_of_run(&self.db, run_id)
             .await
             .unwrap_or_default();
-        crate::budgets::check(&self.db, &scope, true).await
+        // The run asking was counted when it was claimed; a run cap it fills
+        // exactly must not stop it halfway through its own work.
+        crate::budgets::check_claim(&self.db, &scope, true, true).await
     }
 
-    /// The next run in line, with nothing to vet.
+    /// The next run in line, with nothing to vet. Stamped started as it is
+    /// claimed, like a vetted claim: a team run never stamps itself, and a
+    /// budget made later in the window must still see it. Only a run still
+    /// queued — a row left behind by a canceled one must not count.
     async fn claim_head(&self) -> anyhow::Result<Option<Uuid>> {
         let row = sqlx::query(
-            "DELETE FROM queue WHERE run_id = (
-                 SELECT run_id FROM queue
-                 WHERE not_before IS NULL OR not_before <= now()
-                 ORDER BY priority DESC, enqueued_at ASC
-                 FOR UPDATE SKIP LOCKED LIMIT 1
-             ) RETURNING run_id",
+            "WITH claimed AS (
+                 DELETE FROM queue WHERE run_id = (
+                     SELECT run_id FROM queue
+                     WHERE not_before IS NULL OR not_before <= now()
+                     ORDER BY priority DESC, enqueued_at ASC
+                     FOR UPDATE SKIP LOCKED LIMIT 1
+                 ) RETURNING run_id
+             )
+             , stamped AS (
+                 UPDATE runs SET started_at = COALESCE(started_at, now())
+                  WHERE id IN (SELECT run_id FROM claimed) AND status = 'queued'
+             )
+             SELECT run_id FROM claimed",
         )
         .fetch_optional(&self.db.pool)
         .await?;
@@ -2438,6 +2480,16 @@ impl Orchestrator {
         if self.engine(&engine).is_none() {
             anyhow::bail!("{engine} isn't installed on this machine");
         }
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::Scope {
+                workspace: Some(workspace_id),
+                project: Some(project_id),
+                ..Default::default()
+            },
+            true,
+        )
+        .await?;
         // A new article's row is created up front, so the editor has something
         // to open the moment the run is queued rather than only once it lands.
         let article_id = match article_id {
@@ -2668,6 +2720,17 @@ impl Orchestrator {
         if self.engine(&engine).is_none() {
             anyhow::bail!("{engine} isn't installed on this machine");
         }
+        // Before the research exists, so a refusal leaves nothing behind.
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::Scope {
+                workspace: workspace_id,
+                project: project_id,
+                ..Default::default()
+            },
+            true,
+        )
+        .await?;
         let research_id: Uuid = sqlx::query_scalar(
             "INSERT INTO researches (project_id, workspace_id, question, model_tier, effort)
              VALUES ($1, $2, $3, $4, $5) RETURNING id",
@@ -2694,6 +2757,12 @@ impl Orchestrator {
         if self.engine(engine).is_none() {
             anyhow::bail!("{engine} isn't installed on this machine");
         }
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_research(&self.db, research_id).await?,
+            true,
+        )
+        .await?;
         let run_id: Uuid = sqlx::query_scalar(
             "INSERT INTO runs (status, trigger, engine, research_id)
              VALUES ('queued', 'research', $1, $2) RETURNING id",
@@ -3578,6 +3647,17 @@ impl Orchestrator {
                     .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
 
                 let agent = self.load_agent(workspace_id, step.agent.as_deref()).await?;
+                // The step's agent has a budget of its own.
+                if let Some(a) = &agent {
+                    let own = crate::budgets::Scope {
+                        agent: Some(a.id),
+                        ..Default::default()
+                    };
+                    if let Err(over) = crate::budgets::check(&self.db, &own, false).await {
+                        failure = Some(over.to_string());
+                        break 'layers;
+                    }
+                }
                 // A step may name its own engine, and so may the agent bound
                 // to it; the workflow's default is what they fall back to.
                 let step_engine_id = step
@@ -4240,7 +4320,7 @@ this workflow manually."
         // once: it moves only as other runs finish, and a run cannot see
         // those mid-stream anyway. Dollars have no equivalent — no engine
         // says what a run cost until it ends.
-        let token_limit = crate::budgets::token_headroom(&self.db, run_id).await;
+        let token_limit = crate::budgets::token_headroom(&self.db, run_id, step_id).await;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => {
@@ -4890,5 +4970,82 @@ mod tests {
     fn slugify_is_branch_safe() {
         assert_eq!(slugify("Fix: the (weird) bug!!"), "fix-the-weird-bug");
         assert!(slugify(&"x".repeat(100)).len() <= 40);
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb;
+
+    /// No loop: the test does the claiming.
+    fn idle(t: &testdb::TestDb, root: &std::path::Path) -> Orchestrator {
+        Orchestrator::new(
+            t.db.clone(),
+            EventBus::new(),
+            Arc::new(WorktreeManager::new(root.to_path_buf())),
+            4,
+            None,
+        )
+    }
+
+    async fn queued(t: &testdb::TestDb, card: Uuid, status: &str) -> Uuid {
+        let run: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine)
+             VALUES ($1, $2, 'manual', 'mock') RETURNING id",
+        )
+        .bind(card)
+        .bind(status)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO queue (run_id) VALUES ($1)")
+            .bind(run)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        run
+    }
+
+    async fn started(t: &testdb::TestDb, run: Uuid) -> bool {
+        sqlx::query_scalar("SELECT started_at IS NOT NULL FROM runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap()
+    }
+
+    /// A claimed run reads as started from the moment it is claimed, on the
+    /// path with nothing to vet as well as the vetted one: a team run never
+    /// stamps itself, and a budget made later in the window must count it.
+    /// A queue row a canceled run left behind is cleared without counting.
+    #[tokio::test]
+    async fn a_claimed_run_counts_from_its_claim_on_either_path() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = idle(&t, dir.path());
+        let (_, project) = t.project(dir.path(), true).await;
+        let card = t.card(project, "team work").await;
+
+        for vetted in [false, true] {
+            if vetted {
+                sqlx::query(
+                    "INSERT INTO budget_policies (name, scope_kind, window_kind, cap_runs)
+                     VALUES ('roomy', 'machine', 'day', 100)",
+                )
+                .execute(&t.db.pool)
+                .await
+                .unwrap();
+            }
+            let stale = queued(&t, card, "canceled").await;
+            let live = queued(&t, card, "queued").await;
+            assert_eq!(orchestrator.claim_next().await.unwrap(), Some(stale));
+            assert!(!started(&t, stale).await, "vetted: {vetted}");
+            assert_eq!(orchestrator.claim_next().await.unwrap(), Some(live));
+            assert!(started(&t, live).await, "vetted: {vetted}");
+        }
+        t.finish().await;
     }
 }

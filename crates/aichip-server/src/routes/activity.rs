@@ -180,9 +180,11 @@ async fn activity(
     }
 
     // Spend by day. Fourteen days is enough to see a trend without turning
-    // this into a reporting feature.
+    // this into a reporting feature. A run belongs to the day it ran — the
+    // same reading a budget's window uses, so "spent today" beside the daily
+    // cap can never disagree with whether that cap is spent.
     let daily = sqlx::query(
-        "SELECT date_trunc('day', r.created_at) AS day,
+        "SELECT date_trunc('day', COALESCE(r.finished_at, r.started_at, r.created_at)) AS day,
                 SUM(COALESCE(r.cost_usd, 0)) AS cost,
                 COUNT(*) AS runs
          FROM runs r
@@ -192,7 +194,7 @@ async fn activity(
          LEFT JOIN researches rs ON rs.id = r.research_id
          LEFT JOIN projects p ON p.id = COALESCE(
              r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
-         WHERE r.created_at > now() - interval '14 days'
+         WHERE COALESCE(r.finished_at, r.started_at, r.created_at) > now() - interval '14 days'
            AND ($1::uuid IS NULL
                 OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
          GROUP BY 1 ORDER BY 1",
