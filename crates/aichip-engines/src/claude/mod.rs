@@ -127,6 +127,8 @@ impl Engine for ClaudeEngine {
             fixed_model_catalog: true,
             // `total_cost_usd` on the final result line.
             reports_cost: true,
+            // `--disallowedTools` is enforced by the CLI.
+            enforces_denied_tools: true,
         }
     }
 

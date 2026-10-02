@@ -105,6 +105,7 @@ impl Default for Attention {
                 Event::BudgetWarning,
                 Event::Question,
                 Event::Decision,
+                Event::Review,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -151,6 +152,10 @@ pub enum Event {
     /// An agent proposed something only a person can do. On by default, for
     /// the same reason.
     Decision,
+    /// A card's agent review stopped for a person: the rounds are spent, or
+    /// the reviewer ended without a verdict. On by default — nothing more
+    /// happens to the card until someone looks.
+    Review,
 }
 
 impl Event {
@@ -166,6 +171,7 @@ impl Event {
             Event::BudgetWarning => "budget_warning",
             Event::Question => "question",
             Event::Decision => "decision",
+            Event::Review => "review",
         }
     }
 
@@ -181,6 +187,7 @@ impl Event {
             "budget_warning" => Event::BudgetWarning,
             "question" => Event::Question,
             "decision" => Event::Decision,
+            "review" => Event::Review,
             _ => return None,
         })
     }

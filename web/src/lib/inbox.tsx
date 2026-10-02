@@ -99,6 +99,7 @@ export const KIND_LABEL: Record<InboxKind, string> = {
   schema: "Schema change",
   kb_revision: "Knowledge edit",
   recipe: "Preview recipe",
+  review: "Review stopped",
 };
 
 /** The groups the inbox page shows, in order: what blocks a run first. */
@@ -106,7 +107,7 @@ export const GROUPS: { label: string; kinds: InboxKind[] }[] = [
   { label: "Blocking a run", kinds: ["permission", "plan", "team_plan"] },
   { label: "Questions", kinds: ["question", "chat_question", "chat_plan"] },
   { label: "Proposals", kinds: ["decision"] },
-  { label: "Changes to review", kinds: ["schema", "kb_revision", "recipe"] },
+  { label: "Changes to review", kinds: ["review", "schema", "kb_revision", "recipe"] },
   { label: "Cut off by a restart", kinds: ["permission_expired"] },
 ];
 

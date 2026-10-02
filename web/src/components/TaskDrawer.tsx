@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
+import { Agent, api, Attachment, CheckoutState, displayTier, MergeGateError, PendingPermission, Skill, Task, Team, tierColor, type Unmet } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
 import { estimateLine, ForecastAsk, parseForecastAsk } from "../lib/forecast";
@@ -34,6 +34,8 @@ import { Button, IconButton } from "./ui/Button";
 import { Menu } from "./ui/Overlay";
 import { Tabs, TabPanel } from "./ui/Tabs";
 import { Timeline } from "./task/Timeline";
+import { ReviewPanel } from "./task/ReviewPanel";
+import { Textarea } from "./ui/Field";
 import { Building2, FileDiff, GitMerge, MoreHorizontal, Play, RotateCcw, Scale, Square, Trash2, X } from "lucide-react";
 
 type DrawerTab = "overview" | "activity" | "comments" | "checks" | "history" | "diff" | "bakeoff";
@@ -113,6 +115,10 @@ export function TaskDrawer({
   const [attachBusy, setAttachBusy] = useState(false);
   const [busy, setBusy] = useState<"retry" | "resume" | "delete" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What the project's review policy still wants before this card may land,
+  // after a merge it refused — and the note a person writes to merge anyway.
+  const [gate, setGate] = useState<Unmet[] | null>(null);
+  const [override, setOverride] = useState("");
   const [confirm, setConfirm] = useState<{
     title: string;
     body: string;
@@ -345,16 +351,21 @@ export function TaskDrawer({
     }
   };
 
-  const doMerge = async () => {
+  const doMerge = async (force?: { note: string }) => {
     if (merging) return;
     setMerging(true);
     setError(null);
     setBlocked(null);
     try {
-      await api.merge(task.id);
+      await api.merge(task.id, force);
+      setGate(null);
       onChanged();
       onClose();
     } catch (e) {
+      if (e instanceof MergeGateError) {
+        setGate(e.unmet);
+        return;
+      }
       // Inline, like every other failure in this drawer. A native alert()
       // loses the drawer's context and can't be copied out of easily.
       const raw = String(e).replace(/^Error:\s*/, "");
@@ -643,6 +654,39 @@ export function TaskDrawer({
           </div>
         )}
 
+        {gate && (
+          <div className="border-b border-border bg-warning-subtle px-4 py-3 text-xs text-warning-fg">
+            <div className="font-medium">This project's review policy still wants:</div>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {gate.map((u) => (
+                <li key={u.kind}>{u.message}</li>
+              ))}
+            </ul>
+            <Textarea
+              className="mt-2 min-h-[52px] text-fg"
+              value={override}
+              maxLength={500}
+              onChange={(e) => setOverride(e.target.value)}
+              placeholder="To merge anyway, say why. It goes on the card and in the audit log."
+              aria-label="Why merge anyway"
+            />
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                variant="danger"
+                loading={merging}
+                disabled={!override.trim()}
+                onClick={() => void doMerge({ note: override.trim() })}
+              >
+                Merge anyway
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setGate(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
         {confirm && (
           <div className="border-b border-border bg-amber-50 px-5 py-3 text-xs text-amber-800">
             <div className="font-medium">{confirm.title}</div>
@@ -918,6 +962,12 @@ export function TaskDrawer({
             refreshKey={`${task.runId}:${task.runStatus}:${task.localChecks?.status ?? ""}`}
             onChanged={onChanged}
           />
+        </div>
+      )}
+
+      {(task.boardColumn === "review" || task.boardColumn === "done") && (
+        <div className="border-b border-border px-4 py-2 empty:hidden">
+          <ReviewPanel taskId={task.id} busy={running} refreshKey={`${task.runId}:${task.runStatus}`} />
         </div>
       )}
 

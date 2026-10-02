@@ -47,6 +47,9 @@ pub enum Kind {
     KbRevision,
     /// A preview recipe an agent wrote.
     Recipe,
+    /// A card's agent review stopped for a person: its rounds are spent, or
+    /// the reviewer gave no verdict.
+    Review,
 }
 
 impl Kind {
@@ -64,6 +67,7 @@ impl Kind {
             Kind::Schema => &["apply", "discard"],
             Kind::KbRevision => &["accept", "discard"],
             Kind::Recipe => &[],
+            Kind::Review => &["review_again"],
         }
     }
 
@@ -80,6 +84,7 @@ impl Kind {
             Kind::Schema => "schema",
             Kind::KbRevision => "kb_revision",
             Kind::Recipe => "recipe",
+            Kind::Review => "review",
         }
     }
 }
@@ -328,6 +333,52 @@ pub async fn list(db: &Db, workspace: Uuid, include_snoozed: bool) -> anyhow::Re
             card,
             r.get("run_id"),
             card_link(pid, card),
+            r.get("created_at"),
+            vec![],
+        ));
+    }
+
+    // Agent reviews that stopped for a person: the card's latest verdict asks
+    // for changes and nothing has happened since — no run, so no fix and no
+    // second look — and either the reviewer gave no verdict or the rounds the
+    // policy allows are spent. Gone the moment anything runs on the card.
+    for r in sqlx::query(
+        "SELECT d.id, d.task_id, d.run_id, d.round, d.submitted, d.created_at,
+                t.title, t.project_id AS pid, p.name AS pname
+           FROM (SELECT DISTINCT ON (task_id) * FROM review_decisions
+                  ORDER BY task_id, created_at DESC) d
+           JOIN tasks t ON t.id = d.task_id
+           JOIN projects p ON p.id = t.project_id
+           JOIN project_review_policy rp ON rp.project_id = p.id AND rp.require_review
+          WHERE p.workspace_id = $1 AND t.board_column <> 'done'
+            AND d.verdict = 'request_changes'
+            AND (NOT d.submitted OR d.round >= rp.max_rounds)
+            AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.task_id = d.task_id
+                               AND x.created_at > d.created_at)",
+    )
+    .bind(workspace)
+    .fetch_all(&db.pool)
+    .await?
+    {
+        let tid: Uuid = r.get("task_id");
+        let pid: Uuid = r.get("pid");
+        let detail = if r.get::<bool, _>("submitted") {
+            format!(
+                "{} rounds of review and the reviewer still asks for changes",
+                r.get::<i32, _>("round")
+            )
+        } else {
+            "The reviewer ended without a verdict".to_string()
+        };
+        items.push(make(
+            Kind::Review,
+            format!("review:{}", r.get::<Uuid, _>("id")),
+            format!("Review stopped on “{}”", r.get::<String, _>("title")),
+            Some(detail),
+            (Some(pid), r.get("pname")),
+            Some(tid),
+            r.get("run_id"),
+            card_link(Some(pid), Some(tid)),
             r.get("created_at"),
             vec![],
         ));

@@ -20,6 +20,7 @@ pub mod projects;
 pub mod pull_requests;
 pub mod repo_map;
 pub mod research;
+pub mod reviews;
 pub mod revisions;
 pub mod routines;
 pub mod search;
@@ -110,6 +111,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(apps::router())
         .merge(tasks::router())
         .merge(checks::router())
+        .merge(reviews::router())
         .merge(budgets::router())
         .merge(inbox::router())
         .merge(audit::router())

@@ -23,7 +23,8 @@ export type AttentionEvent =
   | "unblocked"
   | "budget_warning"
   | "question"
-  | "decision";
+  | "decision"
+  | "review";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -1710,12 +1711,62 @@ const put = (url: string, body: unknown) =>
 // server would fail to parse the body.
 /** A write that lifts or sets a limit on spending: carries the header no
  *  cross-origin page can send, like the attention and file writes. */
-const guarded = (method: "POST" | "PATCH" | "DELETE", url: string, body?: unknown) =>
+const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?: unknown) =>
   fetch(url, {
     method,
     headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+/** What a project's Merge requires. See `aichip_core::review`. */
+export interface ReviewPolicy {
+  requireChecks: boolean;
+  requireReview: boolean;
+  reviewerAgentId: string | null;
+  maxRounds: number;
+  requirePrGreen: boolean;
+  runChecksAfterEveryRun: boolean;
+}
+
+export interface ReviewNote {
+  file?: string | null;
+  line?: number | null;
+  body: string;
+}
+
+export interface ReviewDecision {
+  id: string;
+  runId: string | null;
+  round: number;
+  verdict: "approve" | "request_changes";
+  /** False: the reviewer ended without a verdict, recorded as changes requested. */
+  submitted: boolean;
+  summary: string;
+  notes: ReviewNote[];
+  reviewer: string | null;
+  createdAt: string;
+}
+
+/** One requirement Merge still waits on. */
+export interface Unmet {
+  kind: "checks" | "review" | "pull_request";
+  message: string;
+}
+
+export interface CardReviews {
+  reviews: ReviewDecision[];
+  rounds: number;
+  maxRounds: number;
+  requireReview: boolean;
+  unmet: Unmet[];
+}
+
+/** A merge the review policy refused, with what it still wants. */
+export class MergeGateError extends Error {
+  constructor(public unmet: Unmet[]) {
+    super(unmet.map((u) => u.message).join(" "));
+  }
+}
 
 export type InboxKind =
   | "plan"
@@ -1728,6 +1779,7 @@ export type InboxKind =
   | "chat_plan"
   | "schema"
   | "kb_revision"
+  | "review"
   | "recipe";
 
 /** One thing waiting on a person. See `aichip_core::inbox`. */
@@ -2534,8 +2586,30 @@ export const api = {
     ),
   diff: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/diff`).then((r) => json<{ diff: string }>(r)),
-  merge: (taskId: string) =>
-    post(`/api/tasks/${taskId}/merge`).then((r) => json<{ merged: boolean }>(r)),
+  /** `force` + `note`: merge past what the review policy still wants. A
+   *  refusal by the policy throws `MergeGateError` with what is unmet. */
+  merge: (taskId: string, force?: { note: string }) =>
+    post(`/api/tasks/${taskId}/merge`, force ? { force: true, note: force.note } : undefined).then(async (r) => {
+      if (r.status === 409) {
+        const text = await r.text();
+        let gate: { kind?: string; unmet?: Unmet[] } | null = null;
+        try {
+          gate = JSON.parse(text);
+        } catch {
+          // plain-text refusal
+        }
+        if (gate?.kind === "gate" && Array.isArray(gate.unmet)) throw new MergeGateError(gate.unmet);
+        throw new Error(text);
+      }
+      return json<{ merged: boolean }>(r);
+    }),
+  reviewPolicy: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/review-policy`).then((r) => json<{ policy: ReviewPolicy }>(r)),
+  saveReviewPolicy: (projectId: string, policy: ReviewPolicy) =>
+    guarded("PUT", `/api/projects/${projectId}/review-policy`, policy).then((r) => json<{ policy: ReviewPolicy }>(r)),
+  cardReviews: (taskId: string) => fetch(`/api/tasks/${taskId}/reviews`).then((r) => json<CardReviews>(r)),
+  /** A person asks for a review now — one round past the cap if need be. */
+  startReview: (taskId: string) => post(`/api/tasks/${taskId}/reviews`).then((r) => json<{ runId: string }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`),
 
   /** Hand a card to someone else, or to nobody.

@@ -2087,9 +2087,16 @@ impl Orchestrator {
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         // Kept for the checks that may run in it once the work is done.
         let work_dir = cwd.clone();
-        // A summary pass explains work already done; it may read the
-        // worktree but not change it, exactly like a planning pass.
-        let read_only = planning || run.get::<String, _>("trigger") == "summary";
+        // A summary pass explains work already done, and a review pass judges
+        // it; either may read the worktree but not change it, exactly like a
+        // planning pass. A review that could edit the diff it judges is not a
+        // review — which is why `review::start` refuses an engine that does
+        // not enforce `denied_tools`.
+        let read_only = planning
+            || matches!(
+                run.get::<String, _>("trigger").as_str(),
+                "summary" | crate::review::PEER_REVIEW
+            );
         let spec = RunSpec {
             cwd,
             prompt,
@@ -2195,7 +2202,11 @@ impl Orchestrator {
             // and changed nothing, so the card stays where it is and nothing
             // is checked or announced again.
             let summarizing = trigger == "summary";
-            if !summarizing {
+            // A review pass is the same: it judged the work, it did none, and
+            // its verdict is posted by `settle_review` below.
+            let reviewing = trigger == crate::review::PEER_REVIEW;
+            let passive = summarizing || reviewing;
+            if !passive {
                 // Review exists to gate a diff onto the base branch. An
                 // in-place run already wrote to the user's folder and produced
                 // no diff, so parking it in review would offer a review that
@@ -2245,18 +2256,23 @@ impl Orchestrator {
 
             // What the run did goes on the card, where a person reading it
             // looks — not only into the agent's memory. Best-effort: a report
-            // that failed to write must not fail a completed run.
-            if let Err(e) = report::post(
-                &self.db,
-                task_id,
-                run_id,
-                bound_agent,
-                &trigger,
-                variant.as_deref(),
-                &outcome.output,
-            )
-            .await
-            {
+            // that failed to write must not fail a completed run. A review's
+            // report is its verdict, which `settle_review` posts.
+            let posted = if reviewing {
+                Ok(())
+            } else {
+                report::post(
+                    &self.db,
+                    task_id,
+                    run_id,
+                    bound_agent,
+                    &trigger,
+                    variant.as_deref(),
+                    &outcome.output,
+                )
+                .await
+            };
+            if let Err(e) = posted {
                 tracing::warn!(%run_id, error = %e, "could not post the run's report");
             }
             // A run that said nothing gets one read-only pass to explain
@@ -2264,7 +2280,7 @@ impl Orchestrator {
             // Not for a bake-off variant (the card's worktree is not the one
             // it worked in) or an in-place card (there is no worktree).
             let summarize = outcome.output.trim().is_empty()
-                && !summarizing
+                && !passive
                 && !in_place
                 && variant.is_none()
                 // An app's change lands by itself just below; a summary
@@ -2296,14 +2312,19 @@ impl Orchestrator {
             // after a Full Auto run — see `checks` for why — and never for an
             // in-place project (no worktree), an app (it lands by itself) or a
             // bake-off variant (its own worktree, compared by a person).
+            //
+            // Or after any run, where the project's review policy carries a
+            // person's standing consent to that (`run_checks_after_every_run`).
             let title: String = run.get("title");
             let chat_id: Option<Uuid> = run.get("task_chat_id");
-            let auto_checks = if !summarizing
-                && !in_place
+            let reviewable = !in_place
                 && run.get::<Option<String>, _>("variant_label").is_none()
-                && run.get::<String, _>("project_kind") == "repo"
-                && permission_mode == PermissionMode::FullAuto
-            {
+                && run.get::<String, _>("project_kind") == "repo";
+            let consented = permission_mode == PermissionMode::FullAuto
+                || crate::review::policy(&self.db, project_id)
+                    .await
+                    .is_ok_and(|p| p.run_checks_after_every_run);
+            let auto_checks = if !passive && reviewable && consented {
                 crate::checks::config(&self.db, project_id)
                     .await
                     .unwrap_or_else(|e| {
@@ -2313,6 +2334,7 @@ impl Orchestrator {
             } else {
                 None
             };
+            let checking = auto_checks.is_some();
             match auto_checks {
                 Some(config) => {
                     let check_run_id =
@@ -2332,7 +2354,7 @@ impl Orchestrator {
                         .await
                     });
                 }
-                None if summarizing => {}
+                None if passive => {}
                 None => {
                     self.announce_ready(run_id, &title, chat_id, in_place, None)
                         .await;
@@ -2341,10 +2363,14 @@ impl Orchestrator {
                     }
                 }
             }
+            // With checks running, `settle_checks` asks once they are done.
+            if reviewable && !checking {
+                self.settle_review(task_id, run_id, &trigger).await;
+            }
 
             // The work joins the agent's memory. Best-effort: a failed memory
-            // write must not fail a completed run.
-            if let Some(agent_id) = bound_agent {
+            // write must not fail a completed run. A reviewer did no work.
+            if let Some(agent_id) = bound_agent.filter(|_| !reviewing) {
                 let title: String = run.get("title");
                 let note = format!(
                     "Completed task \"{title}\": {}",

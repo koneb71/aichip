@@ -134,10 +134,18 @@ async fn restore(
             let Json(_) = super::settings::set_attention(s, headers, Json(body(snap)?)).await?;
         }
         EntityKind::ReviewPolicy => {
-            return Err((
-                StatusCode::NOT_IMPLEMENTED,
-                "review policies are restored from their own screen".into(),
-            ));
+            // Through `routes/reviews.rs`, the one writer of review policies.
+            let mapped = json!({
+                "requireChecks": snap["require_checks"],
+                "requireReview": snap["require_review"],
+                "reviewerAgentId": snap["reviewer_agent_id"],
+                "maxRounds": snap["max_rounds"],
+                "requirePrGreen": snap["require_pr_green"],
+                "runChecksAfterEveryRun": snap["run_checks_after_every_run"],
+            });
+            let Json(_) =
+                super::reviews::put_policy(s, Path(uuid(&id)?), headers, Json(body(mapped)?))
+                    .await?;
         }
     }
     Ok(Json(

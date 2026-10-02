@@ -5,6 +5,7 @@ import { api, Effort, Project, TierChoice } from "../lib/api";
 import { EnginePicker } from "../lib/engines";
 import { TIERS } from "./TierPicker";
 import { ChecksSettings } from "./ChecksSettings";
+import { ReviewPolicySettings } from "./ReviewPolicySettings";
 
 /**
  * Everything about a project that is not a card.
@@ -158,6 +159,12 @@ export function ProjectSettings({
         {project.kind === "repo" && project.vcs === "git" && (
           <Field label="Checks">
             <ChecksSettings projectId={project.id} fullAuto={project.fullAutoOptIn} />
+          </Field>
+        )}
+
+        {project.kind === "repo" && project.vcs === "git" && (
+          <Field label="Before merge">
+            <ReviewPolicySettings projectId={project.id} workspaceId={project.workspaceId} />
           </Field>
         )}
 

@@ -104,6 +104,7 @@ const LABEL: Record<string, string> = {
   apply: "Apply",
   discard: "Discard",
   accept: "Accept",
+  review_again: "Review again",
 };
 
 function Row({ item, first, onDone }: { item: InboxItem; first: boolean; onDone: () => void }) {

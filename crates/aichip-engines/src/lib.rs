@@ -71,6 +71,11 @@ pub struct Capabilities {
     /// they are counted against token caps instead, and the budget screen
     /// says so.
     pub reports_cost: bool,
+    /// Refuses a denied tool on its own, so a read-only pass is read-only
+    /// because the CLI enforces it — not because the model was asked nicely.
+    /// `false` ⇒ an agent reviewer cannot run on it: a review that could
+    /// edit the diff it is judging is not a review.
+    pub enforces_denied_tools: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -249,6 +254,7 @@ mod tests {
             append_system_prompt: true,
             fixed_model_catalog: false,
             reports_cost: true,
+            enforces_denied_tools: true,
         }
     }
 

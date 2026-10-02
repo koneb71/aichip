@@ -260,6 +260,7 @@ mod tests {
             ("routes/budgets.rs", "async fn remove("),
             ("routes/activity.rs", "async fn set_budget("),
             ("routes/settings.rs", "async fn set_attention("),
+            ("routes/reviews.rs", "async fn put_policy("),
         ];
         let server = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aichip-server/src");
         for (file, needle) in WRITERS {

@@ -129,6 +129,22 @@ async fn resolve(
             json!("dismissed")
         }
         ("decision", "approve") => decide(&state, id(0)?, body.acknowledge_forecast).await?,
+        ("review", "review_again") => {
+            let task: Uuid =
+                sqlx::query_scalar("SELECT task_id FROM review_decisions WHERE id = $1")
+                    .bind(id(0)?)
+                    .fetch_optional(&state.db.pool)
+                    .await
+                    .map_err(internal)?
+                    .ok_or((StatusCode::NOT_FOUND, "no such review".to_string()))?;
+            match aichip_core::review::start(orch, task, aichip_core::review::Start::Person)
+                .await
+                .map_err(super::run_refused)?
+            {
+                Ok(run_id) => json!({ "runId": run_id }),
+                Err(skip) => return Err((StatusCode::CONFLICT, skip.sentence())),
+            }
+        }
         ("decision", "deny") => {
             let claimed = aichip_core::decisions::claim(&state.db, id(0)?, "denied")
                 .await

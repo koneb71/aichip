@@ -14,6 +14,10 @@ export interface EngineCapabilities {
   resume_sessions: boolean;
   append_system_prompt: boolean;
   fixed_model_catalog: boolean;
+  /** Prices its runs. False: counted by tokens only. */
+  reports_cost: boolean;
+  /** Holds a pass to read-only. Required of a reviewer's engine. */
+  enforces_denied_tools: boolean;
 }
 
 export interface EngineDescriptor {

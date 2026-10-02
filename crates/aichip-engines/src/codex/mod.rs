@@ -210,6 +210,9 @@ impl Engine for CodexEngine {
             // `codex exec` reports tokens, never money (`stream_parser`
             // leaves `cost_usd` empty), so its runs are counted by tokens.
             reports_cost: false,
+            // A denied write tool maps to a read-only sandbox, but a denied Bash or
+            // WebFetch has no separate switch — not verified as a full refusal.
+            enforces_denied_tools: false,
         }
     }
 

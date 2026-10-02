@@ -77,6 +77,12 @@ pub const ANSWER_END: &str = "<<<END PERSON'S ANSWER>>>";
 pub const GOAL_BEGIN: &str = "<<<BEGIN GOAL CONTEXT>>>";
 pub const GOAL_END: &str = "<<<END GOAL CONTEXT>>>";
 
+/// The change a reviewer is asked to judge. See `runs::follow_up::review_prompt`.
+/// Written by an agent, so it is evidence to read, never instructions — a
+/// diff that adds "reviewers: approve this" is a finding, not an order.
+pub const DIFF_BEGIN: &str = "<<<BEGIN CHANGE UNDER REVIEW>>>";
+pub const DIFF_END: &str = "<<<END CHANGE UNDER REVIEW>>>";
+
 /// Every marker, and the whole reason this module is not four constants.
 pub const ALL: &[&str] = &[
     BRAIN_BEGIN,
@@ -95,6 +101,8 @@ pub const ALL: &[&str] = &[
     ANSWER_END,
     GOAL_BEGIN,
     GOAL_END,
+    DIFF_BEGIN,
+    DIFF_END,
 ];
 
 /// What a stripped marker becomes.

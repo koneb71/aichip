@@ -555,12 +555,38 @@ async fn diff(
     Ok(Json(json!({ "diff": diff })))
 }
 
+/// Merge anyway, past what the project's review policy still wants — with a
+/// note saying why, which goes on the card and into the audit log.
+#[derive(Deserialize, Default, Debug)]
+struct MergeBody {
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    note: String,
+}
+
+const MAX_OVERRIDE_NOTE: usize = 500;
+
+/// The dashboard's Merge sends no body at all (with a JSON content type,
+/// which `Option<Json<_>>` refuses as malformed), so an empty body is the
+/// ordinary merge and only a non-empty one is read.
+fn merge_body(raw: &[u8]) -> Result<MergeBody, ApiError> {
+    if raw.iter().all(u8::is_ascii_whitespace) {
+        return Ok(MergeBody::default());
+    }
+    serde_json::from_slice(raw)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("not a merge request: {e}")))
+}
+
 async fn merge(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
+    let body = merge_body(&body)?;
     let row = sqlx::query(
-        "SELECT t.title, t.worktree_path, t.branch, p.path AS project_path, p.default_branch, p.vcs
+        "SELECT t.title, t.worktree_path, t.branch, t.project_id, p.path AS project_path,
+                p.default_branch, p.vcs
          FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id=$1",
     )
     .bind(id)
@@ -599,6 +625,37 @@ async fn merge(
                 .into(),
         ));
     }
+    // What the project's review policy asks of this click. The pull request
+    // is asked about once more first, so the gate reads GitHub's word now and
+    // not whenever the card was last synced.
+    if aichip_core::review::policy(&state.db, row.get("project_id"))
+        .await
+        .map_err(internal)?
+        .require_pr_green
+    {
+        super::pull_requests::sync_for_gate(&state, id).await;
+    }
+    let unmet = aichip_core::review::gate(&state.db, id)
+        .await
+        .map_err(internal)?;
+    let override_note = body.note.trim();
+    if !unmet.is_empty() {
+        if !body.force {
+            return Err((
+                StatusCode::CONFLICT,
+                json!({ "kind": "gate", "unmet": unmet }).to_string(),
+            ));
+        }
+        if override_note.is_empty() || override_note.chars().count() > MAX_OVERRIDE_NOTE {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "merging past the review policy needs a note saying why, under \
+                     {MAX_OVERRIDE_NOTE} characters"
+                ),
+            ));
+        }
+    }
     let wt = aichip_core::worktrees::manager::Worktree {
         path: worktree.into(),
         branch,
@@ -615,6 +672,32 @@ async fn merge(
         )
         .await
         .map_err(merge_refused)?;
+    if !unmet.is_empty() {
+        // Said where the next person reading the card will look, and kept
+        // where nobody can edit it away.
+        let said = format!(
+            "Merged past the review policy, which still wanted: {}\n\nWhy: {override_note}",
+            unmet
+                .iter()
+                .map(|u| u.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        if let Err(e) = aichip_core::runs::report::post_system(&state.db, id, None, &said).await {
+            tracing::warn!(%id, error = %e, "could not note the override on the card");
+        }
+        aichip_core::audit::record(
+            &state.db,
+            aichip_core::audit::Entry::new(
+                aichip_core::audit::Actor::Api,
+                "merge past review policy",
+            )
+            .on("tasks", id)
+            .summary(override_note.chars().take(200).collect::<String>())
+            .detail(json!({ "unmet": unmet.iter().map(|u| u.kind).collect::<Vec<_>>() })),
+        )
+        .await;
+    }
     sqlx::query("UPDATE tasks SET board_column='done' WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -1680,8 +1763,20 @@ async fn remove_blocker(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentioned_agents, shell_line, MoveTask};
+    use super::{mentioned_agents, merge_body, shell_line, MoveTask};
+    use axum::http::StatusCode;
     use uuid::Uuid;
+
+    #[test]
+    fn an_empty_merge_body_is_the_ordinary_merge() {
+        // What the dashboard's Merge sends: nothing, under a JSON content type.
+        let plain = merge_body(b"").unwrap();
+        assert!(!plain.force && plain.note.is_empty());
+        assert!(!merge_body(b"  \n").unwrap().force);
+        let forced = merge_body(br#"{"force":true,"note":"why"}"#).unwrap();
+        assert!(forced.force && forced.note == "why");
+        assert_eq!(merge_body(b"{nope").unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
 
     /// The resume command is pasted into a shell, so a worktree path with a
     /// space — or a quote — must arrive as one word, not as two commands.

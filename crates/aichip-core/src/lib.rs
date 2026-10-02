@@ -24,6 +24,7 @@ pub mod previews;
 pub mod queue;
 pub mod rag;
 pub mod repo;
+pub mod review;
 pub mod revisions;
 pub mod routines;
 pub mod runs;
