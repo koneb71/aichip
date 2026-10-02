@@ -152,3 +152,86 @@ fn every_migration_has_an_architecture_note() {
         "docs/architecture.md says nothing about migration(s) {gaps:?}"
     );
 }
+
+/// Files outside `web/` that the dashboard's sources import, as repository
+/// paths: `web/src/lib/x.test.ts` importing `../../../crates/a.json` names
+/// `crates/a.json`.
+fn web_imports_from_outside() -> Vec<(String, String)> {
+    let mut found = vec![];
+    let mut stack = vec![root().join("web/src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !path.extension().is_some_and(|e| e == "ts" || e == "tsx") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let file = path
+                .strip_prefix(root())
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            for quote in ['"', '\''] {
+                let marker = format!("from {quote}");
+                for (at, _) in text.match_indices(&marker) {
+                    let rest = &text[at + marker.len()..];
+                    let Some(end) = rest.find(quote) else {
+                        continue;
+                    };
+                    let spec = &rest[..end];
+                    if !spec.starts_with("../") {
+                        continue;
+                    }
+                    // Resolve against the importing file's folder, by
+                    // components, so the result is a repository path.
+                    let mut parts: Vec<&str> = file.split('/').collect();
+                    parts.pop();
+                    for piece in spec.split('/') {
+                        match piece {
+                            ".." => {
+                                parts.pop();
+                            }
+                            "." | "" => {}
+                            p => parts.push(p),
+                        }
+                    }
+                    let target = parts.join("/");
+                    if !target.starts_with("web/") {
+                        found.push((file.clone(), target));
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_image_carries_every_file_the_dashboard_imports_from_outside_web() {
+    // The Docker build's dashboard stage copies only `web/`, and `pnpm build`
+    // type-checks the tests — so a test that imports a specification shared
+    // with Rust (`../../../crates/...`) breaks the image, and nothing else
+    // notices: CI builds from the whole checkout. Each such file has to be
+    // copied in by name, at its repository path under /src.
+    let imports = web_imports_from_outside();
+    assert!(
+        imports.iter().any(|(_, t)| t.ends_with("expr_cases.json")),
+        "the scan found none of the known imports: {imports:?}"
+    );
+    let dockerfile = read("Dockerfile");
+    let missing: Vec<String> = imports
+        .iter()
+        .filter(|(_, target)| !dockerfile.contains(&format!("COPY {target} /src/{target}")))
+        .map(|(file, target)| format!("{file} imports {target}"))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the Dockerfile's web stage must `COPY <path> /src/<path>` each of these, \
+         or `pnpm build` fails in the image:\n{}",
+        missing.join("\n")
+    );
+}
