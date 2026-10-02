@@ -432,12 +432,12 @@ async fn create(
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
-struct StartBody {
+pub(crate) struct StartBody {
     /// The person saw the forecast and starts anyway.
     acknowledge_forecast: bool,
 }
 
-async fn start(
+pub(crate) async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     body: Option<Json<StartBody>>,
@@ -821,6 +821,15 @@ impl MoveTask {
     pub(crate) fn to_column(column: &str) -> Self {
         Self {
             board_column: Some(column.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Hand the card to an agent, leaving everything else alone.
+    pub(crate) fn assign(agent_id: Uuid) -> Self {
+        Self {
+            agent_id: Some(Some(agent_id)),
+            team_id: Some(None),
             ..Default::default()
         }
     }
@@ -2011,7 +2020,7 @@ async fn retry(
 /// the same rule CLAUDE.md states for OpenCode and `Reviewed`: a button that
 /// silently does a different, more expensive thing is worse than one that
 /// says why it can't.
-async fn resume_run(
+pub(crate) async fn resume_run(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {

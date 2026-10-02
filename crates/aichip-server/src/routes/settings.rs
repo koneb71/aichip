@@ -330,11 +330,7 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
 ///
 /// The stored value is a shell command this server will execute, so anything
 /// that can reach this endpoint has remote code execution. It carries the same
-/// header gate the file-write path documents: there is no CORS layer, so a
-/// preflight for `x-aichip-write` gets no `Access-Control-Allow-*` and the
-/// browser refuses to send the real request. Belt and braces behind the Origin
-/// check in `lib.rs`.
-const WRITE_HEADER: &str = "x-aichip-write";
+/// header gate every dashboard write carries — see `super::require_write`.
 
 async fn get_attention(State(state): State<AppState>) -> Json<Value> {
     let a = aichip_core::attention::load(&state.db).await;
@@ -355,12 +351,10 @@ async fn set_attention(
     headers: HeaderMap,
     Json(body): Json<AttentionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    if !headers.contains_key(WRITE_HEADER) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("this endpoint stores a command this machine will run, so it needs the {WRITE_HEADER} header"),
-        ));
-    }
+    super::require_write(
+        &headers,
+        "this endpoint stores a command this machine will run",
+    )?;
     let current = aichip_core::attention::load(&state.db).await;
     let next = aichip_core::attention::Attention {
         enabled: body.enabled.unwrap_or(current.enabled),

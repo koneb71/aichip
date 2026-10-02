@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { Menu as MenuIcon, Monitor, Moon, Plus, Search, Sun, FolderPlus, Bot } from "lucide-react";
+import { Bell, Menu as MenuIcon, Monitor, Moon, Plus, Search, Sun, FolderPlus, Bot } from "lucide-react";
+import { useInbox } from "../../lib/inbox";
 import { sectionFor } from "../../lib/nav";
 import { useCrumbItems } from "../../lib/crumbs";
 import { useTheme } from "../../lib/theme";
@@ -19,6 +20,7 @@ export function TopBar({ onOpenPalette, onOpenNav }: { onOpenPalette: () => void
   const section = sectionFor(pathname);
   const trail = useCrumbItems();
   const { choice, cycle } = useTheme();
+  const { unread } = useInbox();
 
   const themeLabel = choice === "system" ? "Theme: system" : choice === "light" ? "Theme: light" : "Theme: dark";
   const ThemeIcon = choice === "system" ? Monitor : choice === "light" ? Sun : Moon;
@@ -50,6 +52,13 @@ export function TopBar({ onOpenPalette, onOpenNav }: { onOpenPalette: () => void
       <IconButton label="Search" onClick={onOpenPalette} className="md:hidden">
         <Search className="size-4" />
       </IconButton>
+
+      <Tooltip content={unread ? `${unread} waiting on you` : "Inbox"}>
+        <IconButton label={unread ? `Inbox, ${unread} unread` : "Inbox"} onClick={() => navigate("/inbox")} className="relative">
+          <Bell className="size-4" />
+          {unread > 0 && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-accent ring-2 ring-panel" />}
+        </IconButton>
+      </Tooltip>
 
       <Tooltip content={`${themeLabel} — click to change`}>
         <IconButton label={themeLabel} onClick={cycle}>

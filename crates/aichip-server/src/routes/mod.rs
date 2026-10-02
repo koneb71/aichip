@@ -9,6 +9,7 @@ pub mod engines;
 pub mod files;
 pub mod fs;
 pub mod github;
+pub mod inbox;
 pub mod kb;
 pub mod manager;
 pub mod mcp_servers;
@@ -63,6 +64,26 @@ pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
     }
 }
 
+/// The header a dashboard write carries. Its only job is to be un-settable by
+/// a cross-origin simple request: there is no CORS layer, so a preflight for
+/// it gets no `Access-Control-Allow-*` and the browser refuses to send the
+/// real request. The value is not a secret and is checked against nothing.
+/// Belt and braces behind the Origin check in `lib.rs`.
+pub const WRITE_HEADER: &str = "x-aichip-write";
+
+/// Refuse a write that did not come from the dashboard. `what` says what the
+/// endpoint does, so the refusal explains why it is gated.
+pub fn require_write(headers: &axum::http::HeaderMap, what: &str) -> Result<(), ApiError> {
+    if headers.contains_key(WRITE_HEADER) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("{what}, so it needs the {WRITE_HEADER} header"),
+        ))
+    }
+}
+
 /// An answer to something waiting on a person, refused — said in HTTP.
 pub fn answer_refused(e: aichip_core::approvals::Refusal) -> ApiError {
     use aichip_core::approvals::Refusal;
@@ -88,6 +109,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(tasks::router())
         .merge(checks::router())
         .merge(budgets::router())
+        .merge(inbox::router())
         .merge(agents::router())
         .merge(skills::router())
         .merge(teams::router())

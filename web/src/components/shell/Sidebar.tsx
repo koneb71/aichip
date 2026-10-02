@@ -6,6 +6,7 @@ import { GROUPS, NAV, type NavItem } from "../../lib/nav";
 import { useActivity } from "../../lib/activity";
 import { isWorking } from "../../lib/runStatus";
 import { useWorkspace } from "../../lib/workspace";
+import { useInbox } from "../../lib/inbox";
 import { UsageChip } from "../UsageChip";
 import { gradientFor } from "../ui/Surface";
 import { cn } from "../ui/cn";
@@ -182,6 +183,7 @@ function NavRow({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boo
           <Icon className={cn("size-4 shrink-0", isActive ? "text-accent-fg" : "")} strokeWidth={isActive ? 2.1 : 1.8} />
           {!collapsed && <span className="truncate">{item.label}</span>}
           {item.to === "/activity" && <ActivityBadge collapsed={collapsed} />}
+          {item.to === "/inbox" && <InboxBadge collapsed={collapsed} />}
         </>
       )}
     </NavLink>
@@ -195,11 +197,26 @@ function NavRow({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boo
   );
 }
 
+/** How many things are waiting on you that you have not looked at. */
+function InboxBadge({ collapsed }: { collapsed: boolean }) {
+  const { unread } = useInbox();
+  if (!unread) return null;
+  return (
+    <span
+      className={cn(
+        collapsed ? "absolute right-0.5 top-0.5" : "ml-auto",
+        "tabular grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-on-accent",
+      )}
+    >
+      {unread > 99 ? "99+" : unread}
+    </span>
+  );
+}
+
 /** What is going on, without opening the page: capped, a count waiting on you, paused, or a live pulse. */
 function ActivityBadge({ collapsed }: { collapsed: boolean }) {
   const { activity } = useActivity();
   if (!activity) return null;
-  const blocked = activity.blocked.length;
   const working = activity.live.filter((r) => isWorking(r.status)).length;
   const pos = collapsed ? "absolute right-0.5 top-0.5" : "ml-auto";
   if (activity.gate.state === "over_budget") {
@@ -207,18 +224,6 @@ function ActivityBadge({ collapsed }: { collapsed: boolean }) {
       <span className={cn(pos, "size-2 rounded-full bg-danger")} />
     ) : (
       <span className="ml-auto text-[11px] font-medium text-danger-fg">capped</span>
-    );
-  }
-  if (blocked > 0) {
-    return (
-      <span
-        className={cn(
-          pos,
-          "tabular grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] font-semibold leading-none text-white",
-        )}
-      >
-        {blocked}
-      </span>
     );
   }
   if (activity.gate.state === "paused") {

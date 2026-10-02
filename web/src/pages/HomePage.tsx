@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, PlanLimit, Project, Routine, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useActivity } from "../lib/activity";
+import { KIND_LABEL, useInbox } from "../lib/inbox";
 import { isWorking } from "../lib/runStatus";
 import { soonestBurnout } from "../lib/forecast";
 import { Stat } from "../components/Stat";
@@ -54,7 +55,10 @@ export default function HomePage() {
   const live = activity?.live ?? [];
   const working = live.filter((r) => isWorking(r.status)).length;
   const queued = live.filter((r) => r.status === "queued").length;
-  const blocked = activity?.blocked ?? [];
+  // Everything waiting on a person, not only the runs parked on one — the
+  // inbox is the one list of that.
+  const { items: inboxItems } = useInbox();
+  const blocked = inboxItems ?? [];
   const review = tasks.filter((t) => t.boardColumn === "review").length;
 
   // What the last fortnight actually cost, rather than the sum of each card's
@@ -111,7 +115,7 @@ export default function HomePage() {
           icon={Hand}
           tint={blocked.length ? "amber" : "slate"}
           accent={blocked.length ? "var(--color-warning-fg)" : "var(--color-fg)"}
-          to="/activity"
+          to="/inbox"
         />
         <Stat label="Ready to review" value={String(review)} icon={CheckCheck} tint="violet" accent="var(--color-fg)" />
         <Stat
@@ -140,18 +144,18 @@ export default function HomePage() {
               title={
                 <span className="flex items-center gap-2">
                   <StatusDot tone="warning" pulse />
-                  {blocked.length === 1 ? "A run is waiting for you" : `${blocked.length} runs are waiting for you`}
+                  {blocked.length === 1 ? "One thing is waiting on you" : `${blocked.length} things are waiting on you`}
                 </span>
               }
-              action={<SoftLink to="/activity">answer</SoftLink>}
+              action={<SoftLink to="/inbox">open the inbox</SoftLink>}
             >
               <ul className="divide-y divide-border">
-                {/* Keyed with the index too: one run can hold a permission
-                    prompt and a plan at once. */}
-                {blocked.slice(0, 5).map((b, i) => (
-                  <li key={`${b.runId}-${i}`} className="flex items-center gap-2.5 px-4 py-2 text-[13px]">
-                    <Badge tone="warning">{b.kind === "plan" ? "plan" : "permission"}</Badge>
-                    <span className="min-w-0 flex-1 truncate">{b.label}</span>
+                {blocked.slice(0, 5).map((b) => (
+                  <li key={b.key} className="flex items-center gap-2.5 px-4 py-2 text-[13px]">
+                    <Badge tone="warning">{KIND_LABEL[b.kind]}</Badge>
+                    <Link to={b.link} className="min-w-0 flex-1 truncate hover:text-accent-fg">
+                      {b.title}
+                    </Link>
                   </li>
                 ))}
               </ul>

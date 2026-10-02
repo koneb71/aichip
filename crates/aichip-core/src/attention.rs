@@ -103,6 +103,8 @@ impl Default for Attention {
                 Event::Routine,
                 Event::Unblocked,
                 Event::BudgetWarning,
+                Event::Question,
+                Event::Decision,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -143,6 +145,12 @@ pub enum Event {
     /// A budget passed its warning line. On by default: the point of a
     /// warning is to arrive before the hold does.
     BudgetWarning,
+    /// A card's agent stopped to ask a person something. On by default: the
+    /// card waits until someone answers.
+    Question,
+    /// An agent proposed something only a person can do. On by default, for
+    /// the same reason.
+    Decision,
 }
 
 impl Event {
@@ -156,6 +164,8 @@ impl Event {
             Event::Routine => "routine",
             Event::Unblocked => "unblocked",
             Event::BudgetWarning => "budget_warning",
+            Event::Question => "question",
+            Event::Decision => "decision",
         }
     }
 
@@ -169,6 +179,8 @@ impl Event {
             "routine" => Event::Routine,
             "unblocked" => Event::Unblocked,
             "budget_warning" => Event::BudgetWarning,
+            "question" => Event::Question,
+            "decision" => Event::Decision,
             _ => return None,
         })
     }

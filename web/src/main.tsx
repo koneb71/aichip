@@ -20,6 +20,8 @@ import ActivityPage from "./pages/ActivityPage";
 import ConnectionsPage from "./pages/ConnectionsPage";
 import SettingsPage from "./pages/SettingsPage";
 import TeamsPage from "./pages/TeamsPage";
+import InboxPage from "./pages/InboxPage";
+import { InboxProvider } from "./lib/inbox";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
@@ -44,10 +46,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <EnginesProvider>
       <ModelsProvider>
         <ActivityProvider>
+        <InboxProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="inbox" element={<InboxPage />} />
               <Route path="chat" element={<ChatPage />} />
               <Route path="research" element={<ResearchPage />} />
               <Route path="routines" element={<RoutinesPage />} />
@@ -83,6 +87,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           </Routes>
         </BrowserRouter>
         <Toaster />
+        </InboxProvider>
         </ActivityProvider>
       </ModelsProvider>
       </EnginesProvider>

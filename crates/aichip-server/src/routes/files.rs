@@ -60,10 +60,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/file", get(read_task).put(write_task))
 }
 
-/// The header a write must carry. Its only job is to be un-settable by a
-/// cross-origin simple request; the value is not a secret and is not checked
-/// against anything.
-const WRITE_HEADER: &str = "x-aichip-write";
+use super::WRITE_HEADER;
 
 /// Anything larger is reported as too-large rather than streamed into a
 /// browser tab that would choke on it.

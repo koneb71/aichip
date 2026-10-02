@@ -18,8 +18,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-const WRITE_HEADER: &str = "x-aichip-write";
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/budgets", get(list).post(create))
@@ -66,14 +64,7 @@ async fn estimate(
 }
 
 fn require_write_header(headers: &HeaderMap) -> Result<(), ApiError> {
-    if headers.contains_key(WRITE_HEADER) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            format!("changing a budget needs the {WRITE_HEADER} header"),
-        ))
-    }
+    super::require_write(headers, "this changes a budget")
 }
 
 /// Every policy with where it stands this window, and the engines a dollar

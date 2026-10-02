@@ -30,6 +30,9 @@ pub enum FollowUp {
     /// A completed run that said nothing. One read-only pass, continuing its
     /// session where the engine can, writes the card's report.
     Summarize { run_id: Uuid },
+    /// A person answered the question the card's agent asked. The asking
+    /// run's session continues, in the same worktree, with the answer.
+    Answer { question_id: Uuid },
 }
 
 impl FollowUp {
@@ -40,6 +43,7 @@ impl FollowUp {
             Self::FailingChecks { .. } => "checks",
             Self::MergeConflict { .. } => "conflict",
             Self::Summarize { .. } => "summary",
+            Self::Answer { .. } => "answer",
         }
     }
 
@@ -65,6 +69,8 @@ pub enum FollowUpRefusal {
     NothingFailed,
     #[error("that run does not belong to this card")]
     ForeignRun,
+    #[error("that question does not belong to this card, or has not been answered")]
+    ForeignQuestion,
 }
 
 impl Orchestrator {
@@ -247,6 +253,43 @@ impl Orchestrator {
                 };
                 (
                     summary_prompt(&task_prompt, &files, session.is_some()),
+                    None,
+                )
+            }
+            FollowUp::Answer { question_id } => {
+                let q = sqlx::query(
+                    "SELECT q.task_id, q.question, q.answer, r.session_id, r.session_engine
+                       FROM run_questions q JOIN runs r ON r.id = q.run_id
+                      WHERE q.id = $1",
+                )
+                .bind(question_id)
+                .fetch_one(&mut *guard)
+                .await?;
+                let answer: Option<String> = q.get("answer");
+                if q.get::<Uuid, _>("task_id") != task_id || answer.is_none() {
+                    return Err(FollowUpRefusal::ForeignQuestion.into());
+                }
+                // The asker remembers why it asked; carrying its session is
+                // what makes a one-line answer enough.
+                let can_resume = self
+                    .engine(&engine_id)
+                    .is_some_and(|e| e.capabilities().resume_sessions);
+                if let (true, Some(sid), Some(minted_by)) = (
+                    can_resume,
+                    q.get::<Option<String>, _>("session_id"),
+                    q.get::<Option<String>, _>("session_engine"),
+                ) {
+                    if minted_by == engine_id {
+                        session = Some((sid, minted_by));
+                    }
+                }
+                (
+                    answer_prompt(
+                        &task_prompt,
+                        &q.get::<String, _>("question"),
+                        answer.as_deref().unwrap_or_default(),
+                        session.is_some(),
+                    ),
                     None,
                 )
             }
@@ -442,6 +485,40 @@ pub(crate) fn summary_prompt(task_prompt: &str, files: &[String], resumed: bool)
         "\nThe task was:\n{}\n",
         clip_chars(task_prompt, 800)
     ));
+    prompt
+}
+
+/// A person's answer to the question the agent asked, as the next turn.
+///
+/// Fenced: the answer is a person's words, but it travels into a prompt next
+/// to instructions, and the fence is what keeps "ignore the above" in an
+/// answer an answer.
+pub(crate) fn answer_prompt(
+    task_prompt: &str,
+    question: &str,
+    answer: &str,
+    resumed: bool,
+) -> String {
+    let mut prompt = String::from(if resumed {
+        "You asked the person a question and stopped. They have answered. Carry on with the task from where you left off, using their answer.\n"
+    } else {
+        "Earlier work on this task stopped to ask the person a question. They have answered. Pick the task up in this worktree — the changes so far are already here — and carry on, using their answer.\n"
+    });
+    prompt.push_str(&format!(
+        "\nThe question:\n{}\n\nTheir answer:\n{}\n",
+        clip_chars(question, 1000),
+        crate::fence::wrap(
+            crate::fence::ANSWER_BEGIN,
+            crate::fence::ANSWER_END,
+            &clip_chars(answer, 2000)
+        ),
+    ));
+    if !resumed {
+        prompt.push_str(&format!(
+            "\nThe task was:\n{}\n",
+            clip_chars(task_prompt, 1500)
+        ));
+    }
     prompt
 }
 

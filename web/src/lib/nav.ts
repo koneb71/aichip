@@ -5,6 +5,7 @@ import {
   CalendarClock,
   FolderKanban,
   House,
+  Inbox,
   LayoutGrid,
   MessageSquare,
   Plug,
@@ -42,6 +43,7 @@ export const GROUPS: NavGroup[] = ["Work", "Organization", "Knowledge", "System"
 
 export const NAV: NavItem[] = [
   { to: "/", label: "Home", icon: House, group: "Work", end: true, keywords: ["dashboard", "overview"] },
+  { to: "/inbox", label: "Inbox", icon: Inbox, group: "Work", keywords: ["approvals", "waiting", "questions", "decisions"] },
   { to: "/projects", label: "Projects", icon: FolderKanban, group: "Work", keywords: ["board", "repo", "cards"] },
   { to: "/chat", label: "Chat", icon: MessageSquare, group: "Work", keywords: ["assistant"] },
   { to: "/activity", label: "Activity", icon: Activity, group: "Work", keywords: ["runs", "spend", "budget", "queue"] },

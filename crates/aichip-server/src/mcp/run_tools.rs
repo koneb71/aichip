@@ -93,6 +93,24 @@ pub(crate) fn tools(ctx: &RunCtx) -> Vec<Value> {
                 "card_id": { "type": "string", "description": "optional: the id of the card this one is waiting on" }
             }), vec!["reason"]),
         }));
+        tools.push(json!({
+            "name": "ask_person",
+            "description": "Ask the person a question you genuinely cannot settle yourself — a fork in the road only they can choose. It goes to their inbox; your run does not wait. After asking, finish your turn with a short summary of where you are; their answer comes back to you as your next turn, in this same worktree. Offer up to 5 short suggested answers when the choice is between options.",
+            "inputSchema": obj(json!({
+                "question": { "type": "string" },
+                "options": { "type": "array", "items": { "type": "string" }, "description": "optional: up to 5 suggested answers" }
+            }), vec!["question"]),
+        }));
+    }
+    if ctx.workspace_id.is_some() && ctx.card.is_some() {
+        tools.push(json!({
+            "name": "propose_decision",
+            "description": "Propose something only the person can do, with your reason: start a card, move one to backlog/review/done, give one to an agent, make one wait for another, or pause an agent. It goes to their inbox to approve or turn down; nothing happens until they do. Effects: {\"kind\":\"start_card\",\"card_id\"}, {\"kind\":\"move_card\",\"card_id\",\"column\"}, {\"kind\":\"assign_card\",\"card_id\",\"agent\"}, {\"kind\":\"add_blocker\",\"card_id\",\"blocked_by\"}, {\"kind\":\"pause_agent\",\"agent\"}.",
+            "inputSchema": obj(json!({
+                "effect": { "type": "object" },
+                "reason": { "type": "string" }
+            }), vec!["effect", "reason"]),
+        }));
     }
     if ctx.workspace_id.is_some() {
         tools.push(json!({
@@ -120,6 +138,8 @@ pub(crate) fn tools(ctx: &RunCtx) -> Vec<Value> {
 const OWN: &[&str] = &[
     "comment",
     "report_blocker",
+    "ask_person",
+    "propose_decision",
     "search_kb",
     "read_article",
     "recall",
@@ -213,6 +233,57 @@ pub(crate) async fn call(
                 "waitsOn": waits_on,
                 "next": "Stop here and finish with a short summary of what is done and what is not.",
             }))
+        }
+        "ask_person" => {
+            let card = ctx.card.ok_or("this run has no card to ask about")?;
+            let options: Vec<String> = match args.get("options") {
+                None | Some(Value::Null) => vec![],
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|_| "options must be a list of short strings")?,
+            };
+            aichip_core::asks::ask(
+                &state.db,
+                run_id,
+                card,
+                text_arg(&args, "question")?,
+                &options,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "asked": true,
+                "next": "Finish your turn now with a short summary of where you are and what the answer decides. The answer comes back to you as your next turn.",
+            }))
+        }
+        "propose_decision" => {
+            let ws = ctx.workspace_id.ok_or("this run has no workspace")?;
+            ctx.card.ok_or("only a card's run can propose")?;
+            let effect: aichip_core::decisions::Effect =
+                serde_json::from_value(args.get("effect").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("effect is not one of the five kinds: {e}"))?;
+            let who: String = match ctx.agent_id {
+                Some(a) => sqlx::query_scalar("SELECT name FROM agents WHERE id = $1")
+                    .bind(a)
+                    .fetch_optional(&state.db.pool)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_else(|| "An agent".into()),
+                None => "An agent".into(),
+            };
+            let id = aichip_core::decisions::propose(
+                &state.db,
+                ws,
+                ctx.project_id,
+                Some(run_id),
+                &who,
+                &effect,
+                text_arg(&args, "reason")?,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok(
+                json!({ "proposed": true, "id": id, "next": "It is with the person. Carry on with your work; do not wait for it." }),
+            )
         }
         "search_kb" => {
             let ws = ctx.workspace_id.ok_or("this run has no workspace")?;
@@ -321,6 +392,8 @@ mod tests {
             [
                 "comment",
                 "report_blocker",
+                "ask_person",
+                "propose_decision",
                 "search_kb",
                 "read_article",
                 "recall"
@@ -363,7 +436,11 @@ mod tests {
     #[test]
     fn nothing_here_merges_starts_or_configures() {
         for name in names(&ctx(true, true, true)) {
-            for forbidden in ["merge", "start", "setting", "check", "run"] {
+            // "resolve", "approve" and "decide" too: an agent may propose,
+            // never settle — its own proposal least of all.
+            for forbidden in [
+                "merge", "start", "setting", "check", "run", "resolve", "approve", "decide",
+            ] {
                 assert!(
                     !name.contains(forbidden),
                     "{name} looks like it could {forbidden}"

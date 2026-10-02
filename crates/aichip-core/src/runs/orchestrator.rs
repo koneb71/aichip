@@ -1084,9 +1084,8 @@ impl Orchestrator {
         let mut tx = self.db.pool.begin().await?;
         // A run that was waiting on a person already recorded what it was
         // waiting for, and "orphaned by server restart" would throw that away.
-        // This is the whole reason pending prompts need no table of their own:
-        // the restart kills the run either way, and all persistence would have
-        // bought is a truthful sentence, which `park` has already written.
+        // The question itself is in `permission_requests`; it is marked
+        // expired below, which is what the inbox offers to resume from.
         let orphans: Vec<Uuid> = sqlx::query_scalar(
             "UPDATE runs SET status='failed',
                     error_reason = CASE WHEN status='waiting_permission'
@@ -1102,6 +1101,13 @@ impl Orchestrator {
         // The steps died with the run. Leaving them at 'running' is what makes
         // a failed team run still animate a teammate as "working…".
         settle_steps(&mut tx, &orphans, RunStatus::Failed).await?;
+        // The questions those runs were holding will never be answered now.
+        sqlx::query(
+            "UPDATE permission_requests SET resolved_at = now(), decision = 'expired'
+              WHERE resolved_at IS NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
         // Nothing terminal keeps a place in the queue. This is the sweep for
         // rows written before `finish` learned to delete them — without it,
         // every failure this repository has already recorded stays claimable

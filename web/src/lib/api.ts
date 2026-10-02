@@ -21,7 +21,9 @@ export type AttentionEvent =
   | "finished"
   | "routine"
   | "unblocked"
-  | "budget_warning";
+  | "budget_warning"
+  | "question"
+  | "decision";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -1715,6 +1717,40 @@ const guarded = (method: "POST" | "PATCH" | "DELETE", url: string, body?: unknow
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+export type InboxKind =
+  | "plan"
+  | "team_plan"
+  | "permission"
+  | "permission_expired"
+  | "question"
+  | "decision"
+  | "chat_question"
+  | "chat_plan"
+  | "schema"
+  | "kb_revision"
+  | "recipe";
+
+/** One thing waiting on a person. See `aichip_core::inbox`. */
+export interface InboxItem {
+  key: string;
+  kind: InboxKind;
+  title: string;
+  detail: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  taskId: string | null;
+  runId: string | null;
+  /** Where "open" goes. */
+  link: string;
+  createdAt: string;
+  /** What can be done from the inbox itself. */
+  actions: string[];
+  read: boolean;
+  snoozedUntil: string | null;
+  /** Suggested answers a question offered. */
+  options: string[];
+}
+
 const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
@@ -1776,6 +1812,17 @@ export const api = {
     fetch("/api/budgets").then((r) =>
       json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),
     ),
+  inbox: (workspaceId: string, all = false) =>
+    fetch(`/api/inbox?workspace_id=${workspaceId}${all ? "&all=true" : ""}`).then((r) =>
+      json<{ items: InboxItem[]; unread: number }>(r),
+    ),
+  resolveInbox: (key: string, action: string, text?: string) =>
+    guarded("POST", "/api/inbox/resolve", { key, action, text }).then((r) =>
+      json<{ ok: boolean; outcome: unknown }>(r),
+    ),
+  readInbox: (key: string) => guarded("POST", "/api/inbox/read", { key }).then((r) => json<{ ok: boolean }>(r)),
+  snoozeInbox: (key: string, hours: number) =>
+    guarded("POST", "/api/inbox/snooze", { key, hours }).then((r) => json<{ ok: boolean; until: string }>(r)),
   createBudget: (body: BudgetBody) => guarded("POST", "/api/budgets", body).then((r) => json<{ id: string }>(r)),
   updateBudget: (id: string, body: BudgetBody) =>
     guarded("PATCH", `/api/budgets/${id}`, body).then((r) => json<{ updated: boolean }>(r)),
