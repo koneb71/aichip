@@ -2,6 +2,7 @@ pub mod activity;
 pub mod agents;
 pub mod apps;
 pub mod attachments;
+pub mod budgets;
 pub mod chat;
 pub mod checks;
 pub mod engines;
@@ -45,10 +46,20 @@ pub fn run_refused(e: anyhow::Error) -> ApiError {
     if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>()
         || e.is::<aichip_core::runs::follow_up::FollowUpRefusal>()
         || e.is::<aichip_core::agents::Unavailable>()
+        || e.is::<aichip_core::budgets::OverBudget>()
     {
         (axum::http::StatusCode::CONFLICT, e.to_string())
     } else {
         internal(e)
+    }
+}
+
+/// [`run_refused`] for a door whose other failures are the caller's fault
+/// (a 400) rather than a fault: a refusal still reads as a 409.
+pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
+    move |e| match run_refused(e) {
+        (StatusCode::INTERNAL_SERVER_ERROR, message) => (status, message),
+        refused => refused,
     }
 }
 
@@ -64,6 +75,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(apps::router())
         .merge(tasks::router())
         .merge(checks::router())
+        .merge(budgets::router())
         .merge(agents::router())
         .merge(skills::router())
         .merge(teams::router())

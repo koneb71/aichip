@@ -19,7 +19,7 @@ use uuid::Uuid;
 /// depending on what kind of run it is. Same join the activity view uses; kept
 /// identical on purpose, so the two screens can never disagree about which
 /// runs belong to a workspace.
-const PROJECT_JOIN: &str = "
+pub(crate) const PROJECT_JOIN: &str = "
     LEFT JOIN tasks     t ON t.id = r.task_id
     LEFT JOIN workflows w ON w.id = r.workflow_id
     LEFT JOIN chats     c ON c.id = r.chat_id

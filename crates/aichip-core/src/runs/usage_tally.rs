@@ -69,6 +69,12 @@ pub struct UsageTally {
 }
 
 impl UsageTally {
+    /// Output tokens so far, live — what a token budget is measured against
+    /// while the run is still going.
+    pub fn output_tokens(&self) -> i64 {
+        self.live.output_tokens as i64
+    }
+
     /// Fold in one mid-run report. See the module docs for why outputs sum and
     /// the other three take a maximum.
     pub fn observe(&mut self, u: &Usage) {

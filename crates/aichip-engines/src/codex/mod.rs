@@ -207,6 +207,9 @@ impl Engine for CodexEngine {
             // Free-text model ids: Codex takes whatever `--model` is given and
             // the catalog moves faster than any list here could.
             fixed_model_catalog: false,
+            // `codex exec` reports tokens, never money (`stream_parser`
+            // leaves `cost_usd` empty), so its runs are counted by tokens.
+            reports_cost: false,
         }
     }
 

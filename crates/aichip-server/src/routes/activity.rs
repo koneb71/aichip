@@ -83,8 +83,9 @@ async fn activity(
                 r.goal, t.title AS task_title, w.name AS workflow_name,
                 rs.question AS research_question,
                 tm.name AS team_name, p.name AS project_name, p.id AS project_id,
-                r.team_id, r.task_id
+                r.team_id, r.task_id, q.hold_reason
          FROM runs r
+         LEFT JOIN queue q ON q.run_id = r.id
          LEFT JOIN tasks t ON t.id = r.task_id
          LEFT JOIN workflows w ON w.id = r.workflow_id
          LEFT JOIN teams tm ON tm.id = r.team_id
@@ -138,6 +139,8 @@ async fn activity(
                 "model": r.get::<Option<String>, _>("model"),
                 "startedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at"),
                 "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                // Why a queued run is not starting: the budget holding it.
+                "holdReason": r.get::<Option<String>, _>("hold_reason"),
             })
         })
         .collect();
@@ -177,9 +180,11 @@ async fn activity(
     }
 
     // Spend by day. Fourteen days is enough to see a trend without turning
-    // this into a reporting feature.
+    // this into a reporting feature. A run belongs to the day it ran — the
+    // same reading a budget's window uses, so "spent today" beside the daily
+    // cap can never disagree with whether that cap is spent.
     let daily = sqlx::query(
-        "SELECT date_trunc('day', r.created_at) AS day,
+        "SELECT date_trunc('day', COALESCE(r.finished_at, r.started_at, r.created_at)) AS day,
                 SUM(COALESCE(r.cost_usd, 0)) AS cost,
                 COUNT(*) AS runs
          FROM runs r
@@ -189,7 +194,7 @@ async fn activity(
          LEFT JOIN researches rs ON rs.id = r.research_id
          LEFT JOIN projects p ON p.id = COALESCE(
              r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
-         WHERE r.created_at > now() - interval '14 days'
+         WHERE COALESCE(r.finished_at, r.started_at, r.created_at) > now() - interval '14 days'
            AND ($1::uuid IS NULL
                 OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
          GROUP BY 1 ORDER BY 1",
@@ -222,9 +227,14 @@ async fn activity(
             QueueGate::Open => json!({ "state": "open" }),
             QueueGate::Paused => json!({ "state": "paused" }),
             // Named separately from `paused` because there is no resume for
-            // it — it clears at midnight, and offering a button would lie.
-            QueueGate::OverBudget { spent_today, cap_usd } => json!({
-                "state": "over_budget", "spentToday": spent_today, "capUsd": cap_usd,
+            // it — it clears when its window turns, and a button would lie.
+            QueueGate::OverBudget(over) => json!({
+                "state": "over_budget",
+                "policy": over.policy,
+                "policyId": over.policy_id,
+                "detail": over.detail,
+                "resetsAt": over.resets_at,
+                "message": over.to_string(),
             }),
         },
         "budgetUsd": state.orchestrator.daily_budget().await,

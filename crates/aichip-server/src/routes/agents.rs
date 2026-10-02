@@ -82,6 +82,9 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "status": r.get::<String, _>("status"),
         "pauseReason": r.get::<Option<String>, _>("pause_reason"),
         "pausedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("paused_at"),
+        "maxConcurrent": r.get::<Option<i32>, _>("max_concurrent"),
+        "maxDailyRuns": r.get::<Option<i32>, _>("max_daily_runs"),
+        "cooldownSecs": r.get::<Option<i32>, _>("cooldown_secs"),
     })
 }
 
@@ -134,6 +137,26 @@ struct AgentBody {
     /// `permission_preset`: an agent describes a skill, not a toolchain.
     #[serde(default)]
     engine: Option<String>,
+    /// How hard the agent may be worked; `None` is no limit (0077).
+    #[serde(default)]
+    max_concurrent: Option<i32>,
+    #[serde(default)]
+    max_daily_runs: Option<i32>,
+    #[serde(default)]
+    cooldown_secs: Option<i32>,
+}
+
+/// A limit is a positive number or nothing — zero would mean "never", which
+/// is what pausing the agent is for.
+fn check_limits(limits: [Option<i32>; 3]) -> Result<(), ApiError> {
+    if limits.iter().flatten().any(|v| *v <= 0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "limits must be more than zero — leave one empty for no limit, or pause the agent"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn default_icon() -> String {
@@ -150,6 +173,7 @@ async fn create(
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
     }
+    check_limits([body.max_concurrent, body.max_daily_runs, body.cooldown_secs])?;
 
     // One `@` namespace: a skill and an agent are both things you write after
     // an `@`, so one name can only mean one of them. Checked from both sides —
@@ -163,8 +187,9 @@ async fn create(
     let tier = serde_json::to_value(body.model_tier).unwrap();
     let row = sqlx::query(
         "INSERT INTO agents (workspace_id, name, icon, color, description, system_prompt,
-                             model_tier, allowed_tools, permission_preset, effort, engine)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+                             model_tier, allowed_tools, permission_preset, effort, engine,
+                             max_concurrent, max_daily_runs, cooldown_secs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
     )
     .bind(body.workspace_id)
     .bind(body.name.trim())
@@ -177,6 +202,9 @@ async fn create(
     .bind(&body.permission_preset)
     .bind(body.effort.as_deref().filter(|e| !e.is_empty()))
     .bind(body.engine.as_deref().filter(|e| !e.is_empty()))
+    .bind(body.max_concurrent)
+    .bind(body.max_daily_runs)
+    .bind(body.cooldown_secs)
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -201,12 +229,20 @@ struct AgentPatch {
     /// Present-but-null clears it back to inheriting.
     #[serde(default, deserialize_with = "double_option")]
     engine: Option<Option<String>>,
+    /// Present-but-null removes the limit.
+    #[serde(default, deserialize_with = "double_option")]
+    max_concurrent: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "double_option")]
+    max_daily_runs: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "double_option")]
+    cooldown_secs: Option<Option<i32>>,
 }
 
 /// Distinguish "field absent" from "field set to null" so clearing works.
-fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
 {
     serde::Deserialize::deserialize(de).map(Some)
 }
@@ -216,6 +252,11 @@ async fn update(
     Path(id): Path<Uuid>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<Value>, ApiError> {
+    check_limits([
+        body.max_concurrent.flatten(),
+        body.max_daily_runs.flatten(),
+        body.cooldown_secs.flatten(),
+    ])?;
     let tier = body.model_tier.map(|t| {
         serde_json::to_value(t)
             .unwrap()
@@ -231,7 +272,10 @@ async fn update(
             allowed_tools = COALESCE($7, allowed_tools),
             permission_preset = CASE WHEN $12 THEN $8 ELSE permission_preset END,
             effort = CASE WHEN $10 THEN $9 ELSE effort END,
-            engine = CASE WHEN $14 THEN $13 ELSE engine END
+            engine = CASE WHEN $14 THEN $13 ELSE engine END,
+            max_concurrent = CASE WHEN $15 THEN $16 ELSE max_concurrent END,
+            max_daily_runs = CASE WHEN $17 THEN $18 ELSE max_daily_runs END,
+            cooldown_secs = CASE WHEN $19 THEN $20 ELSE cooldown_secs END
          WHERE id = $11 RETURNING *",
     )
     .bind(body.name)
@@ -248,7 +292,24 @@ async fn update(
     .bind(body.permission_preset.is_some())
     .bind(body.engine.clone().flatten().filter(|e| !e.is_empty()))
     .bind(body.engine.is_some())
+    .bind(body.max_concurrent.is_some())
+    .bind(body.max_concurrent.flatten())
+    .bind(body.max_daily_runs.is_some())
+    .bind(body.max_daily_runs.flatten())
+    .bind(body.cooldown_secs.is_some())
+    .bind(body.cooldown_secs.flatten())
     .fetch_one(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    // A raised limit is a new answer for runs already waiting on the old one.
+    sqlx::query(
+        "UPDATE queue SET not_before = NULL, hold_reason = NULL
+          WHERE held_by IS NULL AND hold_reason IS NOT NULL
+            AND run_id IN (SELECT r.id FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+                            WHERE COALESCE(r.agent_id, t.agent_id) = $1)",
+    )
+    .bind(id)
+    .execute(&state.db.pool)
     .await
     .map_err(internal)?;
     Ok(Json(agent_json(&row)))

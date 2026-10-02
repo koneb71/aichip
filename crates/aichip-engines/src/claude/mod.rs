@@ -125,6 +125,8 @@ impl Engine for ClaudeEngine {
             // `--append-system-prompt` appends rather than replaces.
             append_system_prompt: true,
             fixed_model_catalog: true,
+            // `total_cost_usd` on the final result line.
+            reports_cost: true,
         }
     }
 

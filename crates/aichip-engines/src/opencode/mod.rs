@@ -129,6 +129,8 @@ impl Engine for OpenCodeEngine {
             append_system_prompt: true,
             // 75+ providers plus local models — no catalog could keep up.
             fixed_model_catalog: false,
+            // Each step's `cost`, summed into the final event.
+            reports_cost: true,
         }
     }
 

@@ -117,7 +117,7 @@ async fn create(
             body.effort,
         )
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(super::refused_or(StatusCode::BAD_REQUEST))?;
     Ok(Json(json!({ "id": id, "runId": run_id })))
 }
 
@@ -204,7 +204,7 @@ async fn rerun(
         .orchestrator
         .enqueue_research_run(id, &engine)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(super::refused_or(StatusCode::BAD_REQUEST))?;
     Ok(Json(json!({ "runId": run_id })))
 }
 

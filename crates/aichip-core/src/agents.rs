@@ -175,6 +175,177 @@ pub async fn assert_assignable(db: &Db, agent_id: Uuid) -> anyhow::Result<()> {
     }
 }
 
+/// An agent's limits on how hard it is worked (0077). `None` is no limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Limits {
+    pub max_concurrent: Option<i32>,
+    pub max_daily_runs: Option<i32>,
+    pub cooldown_secs: Option<i32>,
+}
+
+/// Does any agent have a limit at all? With none, and no budgets, the queue
+/// claims exactly as it did before limits existed.
+pub async fn any_limits(db: &Db) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM agents
+                         WHERE max_concurrent IS NOT NULL OR max_daily_runs IS NOT NULL
+                            OR cooldown_secs IS NOT NULL)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap_or(false)
+}
+
+/// What one agent is doing and has done, against its limits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Load {
+    /// Runs and team steps executing now.
+    pub live: i64,
+    /// Runs started since midnight.
+    pub today: i64,
+    /// Seconds since its last run ended; `None` if it has not run.
+    pub rested_secs: Option<i64>,
+}
+
+/// Should a run wait for its agent, and until when? Pure: every rule about
+/// limits is here, so it is tested without a database. The `now` and
+/// `tomorrow` it is given are where waits end.
+pub fn wait_for(
+    name: &str,
+    limits: Limits,
+    load: Load,
+    now: chrono::DateTime<chrono::Utc>,
+    tomorrow: chrono::DateTime<chrono::Utc>,
+) -> Option<(chrono::DateTime<chrono::Utc>, String)> {
+    if let Some(max) = limits.max_daily_runs {
+        if load.today >= i64::from(max) {
+            return Some((
+                tomorrow,
+                format!("{name} has done its {max} runs for today"),
+            ));
+        }
+    }
+    if let Some(max) = limits.max_concurrent {
+        if load.live >= i64::from(max) {
+            // Re-asked soon: a slot frees when any of its runs ends, and the
+            // queue has no other way to hear about it.
+            return Some((
+                now + chrono::Duration::seconds(30),
+                format!("{name} is at its limit of {max} at a time"),
+            ));
+        }
+    }
+    if let (Some(cooldown), Some(rested)) = (limits.cooldown_secs, load.rested_secs) {
+        let left = i64::from(cooldown) - rested;
+        if left > 0 {
+            return Some((
+                now + chrono::Duration::seconds(left),
+                format!("{name} is resting between runs ({cooldown}s)"),
+            ));
+        }
+    }
+    None
+}
+
+/// The agent a queued run would work as, if it has limits and they say
+/// wait — and until when. A team run or a workflow is not asked here: its
+/// members are asked one assignment at a time (`org::work_phase`).
+pub async fn hold_for_limits(
+    db: &Db,
+    run_id: Uuid,
+) -> anyhow::Result<Option<(chrono::DateTime<chrono::Utc>, String)>> {
+    let row = sqlx::query(
+        "SELECT a.id, a.name, a.workspace_id, a.max_concurrent, a.max_daily_runs, a.cooldown_secs,
+                now() AS now, date_trunc('day', now()) + interval '1 day' AS tomorrow
+           FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+           JOIN agents a ON a.id = COALESCE(r.agent_id, t.agent_id)
+          WHERE r.id = $1 AND r.team_id IS NULL AND r.workflow_id IS NULL
+            AND (a.max_concurrent IS NOT NULL OR a.max_daily_runs IS NOT NULL
+                 OR a.cooldown_secs IS NOT NULL)",
+    )
+    .bind(run_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let agent: Uuid = row.get("id");
+    let load = load_of(
+        db,
+        agent,
+        row.get("name"),
+        row.get("workspace_id"),
+        Some(run_id),
+    )
+    .await?;
+    Ok(wait_for(
+        &row.get::<String, _>("name"),
+        Limits {
+            max_concurrent: row.get("max_concurrent"),
+            max_daily_runs: row.get("max_daily_runs"),
+            cooldown_secs: row.get("cooldown_secs"),
+        },
+        load,
+        row.get("now"),
+        row.get("tomorrow"),
+    ))
+}
+
+/// How many more an agent may take on at once right now, if it has a limit.
+pub async fn room(db: &Db, agent_id: Uuid) -> anyhow::Result<Option<i64>> {
+    let row = sqlx::query("SELECT name, workspace_id, max_concurrent FROM agents WHERE id = $1")
+        .bind(agent_id)
+        .fetch_optional(&db.pool)
+        .await?;
+    let Some(row) = row else { return Ok(None) };
+    let Some(max) = row.get::<Option<i32>, _>("max_concurrent") else {
+        return Ok(None);
+    };
+    let load = load_of(db, agent_id, row.get("name"), row.get("workspace_id"), None).await?;
+    Ok(Some((i64::from(max) - load.live).max(0)))
+}
+
+/// `except` is the run being asked about: never its own competition, and —
+/// when it already started once — not counted against today twice.
+async fn load_of(
+    db: &Db,
+    agent: Uuid,
+    name: String,
+    workspace: Uuid,
+    except: Option<Uuid>,
+) -> anyhow::Result<Load> {
+    let row = sqlx::query(
+        "SELECT
+            -- Live: executing, or claimed a moment ago and about to (its queue
+            -- row gone, its status not yet moved on).
+            (SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+              WHERE COALESCE(r.agent_id, t.agent_id) = $1 AND r.team_id IS NULL
+                AND r.workflow_id IS NULL AND r.id IS DISTINCT FROM $4
+                AND (r.status IN ('starting', 'running', 'waiting_permission')
+                     OR (r.status = 'queued' AND r.started_at IS NOT NULL
+                         AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.run_id = r.id))))
+          + (SELECT count(*) FROM steps s JOIN runs r ON r.id = s.run_id
+               LEFT JOIN projects p ON p.id = r.project_id
+              WHERE s.assignee = $2 AND s.status IN ('starting', 'running', 'waiting_permission')
+                AND (p.workspace_id IS NULL OR p.workspace_id = $3)) AS live,
+            (SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+              WHERE COALESCE(r.agent_id, t.agent_id) = $1 AND r.id IS DISTINCT FROM $4
+                AND r.started_at >= date_trunc('day', now())) AS today,
+            (SELECT EXTRACT(EPOCH FROM now() - max(r.finished_at))::bigint
+               FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+              WHERE COALESCE(r.agent_id, t.agent_id) = $1 AND r.finished_at IS NOT NULL) AS rested",
+    )
+    .bind(agent)
+    .bind(&name)
+    .bind(workspace)
+    .bind(except)
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Load {
+        live: row.get("live"),
+        today: row.get("today"),
+        rested_secs: row.get("rested"),
+    })
+}
+
 /// The runs an agent is doing right now, anywhere it can be doing them by
 /// itself: its cards (bound to it, or a bake-off variant it was given) and its
 /// comment replies. A team run or a workflow is not stopped — the agent is one
@@ -288,6 +459,61 @@ mod tests {
     }
 
     #[test]
+    fn a_limit_says_how_long_to_wait_and_why() {
+        let now = chrono::Utc::now();
+        let tomorrow = now + chrono::Duration::hours(10);
+        let limits = Limits {
+            max_concurrent: Some(1),
+            max_daily_runs: Some(3),
+            cooldown_secs: Some(120),
+        };
+        let idle = Load {
+            live: 0,
+            today: 1,
+            rested_secs: Some(500),
+        };
+        assert_eq!(wait_for("Ada", limits, idle, now, tomorrow), None);
+        let (until, why) =
+            wait_for("Ada", limits, Load { live: 1, ..idle }, now, tomorrow).unwrap();
+        assert_eq!(
+            (until, why.as_str()),
+            (
+                now + chrono::Duration::seconds(30),
+                "Ada is at its limit of 1 at a time"
+            )
+        );
+        let (until, _) = wait_for("Ada", limits, Load { today: 3, ..idle }, now, tomorrow).unwrap();
+        assert_eq!(until, tomorrow);
+        let (until, _) = wait_for(
+            "Ada",
+            limits,
+            Load {
+                rested_secs: Some(100),
+                ..idle
+            },
+            now,
+            tomorrow,
+        )
+        .unwrap();
+        assert_eq!(until, now + chrono::Duration::seconds(20));
+        // No limits, any load: never waits.
+        assert_eq!(
+            wait_for(
+                "Ada",
+                Limits::default(),
+                Load {
+                    live: 9,
+                    today: 99,
+                    rested_secs: Some(0)
+                },
+                now,
+                tomorrow
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn a_team_names_its_manager_and_members() {
         let m = Uuid::new_v4();
         let a = Uuid::new_v4();
@@ -374,9 +600,17 @@ mod tests {
                     continue;
                 };
                 let body = &source[start..at];
-                // A test writing a run row as a fixture starts no agent.
+                // A test writing a run row as a fixture starts no agent:
+                // a test fn, or anything inside an inline test module
+                // (which in this codebase always closes the file).
                 let before = source[..start].trim_end();
-                let is_test = before.ends_with("#[test]") || before.ends_with("#[tokio::test]");
+                let in_test_module = source[..at]
+                    .rfind("#[cfg(test)]\nmod ")
+                    .and_then(|i| source[i..].lines().nth(1))
+                    .is_some_and(|line| line.trim_end().ends_with('{'));
+                let is_test = in_test_module
+                    || before.ends_with("#[test]")
+                    || before.ends_with("#[tokio::test]");
                 if is_test
                     || body.contains("agents::assert_")
                     || NO_AGENT.iter().any(|(n, _)| *n == name)
@@ -444,6 +678,69 @@ mod db_tests {
 
         orchestrator.resume_agent(ada).await.unwrap();
         orchestrator.start_card(card).await.unwrap();
+
+        t.finish().await;
+    }
+
+    /// An agent at its limit of one at a time: its next card waits in the
+    /// queue, saying why, rather than starting or failing.
+    #[tokio::test]
+    async fn a_run_over_its_agents_limit_waits_its_turn() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (ws, project) = t.project(dir.path(), true).await;
+        let ada = agent(&t, ws, "Ada").await;
+        sqlx::query("UPDATE agents SET max_concurrent = 1, cooldown_secs = 3600 WHERE id = $1")
+            .bind(ada)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let busy = t.card(project, "busy").await;
+        let next = t.card(project, "next").await;
+        sqlx::query("UPDATE tasks SET agent_id = $1 WHERE id IN ($2, $3)")
+            .bind(ada)
+            .bind(busy)
+            .bind(next)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        // Ada is working on one card already.
+        let live: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine, started_at)
+             VALUES ($1, 'running', 'manual', 'mock', now()) RETURNING id",
+        )
+        .bind(busy)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+
+        let run = orchestrator.start_card(next).await.unwrap();
+        t.until(
+            "the run to be held",
+            "SELECT hold_reason IS NOT NULL FROM queue WHERE run_id = $1",
+            run,
+        )
+        .await;
+        let why: String = sqlx::query_scalar("SELECT hold_reason FROM queue WHERE run_id = $1")
+            .bind(run)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(why, "Ada is at its limit of 1 at a time");
+
+        // The first one ends: now it rests before the next.
+        sqlx::query("UPDATE runs SET status = 'completed', finished_at = now() WHERE id = $1")
+            .bind(live)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        assert!(super::hold_for_limits(&t.db, run)
+            .await
+            .unwrap()
+            .is_some_and(|(_, why)| why.contains("resting")));
 
         t.finish().await;
     }

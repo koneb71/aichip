@@ -146,6 +146,52 @@ enum Phase {
 }
 
 impl Orchestrator {
+    /// Drop from a batch the assignments whose member is already at its
+    /// `max_concurrent` — counting the ones this batch would add — or whose
+    /// own budget is spent. A spent budget on the first assignment ends the
+    /// run, saying so: the team cannot make progress without it.
+    async fn within_limits(
+        &self,
+        batch: Vec<usize>,
+        pending: &[Assignment],
+        workers: &[Member],
+    ) -> Result<Vec<usize>, crate::budgets::OverBudget> {
+        let mut room: HashMap<Uuid, i64> = HashMap::new();
+        let mut kept = Vec::with_capacity(batch.len());
+        for (position, index) in batch.into_iter().enumerate() {
+            let Some(member) = workers.iter().find(|m| m.name == pending[index].assignee) else {
+                kept.push(index);
+                continue;
+            };
+            let own = crate::budgets::Scope {
+                agent: Some(member.agent_id),
+                ..Default::default()
+            };
+            if let Err(over) = crate::budgets::check(&self.db, &own, false).await {
+                if position == 0 {
+                    return Err(over);
+                }
+                continue;
+            }
+            let left = match room.get(&member.agent_id) {
+                Some(left) => Some(*left),
+                None => crate::agents::room(&self.db, member.agent_id)
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            match left {
+                Some(left) if left <= 0 && position > 0 => continue,
+                Some(left) => {
+                    room.insert(member.agent_id, left - 1);
+                    kept.push(index);
+                }
+                None => kept.push(index),
+            }
+        }
+        Ok(kept)
+    }
+
     /// Queue an organization run for a goal.
     pub async fn enqueue_org_run(
         &self,
@@ -155,6 +201,18 @@ impl Orchestrator {
         plan_approval: bool,
     ) -> anyhow::Result<Uuid> {
         crate::agents::assert_team_can_run(&self.db, team_id).await?;
+        let workspace: Option<Uuid> =
+            sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
+        let scope = crate::budgets::Scope {
+            workspace,
+            project: Some(project_id),
+            team: Some(team_id),
+            ..Default::default()
+        };
+        crate::budgets::check(&self.db, &scope, true).await?;
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
              SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)
@@ -712,10 +770,26 @@ impl Orchestrator {
                 aborted = Some("canceled".to_string());
                 break;
             }
+            // The team finishes the assignments it is working on, but no new
+            // batch starts on a budget that is spent.
+            if let Err(over) = self.budget_allows_more(ctx.run_id).await {
+                aborted = Some(over.to_string());
+                break;
+            }
 
             // Everything ready whose file scopes don't collide. Usually one;
             // several when the manager split the work cleanly.
             let batch = parallel_batch(&pending, &satisfied, MAX_PARALLEL_ASSIGNMENTS);
+            // A specialist at its limit of runs at once sits out the rest of
+            // this batch. The first assignment always goes, so the team never
+            // stalls waiting on itself.
+            let batch = match self.within_limits(batch, &pending, &workers).await {
+                Ok(batch) => batch,
+                Err(over) => {
+                    aborted = Some(over.to_string());
+                    break;
+                }
+            };
             let completed: Vec<&Assignment> =
                 all.iter().filter(|a| a.status == "completed").collect();
 

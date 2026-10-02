@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, Attachment, CheckoutState, displayTier, PendingPermission, Skill, Task, Team, tierColor } from "../lib/api";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { isActive, isWorking, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
+import { estimateLine, ForecastAsk, parseForecastAsk } from "../lib/forecast";
 import { useAttachments } from "../lib/useAttachments";
 import { AttachmentBar, AttachmentList } from "./AttachmentBar";
 import { TaskComments } from "./TaskComments";
@@ -1326,7 +1327,17 @@ function StatusMover({
 }) {
   const [moving, setMoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ask, setAsk] = useState<ForecastAsk | null>(null);
+  const [estimate, setEstimate] = useState<string | null>(null);
   const waitingFor = unresolvedBlockers(task);
+  // What starting it is likely to cost — only worth asking while it can start.
+  useEffect(() => {
+    if (task.boardColumn !== "backlog") return setEstimate(null);
+    api
+      .taskEstimate(task.id)
+      .then((r) => setEstimate(estimateLine(r.estimate)))
+      .catch(() => setEstimate(null));
+  }, [task.id, task.boardColumn]);
   const cols: { key: Task["boardColumn"]; label: string; hint: string }[] = [
     { key: "backlog", label: "Backlog", hint: "File it for later" },
     {
@@ -1343,15 +1354,19 @@ function StatusMover({
     { key: "done", label: "Done", hint: "Mark it finished" },
   ];
 
-  const move = async (col: Task["boardColumn"]) => {
-    if (col === task.boardColumn || moving) return;
+  const move = async (col: Task["boardColumn"], acknowledgeForecast = false) => {
+    if ((col === task.boardColumn && !acknowledgeForecast) || moving) return;
     setMoving(col);
     setError(null);
+    setAsk(null);
     try {
-      await api.moveTask(task.id, { board_column: col });
+      await api.moveTask(task.id, { board_column: col, acknowledge_forecast: acknowledgeForecast || undefined });
       onChanged();
     } catch (e) {
-      setError(String(e).replace(/^Error:\s*/, ""));
+      // Similar runs say this could overrun a budget: the person decides.
+      const question = parseForecastAsk(String(e));
+      if (question) setAsk(question);
+      else setError(String(e).replace(/^Error:\s*/, ""));
     } finally {
       setMoving(null);
     }
@@ -1399,6 +1414,23 @@ function StatusMover({
           );
         })}
       </div>
+      {estimate && !ask && <div className="mt-1.5 text-[11px] text-ink-dim">Starting it: {estimate}</div>}
+      {ask && (
+        <div className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+          {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
+          <div className="mt-1.5 flex gap-2">
+            <button
+              onClick={() => move("running", true)}
+              className="rounded-md bg-accent px-2 py-0.5 font-medium text-white"
+            >
+              Start anyway
+            </button>
+            <button onClick={() => setAsk(null)} className="rounded-md border border-amber-300 px-2 py-0.5">
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
           {error}

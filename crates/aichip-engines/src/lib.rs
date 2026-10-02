@@ -66,6 +66,11 @@ pub struct Capabilities {
     /// Model ids come from a fixed catalog. `false` ⇒ free-text
     /// `provider/model`, which no catalog could keep up with.
     pub fixed_model_catalog: bool,
+    /// Says what a run cost in dollars when it finishes. `false` ⇒ only
+    /// tokens are known, so a dollar budget cannot see this engine's runs —
+    /// they are counted against token caps instead, and the budget screen
+    /// says so.
+    pub reports_cost: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +248,7 @@ mod tests {
             resume_sessions: resume,
             append_system_prompt: true,
             fixed_model_catalog: false,
+            reports_cost: true,
         }
     }
 

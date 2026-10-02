@@ -5,6 +5,7 @@ import { api, PlanLimit, Project, Routine, Task } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { useActivity } from "../lib/activity";
 import { isWorking } from "../lib/runStatus";
+import { soonestBurnout } from "../lib/forecast";
 import { Stat } from "../components/Stat";
 import { SpendBars } from "../components/spend/SpendBars";
 import { isCurrent, resetIn, statusLabel, statusTone, windowLabel } from "../lib/usage";
@@ -32,6 +33,14 @@ export default function HomePage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [limits, setLimits] = useState<PlanLimit[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  // The budget that runs out soonest at this rate, if any does before it resets.
+  const [burnout, setBurnout] = useState<{ name: string; at: string } | null>(null);
+  useEffect(() => {
+    api
+      .budgets()
+      .then((r) => setBurnout(soonestBurnout(r.policies)))
+      .catch(() => setBurnout(null));
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -93,6 +102,13 @@ export default function HomePage() {
               activity?.budgetUsd ? `Spent today of $${activity.budgetUsd.toFixed(0)}` : "Spent today"
             }
             value={`$${today.toFixed(2)}`}
+            hint={
+              activity?.gate.state === "over_budget"
+                ? `\u201c${activity.gate.policy}\u201d is spent`
+                : burnout
+                  ? `\u201c${burnout.name}\u201d runs out ~${new Date(burnout.at).toLocaleString(undefined, { weekday: "short", hour: "numeric" })}`
+                  : undefined
+            }
             icon="coin"
             tint={activity?.gate.state === "over_budget" ? "amber" : "mint"}
             accent={activity?.gate.state === "over_budget" ? "#d97706" : "var(--color-tier-easy)"}

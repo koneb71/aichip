@@ -52,6 +52,7 @@ impl Engine for MockEngine {
             resume_sessions: true,
             append_system_prompt: true,
             fixed_model_catalog: true,
+            reports_cost: true,
         }
     }
 

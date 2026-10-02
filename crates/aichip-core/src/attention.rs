@@ -102,6 +102,7 @@ impl Default for Attention {
                 Event::OverBudget,
                 Event::Routine,
                 Event::Unblocked,
+                Event::BudgetWarning,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -139,6 +140,9 @@ pub enum Event {
     /// A card landed and a card it was blocking can start. On by default: the
     /// card you were waiting on is often the one you left running overnight.
     Unblocked,
+    /// A budget passed its warning line. On by default: the point of a
+    /// warning is to arrive before the hold does.
+    BudgetWarning,
 }
 
 impl Event {
@@ -151,6 +155,7 @@ impl Event {
             Event::Finished => "finished",
             Event::Routine => "routine",
             Event::Unblocked => "unblocked",
+            Event::BudgetWarning => "budget_warning",
         }
     }
 
@@ -163,6 +168,7 @@ impl Event {
             "finished" => Event::Finished,
             "routine" => Event::Routine,
             "unblocked" => Event::Unblocked,
+            "budget_warning" => Event::BudgetWarning,
             _ => return None,
         })
     }
@@ -666,6 +672,7 @@ mod tests {
             Event::Finished,
             Event::Routine,
             Event::Unblocked,
+            Event::BudgetWarning,
         ] {
             assert_eq!(Event::parse(e.as_str()), Some(e));
         }

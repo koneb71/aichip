@@ -366,7 +366,7 @@ async fn answer_question(
         .orchestrator
         .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(
         json!({ "messageId": message.get::<Uuid, _>("id"), "runId": run_id }),
     ))
@@ -447,7 +447,7 @@ async fn approve_plan(
         .orchestrator
         .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(
         json!({ "messageId": row.get::<Uuid, _>("id"), "runId": run_id }),
     ))
@@ -637,7 +637,7 @@ async fn send(
                 .unwrap_or(&state.orchestrator.default_engine()),
         )
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
 
     Ok(Json(json!({ "messageId": message_id, "runId": run_id })))
 }

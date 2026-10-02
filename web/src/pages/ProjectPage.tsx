@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { parseForecastAsk } from "../lib/forecast";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, Project, Task } from "../lib/api";
@@ -102,7 +103,10 @@ export default function ProjectPage() {
         setMoveError(null);
         await api.moveTask(taskId, { board_column: column, position });
       } catch (e) {
-        setMoveError(String(e));
+        // A budget question needs a choice the board has no room for: say it,
+        // and where to make it.
+        const ask = parseForecastAsk(String(e));
+        setMoveError(ask ? `${ask.message} — open the card to start it anyway` : String(e));
         setTimeout(() => setMoveError(null), 5000);
       }
       refresh().catch(() => {});
