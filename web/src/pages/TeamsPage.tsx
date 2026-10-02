@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, OrgRunSummary, Project, Team, TeamEstimate } from "../lib/api";
 import { EnginePicker, ToolsNote, useEngines } from "../lib/engines";
 import { useWorkspace } from "../lib/workspace";
+import { formChanged } from "../lib/formDirty";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
 import { Page, PageHead } from "../components/ui/Surface";
@@ -412,6 +413,19 @@ function TeamEditor({
     }
   };
 
+  // Against what it opened with: member order is part of a team, so a
+  // reorder counts as an edit.
+  const dirty = formChanged(
+    {
+      name: team?.name,
+      pattern: team?.pattern ?? "pipeline",
+      members: team?.definition.members ?? [],
+      manager: team?.definition.manager,
+      engine: team?.engine,
+    },
+    { name, pattern, members, manager, engine },
+  );
+
   const move = (index: number, dir: -1 | 1) =>
     setMembers((prev) => {
       const next = [...prev];
@@ -425,6 +439,7 @@ function TeamEditor({
     <Sheet
       open
       onOpenChange={(o) => !o && onClose()}
+      dismissible={!dirty}
       width={480}
       title={team ? `Edit ${team.name}` : "New team"}
       actions={team && <HistoryButton kind="team" id={team.id} onRestored={onClose} />}

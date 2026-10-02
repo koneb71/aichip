@@ -37,7 +37,7 @@ export function ReviewPolicySettings({ projectId, workspaceId }: { projectId: st
       .catch(() => setAgents([]));
   }, [workspaceId]);
 
-  if (!draft) return <p className="text-xs text-fg-subtle">{error ?? "Loading…"}</p>;
+  if (!draft) return <p className={`text-xs ${error ? "text-danger-fg" : "text-fg-muted"}`}>{error ?? "Loading…"}</p>;
 
   const dirty = JSON.stringify(draft) !== saved;
   const set = (patch: Partial<ReviewPolicy>) => setDraft({ ...draft, ...patch });
@@ -131,7 +131,7 @@ export function ReviewPolicySettings({ projectId, workspaceId }: { projectId: st
 
       {error && <p className="rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</p>}
       <div className="flex items-center gap-2">
-        <span className="text-xs text-fg-subtle">You can always merge past it, with a note saying why.</span>
+        <span className="text-xs text-fg-muted">You can always merge past it, with a note saying why.</span>
         <span className="ml-auto" />
         <HistoryButton kind="review_policy" id={projectId} onRestored={() => setLoads((n) => n + 1)} />
         <Button size="sm" variant="primary" disabled={!dirty} loading={busy} onClick={() => void save()}>

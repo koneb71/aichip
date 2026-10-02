@@ -127,10 +127,12 @@ impl CursorStream {
             session_id: self.session_id.clone(),
             cost_usd: None,
             usage: v.get("usage").and_then(usage).unwrap_or_default(),
-            result_text: if text.is_empty() {
-                self.last_text.clone()
-            } else {
+            // Cursor's `result` is every message run together; the report is
+            // the last thing it said, as for every other engine.
+            result_text: if self.last_text.is_empty() {
                 text.to_string()
+            } else {
+                self.last_text.clone()
             },
         }
     }

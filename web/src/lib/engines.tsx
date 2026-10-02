@@ -34,27 +34,45 @@ export interface EngineDescriptor {
   capabilities: EngineCapabilities;
 }
 
-const Ctx = createContext<EngineDescriptor[] | null>(null);
+interface EnginesState {
+  engines: EngineDescriptor[] | null;
+  /** The engine the server resolves when a picker is left on its inherit
+   *  option. Asked of the server rather than guessed here, because which one
+   *  it picks depends on what this machine has installed. */
+  defaultId: string | null;
+}
+
+const Ctx = createContext<EnginesState>({ engines: null, defaultId: null });
 
 export function EnginesProvider({ children }: { children: React.ReactNode }) {
-  const [engines, setEngines] = useState<EngineDescriptor[] | null>(null);
+  const [state, setState] = useState<EnginesState>({ engines: null, defaultId: null });
   useEffect(() => {
     fetch("/api/engines")
       .then((r) => r.json())
-      .then((d) => setEngines(d.engines ?? []))
-      .catch(() => setEngines([]));
+      .then((d) =>
+        setState({
+          engines: d.engines ?? [],
+          // An older server sends no `default`; that reads as "unknown".
+          defaultId: typeof d.default === "string" ? d.default : null,
+        }),
+      )
+      .catch(() => setState({ engines: [], defaultId: null }));
   }, []);
-  return <Ctx.Provider value={engines}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={state}>{children}</Ctx.Provider>;
 }
 
 /** `null` until the fetch lands — distinct from "none installed". */
 export function useEngines(): EngineDescriptor[] | null {
-  return useContext(Ctx);
+  return useContext(Ctx).engines;
+}
+
+/** The machine's default engine id, or null while unknown. */
+export function useDefaultEngine(): string | null {
+  return useContext(Ctx).defaultId;
 }
 
 export function useEngine(id: string | null | undefined): EngineDescriptor | undefined {
-  const engines = useContext(Ctx);
-  return engines?.find((e) => e.id === id);
+  return useContext(Ctx).engines?.find((e) => e.id === id);
 }
 
 /**
@@ -95,11 +113,28 @@ export function toolsBlocker(
   );
 }
 
-/** The tools refusal, said under a picker before anyone clicks Start. */
-export function ToolsNote({ engine, what }: { engine: string | null | undefined; what: string }) {
+/**
+ * The tools refusal, said under a picker before anyone clicks Start.
+ *
+ * `inheritsDefault`: the picker's inherit option falls back to the machine's
+ * default engine, so a null `engine` is judged as that one. Leave it off where
+ * inheriting resolves elsewhere (a team's "whatever the card says") — the
+ * machine default would be the wrong engine to warn about.
+ */
+export function ToolsNote({
+  engine,
+  what,
+  inheritsDefault = false,
+}: {
+  engine: string | null | undefined;
+  what: string;
+  inheritsDefault?: boolean;
+}) {
   const installed = useEngines() ?? [];
+  const defaultId = useDefaultEngine();
+  const id = engine ?? (inheritsDefault ? defaultId : null);
   const blocker = toolsBlocker(
-    installed.find((e) => e.id === engine),
+    installed.find((e) => e.id === id),
     what,
     installed,
   );

@@ -7,9 +7,10 @@ import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../li
 import { TIERS } from "../TierPicker";
 import { AgentAvailability } from "./AgentAvailability";
 import { HeartbeatLog } from "./HeartbeatLog";
-import { AGENT_SWATCHES, DEFAULT_AGENT_COLOR } from "../../lib/swatches";
+import { AGENT_SWATCH_NAMES, AGENT_SWATCHES, DEFAULT_AGENT_COLOR } from "../../lib/swatches";
 import { Sheet } from "../ui/Dialog";
 import { Button, IconButton } from "../ui/Button";
+import { formChanged } from "../../lib/formDirty";
 
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -52,6 +53,8 @@ export function AgentEditorDrawer({
   // connection just because the workspace has one configured.
   const [servers, setServers] = useState<McpServer[]>([]);
   const [enabledServers, setEnabledServers] = useState<string[]>([]);
+  // What it had when it was loaded, to tell an unsaved edit from none.
+  const [savedServers, setSavedServers] = useState<string[]>([]);
 
   useEffect(() => {
     api
@@ -65,7 +68,10 @@ export function AgentEditorDrawer({
     if (agent) {
       api
         .agentMcpServers(agent.id)
-        .then((r) => setEnabledServers(r.serverIds))
+        .then((r) => {
+          setEnabledServers(r.serverIds);
+          setSavedServers(r.serverIds);
+        })
         .catch(() => {});
     }
   }, [workspaceId, agent]);
@@ -120,6 +126,45 @@ export function AgentEditorDrawer({
     }
   };
 
+  // Field by field against what the drawer opened with — the same defaults the
+  // state above starts from — so an untouched form closes on Escape as before.
+  const dirty = formChanged(
+    {
+      name: agent?.name,
+      description: agent?.description,
+      systemPrompt: agent?.systemPrompt,
+      tier: agent?.modelTier ?? "medium",
+      color: agent?.color ?? DEFAULT_AGENT_COLOR,
+      preset: agent?.permissionPreset,
+      effort: agent?.effort,
+      engine: agent?.engine,
+      maxConcurrent: agent?.maxConcurrent?.toString(),
+      maxDaily: agent?.maxDailyRuns?.toString(),
+      cooldown: agent?.cooldownSecs?.toString(),
+      title: agent?.title,
+      reportsTo: agent?.reportsTo,
+      heartbeat: agent?.heartbeatSecs?.toString(),
+      servers: [...savedServers].sort(),
+    },
+    {
+      name,
+      description,
+      systemPrompt,
+      tier,
+      color,
+      preset,
+      effort,
+      engine,
+      maxConcurrent,
+      maxDaily,
+      cooldown,
+      title,
+      reportsTo,
+      heartbeat,
+      servers: [...enabledServers].sort(),
+    },
+  );
+
   const remove = async () => {
     if (!agent) return;
     await api.deleteAgent(agent.id);
@@ -130,6 +175,7 @@ export function AgentEditorDrawer({
     <Sheet
       open
       onOpenChange={(o) => !o && onClose()}
+      dismissible={!dirty}
       width={480}
       title={agent ? `Edit ${agent.name}` : "New agent"}
     >
@@ -193,12 +239,16 @@ export function AgentEditorDrawer({
             </Field>
           )}
           <Field label="Color">
-            <div className="flex gap-2">
-              {AGENT_SWATCHES.map((c) => (
+            <div className="flex gap-2" role="group" aria-label="Color">
+              {AGENT_SWATCHES.map((c, i) => (
                 <button
                   key={c}
+                  type="button"
                   onClick={() => setColor(c)}
-                  className="h-7 w-7 rounded-full border-2"
+                  aria-label={AGENT_SWATCH_NAMES[c] ?? `Colour ${i + 1}`}
+                  aria-pressed={color === c}
+                  title={AGENT_SWATCH_NAMES[c]}
+                  className="ring-focus h-7 w-7 rounded-full border-2"
                   style={{ background: c, borderColor: color === c ? "var(--color-fg)" : "transparent" }}
                 />
               ))}

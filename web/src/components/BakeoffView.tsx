@@ -118,19 +118,24 @@ export function BakeoffView({
                       {isOpen ? "Hide diff" : "See diff"}
                     </Button>
                   )}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => keep(v.runId)}
-                    disabled={busy || v.status !== "completed"}
+                  {/* On a wrapper: a disabled kit Button takes no pointer events. */}
+                  <span
+                    className="shrink-0"
                     title={
                       v.status === "completed"
                         ? "Adopt this attempt and discard the others"
                         : "Only a finished attempt can be kept"
                     }
                   >
-                    Keep this
-                  </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => keep(v.runId)}
+                      disabled={busy || v.status !== "completed"}
+                    >
+                      Keep this
+                    </Button>
+                  </span>
                 </div>
               </div>
 

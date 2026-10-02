@@ -153,6 +153,15 @@ impl Engine for CursorEngine {
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
+        // Without `--force` and outside `--mode ask`, Cursor's own docs say a
+        // headless run can still write and run commands. So a writing run in
+        // anything but Full Auto is refused here as well as by `vet`.
+        if !crate::is_read_only(&spec) && spec.permission_mode != PermissionMode::FullAuto {
+            anyhow::bail!(
+                "Cursor CLI has no setting that allows edits without also allowing commands, \
+so it only runs in Full Auto."
+            );
+        }
         let mut cmd = env_guard::command(&self.binary);
         cmd.current_dir(&spec.cwd).args(cursor_args(&spec));
         for (k, v) in &spec.extra_env {
@@ -233,6 +242,20 @@ mod tests {
         assert!(crate::vet(&e, PermissionMode::Reviewed, false).is_err());
         crate::vet(&e, PermissionMode::FullAuto, true).unwrap();
         assert!(!e.capabilities().mcp_tools);
+    }
+
+    #[tokio::test]
+    async fn a_narrower_writing_mode_is_refused_but_a_read_only_pass_is_not() {
+        let e = CursorEngine {
+            binary: "true".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = crate::test_spec();
+        s.cwd = dir.path().to_path_buf();
+        s.permission_mode = PermissionMode::Reviewed;
+        assert!(e.start(s.clone()).is_err());
+        s.denied_tools = vec!["Edit".into(), "Write".into(), "Bash".into()];
+        assert!(e.start(s).is_ok(), "read-only runs in ask mode");
     }
 
     #[test]

@@ -26,8 +26,11 @@
 //!   the assistant, a manager and a team member refuse Gemini at the click.
 //! - **Plan mode is not read-only headless.** gemini-cli's own docs say a
 //!   non-interactive plan-mode run approves its plan and then switches to
-//!   YOLO to carry it out. A read-only pass therefore runs in `default` mode,
-//!   where every tool that would need approval is denied — reads are not.
+//!   YOLO to carry it out. A read-only pass therefore runs in `default` mode
+//!   — and with an admin-tier policy denying the writing tools, because the
+//!   headless deny `default` mode relies on sits in Gemini's lowest tier, and
+//!   any allow rule the person or the repository has ("always allow git")
+//!   outranks it. See [`read_only_policy`].
 //!
 //! ## The worktree is trusted for the run
 //!
@@ -43,6 +46,7 @@ use crate::{pump, Capabilities, Engine, EngineInfo, EngineProcess, RunSpec};
 use aichip_shared::env_guard;
 use aichip_shared::PermissionMode;
 use async_trait::async_trait;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 pub struct GeminiEngine {
@@ -74,12 +78,63 @@ pub fn approval_mode(spec: &RunSpec) -> &'static str {
     }
 }
 
+/// The tools a read-only pass denies, in Gemini's names: its own write.toml's
+/// list, with `web_fetch` only when the run denies the web — a research pass
+/// is read-only and reads the web.
+fn denied_tools(spec: &RunSpec) -> Vec<&'static str> {
+    let mut tools = vec![
+        "replace",
+        "write_file",
+        "run_shell_command",
+        "activate_skill",
+    ];
+    if spec.denied_tools.iter().any(|t| t == "WebFetch") {
+        tools.push("web_fetch");
+    }
+    tools
+}
+
+/// An admin-tier policy holding a read-only pass to read-only.
+///
+/// Admin is the one tier above a person's own "always allow" choices and
+/// their `tools.allowed`; nothing else aichip can pass outranks those. A
+/// directory rather than a file, because that is what Gemini matches a tier
+/// by — and in aichip's own folder, never the run's: a policy in the
+/// worktree would land in the diff.
+pub fn read_only_policy(spec: &RunSpec) -> String {
+    let names: Vec<String> = denied_tools(spec)
+        .iter()
+        .map(|t| format!("\"{t}\""))
+        .collect();
+    format!(
+        "# Written by aichip for a pass that must not change anything.\n\
+         [[rule]]\ntoolName = [{}]\ndecision = \"deny\"\npriority = 999\n",
+        names.join(", ")
+    )
+}
+
+fn write_policy(spec: &RunSpec) -> anyhow::Result<PathBuf> {
+    let dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".aichip")
+        .join("gemini-policy")
+        .join(if denied_tools(spec).contains(&"web_fetch") {
+            "read-only-offline"
+        } else {
+            "read-only"
+        });
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("read-only.toml"), read_only_policy(spec))?;
+    Ok(dir)
+}
+
 /// The argument vector for one run. Pure, so it is testable without the
-/// binary.
+/// binary: the policy for a read-only pass is written by `start`.
 ///
 /// Every value travels as `--flag=value`: yargs then cannot read a prompt
 /// that begins with a dash as an option of its own.
-pub fn gemini_args(spec: &RunSpec) -> Vec<String> {
+pub fn gemini_args(spec: &RunSpec, policy: Option<&Path>) -> Vec<String> {
     let mut args = vec![
         format!("--prompt={}", crate::prompt_with_persona(spec)),
         "--output-format=stream-json".to_string(),
@@ -94,6 +149,9 @@ pub fn gemini_args(spec: &RunSpec) -> Vec<String> {
     }
     for dir in &spec.extra_read_dirs {
         args.push(format!("--include-directories={}", dir.display()));
+    }
+    if let Some(dir) = policy {
+        args.push(format!("--admin-policy={}", dir.display()));
     }
     args
 }
@@ -162,14 +220,23 @@ impl Engine for GeminiEngine {
     }
 
     fn start(&self, spec: RunSpec) -> anyhow::Result<EngineProcess> {
-        let mut cmd = env_guard::command(&self.binary);
-        cmd.current_dir(&spec.cwd).args(gemini_args(&spec));
-        for (k, v) in &spec.extra_env {
-            if aichip_shared::is_auth_env(k) {
-                anyhow::bail!("{}", aichip_shared::auth_env_refusal(k));
-            }
-            cmd.env(k, v);
+        // Refused before anything is written.
+        if let Some(k) = spec
+            .extra_env
+            .keys()
+            .find(|k| aichip_shared::is_auth_env(k))
+        {
+            anyhow::bail!("{}", aichip_shared::auth_env_refusal(k));
         }
+        let policy = if crate::is_read_only(&spec) {
+            Some(write_policy(&spec)?)
+        } else {
+            None
+        };
+        let mut cmd = env_guard::command(&self.binary);
+        cmd.current_dir(&spec.cwd)
+            .args(gemini_args(&spec, policy.as_deref()))
+            .envs(&spec.extra_env);
         pump::spawn(
             cmd,
             Box::new(stream_parser::GeminiStream::default()),
@@ -197,7 +264,7 @@ mod tests {
     fn a_prompt_that_starts_with_a_dash_stays_the_prompt() {
         let mut s = crate::test_spec();
         s.prompt = "--version please".into();
-        let args = gemini_args(&s);
+        let args = gemini_args(&s, None);
         assert_eq!(flag(&args, "prompt"), Some("--version please"));
         assert_eq!(flag(&args, "output-format"), Some("stream-json"));
         assert!(args.contains(&"--skip-trust".to_string()));
@@ -219,10 +286,42 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_pass_carries_a_deny_that_outranks_any_allow() {
+        let mut s = crate::test_spec();
+        s.denied_tools = ["Edit", "Write", "Bash", "WebFetch"]
+            .map(String::from)
+            .to_vec();
+        let policy = read_only_policy(&s);
+        for tool in [
+            "replace",
+            "write_file",
+            "run_shell_command",
+            "activate_skill",
+            "web_fetch",
+        ] {
+            assert!(policy.contains(&format!("\"{tool}\"")), "{tool}");
+        }
+        assert!(policy.contains("decision = \"deny\""));
+        // A research pass reads the web, so the web stays open to it.
+        s.denied_tools = ["Edit", "Write", "Bash"].map(String::from).to_vec();
+        assert!(!read_only_policy(&s).contains("web_fetch"));
+
+        let args = gemini_args(
+            &s,
+            Some(Path::new("/home/me/.aichip/gemini-policy/read-only")),
+        );
+        assert_eq!(
+            flag(&args, "admin-policy"),
+            Some("/home/me/.aichip/gemini-policy/read-only")
+        );
+        assert_eq!(flag(&gemini_args(&s, None), "admin-policy"), None);
+    }
+
+    #[test]
     fn the_persona_rides_in_front_of_the_prompt() {
         let mut s = crate::test_spec();
         s.append_system_prompt = Some("You are Ada, a careful reviewer.".into());
-        let prompt = flag(&gemini_args(&s), "prompt").unwrap().to_string();
+        let prompt = flag(&gemini_args(&s, None), "prompt").unwrap().to_string();
         assert!(prompt.starts_with("You are Ada"));
         assert!(prompt.ends_with("do the thing"));
     }
@@ -233,7 +332,7 @@ mod tests {
         s.model_id = "flash".into();
         s.resume_session_id = Some("5a1d".into());
         s.extra_read_dirs = vec!["/home/me/.aichip/attachments/x".into()];
-        let args = gemini_args(&s);
+        let args = gemini_args(&s, None);
         assert_eq!(flag(&args, "model"), Some("flash"));
         assert_eq!(flag(&args, "resume"), Some("5a1d"));
         assert_eq!(
@@ -243,11 +342,11 @@ mod tests {
         // A blank session is no session, and another engine's model is none.
         s.resume_session_id = Some(String::new());
         s.model_id = "claude-opus-5".into();
-        let args = gemini_args(&s);
+        let args = gemini_args(&s, None);
         assert_eq!(flag(&args, "resume"), None);
         assert_eq!(flag(&args, "model"), None);
         s.model_id = "anthropic/claude-sonnet-4-5".into();
-        assert_eq!(flag(&gemini_args(&s), "model"), None);
+        assert_eq!(flag(&gemini_args(&s, None), "model"), None);
     }
 
     #[test]

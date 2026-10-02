@@ -8,6 +8,11 @@ import { cn } from "./cn";
  * returned, Escape closes, the page behind is inert and scroll-locked, and the
  * title is what a screen reader announces. The eighteen hand-rolled overlays
  * this replaces did none of that.
+ *
+ * `dismissible={false}` is for a form holding unsaved work: Escape and a click
+ * outside then do nothing, because either is easy to do by accident and would
+ * throw the work away. The close button and the form's own buttons still
+ * close it — those are never an accident.
  */
 
 const OVERLAY =
@@ -22,6 +27,7 @@ export function Dialog({
   footer,
   width = 480,
   className,
+  dismissible = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -32,12 +38,16 @@ export function Dialog({
   footer?: ReactNode;
   width?: number;
   className?: string;
+  /** False: only the close button and the dialog's own buttons close it. */
+  dismissible?: boolean;
 }) {
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className={OVERLAY} />
         <RD.Content
+          onEscapeKeyDown={guard(dismissible)}
+          onInteractOutside={guard(dismissible)}
           className={cn(
             "fixed left-1/2 top-[12vh] z-50 flex max-h-[76vh] w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-raised text-fg shadow-[var(--shadow-lg)] outline-none data-[state=open]:animate-[dialog-in_var(--dur-base)_var(--ease-out-soft)]",
             className,
@@ -65,6 +75,11 @@ export function Dialog({
   );
 }
 
+/** Cancels Escape and outside interaction while the work is not to be lost. */
+function guard(dismissible: boolean) {
+  return dismissible ? undefined : (e: Event) => e.preventDefault();
+}
+
 /** A panel that slides in from the right: a card, an agent, a run. */
 export function Sheet({
   open,
@@ -75,6 +90,7 @@ export function Sheet({
   children,
   width = 560,
   className,
+  dismissible = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -85,12 +101,16 @@ export function Sheet({
   children: ReactNode;
   width?: number;
   className?: string;
+  /** False: only the close button and the sheet's own buttons close it. */
+  dismissible?: boolean;
 }) {
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className={cn(OVERLAY, "bg-[color-mix(in_oklab,black_22%,transparent)] backdrop-blur-0")} />
         <RD.Content
+          onEscapeKeyDown={guard(dismissible)}
+          onInteractOutside={guard(dismissible)}
           className={cn(
             "fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border bg-panel text-fg shadow-[var(--shadow-lg)] outline-none data-[state=open]:animate-[sheet-in_var(--dur-base)_var(--ease-out-soft)]",
             className,

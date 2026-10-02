@@ -207,6 +207,7 @@ pub async fn answer_chat_question(
     if chat_busy(orch, chat_id).await? {
         return Err(still_working());
     }
+    let engine = gated_engine(orch, chat_id).await?;
     let row = sqlx::query(
         "UPDATE chat_questions SET answered_at = now(), answer = $3
           WHERE id = $1 AND chat_id = $2 AND answered_at IS NULL
@@ -222,7 +223,7 @@ pub async fn answer_chat_question(
     let questions: Vec<crate::runs::questions::Question> =
         serde_json::from_value(row.get("questions")).map_err(anyhow::Error::from)?;
     let content = crate::runs::questions::answer_message(&questions, answers);
-    user_turn(orch, chat_id, &content).await
+    user_turn(orch, chat_id, &engine, &content).await
 }
 
 /// Carry out a chat plan. Approving leaves plan mode: the next turn is the one
@@ -236,6 +237,7 @@ pub async fn approve_chat_plan(
     if chat_busy(orch, chat_id).await? {
         return Err(still_working());
     }
+    let engine = gated_engine(orch, chat_id).await?;
     let claimed = sqlx::query(
         "UPDATE chat_messages SET plan_outcome = 'approved'
           WHERE id = $1 AND chat_id = $2 AND is_plan AND plan_outcome IS NULL",
@@ -254,10 +256,27 @@ pub async fn approve_chat_plan(
         .execute(&orch.db.pool)
         .await?;
     let content = crate::runs::chat_plan::approval(edited.map(str::trim).filter(|p| !p.is_empty()));
-    user_turn(orch, chat_id, &content).await
+    user_turn(orch, chat_id, &engine, &content).await
 }
 
-async fn user_turn(orch: &Orchestrator, chat_id: Uuid, content: &str) -> Result<Turn, Refusal> {
+/// The engine the next turn will run on, already vetted. Asked before the
+/// answer or approval is recorded: a turn refused after it — no tools on that
+/// engine, a spent budget — left the plan approved, the question answered,
+/// and nothing running to act on either.
+async fn gated_engine(orch: &Orchestrator, chat_id: Uuid) -> Result<String, Refusal> {
+    let engine = orch.chat_engine(chat_id).await?;
+    orch.vet_chat_turn(chat_id, &engine)
+        .await
+        .map_err(Refusal::Gated)?;
+    Ok(engine)
+}
+
+async fn user_turn(
+    orch: &Orchestrator,
+    chat_id: Uuid,
+    engine: &str,
+    content: &str,
+) -> Result<Turn, Refusal> {
     let message_id: Uuid = sqlx::query_scalar(
         "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
     )
@@ -270,7 +289,7 @@ async fn user_turn(orch: &Orchestrator, chat_id: Uuid, content: &str) -> Result<
         .execute(&orch.db.pool)
         .await?;
     let run_id = orch
-        .enqueue_chat_turn(chat_id, &orch.default_engine())
+        .enqueue_chat_turn(chat_id, engine)
         .await
         .map_err(Refusal::Gated)?;
     Ok(Turn { message_id, run_id })
@@ -379,5 +398,65 @@ mod db_tests {
             .unwrap();
         assert_eq!(step, "skipped");
         t.finish().await;
+    }
+
+    /// A turn that would be refused is refused before the approval is
+    /// recorded: otherwise the plan reads approved, nothing runs, and
+    /// approving again says it was already answered.
+    #[tokio::test]
+    async fn an_approval_whose_turn_is_refused_leaves_the_plan_waiting() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = Orchestrator::new(
+            t.db.clone(),
+            crate::bus::EventBus::new(),
+            std::sync::Arc::new(crate::worktrees::manager::WorktreeManager::new(
+                dir.path().join("wt"),
+            )),
+            4,
+            None,
+        );
+        orch.register_engine(std::sync::Arc::new(aichip_engines::mock::MockEngine::demo()));
+        orch.register_engine(std::sync::Arc::new(
+            aichip_engines::gemini::GeminiEngine::default(),
+        ));
+        let (_, project) = t.project(dir.path(), true).await;
+        let chat: Uuid = sqlx::query_scalar(
+            "INSERT INTO chats (project_id, title) VALUES ($1, 'Talk') RETURNING id",
+        )
+        .bind(project)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        // The conversation so far ran on Gemini, which a project chat refuses.
+        sqlx::query(
+            "INSERT INTO runs (chat_id, status, trigger, engine) VALUES ($1, 'completed', 'chat', 'gemini')",
+        )
+        .bind(chat)
+        .execute(&t.db.pool)
+        .await
+        .unwrap();
+        let plan: Uuid = sqlx::query_scalar(
+            "INSERT INTO chat_messages (chat_id, role, content, is_plan) VALUES ($1, 'assistant', 'the plan', TRUE) RETURNING id",
+        )
+        .bind(chat)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let refused = approve_chat_plan(&orch, chat, plan, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, Refusal::Gated(_)), "{refused:?}");
+        let outcome: Option<String> =
+            sqlx::query_scalar("SELECT plan_outcome FROM chat_messages WHERE id = $1")
+                .bind(plan)
+                .fetch_one(&t.db.pool)
+                .await
+                .unwrap();
+        assert_eq!(outcome, None, "still waiting for an answer");
+        // The chat carries on on the engine it was on, not the machine default.
+        assert_eq!(orch.chat_engine(chat).await.unwrap(), "gemini");
     }
 }

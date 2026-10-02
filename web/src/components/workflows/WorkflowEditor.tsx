@@ -8,6 +8,7 @@ import {
   removeStep,
   StepData,
   uniqueStepId,
+  workflowChanged,
   WorkflowMeta,
 } from "../../lib/workflowGraph";
 import { WorkflowCanvas } from "./WorkflowCanvas";
@@ -79,6 +80,13 @@ export function WorkflowEditor({
   // renders what would be saved.
   const yaml = view === "yaml" ? rawYaml : emitWorkflow(meta, steps);
 
+  // What the editor opened with, written the way it would be saved.
+  const savedYaml = useMemo(() => emitWorkflow(initial.meta, initial.steps), [initial]);
+  const dirty = workflowChanged(
+    { yaml: savedYaml, layout: workflow?.uiLayout ?? {} },
+    { yaml, steps, positions },
+  );
+
   const showYaml = () => {
     setRawYaml(emitWorkflow(meta, steps));
     setView("yaml");
@@ -132,6 +140,9 @@ export function WorkflowEditor({
       onOpenChange={(o) => {
         if (!o) onClose();
       }}
+      // Escape is also how people leave a field or a node selection, and here
+      // it would throw away every unsaved step.
+      dismissible={!dirty}
       width={1152}
       className="top-[7vh]! h-[86vh] max-h-[86vh]!"
       // The name is the dialog's title, and still editable in place.

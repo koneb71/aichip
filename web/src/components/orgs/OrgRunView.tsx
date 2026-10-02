@@ -264,7 +264,14 @@ function Shell({
   return (
     <Dialog
       open
-      onOpenChange={(o) => !o && onClose()}
+      onOpenChange={(o) => {
+        if (o) return;
+        // A plan row saves its edits on blur, and Escape or a click outside
+        // closes before focus ever leaves the field — the room unmounts and
+        // the blur never runs. Blurring first sends the edit while it still can.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        onClose();
+      }}
       width={1152}
       // Full screen on a phone, a tall room everywhere else: three columns of
       // live work do not fit the kit's default 76vh.
@@ -353,7 +360,9 @@ function MemberCard({
           </div>
         </div>
       </div>
-      <motion.div layout className="mt-1.5 text-[11px]" style={{ color: busy ? member.color : "var(--color-fg-muted)" }}>
+      {/* The agent's colour is tuned for fills, not for words on a dark panel;
+          it stays on the border and the ring, and the label reads in fg. */}
+      <motion.div layout className={`mt-1.5 text-[11px] ${busy ? "font-medium text-fg" : "text-fg-muted"}`}>
         {stateLabel(state)}
       </motion.div>
     </motion.div>
@@ -391,6 +400,9 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
       : message.kind === "answer"
         ? "var(--color-tier-medium)"
         : color;
+  // The tier tokens are themed for text; an agent's colour is not, so where it
+  // is the accent it only tints the chip and the words stay fg-muted.
+  const ink = accent === color ? "var(--color-fg-muted)" : accent;
 
   return (
     <motion.div
@@ -412,7 +424,7 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
           {label && (
             <span
               className="rounded-full px-1.5 py-0.5 text-[10px]"
-              style={{ background: `color-mix(in oklab, ${accent} 10%, transparent)`, color: accent }}
+              style={{ background: `color-mix(in oklab, ${accent} 10%, transparent)`, color: ink }}
             >
               {label}
             </span>
@@ -511,9 +523,8 @@ function AssignmentCard({
             {assignment.title ?? assignment.key}
           </div>
           {assignment.assignee && (
-            <div className="mt-0.5 text-[11px]" style={{ color }}>
-              {assignment.assignee}
-            </div>
+            // In words, fg-muted: the pip beside it already carries their colour.
+            <div className="mt-0.5 text-[11px] text-fg-muted">{assignment.assignee}</div>
           )}
           {/* Collapsed, each teammate still shows their current action. */}
           <ActivityLine events={events} stepId={assignment.id} live={running} className="mt-1" />

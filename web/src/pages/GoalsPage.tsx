@@ -95,7 +95,7 @@ export default function GoalsPage() {
                         <span className="tabular whitespace-nowrap text-[11px] text-fg-muted">
                           {pct === null ? "no cards yet" : `${goal.done}/${goal.total} · ${pct}%`}
                         </span>
-                        {due && <span className={cn("whitespace-nowrap text-[11px]", due.includes("overdue") ? "text-danger-fg" : "text-fg-subtle")}>{due}</span>}
+                        {due && <span className={cn("whitespace-nowrap text-[11px]", due.includes("overdue") ? "text-danger-fg" : "text-fg-muted")}>{due}</span>}
                       </div>
                     </div>
                   </button>

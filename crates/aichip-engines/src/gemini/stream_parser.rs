@@ -20,6 +20,9 @@ pub struct GeminiStream {
     pending: String,
     /// The last thing the model said, which is what the run reports.
     last_text: String,
+    /// The last fatal `error` event: an invalid stream (an empty or blocked
+    /// response) says why there and then ends with a bare error `result`.
+    last_error: String,
 }
 
 impl GeminiStream {
@@ -82,8 +85,23 @@ impl LineParser for GeminiStream {
             }
             Some("result") => {
                 let mut events = self.flush();
+                // A run that ends in an error still spent what its stats say
+                // — on a turn limit, a whole session's worth. Sent as usage
+                // before the ending, so the tally keeps it (provisional: no
+                // completion reconciled it) rather than recording nothing.
+                if v.get("status").and_then(Value::as_str) != Some("success") {
+                    if let Some(u) = v.get("stats").map(usage).filter(|u| *u != Usage::default()) {
+                        events.push(AichipEvent::UsageUpdated { usage: u });
+                    }
+                }
                 events.push(self.result(&v));
                 events
+            }
+            Some("error") => {
+                if s("severity") == Some("error") {
+                    self.last_error = s("message").unwrap_or_default().to_string();
+                }
+                self.flush()
             }
             // `error` events are non-fatal by definition — a fatal one ends in
             // a `result` — and `message` from the user is the prompt echoed.
@@ -133,8 +151,9 @@ impl GeminiStream {
         let message = v
             .pointer("/error/message")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+            .filter(|m| !m.trim().is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| self.last_error.clone());
         // `TerminalQuotaError` and `RetryableQuotaError` name themselves.
         if kind.contains("Quota") || rate_limit_signal(&message) {
             return AichipEvent::RateLimited {
@@ -147,10 +166,10 @@ impl GeminiStream {
             };
         }
         AichipEvent::RunFailed {
-            reason: if message.is_empty() {
-                format!("Gemini CLI reported an error ({kind})")
-            } else {
-                message
+            reason: match (message.is_empty(), kind.is_empty()) {
+                (false, _) => message,
+                (true, false) => format!("Gemini CLI reported an error ({kind})"),
+                (true, true) => "Gemini CLI reported an error".to_string(),
             },
         }
     }
@@ -266,6 +285,29 @@ mod tests {
             events,
             vec![AichipEvent::RunFailed {
                 reason: "no shell".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_run_that_ends_in_error_keeps_its_tokens_and_its_reason() {
+        let events = run(concat!(
+            r#"{"type":"error","timestamp":"t","severity":"error","message":"Model stream ended with an empty response."}"#,
+            "\n",
+            r#"{"type":"result","timestamp":"t","status":"error","stats":{"total_tokens":900,"input_tokens":700,"output_tokens":150,"cached":100,"input":600}}"#,
+        ));
+        match &events[..] {
+            [AichipEvent::UsageUpdated { usage }, AichipEvent::RunFailed { reason }] => {
+                assert_eq!(usage.output_tokens, 200);
+                assert_eq!(reason, "Model stream ended with an empty response.");
+            }
+            other => panic!("{other:?}"),
+        }
+        // No stats, no message, no kind: still a sentence, not "()".
+        assert_eq!(
+            run(r#"{"type":"result","timestamp":"t","status":"error"}"#),
+            vec![AichipEvent::RunFailed {
+                reason: "Gemini CLI reported an error".into()
             }]
         );
     }

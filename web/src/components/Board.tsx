@@ -121,7 +121,7 @@ export function Board({
                 </div>
               ))}
               {colTasks.length === 0 && (
-                <div className="mt-1 rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-fg-subtle">
+                <div className="mt-1 rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-fg-muted">
                   {col.empty}
                 </div>
               )}

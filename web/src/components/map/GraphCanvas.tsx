@@ -9,6 +9,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useTheme } from "../../lib/theme";
 import { GraphEdge, GraphFile, layout, moduleOf, neighbourhood } from "../../lib/repoGraph";
 import { MapNodeData, nodeTypes } from "./GraphNodes";
 
@@ -38,6 +39,8 @@ export function GraphCanvas({
   onSelect: (id: string | null) => void;
   onOpenFile: (path: string) => void;
 }) {
+  // React Flow's own stylesheet draws the controls light unless told the theme.
+  const { theme } = useTheme();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // A module that stops existing must not stay in the open set, or reopening
@@ -137,6 +140,7 @@ export function GraphCanvas({
           nodes={rfNodes}
           edges={rfEdges}
           nodeTypes={nodeTypes}
+          colorMode={theme}
           onNodeClick={(_, node) => click(node.id)}
           onNodeDoubleClick={(_, node) => {
             const n = laid.nodes.find((x) => x.id === node.id);

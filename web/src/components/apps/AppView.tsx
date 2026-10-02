@@ -637,16 +637,14 @@ function RowEditor({
           {(form.spec.buttons ?? []).map((name) => {
             const action = manifest.actions.find((a) => a.name === name);
             if (!action || !showIf(action.showIf, record, now)) return null;
+            // The title is on a wrapper because it only ever shows while the
+            // button is disabled, and a disabled kit Button takes no pointer events.
             return (
-              <Button
-                key={name}
-                size="sm"
-                onClick={() => press(action.name)}
-                disabled={busy || !row?.id}
-                title={row?.id ? undefined : "Save the record first."}
-              >
-                {action.label}
-              </Button>
+              <span key={name} className="shrink-0" title={row?.id ? undefined : "Save the record first."}>
+                <Button size="sm" onClick={() => press(action.name)} disabled={busy || !row?.id}>
+                  {action.label}
+                </Button>
+              </span>
             );
           })}
         </div>

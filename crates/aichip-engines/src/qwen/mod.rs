@@ -67,7 +67,8 @@ pub fn approval_mode(spec: &RunSpec) -> &'static str {
 fn qwen_tools(denied: &str) -> &'static [&'static str] {
     match denied {
         "Bash" => &["run_shell_command", "exec"],
-        "Edit" | "MultiEdit" | "NotebookEdit" => &["edit"],
+        "Edit" | "MultiEdit" => &["edit"],
+        "NotebookEdit" => &["notebook_edit"],
         "Write" => &["write_file"],
         "WebFetch" => &["web_fetch"],
         "WebSearch" => &["web_search"],
@@ -78,12 +79,29 @@ fn qwen_tools(denied: &str) -> &'static [&'static str] {
 /// The argument vector for one run. Pure: the MCP file, if any, has already
 /// been written by `start`.
 pub fn qwen_args(spec: &RunSpec, mcp_file: Option<&Path>) -> Vec<String> {
-    let mut args = vec![
-        "--output-format=stream-json".to_string(),
-        format!("--approval-mode={}", approval_mode(spec)),
-    ];
+    let mut args = vec![format!("--approval-mode={}", approval_mode(spec))];
     let mut excluded: Vec<&str> = vec![];
-    for tool in spec.denied_tools.iter().flat_map(|t| qwen_tools(t)) {
+    // Qwen has writers of its own that Claude Code's vocabulary cannot name,
+    // and that headless `default` mode allows: `enter_worktree` runs `git
+    // worktree add` inside the checkout, the memory tools write to the
+    // person's ~/.qwen. A pass that must not change anything excludes them.
+    let own_writers: &[&str] = if crate::is_read_only(spec) {
+        &[
+            "enter_worktree",
+            "exit_worktree",
+            "notebook_edit",
+            "save_memory",
+            "manage_memory",
+        ]
+    } else {
+        &[]
+    };
+    for tool in spec
+        .denied_tools
+        .iter()
+        .flat_map(|t| qwen_tools(t))
+        .chain(own_writers)
+    {
         if !excluded.contains(tool) {
             excluded.push(tool);
         }
@@ -108,6 +126,12 @@ pub fn qwen_args(spec: &RunSpec, mcp_file: Option<&Path>) -> Vec<String> {
     for dir in &spec.extra_read_dirs {
         args.push(format!("--include-directories={}", dir.display()));
     }
+    // `--exclude-tools` and `--include-directories` are yargs arrays, which go
+    // on taking every word that follows them, `=` form or not: the prompt
+    // became a directory to include. A scalar flag ends an array, so one
+    // stands between them and the prompt. Not `--`: Qwen reads the prompt
+    // only from its `query` positional, which words after `--` never reach.
+    args.push("--output-format=stream-json".into());
     // Positional and last: `--prompt` is deprecated in favour of it.
     args.push(crate::positional(spec.prompt.clone()));
     args
@@ -253,9 +277,41 @@ mod tests {
         assert_eq!(flags(&args, "approval-mode"), ["default"]);
         assert_eq!(
             flags(&args, "exclude-tools"),
-            ["edit", "write_file", "run_shell_command", "exec"]
+            [
+                "edit",
+                "write_file",
+                "notebook_edit",
+                "run_shell_command",
+                "exec",
+                "enter_worktree",
+                "exit_worktree",
+                "save_memory",
+                "manage_memory"
+            ]
         );
         assert!(!args.iter().any(|a| a.contains("yolo")));
+    }
+
+    #[test]
+    fn a_scalar_flag_stands_between_the_arrays_and_the_prompt() {
+        // The arrays before it would otherwise swallow it: an attachment
+        // made the task a directory to include, and a read-only pass made it
+        // a tool to exclude.
+        let mut s = crate::test_spec();
+        s.extra_read_dirs = vec!["/att".into()];
+        s.denied_tools = vec!["Edit".into()];
+        let args = qwen_args(&s, None);
+        // Checked against yargs 17.7.2 with Qwen's option shapes: after a
+        // scalar flag the prompt is the query; after an array flag, or after
+        // `--`, it is not.
+        assert_eq!(args[args.len() - 2], "--output-format=stream-json");
+        assert!(!args.contains(&"--".to_string()));
+        // Read-only or not, the writers Qwen has of its own are only shut
+        // off when the pass must not write.
+        s.denied_tools.clear();
+        assert!(!qwen_args(&s, None)
+            .iter()
+            .any(|a| a.contains("enter_worktree")));
     }
 
     #[test]

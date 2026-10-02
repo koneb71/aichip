@@ -13,6 +13,7 @@ import {
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useTheme } from "../../lib/theme";
 import {
   layoutSteps,
   Position,
@@ -54,6 +55,9 @@ function Canvas({
   statuses,
   readOnly,
 }: CanvasProps) {
+  // React Flow's own stylesheet draws the controls and default edges light
+  // unless it is told the theme.
+  const { theme } = useTheme();
   const [error, setError] = useState<string | null>(null);
   const [dragged, setDragged] = useState<Record<string, Position>>({});
   const laidOut = useMemo(
@@ -160,6 +164,7 @@ function Canvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        colorMode={theme}
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}

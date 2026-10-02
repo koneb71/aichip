@@ -6,6 +6,7 @@ import { Checkbox, Select } from "./ui/Field";
 import { Preset, WEEKDAYS, compile, describeCron, recognize, relative } from "../lib/cron";
 import { Icon } from "./ui/Icon";
 import { Button, buttonClasses } from "./ui/Button";
+import { ToolsNote } from "../lib/engines";
 
 /** What can wake the manager before its schedule, as the editor says it. */
 const WAKES: { kind: WakeKind; label: string }[] = [
@@ -227,6 +228,9 @@ export function ManagerPanel({
               agent that writes the code — the manager picks that per card.
             </span>
           </label>
+          {/* No engine picker here: a manager runs on the one its routine
+              names, or the machine's default — which may lack the tools. */}
+          <ToolsNote engine={manager?.engine ?? null} what="a project manager" inheritsDefault />
 
           <label className="block">
             <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">

@@ -28,6 +28,7 @@ export function ComposerSettings({
   effort,
   onEffort,
   disabled,
+  usesTools = true,
 }: {
   engine: string | null;
   onEngine: (next: string | null) => void;
@@ -39,6 +40,9 @@ export function ComposerSettings({
   effort: Effort | null;
   onEffort: (next: Effort | null) => void;
   disabled?: boolean;
+  /** False for a chat with no project: it is never handed aichip's tools, so
+   *  an engine without them is no reason to warn. */
+  usesTools?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const engines = useEngines();
@@ -83,7 +87,7 @@ export function ComposerSettings({
             onChange={onEngine}
             inheritLabel="Default"
           />
-          <ToolsNote engine={engine} what="the assistant" />
+          {usesTools && <ToolsNote engine={engine} what="the assistant" inheritsDefault />}
         </Row>
       )}
       <Row label="Model">

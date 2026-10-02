@@ -138,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_run_that_talks_about_rate_limits_is_finished() {
+        let done = r#"{"type":"result","subtype":"success","is_error":false,"result":"Added rate limiting; returns 429 after 5 attempts, within quota.","session_id":"T-1"}"#;
+        assert!(matches!(line(done)[..], [AichipEvent::RunCompleted { .. }]));
+        // A failed one that says so is still a limit.
+        let limited = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"429 Too Many Requests"}"#;
+        assert!(matches!(
+            line(limited)[..],
+            [AichipEvent::RateLimited { .. }]
+        ));
+    }
+
+    #[test]
     fn the_exit_verdict_names_the_cli() {
         let mut p = ClaudeCompat { label: "Qwen Code" };
         match p.finish(false, Some(1), &[]) {

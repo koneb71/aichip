@@ -129,6 +129,12 @@ impl Engine for AmpEngine {
         if crate::is_read_only(&spec) {
             anyhow::bail!("{NO_READ_ONLY}");
         }
+        // `vet` refuses the narrower modes; this is the adapter refusing them
+        // too, so a caller that skipped the vet cannot get an unrestricted
+        // run by asking for a restricted one.
+        if spec.permission_mode != PermissionMode::FullAuto {
+            anyhow::bail!("Amp runs every tool without asking, so it only runs in Full Auto.");
+        }
         let mut cmd = env_guard::command(&self.binary);
         cmd.current_dir(&spec.cwd).args(amp_args(&spec));
         for (k, v) in &spec.extra_env {
@@ -197,6 +203,19 @@ mod tests {
         assert!(crate::vet(&e, PermissionMode::AutoEdit, false).is_err());
         assert!(crate::vet(&e, PermissionMode::Reviewed, false).is_err());
         crate::vet(&e, PermissionMode::FullAuto, true).unwrap();
+    }
+
+    #[test]
+    fn a_narrower_mode_is_refused_rather_than_run_unrestricted() {
+        let mut s = crate::test_spec();
+        s.permission_mode = PermissionMode::Reviewed;
+        let err = AmpEngine {
+            binary: "true".into(),
+        }
+        .start(s)
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("only runs in Full Auto"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ import {
   renameStep,
   uniqueStepId,
   wouldCycle,
+  workflowChanged,
 } from "./workflowGraph";
 
 const DEBATE = `name: fix-hard-bug
@@ -166,5 +167,29 @@ describe("editing helpers", () => {
     const pruned = removeStep(parseWorkflow(DEBATE).steps, "triage");
     expect(pruned.map((s) => s.id)).toEqual(["attempt", "judge"]);
     expect(pruned[0].needs).toEqual([]);
+  });
+});
+
+describe("workflowChanged", () => {
+  const { meta, steps } = parseWorkflow(DEBATE);
+  const yaml = emitWorkflow(meta, steps);
+  const saved = { yaml, layout: {} };
+
+  it("is clean when nothing was touched", () => {
+    expect(workflowChanged(saved, { yaml, steps, positions: {} })).toBe(false);
+  });
+  it("is clean when a drag commits the auto-laid positions unchanged", () => {
+    expect(workflowChanged(saved, { yaml, steps, positions: layoutSteps(steps) })).toBe(false);
+  });
+  it("sees a moved step", () => {
+    expect(workflowChanged(saved, { yaml, steps, positions: { triage: { x: 999, y: 0 } } })).toBe(true);
+  });
+  it("sees a step moved back to where it was saved as clean", () => {
+    const layout = { triage: { x: 5, y: 7 } };
+    expect(workflowChanged({ yaml, layout }, { yaml, steps, positions: { triage: { x: 5, y: 7 } } })).toBe(false);
+  });
+  it("sees an edit to the workflow itself", () => {
+    const edited = emitWorkflow({ ...meta, name: "renamed" }, steps);
+    expect(workflowChanged(saved, { yaml: edited, steps, positions: {} })).toBe(true);
   });
 });

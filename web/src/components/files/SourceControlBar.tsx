@@ -117,24 +117,27 @@ export function SourceControlBar({
           )}
           {state.hasRemote && (
             <>
-              <Button
-                size="xs"
-                variant="secondary"
-                onClick={() => run("pull", () => api.pullCheckout(projectId), "up to date")}
-                disabled={busy !== null || dirtyCount > 0}
+              {/* Titles on wrappers: a disabled kit Button takes no pointer
+                  events, and the title is what says why it is disabled. */}
+              <span
+                className="shrink-0"
                 title={
                   dirtyCount > 0
                     ? "Commit your changes first — pulling over an edited tree is how work gets tangled"
                     : "Fast-forward from the upstream"
                 }
               >
-                {busy === "pull" ? "Pulling…" : "↓ Pull"}
-              </Button>
-              <Button
-                size="xs"
-                variant="secondary"
-                onClick={() => run("push", () => api.pushCheckout(projectId), "pushed")}
-                disabled={busy !== null || (!unpublished && (state.ahead ?? 0) === 0)}
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => run("pull", () => api.pullCheckout(projectId), "up to date")}
+                  disabled={busy !== null || dirtyCount > 0}
+                >
+                  {busy === "pull" ? "Pulling…" : "↓ Pull"}
+                </Button>
+              </span>
+              <span
+                className="shrink-0"
                 title={
                   unpublished
                     ? "This branch has never been pushed — this publishes it"
@@ -143,8 +146,15 @@ export function SourceControlBar({
                       : "Push your commits to the upstream"
                 }
               >
-                {busy === "push" ? "Pushing…" : unpublished ? "↑ Publish" : "↑ Push"}
-              </Button>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => run("push", () => api.pushCheckout(projectId), "pushed")}
+                  disabled={busy !== null || (!unpublished && (state.ahead ?? 0) === 0)}
+                >
+                  {busy === "push" ? "Pushing…" : unpublished ? "↑ Publish" : "↑ Push"}
+                </Button>
+              </span>
             </>
           )}
         </span>

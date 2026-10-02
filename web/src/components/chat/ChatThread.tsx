@@ -542,6 +542,7 @@ export function ChatThread({
                 effort={effort}
                 onEffort={setEffort}
                 disabled={!!activeRunId}
+                usesTools={!general}
               />
               {/* On the row, not inside the settings popover. A collapsed
                   control is fine for "which model"; plan mode changes whether

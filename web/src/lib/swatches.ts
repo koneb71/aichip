@@ -10,6 +10,16 @@
 /** What the agent editor offers. */
 export const AGENT_SWATCHES = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
 
+/** What a screen reader calls each one: a swatch is otherwise an unnamed button. */
+export const AGENT_SWATCH_NAMES: Record<string, string> = {
+  "#4f46e5": "Indigo",
+  "#059669": "Green",
+  "#c026d3": "Magenta",
+  "#ea580c": "Orange",
+  "#0284c7": "Blue",
+  "#dc2626": "Red",
+};
+
 /** A new agent's colour until someone picks another. */
 export const DEFAULT_AGENT_COLOR = "#4f46e5";
 

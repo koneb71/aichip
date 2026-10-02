@@ -63,7 +63,7 @@ export function UnattendedSettings() {
             <option value={120}>2 hours</option>
           </Select>
         </label>
-        <p className="-mt-2 text-xs text-fg-subtle">Never while it waits on you for a permission.</p>
+        <p className="-mt-2 text-xs text-fg-muted">Never while it waits on you for a permission.</p>
         <div className="flex items-start gap-3">
           <Switch checked={v.autoResume} onChange={(on) => void save({ autoResume: on })} label="Resume stopped runs by themselves" />
           <div>

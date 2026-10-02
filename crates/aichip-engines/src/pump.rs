@@ -94,12 +94,17 @@ pub fn spawn(
 
     let pid = child.id();
     tokio::spawn(async move {
-        let mut ended = false;
+        // An ending is held, not sent, until the process has exited, and only
+        // the last one counts. Qwen writes a failed result line for a failed
+        // sub-agent and carries on — sent at once, it ended a live run (and a
+        // chat turn) and later ones followed it. The final word comes last.
+        let mut ending: Option<AichipEvent> = None;
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             for event in parser.line(&line) {
-                ended |= is_terminal(&event);
-                if tx.send(event).await.is_err() {
+                if is_terminal(&event) {
+                    ending = Some(event);
+                } else if tx.send(event).await.is_err() {
                     return; // receiver dropped — run canceled
                 }
             }
@@ -107,12 +112,10 @@ pub fn spawn(
         let status = child.wait().await.ok();
         let seen = err_rx.await.unwrap_or_default();
         tracing::debug!(engine = label, stderr_tail = ?seen.tail, "engine exited");
-        if ended {
-            return;
-        }
         let exit_ok = status.is_some_and(|s| s.success());
-        let last = match seen.rate_limited {
-            Some(message) if !exit_ok => AichipEvent::RateLimited {
+        let last = match (ending, seen.rate_limited) {
+            (Some(said), _) => said,
+            (None, Some(message)) if !exit_ok => AichipEvent::RateLimited {
                 reset_at: None,
                 message,
             },
@@ -177,5 +180,44 @@ mod tests {
             "fatal: no".into(),
         ];
         assert_eq!(reason_from(&tail, "x"), "a · b · fatal: no");
+    }
+
+    /// A failed sub-agent's result line, then the session's own: one ending,
+    /// the last. (Qwen does this; the parser is the Claude-compatible one.)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_run_ends_once_with_the_last_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = concat!(
+            r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+            "\n",
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"error":{"message":"TIMEOUT"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"carried on"}]}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#,
+            "\n",
+        );
+        let bin = crate::replaying(dir.path(), fixture);
+        let cmd = aichip_shared::env_guard::command(&bin);
+        let mut proc = spawn(
+            cmd,
+            Box::new(crate::claude::compat::ClaudeCompat { label: "Qwen Code" }),
+            "test",
+        )
+        .unwrap();
+        let mut events = vec![];
+        while let Some(e) = proc.events.recv().await {
+            events.push(e);
+        }
+        let endings: Vec<_> = events.iter().filter(|e| is_terminal(e)).collect();
+        assert!(
+            matches!(endings[..], [AichipEvent::RunCompleted { .. }]),
+            "{events:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(AichipEvent::RunCompleted { .. })
+        ));
     }
 }

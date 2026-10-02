@@ -34,9 +34,10 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
           : status
             ? statusColor(status)
             : "var(--color-border)",
+        // statusColor is a CSS variable, so a hex alpha suffix cannot tint it.
         boxShadow: running
-          ? `0 0 0 3px ${statusColor(status!)}22`
-          : "0 1px 2px rgba(16,17,20,0.06)",
+          ? `0 0 0 3px color-mix(in oklab, ${statusColor(status!)} 13%, transparent)`
+          : "var(--shadow-xs)",
       }}
     >
       <Handle

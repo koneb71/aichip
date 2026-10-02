@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Project, Routine, RoutineDraft, RoutineRun } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
-import { EnginePicker } from "../lib/engines";
+import { EnginePicker, ToolsNote } from "../lib/engines";
 import { Icon } from "../components/ui/Icon";
 import { Button } from "../components/ui/Button";
 import { compile, describeCron, Preset, recognize, relative, WEEKDAYS } from "../lib/cron";
@@ -262,15 +262,12 @@ function RoutineCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={runNow}
-            disabled={busy || !!live}
-            title={live ? "Already running" : "Fire once, without touching the schedule"}
-          >
-            {busy ? "Firing…" : "Run now"}
-          </Button>
+          {/* On a wrapper: a disabled kit Button takes no pointer events. */}
+          <span className="shrink-0" title={live ? "Already running" : "Fire once, without touching the schedule"}>
+            <Button variant="secondary" size="sm" onClick={runNow} disabled={busy || !!live}>
+              {busy ? "Firing…" : "Run now"}
+            </Button>
+          </span>
           <Button variant="secondary" size="sm" onClick={onEdit}>
             Edit
           </Button>
@@ -455,6 +452,10 @@ function Editor({
   const allowGeneral = d.kind !== "task";
 
   const set = (patch: Partial<RoutineDraft>) => setD((prev) => ({ ...prev, ...patch }));
+  // `manage` is not a kind this editor offers, but the list includes managers.
+  const kind: string = d.kind;
+  const toolsWhat =
+    kind === "manage" ? "a project manager" : kind === "chat" && d.projectId ? "the assistant" : null;
 
   const field = "rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs";
 
@@ -627,6 +628,10 @@ function Editor({
             <option value="max">Max</option>
           </select>
         </div>
+        {/* Only the firings that are handed aichip's tools: a project manager
+            (listed here though it is edited on its board) and a chat that
+            stands in a project. A watch, or a chat with no project, never is. */}
+        {toolsWhat && <ToolsNote engine={d.engine ?? null} what={toolsWhat} inheritsDefault />}
 
         <div className="flex items-center justify-end gap-2">
           <Button variant="secondary" size="sm" onClick={onCancel}>

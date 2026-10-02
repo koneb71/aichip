@@ -28,10 +28,16 @@ export const MONACO_COLORS: Record<CodeTheme, Record<string, string>> = {
   light: {
     // --color-panel
     "editor.background": "#ffffff",
-    "editorLineNumber.foreground": "#9ca3af",
-    "editorLineNumber.activeForeground": "#4b5563",
-    "editor.lineHighlightBackground": "#f6f6f7",
-    "editorIndentGuide.background1": "#ececee",
+    "editorGutter.background": "#ffffff",
+    "minimap.background": "#ffffff",
+    // --color-fg-subtle
+    "editorLineNumber.foreground": "#8e8e99",
+    // --color-fg-muted
+    "editorLineNumber.activeForeground": "#5f5f6b",
+    // --color-panel-2
+    "editor.lineHighlightBackground": "#f2f2f4",
+    // --color-border
+    "editorIndentGuide.background1": "#e5e5e9",
   },
   dark: {
     // --color-panel (dark)
@@ -43,6 +49,7 @@ export const MONACO_COLORS: Record<CodeTheme, Record<string, string>> = {
     "editorLineNumber.activeForeground": "#cccccc",
     // --color-panel-2 (dark)
     "editor.lineHighlightBackground": "#1b1c21",
+    // --color-border (dark)
     "editorIndentGuide.background1": "#26272e",
   },
 };

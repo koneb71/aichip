@@ -614,7 +614,7 @@ function DirEntries({
             <span className="truncate">{entry.name}</span>
             {dirtyDot && <span className="text-[9px] text-fg">●</span>}
             {entry.size !== null && !dirtyDot && (
-              <span className="ml-auto shrink-0 text-[10px] text-fg-subtle">
+              <span className="ml-auto shrink-0 text-[10px] text-fg-muted">
                 {humanSize(entry.size)}
               </span>
             )}

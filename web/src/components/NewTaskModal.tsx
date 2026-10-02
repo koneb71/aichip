@@ -160,6 +160,8 @@ export function NewTaskModal({
         }
         onClose();
       }}
+      // Anything typed or attached is work a stray Escape would throw away.
+      dismissible={!title.trim() && !prompt.trim() && att.items.length === 0}
       title={`New task · ${project.name}`}
       width={576}
       className={att.dragging ? "border-accent! ring-2 ring-accent/30" : undefined}

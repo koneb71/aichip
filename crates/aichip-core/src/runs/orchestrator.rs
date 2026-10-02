@@ -78,6 +78,23 @@ pub const CHAT_DENIED_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "Notebook
 /// so the assistant could not read the repository or reach its own tools and
 /// fell back to asking the user what they were working on. `vet` exists to
 /// refuse exactly that pairing, and this was the one caller that never ran it.
+/// What a run that was refused Full Auto runs as instead: the narrowest mode
+/// this engine can honour, or `None` when it has none — Amp and Cursor allow
+/// every tool or nothing, so for them the refusal has to be a refusal.
+///
+/// Reviewed where the engine can ask; otherwise Auto-edit, which is no more
+/// than a person could pick for the card directly. Never a mode `vet` would
+/// refuse: on OpenCode, Reviewed silently rejects every tool call.
+pub(crate) fn short_of_full_auto(caps: &aichip_engines::Capabilities) -> Option<PermissionMode> {
+    if caps.interactive_permissions {
+        Some(PermissionMode::Reviewed)
+    } else if caps.auto_edit {
+        Some(PermissionMode::AutoEdit)
+    } else {
+        None
+    }
+}
+
 fn chat_permission_mode(engine: &dyn aichip_engines::Engine) -> PermissionMode {
     if engine.capabilities().interactive_permissions {
         // Claude: the allow-list has already pre-approved the read tools, so
@@ -422,6 +439,12 @@ pub struct NoTools {
     pub can: String,
 }
 
+/// An engine that cannot honour the mode some work needs — `vet`'s answer,
+/// as a refusal a door turns into a 409 rather than a run that fails later.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct CantHonour(pub String);
+
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
@@ -618,9 +641,28 @@ impl Orchestrator {
         if self.engines.contains_key("claude-code") {
             return "claude-code".into();
         }
-        self.engines()
+        // Otherwise the most capable engine installed, by what it can do: one
+        // that can carry aichip's tools and edit without a shell first, since
+        // the assistant, a manager, a team and an ordinary card all fall back
+        // to this. Alphabetical order alone made Amp the default beside Codex
+        // — an engine every one of those would refuse.
+        let installed: Vec<_> = self
+            .engines()
             .into_iter()
-            .find(|e| e.id() != "mock")
+            .filter(|e| e.id() != "mock")
+            .collect();
+        let rank = |e: &Arc<dyn Engine>| {
+            let c = e.capabilities();
+            match (c.mcp_tools, c.auto_edit) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }
+        };
+        installed
+            .iter()
+            .min_by_key(|e| rank(e))
             .map(|e| e.id().to_string())
             .unwrap_or_else(|| "claude-code".into())
     }
@@ -941,10 +983,22 @@ impl Orchestrator {
         }
     }
 
-    /// Create a run for a chat turn. Chat runs outrank task runs in the
-    /// queue (priority 20 vs 10) so the assistant feels responsive.
-    pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
-        self.needs_tools(engine, "the assistant")?;
+    /// Every refusal a chat turn can meet, without starting it — so a caller
+    /// that writes something first (an answer, an approval) can ask before
+    /// it does, and a refusal leaves nothing half-done.
+    pub async fn vet_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<()> {
+        // Only a chat on a project is handed aichip's tools (`execute_chat_run`
+        // wires them by project); a general chat or a watch routine reads the
+        // web and nothing else, and any engine can do that.
+        let project: Option<Uuid> =
+            sqlx::query_scalar("SELECT project_id FROM chats WHERE id = $1")
+                .bind(chat_id)
+                .fetch_optional(&self.db.pool)
+                .await?
+                .flatten();
+        if project.is_some() {
+            self.needs_tools(engine, "the assistant")?;
+        }
         // The assistant spends like anything else: a spent workspace or
         // project says so on the message, not by leaving the turn queued.
         crate::budgets::check(
@@ -953,6 +1007,28 @@ impl Orchestrator {
             true,
         )
         .await?;
+        Ok(())
+    }
+
+    /// The engine a chat's next turn runs on when nobody picked one: the one
+    /// its last turn ran on, so an answer or an approval carries on where the
+    /// conversation was — a manager thread on Qwen stays on Qwen.
+    pub async fn chat_engine(&self, chat_id: Uuid) -> anyhow::Result<String> {
+        let last: Option<String> = sqlx::query_scalar(
+            "SELECT engine FROM runs WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(chat_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        Ok(last
+            .filter(|e| self.engine(e).is_some())
+            .unwrap_or_else(|| self.default_engine()))
+    }
+
+    /// Create a run for a chat turn. Chat runs outrank task runs in the
+    /// queue (priority 20 vs 10) so the assistant feels responsive.
+    pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
+        self.vet_chat_turn(chat_id, engine).await?;
         let row = sqlx::query(
             "INSERT INTO runs (chat_id, status, trigger, engine)
              VALUES ($1, 'queued', 'chat', $2) RETURNING id",
@@ -1364,17 +1440,41 @@ impl Orchestrator {
     pub async fn vet_card(&self, task_id: Uuid) -> anyhow::Result<Option<String>> {
         let row = sqlx::query(
             "SELECT COALESCE(a.engine, t.engine) AS engine,
-                    COALESCE(a.permission_preset, t.permission_mode) AS mode
-             FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+                    COALESCE(a.permission_preset, t.permission_mode) AS mode,
+                    p.full_auto_opt_in, p.vcs
+             FROM tasks t JOIN projects p ON p.id = t.project_id
+             LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
         )
         .bind(task_id)
         .fetch_one(&self.db.pool)
         .await?;
-        let mode = match row.get::<Option<String>, _>("mode") {
+        let mut mode = match row.get::<Option<String>, _>("mode") {
             Some(m) => serde_json::from_value(serde_json::Value::String(m)).unwrap_or_default(),
             None => self.default_permission_mode().await,
         };
-        Ok(self.vet_engine(&row.get::<String, _>("engine"), mode))
+        let engine_id: String = row.get("engine");
+        // The Full Auto gate dispatch will apply, said at the click: where it
+        // will not hold, the card runs as the narrowest mode its engine has —
+        // or, for an engine with none, cannot start at all.
+        if mode == PermissionMode::FullAuto {
+            // In place (no git) means no worktree, which Full Auto needs.
+            let gated =
+                !row.get::<bool, _>("full_auto_opt_in") || row.get::<String, _>("vcs") != "git";
+            if let (true, Some(engine)) = (gated, self.engine(&engine_id)) {
+                match short_of_full_auto(&engine.capabilities()) {
+                    Some(narrower) => mode = narrower,
+                    None => {
+                        return Ok(Some(format!(
+                            "{} can only run with every tool allowed, and Full Auto is off for \
+this project (it needs the project's opt-in and a worktree to work in). Turn it on for the \
+project, or run this card on an engine with a narrower mode.",
+                            engine.label()
+                        )))
+                    }
+                }
+            }
+        }
+        Ok(self.vet_engine(&engine_id, mode))
     }
 
     /// Start a card the way the Start button does — vetted, queued, moved to
@@ -1441,6 +1541,15 @@ impl Orchestrator {
         // guess — and for a multi-provider engine it's usually a wrong one.
         // The install itself knows better, so ask it.
         for engine in self.engines() {
+            // An engine with a catalog of its own and defaults named from it
+            // (Gemini's aliases, Amp's modes) already has the right answer:
+            // those names match none of the keywords below, and deriving
+            // from them put every tier on one model.
+            if engine.capabilities().fixed_model_catalog
+                && !EngineTierMapping::defaults_for(engine.id()).0.is_empty()
+            {
+                continue;
+            }
             let Some(info) = self.detected.get(engine.id()) else {
                 continue;
             };
@@ -2058,10 +2167,52 @@ impl Orchestrator {
             .resolve_effort(agent_effort, card_effort, &engine_id, tier)
             .await;
 
+        // FullAuto is refused outside aichip-managed worktrees and outside
+        // opted-in projects — the structural safety gate. The run steps down
+        // to the narrowest mode its engine can actually honour; one with
+        // nothing narrower (Amp, Cursor) keeps FullAuto here only so that
+        // the vet below refuses it with the reason.
+        let full_auto_opt_in: bool = run.get("full_auto_opt_in");
+        let permission_mode = if permission_mode == PermissionMode::FullAuto
+            && !(full_auto_opt_in && self.worktrees.manages(&cwd))
+        {
+            match short_of_full_auto(&engine.capabilities()) {
+                Some(mode) => {
+                    tracing::warn!(%run_id, ?mode, "stepping FullAuto down (gate not satisfied)");
+                    mode
+                }
+                None => {
+                    let reason = format!(
+                        "{} can only run with every tool allowed, and this project does not allow \
+that here — Full Auto needs the project's opt-in and a worktree to work in. Turn it on for the \
+project, or run this card on an engine with a narrower mode.",
+                        engine.label()
+                    );
+                    let seq = next_seq(&self.db, run_id).await?;
+                    self.persist_and_publish(
+                        run_id,
+                        None,
+                        seq,
+                        &AichipEvent::RunFailed {
+                            reason: reason.clone(),
+                        },
+                    )
+                    .await?;
+                    self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
+                    return Ok(());
+                }
+            }
+        } else {
+            permission_mode
+        };
+
         // Capability gate. Checked here as well as at enqueue time because a
         // card's mode can be edited after it was queued — and a run that
         // can't honour its mode must fail loudly rather than quietly running
-        // with more freedom than was asked for.
+        // with more freedom than was asked for. On the mode the run will
+        // actually have, after the gate above: Amp cannot be held to
+        // Reviewed and runs every tool regardless, so a Full Auto it was
+        // refused has to stop it, not hand it Reviewed and let it run.
         if let Err(reason) = aichip_engines::vet(
             engine.as_ref(),
             permission_mode,
@@ -2082,18 +2233,6 @@ impl Orchestrator {
             self.finish(run_id, RunStatus::Failed, Some(reason)).await?;
             return Ok(());
         }
-
-        // FullAuto is refused outside aichip-managed worktrees and outside
-        // opted-in projects — the structural safety gate.
-        let full_auto_opt_in: bool = run.get("full_auto_opt_in");
-        let permission_mode = if permission_mode == PermissionMode::FullAuto
-            && !(full_auto_opt_in && self.worktrees.manages(&cwd))
-        {
-            tracing::warn!(%run_id, "downgrading FullAuto to Reviewed (gate not satisfied)");
-            PermissionMode::Reviewed
-        } else {
-            permission_mode
-        };
 
         // Servers this agent opted into. Loaded before the config is written
         // because they go into the same file as aichip's own endpoint.
@@ -5331,8 +5470,24 @@ mod db_tests {
         .unwrap();
         let err = orch.enqueue_chat_turn(chat, "gemini").await.unwrap_err();
         assert!(err.is::<NoTools>(), "{err}");
+        // A chat with no project is never handed the tools, so any engine
+        // will do for it.
+        let general: Uuid = sqlx::query_scalar(
+            "INSERT INTO chats (title, workspace_id) VALUES ('General', $1) RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        orch.enqueue_chat_turn(general, "gemini").await.unwrap();
+        sqlx::query("DELETE FROM runs WHERE chat_id = $1")
+            .bind(general)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
 
-        // A team on a capable engine with one member pinned to Cursor.
+        // A team on a capable engine. Its members run on the team's engine,
+        // so one pinned to Cursor for its own card work does not matter here.
         let member: Uuid = sqlx::query_scalar(
             "INSERT INTO agents (workspace_id, name, engine) VALUES ($1, 'Cy', 'cursor') RETURNING id",
         )
@@ -5342,34 +5497,28 @@ mod db_tests {
         .unwrap();
         let team: Uuid = sqlx::query_scalar(
             "INSERT INTO teams (workspace_id, name, pattern, definition, engine)
-             VALUES ($1, 'T', 'org', $2, 'qwen') RETURNING id",
+             VALUES ($1, 'T', 'org', $2, 'gemini') RETURNING id",
         )
         .bind(ws)
         .bind(serde_json::json!({ "members": [{ "agent_id": member.to_string() }] }))
         .fetch_one(&t.db.pool)
         .await
         .unwrap();
+        // On Gemini it is refused, at either door: the Teams page…
         let err = orch
             .enqueue_org_run(team, project, "ship it", false)
             .await
             .unwrap_err();
-        assert!(err.to_string().starts_with("Cursor CLI can't"), "{err}");
-
-        // The member back on the team's engine, and the team on Gemini.
-        sqlx::query("UPDATE agents SET engine = NULL WHERE id = $1")
-            .bind(member)
-            .execute(&t.db.pool)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE teams SET engine = 'gemini' WHERE id = $1")
+        assert!(err.is::<NoTools>(), "{err}");
+        // …and a card assigned to the team.
+        let card = t.card(project, "for the team").await;
+        sqlx::query("UPDATE tasks SET team_id = $2 WHERE id = $1")
+            .bind(card)
             .bind(team)
             .execute(&t.db.pool)
             .await
             .unwrap();
-        let err = orch
-            .enqueue_org_run(team, project, "ship it", false)
-            .await
-            .unwrap_err();
+        let err = orch.enqueue_task(card).await.unwrap_err();
         assert!(err.is::<NoTools>(), "{err}");
 
         // Nothing was queued by any of it.
@@ -5379,7 +5528,7 @@ mod db_tests {
             .unwrap();
         assert_eq!(runs, 0);
 
-        // And on a capable engine with no pinned members, the team starts.
+        // On Qwen it starts, the Cursor-pinned member and all.
         sqlx::query("UPDATE teams SET engine = 'qwen' WHERE id = $1")
             .bind(team)
             .execute(&t.db.pool)
@@ -5388,5 +5537,118 @@ mod db_tests {
         orch.enqueue_org_run(team, project, "ship it", false)
             .await
             .unwrap();
+    }
+
+    /// Without Claude Code, the default is the most capable engine installed
+    /// — not the first by name, which with Amp installed was one that the
+    /// assistant, a manager and a team would all refuse.
+    #[tokio::test]
+    async fn the_default_engine_is_chosen_by_what_it_can_do() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::amp::AmpEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::cursor::CursorEngine::default()));
+        assert_eq!(orch.default_engine(), "amp", "first of equals, by name");
+        orch.register_engine(Arc::new(aichip_engines::gemini::GeminiEngine::default()));
+        assert_eq!(
+            orch.default_engine(),
+            "gemini",
+            "it can at least edit without a shell"
+        );
+        orch.register_engine(Arc::new(aichip_engines::codex::CodexEngine::default()));
+        assert_eq!(orch.default_engine(), "codex");
+    }
+
+    /// Gemini's aliases and Amp's modes are their own catalogs; the keyword
+    /// guess that serves a multi-provider engine put every tier on one of
+    /// them.
+    #[tokio::test]
+    async fn an_engine_with_its_own_catalog_keeps_its_own_defaults() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        for engine in [
+            Arc::new(aichip_engines::amp::AmpEngine::default()) as Arc<dyn Engine>,
+            Arc::new(aichip_engines::gemini::GeminiEngine::default()),
+        ] {
+            let models = match engine.id() {
+                "amp" => ["low", "medium", "high", "ultra"]
+                    .map(String::from)
+                    .to_vec(),
+                _ => ["auto", "pro", "flash", "flash-lite"]
+                    .map(String::from)
+                    .to_vec(),
+            };
+            orch.detected.insert(
+                engine.id(),
+                aichip_engines::EngineInfo {
+                    version: "1".into(),
+                    authenticated: true,
+                    providers: vec![],
+                    models,
+                },
+            );
+            orch.register_engine(engine);
+        }
+        orch.load_tier_mapping().await.unwrap();
+        let tiers = |e: &str| {
+            [ModelTier::Easy, ModelTier::Medium, ModelTier::Complex].map(|t| orch.model_for(e, t))
+        };
+        assert_eq!(tiers("amp"), ["low", "medium", "high"]);
+        assert_eq!(tiers("gemini"), ["flash-lite", "flash", "pro"]);
+        assert!(orch.derived_defaults("amp").is_none());
+        assert!(orch.derived_defaults("gemini").is_none());
+    }
+
+    /// Where Full Auto is off for the project, a card steps down to the
+    /// narrowest mode its engine can honour — and an engine with nothing
+    /// narrower (Amp runs every tool, always) is refused at the click rather
+    /// than handed Reviewed, which it would ignore.
+    #[tokio::test]
+    async fn full_auto_refused_steps_down_or_says_no() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::amp::AmpEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::codex::CodexEngine::default()));
+        let (_, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "go").await;
+        let on = |engine: &'static str| {
+            sqlx::query("UPDATE tasks SET engine = $2, permission_mode = 'full_auto' WHERE id = $1")
+                .bind(card)
+                .bind(engine)
+                .execute(&t.db.pool)
+        };
+        let opt_in = |yes: bool| {
+            sqlx::query("UPDATE projects SET full_auto_opt_in = $2 WHERE id = $1")
+                .bind(project)
+                .bind(yes)
+                .execute(&t.db.pool)
+        };
+        opt_in(false).await.unwrap();
+        on("amp").await.unwrap();
+        let said = orch.vet_card(card).await.unwrap().expect("refused");
+        assert!(
+            said.starts_with("Amp can only run with every tool allowed"),
+            "{said}"
+        );
+        // Codex steps down to Auto-edit, which it can honour.
+        on("codex").await.unwrap();
+        assert_eq!(orch.vet_card(card).await.unwrap(), None);
+        // With the opt-in, Amp's Full Auto is what was asked for and allowed.
+        opt_in(true).await.unwrap();
+        on("amp").await.unwrap();
+        assert_eq!(orch.vet_card(card).await.unwrap(), None);
+        assert_eq!(
+            short_of_full_auto(&aichip_engines::mock::MockEngine::demo().capabilities()),
+            Some(PermissionMode::Reviewed)
+        );
     }
 }

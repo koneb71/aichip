@@ -53,6 +53,7 @@ pub fn run_refused(e: anyhow::Error) -> ApiError {
         || e.is::<aichip_core::agents::Unavailable>()
         || e.is::<aichip_core::budgets::OverBudget>()
         || e.is::<aichip_core::runs::orchestrator::NoTools>()
+        || e.is::<aichip_core::runs::orchestrator::CantHonour>()
     {
         (axum::http::StatusCode::CONFLICT, e.to_string())
     } else {

@@ -120,11 +120,11 @@ export function RepoApps({
             </div>
             {/* "Update" rather than "Install" when it is already here: syncing
                 replaces the manifest of the app of that name and keeps its
-                rows, which is a different promise and worth a different word. */}
-            <Button
-              size="xs"
-              onClick={() => sync(a)}
-              disabled={busy !== null || a.error !== null}
+                rows, which is a different promise and worth a different word.
+                The title is on a wrapper: a disabled kit Button takes no
+                pointer events, and the title is what says why it is disabled. */}
+            <span
+              className="shrink-0"
               title={
                 a.error
                   ? "This manifest does not parse, so there is nothing to install."
@@ -133,8 +133,10 @@ export function RepoApps({
                     : "Install it here."
               }
             >
-              {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
-            </Button>
+              <Button size="xs" onClick={() => sync(a)} disabled={busy !== null || a.error !== null}>
+                {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
+              </Button>
+            </span>
           </div>
         ))}
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Project, Skill, SkillInstall, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Card, Empty, Item, Page, PageHead, Stagger, TintIcon } from "../components/ui/Surface";
@@ -180,6 +180,13 @@ function SkillEditor({
     draft.description !== skill.description ||
     draft.instructions !== skill.instructions ||
     draft.mustNot !== skill.mustNot;
+  // A close request saves an unsaved edit first, but only once per edit: a
+  // save the server refuses leaves `dirty` set, and every later close would
+  // otherwise just repeat it and never close.
+  const closeSaved = useRef(false);
+  useEffect(() => {
+    closeSaved.current = false;
+  }, [draft]);
 
   const save = async (patch: Partial<Skill> = {}) => {
     setBusy(true);
@@ -221,10 +228,12 @@ function SkillEditor({
       // Closing mid-save would drop the answer on the floor, as the scrim click
       // did before. Fields save on blur, and Escape or a click outside closes
       // without one — so an unsaved edit is saved first, and only the next
-      // request closes, the way the scrim click used to save and stay open.
+      // request closes, the way the scrim click used to save and stay open —
+      // whether or not that save was accepted.
       onOpenChange={(o) => {
         if (o || busy) return;
-        if (dirty) {
+        if (dirty && !closeSaved.current) {
+          closeSaved.current = true;
           save();
           return;
         }
