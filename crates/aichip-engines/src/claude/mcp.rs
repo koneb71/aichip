@@ -64,9 +64,16 @@ fn pairs(kv: &[(String, String)]) -> Value {
 /// at the umask's 0644, readable by every account on the machine for as long
 /// as it sat there (until `leftovers::sweep` at the next boot).
 pub fn write(dir: &Path, run_key: &str, wiring: &McpWiring) -> anyhow::Result<PathBuf> {
+    write_config(dir, run_key, &config(wiring))
+}
+
+/// Write any engine's MCP config for one run, owner-only, as
+/// `<dir>/<run_key>.json` — the name `leftovers::sweep` knows to clear once
+/// the run is gone. One run has one engine, so the dialects never collide.
+pub fn write_config(dir: &Path, run_key: &str, config: &Value) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{run_key}.json"));
-    let bytes = serde_json::to_vec_pretty(&config(wiring))?;
+    let bytes = serde_json::to_vec_pretty(config)?;
 
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create(true).truncate(true);

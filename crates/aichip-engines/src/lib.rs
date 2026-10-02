@@ -8,11 +8,16 @@
 //! 3. Never set authentication environment variables on spawned processes.
 //! 4. Never proxy, intercept, or replay the engine's network traffic.
 
+pub mod amp;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
+pub mod gemini;
 pub mod local;
 pub mod mock;
 pub mod opencode;
+pub mod pump;
+pub mod qwen;
 
 use aichip_shared::{AichipEvent, McpWiring, ModelTier, PermissionMode, ReasoningEffort};
 use async_trait::async_trait;
@@ -76,6 +81,18 @@ pub struct Capabilities {
     /// `false` ⇒ an agent reviewer cannot run on it: a review that could
     /// edit the diff it is judging is not a review.
     pub enforces_denied_tools: bool,
+    /// Can be handed aichip's MCP server for one run without writing a file
+    /// into the run's folder (a flag, an env var, a config in aichip's own
+    /// scratch dir). `false` ⇒ the features that live on aichip's tools — the
+    /// chat assistant, a project manager, a team member — are refused at the
+    /// click, and a card run simply goes without its toolbox. An adapter never
+    /// writes a config into a worktree or the user's checkout: it would land
+    /// in the diff, or overwrite their own.
+    pub mcp_tools: bool,
+    /// Can edit files without also being handed a shell. `false` ⇒ Auto-edit
+    /// is refused by `vet` rather than quietly widened to Full Auto, for the
+    /// same reason `Reviewed` is.
+    pub auto_edit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +199,69 @@ pub trait Engine: Send + Sync {
     fn interactive_resume_argv(&self, session_id: &str) -> Option<Vec<String>>;
 }
 
+/// Tools whose denial means "this run must not change anything".
+///
+/// aichip says "read-only" as a denial list, because that is the vocabulary
+/// Claude Code and OpenCode share. An engine with no per-tool vocabulary
+/// translates it into whatever mode it has where nothing can write — and a
+/// denial beats the permission mode, including `FullAuto`: a chat run is
+/// dispatched `FullAuto` on purpose, *in the user's real checkout*, bounded
+/// only by its denials (see `codex::config::sandbox_mode`).
+pub(crate) const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"];
+
+/// Has the caller denied this run anything that could write?
+pub(crate) fn is_read_only(spec: &RunSpec) -> bool {
+    spec.denied_tools
+        .iter()
+        .any(|t| WRITE_TOOLS.iter().any(|w| w.eq_ignore_ascii_case(t)))
+}
+
+/// The prompt, with the persona folded in front for an engine that has no
+/// way to add to its system prompt.
+///
+/// Nothing upstream does this — the orchestrator hands every adapter the
+/// persona in `append_system_prompt` and trusts it to arrive. An adapter that
+/// dropped it would run every agent as nobody in particular, and every
+/// recalled memory would vanish with it.
+pub(crate) fn prompt_with_persona(spec: &RunSpec) -> String {
+    match spec.append_system_prompt.as_deref().map(str::trim) {
+        Some(persona) if !persona.is_empty() => {
+            format!("{persona}\n\n---\n\n{}", spec.prompt)
+        }
+        _ => spec.prompt.clone(),
+    }
+}
+
+/// A prompt that can travel as a positional argument without being read as
+/// anything else, for a CLI whose parser has not been checked for `--`.
+///
+/// Two ways a positional goes wrong: it starts with a dash and is taken for
+/// an option, or it is one bare word that happens to be a subcommand — a chat
+/// message reading just `login` or `mcp` would run that instead. A newline is
+/// invisible to the model and fixes both.
+pub(crate) fn positional(prompt: String) -> String {
+    if prompt.starts_with('-') {
+        format!("\n{prompt}")
+    } else if !prompt.contains(char::is_whitespace) {
+        format!("{prompt}\n")
+    } else {
+        prompt
+    }
+}
+
+/// A model id from Claude Code's own catalog, or no id at all.
+///
+/// `TierMapping::model_for` falls back to `claude-opus-5` for a tier it has
+/// no entry for, so an engine whose mapping was never filled in is handed a
+/// Claude Code id. Passing that on names a model the CLI has never heard of;
+/// saying nothing lets it use the one it is configured for. Only the exact
+/// catalog ids are dropped — an engine that fronts Anthropic's API under its
+/// own naming keeps every id it actually uses.
+pub(crate) fn foreign_model(id: &str) -> bool {
+    let id = id.trim();
+    id.is_empty() || aichip_shared::is_known_model(id)
+}
+
 /// Refuse a run the engine cannot honour, with a reason a person can act on.
 ///
 /// The one place capability mismatches are decided, so the answer is the same
@@ -208,6 +288,14 @@ needs) or Don't-ask, or run this on Claude Code.",
             engine.label()
         ));
     }
+    if permission_mode == PermissionMode::AutoEdit && !caps.auto_edit {
+        return Err(format!(
+            "{} can't run in Auto-edit: it has no setting that allows edits without \
+also allowing commands. Choose Full Auto (in a worktree you can review) or run \
+this on an engine that can.",
+            engine.label()
+        ));
+    }
     if resuming && !caps.resume_sessions {
         return Err(format!(
             "{} can't resume a previous session, so this would silently start over \
@@ -216,6 +304,66 @@ without the earlier context.",
         ));
     }
     Ok(())
+}
+
+/// A plain Auto-edit run in a worktree, for the adapters' argv tests.
+#[cfg(test)]
+pub(crate) fn test_spec() -> RunSpec {
+    RunSpec {
+        cwd: PathBuf::from("/tmp/wt"),
+        prompt: "do the thing".into(),
+        model_tier: ModelTier::Medium,
+        model_id: String::new(),
+        effort: None,
+        resume_session_id: None,
+        permission_mode: PermissionMode::AutoEdit,
+        allowed_tools: vec![],
+        denied_tools: vec![],
+        append_system_prompt: None,
+        run_key: "run-1".into(),
+        extra_read_dirs: vec![],
+        permission_prompt_tool: false,
+        extra_env: HashMap::new(),
+        mcp: Default::default(),
+    }
+}
+
+/// Every event an engine sends for one run, to the end.
+#[cfg(test)]
+pub(crate) async fn drain(engine: &dyn Engine, spec: RunSpec) -> Vec<AichipEvent> {
+    let mut proc = engine.start(spec).unwrap();
+    let mut events = vec![];
+    while let Some(e) = proc.events.recv().await {
+        events.push(e);
+    }
+    events
+}
+
+/// A stand-in for an engine's binary: a shell script that records its argv
+/// to `<dir>/argv` and then runs `body`. Lets an adapter be tested end to end
+/// — argv, spawn, pump, parser — without the real CLI on the machine.
+#[cfg(all(test, unix))]
+pub(crate) fn stand_in(dir: &std::path::Path, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("engine");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}/argv'\n{body}\n",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin.display().to_string()
+}
+
+/// A stand-in that prints `fixture` on stdout and exits 0.
+#[cfg(all(test, unix))]
+pub(crate) fn replaying(dir: &std::path::Path, fixture: &str) -> String {
+    let path = dir.join("fixture.jsonl");
+    std::fs::write(&path, fixture).unwrap();
+    stand_in(dir, &format!("cat '{}'", path.display()))
 }
 
 #[cfg(test)]
@@ -255,7 +403,20 @@ mod tests {
             fixed_model_catalog: false,
             reports_cost: true,
             enforces_denied_tools: true,
+            mcp_tools: true,
+            auto_edit: true,
         }
+    }
+
+    #[test]
+    fn an_engine_without_auto_edit_refuses_it_rather_than_widening() {
+        let engine = Fake(Capabilities {
+            auto_edit: false,
+            ..caps(false, true)
+        });
+        let err = vet(&engine, PermissionMode::AutoEdit, false).unwrap_err();
+        assert!(err.contains("Fake Engine") && err.contains("Full Auto"));
+        vet(&engine, PermissionMode::FullAuto, false).unwrap();
     }
 
     #[test]

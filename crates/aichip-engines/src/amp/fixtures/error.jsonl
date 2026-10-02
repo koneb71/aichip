@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/tmp/wt","session_id":"T-0b1c2d3e-0000-4f00-8000-000000000001","tools":["read"],"mcp_servers":[]}
+{"type":"result","subtype":"error_during_execution","duration_ms":800,"is_error":true,"num_turns":1,"error":"Tool execution failed: read: ENOENT","session_id":"T-0b1c2d3e-0000-4f00-8000-000000000001"}

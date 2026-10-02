@@ -21,15 +21,6 @@
 use crate::RunSpec;
 use aichip_shared::{McpTransport, McpWiring, PermissionMode, ReasoningEffort};
 
-/// Tools whose denial means "this run must not change anything".
-///
-/// aichip expresses "read-only" as a denial list, because that is the
-/// vocabulary Claude Code and OpenCode share. Codex has no per-tool permission
-/// vocabulary at all — its lever is the sandbox — so the translation is: if
-/// the caller denied any tool that could write, the sandbox must be one where
-/// nothing can.
-const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"];
-
 /// The sandbox this run gets.
 ///
 /// The ordering is the whole point, and it is the same rule the OpenCode
@@ -46,11 +37,7 @@ const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Ba
 /// escalation performed on the user's behalf, which is exactly what the
 /// capability system exists to prevent.
 pub fn sandbox_mode(spec: &RunSpec) -> &'static str {
-    if spec
-        .denied_tools
-        .iter()
-        .any(|t| WRITE_TOOLS.iter().any(|w| w.eq_ignore_ascii_case(t)))
-    {
+    if crate::is_read_only(spec) {
         return "read-only";
     }
     match spec.permission_mode {

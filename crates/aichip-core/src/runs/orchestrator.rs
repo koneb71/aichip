@@ -408,6 +408,20 @@ impl CallerKind {
 #[error("this card is already running — cancel it before starting it again")]
 pub struct AlreadyRunning;
 
+/// The work needs aichip's tools — the chat assistant's board tools, a team
+/// member's hand-off tools — and this engine cannot be given them for one
+/// run without a config file in the run's folder. Refused at the click, the
+/// way `vet` refuses a permission mode.
+#[derive(Debug, thiserror::Error)]
+#[error("{label} can't be handed aichip's tools for a single run, and {what} works through them — pick an engine that can ({can})")]
+pub struct NoTools {
+    pub label: String,
+    pub what: &'static str,
+    /// The installed engines that can, by name — computed, so the advice is
+    /// never an engine this machine does not have.
+    pub can: String,
+}
+
 /// Race-free `events.seq` allocation. A workflow run has several steps
 /// writing concurrently, and `(run_id, seq)` is unique.
 #[derive(Clone)]
@@ -901,9 +915,36 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Refuse an engine that cannot be handed aichip's MCP tools per run, for
+    /// work that lives on them. An unknown engine passes: dispatch reports
+    /// that with a better message.
+    pub fn needs_tools(&self, engine: &str, what: &'static str) -> Result<(), NoTools> {
+        match self.engine(engine) {
+            Some(e) if !e.capabilities().mcp_tools => {
+                let mut can: Vec<&str> = self
+                    .engines
+                    .values()
+                    .filter(|e| e.id() != "mock" && e.capabilities().mcp_tools)
+                    .map(|e| e.label())
+                    .collect();
+                can.sort_unstable();
+                Err(NoTools {
+                    label: e.label().to_string(),
+                    what,
+                    can: match can.len() {
+                        0 => "none is installed".to_string(),
+                        _ => can.join(", "),
+                    },
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Create a run for a chat turn. Chat runs outrank task runs in the
     /// queue (priority 20 vs 10) so the assistant feels responsive.
     pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
+        self.needs_tools(engine, "the assistant")?;
         // The assistant spends like anything else: a spent workspace or
         // project says so on the message, not by leaving the turn queued.
         crate::budgets::check(
@@ -5253,5 +5294,99 @@ mod db_tests {
             assert!(started(&t, live).await, "vetted: {vetted}");
         }
         t.finish().await;
+    }
+
+    /// The assistant and a team live on aichip's tools. An engine that cannot
+    /// be handed them for one run is refused at the click — never started
+    /// toolless — and the refusal names the installed engines that can.
+    #[tokio::test]
+    async fn work_that_lives_on_aichips_tools_refuses_an_engine_that_cannot_carry_them() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut orch = idle(&t, dir.path());
+        orch.register_engine(Arc::new(aichip_engines::mock::MockEngine::demo()));
+        orch.register_engine(Arc::new(aichip_engines::gemini::GeminiEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::qwen::QwenEngine::default()));
+        orch.register_engine(Arc::new(aichip_engines::cursor::CursorEngine::default()));
+
+        let no = orch.needs_tools("gemini", "the assistant").unwrap_err();
+        let said = no.to_string();
+        assert!(said.starts_with("Gemini CLI can't"), "{said}");
+        // Qwen can; the mock is not advice; Cursor cannot.
+        assert!(said.ends_with("(Qwen Code)"), "{said}");
+        orch.needs_tools("qwen", "the assistant").unwrap();
+        orch.needs_tools("mock", "the assistant").unwrap();
+        // Unknown is dispatch's to explain.
+        orch.needs_tools("nope", "the assistant").unwrap();
+
+        let (ws, project) = t.project(dir.path(), true).await;
+        let chat: Uuid = sqlx::query_scalar(
+            "INSERT INTO chats (project_id, title) VALUES ($1, 'Talk') RETURNING id",
+        )
+        .bind(project)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let err = orch.enqueue_chat_turn(chat, "gemini").await.unwrap_err();
+        assert!(err.is::<NoTools>(), "{err}");
+
+        // A team on a capable engine with one member pinned to Cursor.
+        let member: Uuid = sqlx::query_scalar(
+            "INSERT INTO agents (workspace_id, name, engine) VALUES ($1, 'Cy', 'cursor') RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO teams (workspace_id, name, pattern, definition, engine)
+             VALUES ($1, 'T', 'org', $2, 'qwen') RETURNING id",
+        )
+        .bind(ws)
+        .bind(serde_json::json!({ "members": [{ "agent_id": member.to_string() }] }))
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let err = orch
+            .enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().starts_with("Cursor CLI can't"), "{err}");
+
+        // The member back on the team's engine, and the team on Gemini.
+        sqlx::query("UPDATE agents SET engine = NULL WHERE id = $1")
+            .bind(member)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE teams SET engine = 'gemini' WHERE id = $1")
+            .bind(team)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let err = orch
+            .enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap_err();
+        assert!(err.is::<NoTools>(), "{err}");
+
+        // Nothing was queued by any of it.
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0);
+
+        // And on a capable engine with no pinned members, the team starts.
+        sqlx::query("UPDATE teams SET engine = 'qwen' WHERE id = $1")
+            .bind(team)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        orch.enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap();
     }
 }

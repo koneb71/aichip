@@ -77,10 +77,38 @@ export function permissionBlocker(
   return null;
 }
 
-/** Why this engine can't do work that lives on aichip's tools, or null. */
-export function toolsBlocker(engine: EngineDescriptor | undefined, what: string): string | null {
+/**
+ * Why this engine can't do work that lives on aichip's tools, or null —
+ * naming the installed engines that can, so the advice is never one this
+ * machine doesn't have.
+ */
+export function toolsBlocker(
+  engine: EngineDescriptor | undefined,
+  what: string,
+  installed: EngineDescriptor[] = [],
+): string | null {
   if (!engine || engine.capabilities.mcp_tools !== false) return null;
-  return `${engine.label} can't be handed aichip's tools for one run, and ${what} works through them.`;
+  const can = installed.filter((e) => e.capabilities.mcp_tools).map((e) => e.label);
+  return (
+    `${engine.label} can't be handed aichip's tools for one run, and ${what} works through them.` +
+    (can.length ? ` Pick ${can.join(", ")}.` : "")
+  );
+}
+
+/** The tools refusal, said under a picker before anyone clicks Start. */
+export function ToolsNote({ engine, what }: { engine: string | null | undefined; what: string }) {
+  const installed = useEngines() ?? [];
+  const blocker = toolsBlocker(
+    installed.find((e) => e.id === engine),
+    what,
+    installed,
+  );
+  if (!blocker) return null;
+  return (
+    <p className="mt-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2 py-1 text-[11px] text-warning-fg">
+      {blocker}
+    </p>
+  );
 }
 
 /**

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Effort, LocalModel, Tier, api } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
-import { EnginePicker, useEngines } from "../../lib/engines";
+import { EnginePicker, ToolsNote, useEngines } from "../../lib/engines";
 import { TierPicker } from "../TierPicker";
 import { EffortPicker, EFFORTS } from "../EffortPicker";
 
@@ -89,6 +89,7 @@ export function ComposerSettings({
                     onChange={onEngine}
                     inheritLabel="Default"
                   />
+                  <ToolsNote engine={engine} what="the assistant" />
                 </Row>
               )}
               <Row label="Model">

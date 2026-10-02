@@ -181,6 +181,15 @@ pub(crate) async fn upsert(
             ));
         }
     }
+    // A manager works the board through aichip's tools; refused at the save,
+    // not at nine tomorrow morning.
+    let engine = body
+        .engine
+        .clone()
+        .unwrap_or_else(|| state.orchestrator.default_engine());
+    if let Err(no) = state.orchestrator.needs_tools(&engine, "a project manager") {
+        return Err((StatusCode::CONFLICT, no.to_string()));
+    }
 
     // A repository, not a document space: a manager on a space would be
     // refused by every board tool it reached for. Refused here so the person

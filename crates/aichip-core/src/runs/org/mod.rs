@@ -213,6 +213,28 @@ impl Orchestrator {
             ..Default::default()
         };
         crate::budgets::check(&self.db, &scope, true).await?;
+        // A team hands work between its members through aichip's tools, so
+        // the planner's engine and every member's must be able to take them.
+        let team: Option<(Option<String>, serde_json::Value)> =
+            sqlx::query_as("SELECT engine, definition FROM teams WHERE id = $1")
+                .bind(team_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
+        if let Some((team_engine, definition)) = team {
+            // A member with no engine of its own runs on the team's.
+            let mut engines = vec![team_engine.unwrap_or_else(|| self.default_engine())];
+            let members = crate::agents::team_agent_ids(&definition);
+            let theirs: Vec<String> = sqlx::query_scalar(
+                "SELECT engine FROM agents WHERE id = ANY($1) AND engine IS NOT NULL",
+            )
+            .bind(&members)
+            .fetch_all(&self.db.pool)
+            .await?;
+            engines.extend(theirs);
+            for engine in &engines {
+                self.needs_tools(engine, "a team")?;
+            }
+        }
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
              SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)

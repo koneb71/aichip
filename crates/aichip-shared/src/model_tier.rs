@@ -207,6 +207,29 @@ impl EngineTierMapping {
             // can degrade performance" — the same warning it gives an id
             // nobody ever published.
             "codex" | "ollama" | "lmstudio" => TierMapping(BTreeMap::new()),
+            // Gemini's documented aliases follow Google's releases, so they
+            // stay right without editing when a model is retired.
+            "gemini" => TierMapping(BTreeMap::from([
+                (ModelTier::Easy, "flash-lite".to_string()),
+                (ModelTier::Medium, "flash".to_string()),
+                (ModelTier::Complex, "pro".to_string()),
+            ])),
+            // `auto` is the one id every Cursor account has; which models a
+            // plan can use is the account's business.
+            "cursor" => TierMapping(BTreeMap::from([
+                (ModelTier::Easy, "auto".to_string()),
+                (ModelTier::Medium, "auto".to_string()),
+                (ModelTier::Complex, "auto".to_string()),
+            ])),
+            // Qwen's ids depend on which provider the person pointed it at,
+            // so it states none and runs the one Qwen is configured for.
+            "qwen" => TierMapping(BTreeMap::new()),
+            // Amp has no model flag, only modes, and a tier climbs them.
+            "amp" => TierMapping(BTreeMap::from([
+                (ModelTier::Easy, "low".to_string()),
+                (ModelTier::Medium, "medium".to_string()),
+                (ModelTier::Complex, "high".to_string()),
+            ])),
             // Claude Code and the mock engine both speak Claude model ids.
             _ => TierMapping::default(),
         }
@@ -290,6 +313,20 @@ pub fn is_known_model_for(engine: &str, id: &str) -> bool {
         // fixed list here would reject a model that works. Anything non-empty
         // is accepted and the CLI reports what it cannot reach.
         "codex" => !id.trim().is_empty(),
+        // Bare names that move with each vendor's releases: Gemini's aliases
+        // and ids, Cursor's per-account catalog, Qwen's per-provider ids
+        // (which may be `org/model` on a routing provider). A typo is the
+        // CLI's to report; whitespace never is an id.
+        "gemini" | "cursor" => {
+            let id = id.trim();
+            !id.is_empty() && !id.contains(char::is_whitespace) && !id.contains('/')
+        }
+        "qwen" => {
+            let id = id.trim();
+            !id.is_empty() && !id.contains(char::is_whitespace)
+        }
+        // Amp chooses the model; what a tier picks is a mode.
+        "amp" => matches!(id, "low" | "medium" | "high" | "ultra"),
         _ => is_known_model(id),
     }
 }
@@ -623,5 +660,24 @@ mod per_engine_tests {
             TierChoice::from(ModelTier::Medium).fixed(),
             Some(ModelTier::Medium)
         );
+    }
+
+    #[test]
+    fn the_newer_engines_default_to_ids_they_can_run_and_validate_their_own() {
+        let d = EngineTierMapping::defaults_for;
+        assert_eq!(d("gemini").model_for(ModelTier::Easy), "flash-lite");
+        assert_eq!(d("gemini").model_for(ModelTier::Complex), "pro");
+        assert_eq!(d("cursor").model_for(ModelTier::Medium), "auto");
+        assert_eq!(d("amp").model_for(ModelTier::Complex), "high");
+        // Qwen's ids are its provider's; it names none.
+        assert!(d("qwen").0.is_empty());
+
+        assert!(is_known_model_for("amp", "ultra"));
+        assert!(!is_known_model_for("amp", "gpt-5"));
+        assert!(is_known_model_for("gemini", "gemini-2.5-pro"));
+        assert!(!is_known_model_for("gemini", "google/gemini-2.5-pro"));
+        assert!(!is_known_model_for("cursor", " "));
+        assert!(is_known_model_for("qwen", "qwen/qwen3-coder"));
+        assert!(!is_known_model_for("qwen", "qwen3 coder"));
     }
 }

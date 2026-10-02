@@ -1088,7 +1088,7 @@ export interface EngineModels {
   label: string;
   /** False for engines fronting many providers — the field is free text. */
   fixedCatalog: boolean;
-  choices: { id: string; label: string; blurb: string }[];
+  choices: { id: string; label: string; blurb: string | null }[];
   /** Model ids this install can actually reach. Suggestions, not a whitelist. */
   available: string[];
   providers: { name: string; auth: string }[];

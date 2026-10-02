@@ -67,12 +67,19 @@ async fn get_models(State(state): State<AppState>) -> Json<Value> {
                 // OpenCode fronts 75+ providers, so its field is free text and
                 // the picker says so rather than offering a stale list.
                 "fixedCatalog": e.capabilities().fixed_model_catalog,
-                "choices": if e.capabilities().fixed_model_catalog {
-                    MODEL_CHOICES.iter().map(|m| json!({
+                // A fixed catalog is the engine's own when its install
+                // reported one — Gemini's aliases, Amp's modes — and Claude
+                // Code's, the one catalog aichip ships, when it did not.
+                "choices": match (e.capabilities().fixed_model_catalog, state.orchestrator.engine_info(e.id())) {
+                    (false, _) => vec![],
+                    (true, Some(info)) if !info.models.is_empty() => info
+                        .models
+                        .iter()
+                        .map(|id| json!({ "id": id, "label": id, "blurb": null }))
+                        .collect::<Vec<_>>(),
+                    (true, _) => MODEL_CHOICES.iter().map(|m| json!({
                         "id": m.id, "label": m.label, "blurb": m.blurb,
-                    })).collect::<Vec<_>>()
-                } else {
-                    vec![]
+                    })).collect::<Vec<_>>(),
                 },
                 // What this install can actually reach, straight from the CLI.
                 // Suggestions, not a whitelist: a local model the CLI doesn't

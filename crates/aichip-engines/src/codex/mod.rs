@@ -213,6 +213,10 @@ impl Engine for CodexEngine {
             // A denied write tool maps to a read-only sandbox, but a denied Bash or
             // WebFetch has no separate switch — not verified as a full refusal.
             enforces_denied_tools: false,
+            // `-c mcp_servers.…` overrides, per invocation.
+            mcp_tools: true,
+            // `workspace-write`: edits, with commands held to the sandbox.
+            auto_edit: true,
         }
     }
 

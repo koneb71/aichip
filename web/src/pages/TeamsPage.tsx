@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api, OrgRunSummary, Project, Team, TeamEstimate } from "../lib/api";
-import { EnginePicker, useEngines } from "../lib/engines";
+import { EnginePicker, ToolsNote, useEngines } from "../lib/engines";
 import { useWorkspace } from "../lib/workspace";
 import { OrgRunView } from "../components/orgs/OrgRunView";
 import { isWorking, needsYou, statusColor } from "../lib/runStatus";
@@ -478,6 +478,7 @@ function TeamEditor({
             />
           </div>
         )}
+        <ToolsNote engine={engine} what="a team" />
 
         <div className="grid grid-cols-2 gap-2">
           {PATTERNS.map((p) => (
