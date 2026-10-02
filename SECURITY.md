@@ -400,7 +400,7 @@ Eren was called aichip, and that name is written into state that already exists.
 spelling lives in `crates/eren-shared/src/brand.rs`, and the rule for each is the same: write
 the new name, read both, prefer the new. What that means for security:
 
-- **The home folder moves once.** The first `eren serve` moves `~/.aichip` to `~/.eren` and
+- **The home folder moves once.** The first `eren serve` (or `eren doctor`) moves `~/.aichip` to `~/.eren` and
   leaves a symlink at the old path, so absolute paths stored in the database and in git's
   worktree links keep resolving. If the link cannot be made the move is undone and Eren refuses
   to start. If both folders already exist, Eren uses `~/.eren` and leaves the old one alone —

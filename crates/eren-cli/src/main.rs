@@ -600,6 +600,9 @@ async fn run_version(bin: &str, args: &[&str]) -> Option<String> {
 }
 
 #[cfg(test)]
+mod docs_tests;
+
+#[cfg(test)]
 mod tests {
     use super::displayable;
 

@@ -108,8 +108,8 @@ bridge, the audit layer, and the SPA fallback that serves the built dashboard. E
 takes `AppState`, which carries `db`, `bus`, `orchestrator`, `permissions`, `storage` and a
 mutex serializing Files-tab saves.
 
-**`eren-cli`** — the `eren` binary: `serve` and `doctor`. `serve` adopts state from before
-the rename, brings up the database, registers the engines with the orchestrator, runs the
+**`eren-cli`** — the `eren` binary: `serve` and `doctor`. Both adopt state from before the
+rename first; `serve` then brings up the database, registers the engines with the orchestrator, runs the
 boot-time sweeps (previews, worktrees, per-run files, orphaned runs, interrupted checks) and
 spawns the long-running loops (queue, scheduler, attachments, preview idling).
 
@@ -1071,7 +1071,7 @@ removes it completely.
 
 **The scan test.** `no_old_name_outside_brand`, in the same file, lists the repository with `git ls-files` and fails the build if the old name turns up anywhere but `brand.rs`, `legacy.rs`, `web/src/lib/brand.ts` and its test, the migration history (never edited), and the configuration that names data already on people's machines (`docker-compose.yml`, `.env.example`, `Dockerfile`, `web/index.html`). A document may say what Eren used to be called — but only beside the name it is now: in any `.md` line that mentions aichip, the word `eren` must appear too, so a stale `cargo run -p <old>-cli` cannot hide as history. This document follows that rule; so must yours.
 
-**The home folder** is Eren's own, so it is moved once. `brand::adopt_legacy_home`, called first thing by `serve` through `adopt_legacy_state` in `crates/eren-cli/src/main.rs` — before the managed Postgres starts, so no file in the folder is open — renames `~/.aichip` to `~/.eren` and leaves a relative symlink at the old path. **The link is the point.** The database stores absolute paths into the home folder (a card's worktree, an app's folder), and git records each worktree's absolute path in the repository it belongs to; rewriting all of that would mean editing files inside people's repositories, and a link makes every one of those paths keep resolving with nothing rewritten. A rename within one directory is atomic, so an interruption leaves either layout, never half; if the link cannot be made the move is undone and `serve` refuses to start, because a moved folder without its link would break every stored path. Two real folders are left alone (`Adoption::Both`) — merging two homes is not something to guess at. `adopt_legacy_state` is never silent: the move is logged, and every `AICHIP_*` variable still set in the environment gets a warning naming its `EREN_*` replacement (`legacy_env_in_use`). The `Dockerfile` makes the same link for the container's volume.
+**The home folder** is Eren's own, so it is moved once. `brand::adopt_legacy_home`, called first thing by `serve` and `doctor` through `adopt_legacy_state` in `crates/eren-cli/src/main.rs` — before the managed Postgres starts, so no file in the folder is open — renames `~/.aichip` to `~/.eren` and leaves a relative symlink at the old path. **The link is the point.** The database stores absolute paths into the home folder (a card's worktree, an app's folder), and git records each worktree's absolute path in the repository it belongs to; rewriting all of that would mean editing files inside people's repositories, and a link makes every one of those paths keep resolving with nothing rewritten. A rename within one directory is atomic, so an interruption leaves either layout, never half; if the link cannot be made the move is undone and the command refuses to start, because a moved folder without its link would break every stored path. Two real folders are left alone (`Adoption::Both`) — merging two homes is not something to guess at. `adopt_legacy_state` is never silent: the move is logged, and every `AICHIP_*` variable still set in the environment gets a warning naming its `EREN_*` replacement (`legacy_env_in_use`). The `Dockerfile` makes the same link for the container's volume.
 
 **[`crates/eren-core/src/legacy.rs`](../crates/eren-core/src/legacy.rs)** is the part that
 needs a database, and both halves run at boot and are no-ops the second time.
@@ -1112,8 +1112,9 @@ Rust tests are inline `#[cfg(test)] mod tests` next to the code they test — th
 ([`crates/eren-core/src/testdb.rs`](../crates/eren-core/src/testdb.rs)): each gets its own
 migrated database on the server `DATABASE_URL` names, an orchestrator with the mock engine
 if it asks, and skips when `DATABASE_URL` is unset. CI runs them against a Postgres service;
-locally, `DATABASE_URL=postgres://eren:eren@localhost:5433/eren cargo test` runs them
-against `docker compose up -d`.
+locally, against `docker compose up -d`, run Eren's tests with
+`DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip cargo test` — Eren's compose
+keeps those legacy names because they name an existing volume.
 
 The house style is still to make the interesting decision pure so it can be asserted
 directly: `resolve_step_permission`, `Standing::apply`, `fence::scrub_foreign`,

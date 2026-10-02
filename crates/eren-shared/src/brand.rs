@@ -85,7 +85,7 @@ pub fn legacy_env_in_use() -> Vec<(String, String)> {
 
 /// Variables for a spawned process, each `EREN_*` one also under its old name.
 ///
-/// Scripts people wrote — a check command, an MCP server, anything an agent
+/// Scripts people wrote — an MCP server, an engine's own hook, anything an agent
 /// runs — read `$AICHIP_RUN_ID` and the rest; setting both for the
 /// compatibility window keeps them working while new ones are written against
 /// `EREN_*`.
