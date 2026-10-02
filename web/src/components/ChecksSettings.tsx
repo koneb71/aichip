@@ -1,3 +1,4 @@
+import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
 import { api, CheckCommand, ProjectChecks } from "../lib/api";
 
@@ -14,6 +15,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [loads, setLoads] = useState(0);
   useEffect(() => {
     api
       .projectChecks(projectId)
@@ -22,7 +24,7 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
         setSaved(JSON.stringify(c));
       })
       .catch((e) => setError(String(e)));
-  }, [projectId]);
+  }, [projectId, loads]);
 
   if (!draft) return <p className="text-[11px] text-ink-dim">{error ?? "Loading…"}</p>;
 
@@ -107,10 +109,12 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
             <option value={3}>up to 3 times</option>
           </select>
         </label>
+        <span className="ml-auto" />
+        <HistoryButton kind="project_checks" id={projectId} onRestored={() => setLoads((n) => n + 1)} />
         <button
           onClick={save}
           disabled={!dirty || busy}
-          className="ml-auto rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
+          className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
         >
           {busy ? "Saving…" : dirty ? "Save checks" : "Saved"}
         </button>

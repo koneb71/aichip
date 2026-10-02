@@ -212,7 +212,7 @@ async fn create(
 }
 
 #[derive(Deserialize)]
-struct AgentPatch {
+pub(crate) struct AgentPatch {
     name: Option<String>,
     icon: Option<String>,
     color: Option<String>,
@@ -247,7 +247,7 @@ where
     serde::Deserialize::deserialize(de).map(Some)
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<AgentPatch>,
@@ -264,6 +264,12 @@ async fn update(
             .unwrap()
             .to_string()
     });
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Agent,
+        &id.to_string(),
+    )
+    .await;
     let row = sqlx::query(
         "UPDATE agents SET
             name = COALESCE($1, name), icon = COALESCE($2, icon),
@@ -327,6 +333,12 @@ async fn remove(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Agent,
+        &id.to_string(),
+    )
+    .await;
     let deleted = sqlx::query("DELETE FROM agents WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)

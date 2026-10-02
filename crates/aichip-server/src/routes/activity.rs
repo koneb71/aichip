@@ -37,8 +37,26 @@ struct BudgetBody {
 
 async fn set_budget(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<BudgetBody>,
 ) -> Result<Json<Value>, ApiError> {
+    // The same gate and the same undo as every other budget write: this is
+    // the "Daily budget" policy under an older name.
+    super::require_write(&headers, "this changes a budget")?;
+    let daily: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM budget_policies WHERE scope_kind = 'machine' AND name = 'Daily budget'",
+    )
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(internal)?;
+    if let Some(id) = daily {
+        aichip_core::revisions::keep(
+            &state.db,
+            aichip_core::revisions::EntityKind::BudgetPolicy,
+            &id.to_string(),
+        )
+        .await;
+    }
     state
         .orchestrator
         .set_daily_budget(body.cap_usd)

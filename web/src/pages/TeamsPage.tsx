@@ -1,3 +1,4 @@
+import { HistoryButton } from "../components/RevisionsPanel";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -451,7 +452,10 @@ function TeamEditor({
     >
       <div className="flex items-center justify-between border-b border-line p-5">
         <div className="text-base font-semibold">{team ? `Edit ${team.name}` : "New team"}</div>
-        <button onClick={onClose} className="text-ink-dim hover:text-ink">✕</button>
+        <div className="flex items-center gap-1">
+          {team && <HistoryButton kind="team" id={team.id} onRestored={onClose} />}
+          <button onClick={onClose} className="text-ink-dim hover:text-ink">✕</button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">

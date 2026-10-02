@@ -123,7 +123,7 @@ async fn create(
 }
 
 #[derive(Deserialize)]
-struct TeamPatch {
+pub(crate) struct TeamPatch {
     name: Option<String>,
     pattern: Option<String>,
     definition: Option<Value>,
@@ -140,7 +140,7 @@ where
     serde::Deserialize::deserialize(de).map(Some)
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<TeamPatch>,
@@ -153,6 +153,12 @@ async fn update(
             ));
         }
     }
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Team,
+        &id.to_string(),
+    )
+    .await;
     let row = sqlx::query(
         "UPDATE teams SET name = COALESCE($1, name), pattern = COALESCE($2, pattern),
                 definition = COALESCE($3, definition),
@@ -175,6 +181,12 @@ async fn remove(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Team,
+        &id.to_string(),
+    )
+    .await;
     sqlx::query("DELETE FROM teams WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)

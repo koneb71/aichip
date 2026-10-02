@@ -99,7 +99,7 @@ async fn read(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ManagerBody {
+pub(crate) struct ManagerBody {
     agent_id: Option<Uuid>,
     /// What this project's manager should care about. May be empty — a
     /// manager with no brief still has a job.
@@ -117,7 +117,16 @@ struct ManagerBody {
     max_starts: Option<i32>,
 }
 
-async fn upsert(
+/// This project's manager routine, if it has one.
+async fn manager_id(state: &AppState, project_id: Uuid) -> Result<Option<Uuid>, ApiError> {
+    sqlx::query_scalar("SELECT id FROM routines WHERE kind = 'manage' AND project_id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)
+}
+
+pub(crate) async fn upsert(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ManagerBody>,
@@ -194,6 +203,14 @@ async fn upsert(
     // on update, deliberately: the standing thread is the manager's memory,
     // and changing the schedule or the brief should not amount to firing it
     // and hiring someone with amnesia.
+    if let Some(existing) = manager_id(&state, project_id).await? {
+        aichip_core::revisions::keep(
+            &state.db,
+            aichip_core::revisions::EntityKind::Routine,
+            &existing.to_string(),
+        )
+        .await;
+    }
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO routines
             (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up,
@@ -242,6 +259,14 @@ async fn remove(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(existing) = manager_id(&state, project_id).await? {
+        aichip_core::revisions::keep(
+            &state.db,
+            aichip_core::revisions::EntityKind::Routine,
+            &existing.to_string(),
+        )
+        .await;
+    }
     sqlx::query("DELETE FROM routines WHERE kind = 'manage' AND project_id = $1")
         .bind(project_id)
         .execute(&state.db.pool)

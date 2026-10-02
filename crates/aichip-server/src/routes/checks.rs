@@ -55,13 +55,13 @@ async fn get_config(
 }
 
 #[derive(Deserialize)]
-struct ConfigBody {
+pub(crate) struct ConfigBody {
     commands: Vec<Check>,
     timeout_secs: i32,
     auto_fix_attempts: i32,
 }
 
-async fn put_config(
+pub(crate) async fn put_config(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
@@ -84,6 +84,12 @@ async fn put_config(
     }
     let commands = checks::validate(&body.commands, body.timeout_secs, body.auto_fix_attempts)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::ProjectChecks,
+        &project_id.to_string(),
+    )
+    .await;
     sqlx::query(
         "INSERT INTO project_checks (project_id, commands, timeout_secs, auto_fix_attempts, updated_at)
          VALUES ($1, $2, $3, $4, now())

@@ -220,7 +220,7 @@ async fn create(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct UpdateBody {
+pub(crate) struct UpdateBody {
     name: Option<String>,
     prompt: Option<String>,
     url: Option<String>,
@@ -232,7 +232,7 @@ struct UpdateBody {
     effort: Option<String>,
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateBody>,
@@ -262,6 +262,12 @@ async fn update(
     // Re-enabling resets the bookmark: the scheduler measures the next
     // occurrence from now, instead of instantly "catching up" a window that
     // passed while the routine was off.
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Routine,
+        &id.to_string(),
+    )
+    .await;
     let n = sqlx::query(
         "UPDATE routines SET
             name = coalesce($2, name),
@@ -304,6 +310,12 @@ async fn remove(
 ) -> Result<Json<Value>, ApiError> {
     // The standing chat thread and everything the routine produced stay:
     // deleting a schedule must not delete its answers.
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Routine,
+        &id.to_string(),
+    )
+    .await;
     sqlx::query("DELETE FROM routines WHERE id = $1")
         .bind(id)
         .execute(&state.db.pool)

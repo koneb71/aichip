@@ -1,3 +1,4 @@
+import { HistoryButton } from "../RevisionsPanel";
 import { useCallback, useEffect, useState } from "react";
 import { api, BudgetBody, BudgetCap, BudgetScopeKind, BudgetStanding } from "../../lib/api";
 import { useWorkspace } from "../../lib/workspace";
@@ -114,6 +115,7 @@ function BudgetRow({
           <button onClick={onEdit} className="rounded-md border border-line px-2 py-0.5 text-[11px] hover:bg-panel-2">
             Edit
           </button>
+          <HistoryButton kind="budget_policy" id={row.policy.id} onRestored={onChanged} />
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { HistoryButton } from "../RevisionsPanel";
 import { motion } from "framer-motion";
 import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../../lib/api";
 import { useTierModel } from "../../lib/models";
@@ -297,6 +298,7 @@ export function AgentEditorDrawer({
         ) : (
           <span />
         )}
+        {agent && <HistoryButton kind="agent" id={agent.id} onRestored={onChanged} />}
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={save}

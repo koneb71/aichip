@@ -1,3 +1,4 @@
+import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
 import { api, AttentionSettingsValue, AttentionEvent } from "../lib/api";
 
@@ -38,6 +39,7 @@ export function AttentionSettings() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
+  const [loads, setLoads] = useState(0);
   useEffect(() => {
     api
       .attentionSettings()
@@ -45,7 +47,7 @@ export function AttentionSettings() {
       // An older server has no such route; the panel removes itself rather
       // than sitting there broken. Same guard PreviewSettings uses.
       .catch(() => setAvailable(false));
-  }, []);
+  }, [loads]);
 
   if (!available || !v) return null;
 
@@ -70,7 +72,10 @@ export function AttentionSettings() {
 
   return (
     <section className="mt-8 max-w-2xl">
-      <h2 className="text-sm font-semibold">When a run needs you</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">When a run needs you</h2>
+        <HistoryButton kind="attention" id="attention" onRestored={() => setLoads((n) => n + 1)} />
+      </div>
       <p className="mt-1 text-xs leading-relaxed text-ink-dim">
         A run that stops to ask something releases its place in the queue, so the rest of the
         board keeps moving. It waits for you — and unlike before, if the wait runs out it is{" "}

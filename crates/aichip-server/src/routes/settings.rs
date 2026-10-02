@@ -338,7 +338,7 @@ async fn get_attention(State(state): State<AppState>) -> Json<Value> {
 }
 
 #[derive(Deserialize)]
-struct AttentionBody {
+pub(crate) struct AttentionBody {
     enabled: Option<bool>,
     command: Option<String>,
     events: Option<Vec<String>>,
@@ -346,7 +346,7 @@ struct AttentionBody {
     wait_secs: Option<i64>,
 }
 
-async fn set_attention(
+pub(crate) async fn set_attention(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<AttentionBody>,
@@ -375,6 +375,12 @@ async fn set_attention(
     let warning = aichip_shared::looks_like_secret(&next.command)
         .map(|f| aichip_shared::secrets::refusal(&f));
 
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Attention,
+        "attention",
+    )
+    .await;
     let saved = aichip_core::attention::save(&state.db, next)
         .await
         .map_err(internal)?;

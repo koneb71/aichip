@@ -41,7 +41,7 @@ async fn list(
 }
 
 #[derive(Deserialize)]
-struct SkillBody {
+pub(crate) struct SkillBody {
     workspace_id: Option<Uuid>,
     name: Option<String>,
     description: Option<String>,
@@ -102,7 +102,7 @@ async fn create(
     one(&state, id).await
 }
 
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<SkillBody>,
@@ -124,6 +124,13 @@ async fn update(
             return Err((StatusCode::CONFLICT, why));
         }
     }
+
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Skill,
+        &id.to_string(),
+    )
+    .await;
 
     sqlx::query(
         "UPDATE skills SET name = COALESCE($2, name),
@@ -150,6 +157,12 @@ async fn remove(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Skill,
+        &id.to_string(),
+    )
+    .await;
     sqlx::query("DELETE FROM skills WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)

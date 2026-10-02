@@ -1795,6 +1795,27 @@ const auditParams = (q: AuditQuery) => {
   return p.toString();
 };
 
+export type RevisionKind =
+  | "agent"
+  | "team"
+  | "routine"
+  | "skill"
+  | "project_checks"
+  | "budget_policy"
+  | "attention"
+  | "review_policy";
+
+/** A setting as it was before one change. See `aichip_core::revisions`. */
+export interface ConfigRevision {
+  id: number;
+  entityKind: RevisionKind;
+  entityId: string;
+  createdAt: string;
+  snapshot: Record<string, unknown>;
+  /** What restoring it would change, against the setting as it is now. */
+  changed: string[];
+}
+
 const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
@@ -1856,6 +1877,12 @@ export const api = {
     fetch("/api/budgets").then((r) =>
       json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),
     ),
+  configRevisions: (kind: RevisionKind, id: string) =>
+    fetch(`/api/revisions?kind=${kind}&id=${encodeURIComponent(id)}`).then((r) =>
+      json<{ revisions: ConfigRevision[] }>(r),
+    ),
+  restoreConfigRevision: (rev: number) =>
+    guarded("POST", `/api/revisions/${rev}/restore`).then((r) => json<{ restored: boolean }>(r)),
   audit: (q: AuditQuery = {}) =>
     fetch(`/api/audit?${auditParams(q)}`).then((r) => json<{ entries: AuditEntry[]; next: number | null }>(r)),
   auditCsvUrl: (q: AuditQuery = {}) => `/api/audit.csv?${auditParams(q)}`,
@@ -2591,7 +2618,7 @@ export const api = {
     ),
   /** Dollars per day; null removes the cap. */
   setBudget: (capUsd: number | null) =>
-    post("/api/queue/budget", { cap_usd: capUsd }).then((r) =>
+    guarded("POST", "/api/queue/budget", { cap_usd: capUsd }).then((r) =>
       json<{ capUsd: number | null }>(r),
     ),
   teamEstimate: (teamId: string) =>
