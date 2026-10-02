@@ -9,11 +9,18 @@
 
 # ── 1. Dashboard ───────────────────────────────────────────────────────────
 FROM node:22-slim AS web
-WORKDIR /web
+# Laid out as the repository is, under /src, because two web tests import a
+# specification the Rust tests read too (`../../../crates/...`), and
+# `pnpm build` type-checks the tests. Only those files are copied from
+# crates/, so a Rust edit does not rebuild the dashboard. A test in
+# eren-cli (docs_tests) fails when a new one is imported and not listed here.
+WORKDIR /src/web
 RUN corepack enable
 # Manifests first so a source-only edit doesn't reinstall the world.
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
+COPY crates/eren-core/src/apps/expr_cases.json /src/crates/eren-core/src/apps/expr_cases.json
+COPY crates/eren-core/src/runs/mention_cases.json /src/crates/eren-core/src/runs/mention_cases.json
 COPY web/ ./
 RUN pnpm build
 
@@ -55,7 +62,7 @@ RUN groupadd -g "${GID}" eren 2>/dev/null || true \
 RUN mkdir -p /home/aichip && ln -s /home/eren/.eren /home/aichip/.aichip
 
 COPY --from=server /src/target/release/eren /usr/local/bin/eren
-COPY --from=web /web/dist /srv/eren/web
+COPY --from=web /src/web/dist /srv/eren/web
 
 ENV EREN_WEB_DIST=/srv/eren/web
 # Bind wide inside the container: the container's own loopback is not the
