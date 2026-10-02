@@ -174,7 +174,8 @@ pub trait ProcessHandle: Send {
 
 #[async_trait]
 pub trait Engine: Send + Sync {
-    /// Stable identifier: "claude-code" | "opencode" | "mock".
+    /// Stable identifier, stored on cards and runs: "claude-code", "opencode",
+    /// "codex", "gemini", "cursor", "qwen", "amp", "ollama", "lmstudio", "mock".
     fn id(&self) -> &'static str;
 
     /// Human-facing name, for pickers and error messages.

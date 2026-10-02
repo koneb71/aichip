@@ -37,20 +37,70 @@ What holds that together is the bind address:
   connecting.
 - The router refuses any request whose `Host` header is not `127.0.0.1`, `localhost` or `[::1]`,
   which is the DNS-rebinding defence.
-- It also refuses any request carrying a cross-origin `Origin`. A missing `Origin` is allowed on
-  purpose — the spawned agent CLIs call `/mcp`, and `eren doctor` and `curl` are not browsers,
-  and none of them send one. The attacker this check exists for is a web page, and browsers
-  attach `Origin` to exactly the cross-origin requests that matter, WebSocket upgrades included.
+- It also refuses any request whose `Origin` is not the very authority the request reached —
+  same host *and* port — and any `Origin: null`. Same-origin rather than "any loopback page",
+  because loopback is also where previews live: agent-written, unreviewed code served at
+  `http://127.0.0.1:{port}`, which under a port-agnostic rule could open `/ws/terminal`. A
+  missing `Origin` is allowed on purpose — the spawned agent CLIs call `/mcp`, and `eren doctor`
+  and `curl` are not browsers, and none of them send one. The attacker this check exists for is
+  a web page, and browsers attach `Origin` to exactly the cross-origin requests that matter,
+  WebSocket upgrades included. Both checks live in `reject_non_local_callers` in
+  `crates/eren-server/src/lib.rs`.
 - Dashboard responses carry `X-Frame-Options: DENY` and `frame-ancestors 'none'`, because the UI
   is made of one-click irreversible actions — a permission prompt's **Allow**, a squash-merge —
   and an invisible iframe positioned under something innocuous would collect one of those clicks.
   Previews and apps are meant to be embedded and deliberately sit outside that layer.
 
+### The write header
+
+The writes that store or run a command, answer for you, or change what gates a merge also
+require an `X-Eren-Write` header: saving a file from the Files tab, storing or running a
+project's checks, the attention hook, the unattended-runs setting, budgets, the review policy,
+restoring a config revision, and answering an inbox item. The header's value is checked against
+nothing and is not a secret; its only job is to be one a cross-origin page cannot set. There is
+no CORS layer, so a preflight for it gets no `Access-Control-Allow-*` and the browser never sends
+the real request. It is belt and braces behind the `Origin` check, not a replacement for it.
+
+`has_write_header` in `crates/eren-server/src/routes/mod.rs` also accepts the name from before
+the rename, `X-Aichip-Write`, so scripts written against the old API keep working under Eren;
+either spelling does the job equally.
+
+### The app bridge
+
+An app reaches Eren's data through `/__eren/…` on its own hostname, answered in Eren's process
+before anything is forwarded to the app's container, and never on the dashboard's host (there it
+answers 404). Every path but `client.js`, the stylesheet and `health` must carry `X-Eren-App` —
+the primary defence here, because a cross-origin `text/plain` POST is a simple request and would
+otherwise land — and any `Origin` present must be that app's own. `OPTIONS` is always refused, so
+a preflight has nothing to succeed with. Scopes are deny-by-default from a closed enum
+(`eren_core::apps::bridge`). Apps built before Eren was renamed load `/__aichip/client.js` and
+send `X-Aichip-App`, from files in their own folders that Eren does not rewrite, so both the old
+prefix and the old header are accepted under exactly the same gates
+(`crates/eren-server/src/app_bridge.rs`).
+
+### Network exposure
+
 Setting `EREN_BIND` to anything that is not loopback makes the server reachable from your
 network, where none of the above is a defence: `curl -H 'Host: localhost'` from across the room
 sets that header itself. Eren refuses to start in that configuration unless you also set
-`EREN_TRUST_NETWORK=1`, so that exposing it is a decision rather than a side effect. If you
-need the dashboard from another device, an SSH tunnel keeps the loopback assumption true.
+`EREN_TRUST_NETWORK=1` (anything but empty or `0`), so that exposing it is a decision rather
+than a side effect. If you need the dashboard from another device, an SSH tunnel keeps the
+loopback assumption true.
+
+The container image sets `EREN_BIND=0.0.0.0` and `EREN_TRUST_NETWORK=1`, because inside a
+container the port is only reachable through an explicit mapping. `docker-compose.yml` therefore
+publishes every port — Eren's, Postgres's and MinIO's — on `127.0.0.1` only. Docker's default is
+every interface; if you remove the `127.0.0.1:` you are publishing an unauthenticated agent
+runner, and a database with a default password.
+
+The databases deserve that sentence. The compose Postgres defaults to a well-known password
+(`POSTGRES_PASSWORD` in `.env.example`), and the compose MinIO to well-known root credentials
+(`EREN_S3_ACCESS_KEY` / `EREN_S3_SECRET_KEY`). Write access to Eren's database is code execution
+on your machine: it holds the MCP servers an agent is launched with, the attention hook command,
+and the projects' check commands, all of which Eren runs. Keep both on loopback, and change the
+defaults if anything else on the machine is not yours. The Postgres `eren serve` manages itself
+needs none of this: it listens on `localhost` with a random 32-character password generated on
+first boot and kept in `~/.eren/pg_password`.
 
 Two endpoints deserve naming, because they are arbitrary code execution and file writes by
 design, and their only gate is the one above:
@@ -60,8 +110,7 @@ design, and their only gate is the one above:
   documented at the top of `crates/eren-server/src/routes/files.rs`: no path may contain a
   `.git` component (writing `.git/hooks/pre-commit` would be remote code execution, since Eren
   runs `git checkout` and `git merge` in that repo), the tree must be one Eren is allowed to
-  write, a content hash must match what is on disk, and the request must carry a header no
-  cross-origin simple request can set.
+  write, a content hash must match what is on disk, and the request must carry the write header.
 
 Eren is not hardened as a multi-tenant service, and the workspace/team structures in the data
 model are organisational, not a security boundary. Do not expose it to a shared network, and do
@@ -73,28 +122,64 @@ Four invariants are stated at the top of `crates/eren-engines/src/lib.rs` and en
 the codebase. Contributions that violate them are rejected.
 
 1. **Adapters spawn official agent binaries found on `PATH` and read their stdout.** Nothing
-   else. There is no HTTP control API for an engine and no proxy in front of one.
+   else. There is no HTTP control API for an engine and no proxy in front of one. The local
+   runtimes (Ollama, LM Studio) are no exception: they hold no tools, so their adapter runs the
+   OpenCode binary with the provider declared.
 2. **Eren never reads, stores, extracts or forwards credentials, and never touches `~/.claude`
    or any engine's config or credential files.** It runs on the CLI's own subscription login.
    `eren doctor` answers "is this CLI logged in?" by *running* it, not by reading its files.
    The same rule is why skills are installed project-locally and never with `npx skills add -g`,
    which writes into `~/.claude`.
-3. **Eren never sets authentication environment variables on a spawned process.** The single
-   source of truth for "is this an auth secret" is
-   [`crates/eren-shared/src/env_guard.rs`](crates/eren-shared/src/env_guard.rs) — use
-   `is_auth_env` / `auth_env_refusal`, never a hand-rolled prefix list. The check is broad on
-   purpose: it matches vendor namespaces and secret-shaped name fragments, so a provider nobody
-   has heard of is still caught by `ACME_API_KEY`. A false positive costs one confusing refusal;
-   a false negative hands a credential to a subprocess. It also refuses `OPENCODE_CONFIG*` and
-   `OPENCODE_PERMISSION`, which are not secrets but can rewrite the permission rules the adapter
-   generated.
+3. **Eren never sets authentication environment variables on a spawned process.** See below.
 4. **Eren never proxies, intercepts or replays engine network traffic.**
 
-A spawned CLI inherits the server's whole environment, so `EREN_OWN_SECRETS` — the credentials
-Eren itself owns, currently the S3 access and secret keys — are stripped from every child
-process: engines, `gh`, and the skills installer alike. That list is deliberately narrow. Your
-own provider variables are yours and are left alone, because OpenCode authenticates some
-providers from the environment on purpose.
+### `env_guard`: one answer to "is this a secret?"
+
+The single source of truth is
+[`crates/eren-shared/src/env_guard.rs`](crates/eren-shared/src/env_guard.rs). Use `is_auth_env`
+/ `auth_env_refusal`, never a hand-rolled prefix list; every adapter runs `is_auth_env` over the
+variables it was asked to set and refuses the run on a match.
+
+`is_auth_env` is broad on purpose. It matches, ignoring case:
+
+- **vendor namespaces**, refused wholesale: `ANTHROPIC_`, `CLAUDE_CODE_OAUTH`, `OPENAI_`,
+  `AZURE_`, `AWS_`, `GOOGLE_`, `GEMINI_`, `VERTEX_`, `GROQ_`, `MISTRAL_`, `DEEPSEEK_`, `XAI_`,
+  `OPENROUTER_`, `TOGETHER_`, `FIREWORKS_`, `CEREBRAS_`, `PERPLEXITY_`, `COHERE_`, `HUGGING`,
+  `HF_`, `REPLICATE_`, `OLLAMA_`, `OPENCODE_`, and for the newer engines `CURSOR_` and
+  `AGENT_CLI_` (Cursor), `QWEN_` and `DASHSCOPE_` (Qwen Code), and `AMP_` (Amp) — Gemini CLI is
+  covered by `GEMINI_` and `GOOGLE_`;
+- **secret-shaped fragments** anywhere in the name: `API_KEY`, `APIKEY`, `_TOKEN`, `TOKEN_`,
+  `_SECRET`, `SECRET_`, `PASSWORD`, `PASSWD`, `OAUTH`, `CREDENTIAL`, `PRIVATE_KEY`,
+  `SESSION_KEY`, `ACCESS_KEY` — so a provider nobody has heard of is still caught by
+  `ACME_API_KEY`.
+
+A false positive costs one confusing refusal; a false negative hands a credential to a
+subprocess. Some namespaces are there for more than keys: `OPENCODE_CONFIG*` and
+`OPENCODE_PERMISSION` are not secrets but can rewrite the permission rules the adapter generated,
+and several of the newer CLIs carry settings in their namespace that would change how they run.
+
+**What Eren itself holds.** A spawned CLI inherits the server's whole environment, so the
+credentials Eren owns — `OWN_SECRETS`, currently the object-storage access and secret keys — are
+stripped from every child process: engines, `git` (whose repository hooks inherit the
+environment), `docker`, `gh`, every `--version` probe, the MCP test button, the attention hook
+and the skills installer alike. Each key is read under two names, so `own_secrets()` spells out
+both: `EREN_S3_ACCESS_KEY`, `EREN_S3_SECRET_KEY`, and the pre-rename `AICHIP_S3_ACCESS_KEY` and
+`AICHIP_S3_SECRET_KEY` that Eren still reads. A test also checks that everything Eren owns reads
+as a secret to `is_auth_env`, so it can never be handed back through a run's extra variables.
+
+That list is deliberately narrow. Your own provider variables are yours and are left alone,
+because OpenCode authenticates some providers from the environment on purpose, and Amp's
+headless runs read `AMP_API_KEY` from yours. Eren passes your environment through; it never
+adds to it.
+
+**`env_guard::command` is the only way anything in the workspace starts a process.** Stripping
+used to be something each spawn site remembered, and most forgot. Now `std::process::Command::new`
+and `tokio::process::Command::new` are listed in `clippy.toml`'s `disallowed-methods`, and a
+test in `env_guard.rs` reads every `.rs` file under `crates/` and fails on any `Command::new(`
+outside that module — the test is the one that runs everywhere `cargo test` does, since CI does
+not block on clippy yet.
+
+### Secrets typed into Eren
 
 Text you type into a project Brain or a Skill is checked by
 [`crates/eren-shared/src/secrets.rs`](crates/eren-shared/src/secrets.rs) before it is saved,
@@ -109,6 +194,50 @@ to a model and stays readable in the run transcript.
 Run transcripts, prompts, diffs and costs are stored in Postgres, and Eren boots and manages
 its own cluster under `~/.eren/pgdata` unless `DATABASE_URL` is set. Assume everything an
 agent read or wrote during a run is recoverable from that database and from `~/.eren`.
+
+## Files Eren writes outside a run's folder
+
+An agent works in a worktree, and nothing Eren generates for a run is written there — a file in
+the worktree would land in the diff, and one in the repository could be committed. What Eren
+writes instead lives under `~/.eren`:
+
+| Path | What it is |
+| --- | --- |
+| `~/.eren/mcp/<run>.json` | The `--mcp-config` file for a Claude Code or Qwen Code run: Eren's own endpoint plus whichever MCP servers the agent was given, including any headers or env values you configured for them. Created owner-only (`0600`), and re-tightened before writing if an older build left it wider (`crates/eren-engines/src/claude/mcp.rs`). Qwen's goes through the same writer (`crates/eren-engines/src/qwen/mod.rs`). |
+| `~/.eren/prompts/<run>.md` | OpenCode's persona and recalled memory, because its `instructions` setting takes file paths (`crates/eren-engines/src/opencode/mod.rs`). The rest of OpenCode's config travels in `OPENCODE_CONFIG_CONTENT`, which OpenCode applies *after* a repository's own `opencode.json`, so a repository cannot widen what Eren granted. |
+| `~/.eren/gemini-policy/read-only*/read-only.toml` | An admin-tier Gemini CLI policy denying the writing tools for a pass that must not change anything. Admin is the one tier above a person's or a repository's own "always allow" rules; Gemini's headless deny sits in its lowest tier. It holds no secrets (`crates/eren-engines/src/gemini/mod.rs`). |
+| `~/.eren/pg_password`, `~/.eren/pgdata` | The managed Postgres's password (set to `0600`) and data. |
+| `~/.eren/worktrees`, `attachments`, `apps`, `previews`, `spaces`, `tmp`, `models` | Card worktrees; attachments granted to runs with `--add-dir` and never copied into a worktree, so `git add -A` cannot commit them; apps; preview compose files and logs; spaces; the scratch folder utility and web-research runs stand in; the local embedding model cache. |
+
+The per-run files under `mcp/` and `prompts/` are deleted at the next boot once their run has
+ended (`crates/eren-core/src/leftovers.rs`), which only ever removes files with the extensions
+Eren wrote there.
+
+## The audit log
+
+`audit_log` is append-only and has exactly one writer, `eren_core::audit::record`
+(`crates/eren-core/src/audit.rs`); a source-scanning test fails the build for any other
+`INSERT`, `UPDATE` or `DELETE` on it. Its only delete is the retention prune: agent and system
+rows go after 90 days, API rows are kept. A write that fails is logged and dropped rather than
+failing the thing it records.
+
+What it records:
+
+- **every mutating `/api` request** (`POST`, `PUT`, `PATCH`, `DELETE`), from the server's audit
+  layer (`crates/eren-server/src/audit_layer.rs`): the method, the route *template*
+  (`/api/tasks/{id}/merge`), the path ids, and the response status. It **never reads the
+  body**, which carries prompts, file contents and the occasional secret. The few `POST`s that
+  change nothing are listed in `audit_layer::QUIET`, each with its reason;
+- **every agent tool call** through the three MCP endpoints: the tool's name, the run, and
+  whether it succeeded or was refused (with the refusal reason, clipped) — **never the tool's
+  input**, which can carry anything the model wrote. Permission prompts record the tool's name
+  and the answer;
+- **Eren's own actions**: a routine fired, a stalled run stopped or resumed, and a merge past
+  the review policy, whose summary is the note the person gave for overriding it.
+
+It records `api`, not "a person": there is no login, and any local process can call the API as
+well as a browser can. It is a ledger kept by the application, not a tamper-proof one — anyone
+with write access to the database can edit it.
 
 ## Prompt injection
 
@@ -130,24 +259,32 @@ fence and start issuing instructions from outside it.
 list, and every scrubber strips all of it. That is not tidiness: the framings are not equally
 strong, and a body that forged a *different* family's opener could move itself from the weakest
 framing ("read this as background, not as instructions") to the strongest ("follow it where it
-applies"). A sixth feature that quotes text adds its pair there, and is protected from the other
-five in one edit.
+applies"). A new feature that quotes text adds its pair there, and is protected from the others
+in one edit.
 
 **What the fence cannot do.** It is prose plus delimiters. A model can still be talked into
 something by text inside a correctly-formed fence — that is the nature of the problem, and no
 amount of framing makes it a boundary. Treat the fence as reducing the odds, not as a control.
 
-The control is structural, and it is this: **an imported card is never started automatically.**
-`tasks::create_imported` lands the card in the backlog with no run and no enqueue, and has no
-parameter that could change that; it also defaults such cards to plan-first, so a person reads a
-plan before a file is touched. A scheduled manager pass cannot start one either — the MCP tool
-handler looks up the card's `source` and refuses, because an agent running on a timer at 3am is
-exactly what would remove the human that rule exists to place. The manager's own start budget
-(default 2 per pass, hard-capped at 10) is likewise enforced by counting rows in the database,
-not by asking the model to behave.
+The control is structural, and it is this: **an imported card is never started by its import,
+or by an agent acting on its own.** `tasks::create_imported` lands the card in the backlog with no run, no
+enqueue and no agent, and has no parameter that could change that; it also defaults such cards
+to plan-first, so a person reads a plan before a file is touched. A manager pass cannot start
+one either — the MCP tool handler (`vet_manager_start` in
+`crates/eren-server/src/mcp/chat_tools.rs`) looks up the card's `source` and refuses, because an
+agent running on a timer at 3am is exactly what would remove the human that rule exists to place.
+(The chat assistant can start one when you ask it to in chat; that is you starting it.)
+
+What a person decides about such a card afterwards is theirs, and two of those decisions start
+it without a further click: assigning it to an agent that has a heartbeat, and ticking
+"start when unblocked". Both go through `start_card`, the Start button's own vetting, which
+checks budgets, agent limits and capabilities but not where the card came from. Read an
+imported card before you do either.
 
 If you connect your own MCP servers, whatever they return is untrusted content on the same
-footing as everything above.
+footing as everything above. So is a repository's own engine configuration: Gemini CLI runs
+with `--skip-trust` so a worktree it has never seen can run headless, which lets that
+repository's `.gemini/settings.json` apply — the same footing as the repository's code.
 
 ## Agents run with the permissions you give them
 
@@ -158,7 +295,7 @@ Three modes, per card:
   Deny resolves it. Timing out is reported as *unanswered*, never as a denial: an engine told a
   person refused it will work around the refusal, and spend real money doing so.
 - **Auto-edit** — file edits are auto-approved; Bash and other tools still prompt.
-- **Full-auto** — `--dangerously-skip-permissions`, nothing prompts.
+- **Full-auto** — `--dangerously-skip-permissions` or the engine's equivalent; nothing prompts.
 
 Two things about the tool lists, because getting them backwards is the classic mistake:
 
@@ -167,24 +304,78 @@ Two things about the tool lists, because getting them backwards is the classic m
 - **`denied_tools` is what binds.** Adapters apply it last, so it beats the allow-list and the
   permission mode. This is why chat runs — which execute in your *real* checkout, not a worktree
   — carry an explicit denial of `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and `Bash`, and why
-  plan-first passes deny the mutating tools too.
+  plan-first passes deny the mutating tools too. Each adapter translates a denial into its own
+  CLI's terms (a read-only sandbox, an excluded tool, Cursor's `ask` mode, the Gemini policy
+  above), and Amp, which has no read-only mode, refuses a pass that must not write rather than
+  run one with a shell it was told it did not have.
 
 Full-auto is refused where there is nothing to contain it. The gate is structural: the run's
 working directory must be a worktree Eren itself manages *and* the project must have opted in.
-Otherwise the mode is downgraded to Reviewed and the run continues. Downgrades only ever go one
-way — refusing full-auto is de-escalation. The opposite, quietly turning Reviewed into Auto-edit
-because an engine cannot pause and ask, would be a privilege escalation performed on your behalf,
-so it is an error instead: starting a Reviewed card on OpenCode is refused with a 409 at the
-click, because OpenCode has no interactive permissions and headless it silently rejects every
-prompt.
+Otherwise the card runs in the narrowest mode its engine has — Reviewed, or Auto-edit for an
+engine that cannot pause and ask — and an engine with neither (Cursor, Amp) is refused at the
+click. Downgrades only ever go one way — refusing full-auto is de-escalation. The opposite,
+quietly turning Reviewed into Auto-edit because an engine cannot pause and ask, would be a
+privilege escalation performed on your behalf, so it is an error instead: starting a Reviewed
+card on an engine without interactive permissions (every one but Claude Code) is refused with a
+409 at the click, because headless they silently reject every prompt. Cursor and Amp refuse
+Auto-edit the same way: neither can allow edits without allowing commands too.
 
 Board cards run in an isolated git worktree, which is what makes a run reviewable and undoable.
 A project that cannot have its own repository edits in place, and full-auto is refused there
-regardless of the project setting. Attachments are granted with `--add-dir` and deliberately
-never copied into a worktree, so an agent running `git add -A` cannot commit them.
+regardless of the project setting.
 
 None of this contains an agent that has been given Bash. Bash is Bash: it can reach the network,
 your other files, and anything your user account can do. Read the diff before you merge.
+
+## Work nobody clicked
+
+Several features start agents without a click at the moment they start: Full Auto runs, manager
+routines (on a schedule, or woken early by news), heartbeats that pull an agent's next card,
+cards set to start when unblocked, a review loop's fix runs, and the opt-in auto-resume of a
+stalled run. Each of these was a person's standing decision — a schedule, a heartbeat interval,
+a checkbox, a policy — and each is bounded:
+
+- **Caps.** A manager pass may start at most its configured number of cards (default 2, hard cap
+  10), counted from the rows it recorded, never from what the model says. Early wakes wait for an
+  idle thread, a cooldown and a daily cap. A heartbeat is one of four fixed intervals (5 min to
+  4 h), does at most one thing per beat, and an idle beat calls no model. Agents carry their own
+  `max_concurrent`, `max_daily_runs` and `cooldown_secs`. A stalled run is resumed at most twice
+  along a chain, and only if you turned that on.
+- **The same door as a click.** Heartbeats and start-when-unblocked go through `start_card`,
+  and auto-resume through the Resume button's own `resume_dead_run`, so every gate the button
+  meets — capabilities, the Full Auto opt-in, budgets, agent status and limits — applies.
+- **Budgets.** A spent budget refuses every door that starts work with a 409 naming the policy;
+  the queue holds a run whose scope is spent; a manager's start that *could* overrun one is left
+  in the backlog for a person. Dollars cannot stop a run midway — no engine prices a run until
+  it ends — so only token caps on a `stop` policy can interrupt one.
+- **Imported cards** are refused to a manager pass, as above.
+- **Merging is always a person's click.** The review policy (`crates/eren-core/src/review.rs`,
+  written only by `routes/reviews.rs`) decides what that click requires — an agent reviewer's
+  approval, passing checks, a green pull request, each of the latest work — and an unmet gate
+  answers `409`. Overriding it takes a note, which goes on the card and into the audit log. The
+  agent reviewer is read-only, never the card's own author, fails closed (no verdict counts as
+  changes requested), and the fix loop stops at `max_rounds`. Apps are the one exception: an
+  app's build lands without review, which is why only its newest build can be reverted, and a
+  destructive schema change still waits for a person.
+- **Checks start unasked only after a Full Auto run**, or where the project's review policy
+  sets `run_checks_after_every_run`. Checks execute code the agent may have edited, so otherwise
+  a person clicks "Run checks" — that click is the consent, and the policy switch is its
+  standing form. Check commands are written only by `routes/checks.rs`, behind the write header;
+  nothing an agent, an importer or an app build writes can carry one.
+
+### The run toolbox
+
+A card's run gets Eren's own MCP tools on `/mcp/run/{run_id}`
+(`crates/eren-server/src/mcp/run_tools.rs`): `comment`, `report_blocker`, `ask_person`,
+`propose_decision`, `submit_review`, `search_kb`, `read_article` and `recall`. **These pass the
+`approve` prompt without asking a person** — that is what makes them usable from a Reviewed run
+— so nothing added there may merge, start a run, or write settings or check commands. A test
+fails on any tool name containing `merge`, `start`, `setting`, `check`, `run`, `resolve`,
+`approve` or `decide`: an agent proposes, a person decides, and `propose_decision` only puts an
+item in the inbox. What a run is offered is read from its row, never from the model — a
+planning or summary pass only reads, a review pass may also give its verdict — and every MCP
+endpoint refuses calls once its run has ended. Qwen Code marks Eren's server as trusted for the
+same reason; a server you added keeps Qwen's default.
 
 ## Third-party skills
 
@@ -203,15 +394,50 @@ Skills installed from a registry are re-derived from disk on every install and s
 folder is the copy that wins; editing the mirrored row in Eren does not change what an agent
 actually reads.
 
+## Upgrading from aichip, Eren's old name
+
+Eren was called aichip, and that name is written into state that already exists. Every old
+spelling lives in `crates/eren-shared/src/brand.rs`, and the rule for each is the same: write
+the new name, read both, prefer the new. What that means for security:
+
+- **The home folder moves once.** The first `eren serve` moves `~/.aichip` to `~/.eren` and
+  leaves a symlink at the old path, so absolute paths stored in the database and in git's
+  worktree links keep resolving. If the link cannot be made the move is undone and Eren refuses
+  to start. If both folders already exist, Eren uses `~/.eren` and leaves the old one alone —
+  anything secret in it (the old `pg_password`, MCP configs) stays there until you delete it.
+- **Settings are read as `EREN_*` first, `AICHIP_*` second**, and each old name still set is
+  logged by name (never value) at boot. Both spellings of Eren's own secrets are stripped from
+  children, as above.
+- **Child processes get `AICHIP_*` copies of the `EREN_*` variables Eren sets for them**, for
+  one release, so scripts that read the old names keep working (`brand::with_legacy_env`, and the
+  attention hook in `crates/eren-core/src/attention.rs`). Those are non-secret values only — run
+  and chat ids, the step, and the hook's event, title, body, project, card, tool and URL — and the
+  hook still never receives a tool's input.
+- **The write header, the app bridge header and the bridge prefix** are accepted under both
+  names (Eren's `X-Eren-*` and `/__eren`, and the old ones), behind the same gates.
+- **The compose Postgres role, database and volume keep their old names**, because they name
+  data that already exists; see the top of `docker-compose.yml`.
+
 ## Reviewing changes to this codebase
 
 If you are contributing, the places where a mistake becomes a security bug are:
 
-- `crates/eren-shared/src/env_guard.rs` — never bypass it, never re-implement it.
+- `crates/eren-shared/src/env_guard.rs` — never bypass it, never re-implement it, and spawn
+  only through `env_guard::command`.
+- `crates/eren-shared/src/brand.rs` — every old name is accepted here; a new one widens what
+  the server answers to.
 - `crates/eren-core/src/fence.rs` — a new feature that quotes outside text registers its marker
   pair here.
 - `crates/eren-server/src/routes/files.rs` — the four write gates.
 - `crates/eren-server/src/lib.rs` — the `Host`/`Origin` guard and the bind-exposure check.
+- `crates/eren-server/src/routes/mod.rs` — `require_write`, for any new endpoint that stores
+  or runs a command.
+- `crates/eren-server/src/mcp/` — every agent-facing toolbox: nothing there may merge, start a
+  run, resolve an inbox item, or write settings or check commands; and a manager's starts stay
+  behind `vet_manager_start`.
+- `crates/eren-engines/src/claude/mcp.rs` — generated MCP configs are written owner-only.
+- `crates/eren-core/src/audit.rs` and `crates/eren-server/src/audit_layer.rs` — the ledger
+  records routes and tool names, never bodies or tool input.
 - `crates/eren-core/src/apps/` — nothing an app sends is ever an identifier; field names are
   looked up among the declared fields and the manifest's copy is emitted, operators come from an
   enum, values are always bound.
