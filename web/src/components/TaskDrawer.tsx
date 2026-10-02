@@ -1523,7 +1523,7 @@ function Blockers({
     }
   };
 
-  if (blockers.length === 0 && candidates.length === 0) return null;
+  if (blockers.length === 0 && candidates.length === 0 && !task.blockedNote) return null;
 
   return (
     <div className="border-b border-line px-5 py-3">
@@ -1541,7 +1541,13 @@ function Blockers({
         )}
       </div>
 
-      {blockers.length === 0 && !adding && (
+      {task.blockedNote && (
+        <div className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+          <span className="font-medium">The agent reported it is stuck:</span> {task.blockedNote}
+        </div>
+      )}
+
+      {blockers.length === 0 && !adding && !task.blockedNote && (
         <div className="text-[11px] text-ink-dim/70">
           Nothing — this card can start any time.
         </div>

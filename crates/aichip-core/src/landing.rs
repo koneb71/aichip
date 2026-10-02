@@ -100,6 +100,66 @@ pub fn note(landed: &str, outcome: Result<(), &str>, asked_to_start: bool) -> St
     }
 }
 
+/// Why a dependency was not recorded.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum BlockerRefusal {
+    #[error("a card can't block itself")]
+    ItsOwnBlocker,
+    #[error("both cards must be on the same board")]
+    OtherBoard,
+    #[error("that would make these cards wait for each other — neither could ever start")]
+    Cycle,
+}
+
+/// Record that `task_id` cannot start until `blocked_by` lands.
+///
+/// Everything that can be wrong is refused now, not at start time: the two
+/// cards must share a board, a card cannot block itself, and the edge must
+/// not close a cycle — two cards each waiting for the other would simply
+/// never run, with nothing anywhere saying why. One place, because a person
+/// and an agent (`report_blocker`) both declare dependencies.
+pub async fn add_blocker(db: &Db, task_id: Uuid, blocked_by: Uuid) -> anyhow::Result<()> {
+    if task_id == blocked_by {
+        return Err(BlockerRefusal::ItsOwnBlocker.into());
+    }
+    let same_project: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM tasks a JOIN tasks b ON a.project_id = b.project_id
+          WHERE a.id = $1 AND b.id = $2)",
+    )
+    .bind(task_id)
+    .bind(blocked_by)
+    .fetch_one(&db.pool)
+    .await?;
+    if !same_project {
+        return Err(BlockerRefusal::OtherBoard.into());
+    }
+    // Would this edge close a loop? Walk the new blocker's own blockers all
+    // the way up; finding this card there means A→B→…→A.
+    let cycles: bool = sqlx::query_scalar(
+        "WITH RECURSIVE up AS (
+             SELECT blocked_by FROM task_deps WHERE task_id = $2
+             UNION
+             SELECT d.blocked_by FROM task_deps d JOIN up ON d.task_id = up.blocked_by
+         )
+         SELECT EXISTS (SELECT 1 FROM up WHERE blocked_by = $1)",
+    )
+    .bind(task_id)
+    .bind(blocked_by)
+    .fetch_one(&db.pool)
+    .await?;
+    if cycles {
+        return Err(BlockerRefusal::Cycle.into());
+    }
+    sqlx::query(
+        "INSERT INTO task_deps (task_id, blocked_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(task_id)
+    .bind(blocked_by)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
 impl Orchestrator {
     /// A card reached done: mark it landed and wake what it was blocking.
     ///

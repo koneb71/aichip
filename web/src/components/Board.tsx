@@ -245,6 +245,13 @@ function TaskCard({
         <StepOutcome status={task.stepStatus} />
         {(() => {
           const waiting = unresolvedBlockers(task);
+          if (task.blockedNote && waiting.length === 0) {
+            return (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700" title={task.blockedNote}>
+                ⚠ agent is stuck
+              </span>
+            );
+          }
           if (waiting.length > 0) {
             return (
               <span

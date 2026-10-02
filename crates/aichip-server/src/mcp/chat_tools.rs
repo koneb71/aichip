@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 pub async fn rpc(
     State(state): State<AppState>,
-    Path(chat_id): Path<Uuid>,
+    Path((chat_id, run_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
     let Some(id) = req.get("id").cloned() else {
@@ -52,7 +52,11 @@ pub async fn rpc(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
-            match call_tool(&state, chat_id, name, args).await {
+            let outcome = match super::still_running(&state, run_id, "chat_id", chat_id).await {
+                Ok(()) => call_tool(&state, chat_id, name, args).await,
+                Err(e) => Err(e),
+            };
+            match outcome {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]
                 }),
@@ -172,6 +176,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
                     "title": { "type": "string" },
                     "prompt": { "type": "string", "description": "full instructions for the coding agent" },
                     "agent_name": { "type": "string", "description": "optional: bind a named agent from the library, spelled exactly as list_agents reports it. An unknown name is rejected. Omit it and a single agent the user @mentioned in their message is used instead." },
+                    "skill_name": { "type": "string", "description": "optional: how this card's work should be done — a skill name exactly as list_skills reports it. A card takes one skill. Omit it and a single skill the user @mentioned is used; if they named several, say which one each card uses." },
                     "model_tier": { "type": "string", "enum": ["easy", "medium", "complex"] },
                     "start": { "type": "boolean" }
                 }), vec!["title", "prompt"])
@@ -383,10 +388,12 @@ async fn call_tool(
             // agent: they asked for the work to be done a particular way, and
             // whether that survives should not depend on the assistant
             // remembering to say so.
-            let skill = aichip_core::runs::mentions::latest_skills_for_chat(&state.db, chat_id)
+            let mentioned = aichip_core::runs::mentions::latest_skills_for_chat(&state.db, chat_id)
                 .await
                 .map_err(|e| e.to_string())?;
-            let skill_id = (skill.len() == 1).then(|| skill[0].0);
+            let skill =
+                resolve_skill(state, workspace_id, args.get("skill_name"), &mentioned).await?;
+            let skill_id = skill.as_ref().map(|(id, _)| *id);
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
             let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
             // Checked before the card exists, so a refusal does not leave a
@@ -483,7 +490,7 @@ async fn call_tool(
                 "run_id": run_id,
                 "started": start,
                 "agent": agent_name,
-                "skill": skill_id.and_then(|_| skill.first().map(|(_, n)| n.clone())),
+                "skill": skill.map(|(_, name)| name),
             }))
         }
         "start_task" => {
@@ -843,6 +850,47 @@ async fn call_tool(
             }))
         }
         other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+/// Which skill a new card uses: the one named, else the one the user
+/// @mentioned. Several mentioned and none named is a question for the
+/// assistant, not a guess — a card takes one skill, and picking the first
+/// would quietly drop the others the person asked for.
+async fn resolve_skill(
+    state: &AppState,
+    workspace_id: Uuid,
+    named: Option<&Value>,
+    mentioned: &[(Uuid, String)],
+) -> Result<Option<(Uuid, String)>, String> {
+    if let Some(name) = named
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        // Matched without regard to case, like agents; a disabled skill is
+        // as good as absent.
+        let found: Option<(Uuid, String)> = sqlx::query_as(
+            "SELECT id, name FROM skills WHERE workspace_id=$1 AND lower(name)=lower($2) AND enabled",
+        )
+        .bind(workspace_id)
+        .bind(name)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        return found.map(Some).ok_or_else(|| {
+            format!(
+                "there is no skill called \"{name}\" here — list_skills shows the ones there are"
+            )
+        });
+    }
+    match mentioned {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        several => Err(format!(
+            "the user named several skills ({}) and a card takes one — pass skill_name to say which this card uses",
+            several.iter().map(|(_, n)| format!("\"{n}\"")).collect::<Vec<_>>().join(", ")
+        )),
     }
 }
 

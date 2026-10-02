@@ -604,6 +604,13 @@ impl Orchestrator {
         // one has been deliberately configured for it, while a card's is the
         // machine default nobody chose.
         //
+        // A new attempt is a new answer to whatever stopped the last one.
+        sqlx::query(
+            "UPDATE tasks SET blocked_note = NULL WHERE id = $1 AND blocked_note IS NOT NULL",
+        )
+        .bind(task_id)
+        .execute(&mut *guard)
+        .await?;
         // The run and its queue row commit together. Apart, a crash between
         // them left a run reading `queued` that nothing would ever dispatch.
         let row = sqlx::query(
@@ -1861,6 +1868,8 @@ impl Orchestrator {
         let mut allowed_tools = agent_tools.unwrap_or_default();
         if !allowed_tools.is_empty() {
             allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+            // aichip's own run toolbox — comment, report_blocker, look-ups.
+            allowed_tools.push("mcp__aichip".to_string());
         }
 
         let model_id = self.model_for(&engine_id, tier);
@@ -2943,7 +2952,9 @@ impl Orchestrator {
                 aichip_url: self
                     .mcp_base_url
                     .as_ref()
-                    .map(|b| format!("{b}/mcp/chat/{chat_id}")),
+                    // The run in the URL, so a CLI that outlives its turn
+                    // cannot keep calling the board tools on the chat's behalf.
+                    .map(|b| format!("{b}/mcp/chat/{chat_id}/{run_id}")),
                 servers: vec![],
             },
             None => McpWiring::default(),
@@ -3593,6 +3604,7 @@ this workflow manually."
                     .unwrap_or_default();
                 if !step_tools.is_empty() {
                     step_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+                    step_tools.push("mcp__aichip".to_string());
                 }
 
                 let attempts = step.parallelism();

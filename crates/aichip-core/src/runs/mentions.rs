@@ -240,20 +240,23 @@ pub fn augment_skills_prompt(prompt: &str, names: &[String]) -> String {
         listed.push(quoted);
     }
 
-    let (subject, verb) = if listed.len() == 1 {
-        ("skill", "is")
+    let subject = if listed.len() == 1 { "skill" } else { "skills" };
+    // One skill attaches by itself; several cannot, because a card takes one.
+    // Promising otherwise is how cards came out with none of them.
+    let attach = if listed.len() == 1 {
+        "Any task you create in this turn is attached to it automatically".to_string()
     } else {
-        ("skills", "are")
+        "A task takes one skill, so pass skill_name to create_task to say which \
+         one each task you create uses"
+            .to_string()
     };
     let block = format!(
         "\n\n---\nThe user also named the {subject} {} in this message. Those are \
          *skills*, not agents — saved instructions for how they want a kind of job \
-         done. Any task you create in this turn {verb} attached to {} automatically, \
-         and whoever runs it will be given the instructions then. There is nothing \
-         to look up and nothing to ask about: do not go looking for an agent by \
-         that name, and do not repeat the instructions into the task's prompt.",
+         done. {attach}, and whoever runs it will be given the instructions then. Do \
+         not go looking for an agent by that name, and do not repeat the \
+         instructions into the task's prompt.",
         listed.join(", "),
-        if listed.len() == 1 { "it" } else { "them" },
     );
     format!("{prompt}{block}")
 }
@@ -542,7 +545,11 @@ mod tests {
             ],
         );
         assert!(block.contains("skills \"release-checklist\", \"how-we-migrate\""));
-        assert!(block.contains("are attached to them"));
+        // A card takes one skill, so several cannot all attach by themselves —
+        // the block must ask for skill_name rather than promise what
+        // create_task will not do.
+        assert!(!block.contains("automatically"));
+        assert!(block.contains("pass skill_name"));
     }
 
     #[test]

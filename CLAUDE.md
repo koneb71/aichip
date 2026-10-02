@@ -78,6 +78,8 @@ An agent is `active`, `paused`, `retired` or `pending_approval` (`aichip_core::a
 
 Mid-run permission prompts flow: engine → `--permission-prompt-tool mcp__aichip__approve` → `crates/aichip-server/src/mcp/` → `PermissionBroker` parks the call and emits an event → dashboard Allow/Deny resolves the oneshot (15 min timeout → deny).
 
+A card's run also gets aichip's own toolbox on `/mcp/run/{run_id}` ([crates/aichip-server/src/mcp/run_tools.rs](crates/aichip-server/src/mcp/run_tools.rs)): `comment`, `report_blocker`, `search_kb`, `read_article`, `recall`. What a run is offered is read from its row (a planning or summary pass only reads), and every MCP endpoint refuses calls once its run has ended. These tools pass `approve` without asking a person, so **nothing added there may merge, start a run, or write settings or check commands**.
+
 ### Apps
 
 An app is a **project** under `~/.aichip/apps/<slug>` (`projects.kind='app'`),

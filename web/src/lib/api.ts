@@ -213,6 +213,8 @@ export interface Task {
   startWhenUnblocked: boolean;
   /** The assignee's status: a paused one keeps the card but starts nothing. */
   agentStatus: Agent["status"] | null;
+  /** What the agent reported stopped it, until the card next starts. */
+  blockedNote: string | null;
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */

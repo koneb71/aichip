@@ -87,7 +87,7 @@ async fn list(
                   WHERE d.task_id = t.id) AS blocked_by,
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
-                t.start_when_unblocked,
+                t.start_when_unblocked, t.blocked_note,
                 a.name AS agent_name, a.color AS agent_color, a.status AS agent_status,
                 t.skill_id, sk.name AS skill_name,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
@@ -288,6 +288,8 @@ async fn list(
                 "planFirst": r.get::<bool, _>("plan_first"),
                 "startWhenUnblocked": r.get::<bool, _>("start_when_unblocked"),
                 "agentStatus": r.get::<Option<String>, _>("agent_status"),
+                // What the agent said stopped it, until the card next starts.
+                "blockedNote": r.get::<Option<String>, _>("blocked_note"),
             })
         })
         .collect();
@@ -1546,65 +1548,22 @@ struct AddBlocker {
     blocked_by: Uuid,
 }
 
-/// Declare that this card cannot start until another card lands.
-///
-/// Everything that can be wrong is wrong now, not at start time: the two
-/// cards must share a board, a card cannot block itself, and the edge must
-/// not close a cycle — two cards each waiting for the other would simply
-/// never run, with nothing anywhere saying why.
+/// Declare that this card cannot start until another card lands. The rules
+/// are `landing::add_blocker`'s, shared with an agent's `report_blocker`.
 async fn add_blocker(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<AddBlocker>,
 ) -> Result<Json<Value>, ApiError> {
-    if body.blocked_by == id {
-        return Err((StatusCode::BAD_REQUEST, "a card can't block itself".into()));
+    use aichip_core::landing::{add_blocker, BlockerRefusal};
+    match add_blocker(&state.db, id, body.blocked_by).await {
+        Ok(()) => Ok(Json(json!({ "ok": true }))),
+        Err(e) => match e.downcast_ref::<BlockerRefusal>() {
+            Some(BlockerRefusal::Cycle) => Err((StatusCode::CONFLICT, e.to_string())),
+            Some(_) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+            None => Err(internal(e)),
+        },
     }
-    let same_project: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM tasks a JOIN tasks b ON a.project_id = b.project_id
-          WHERE a.id = $1 AND b.id = $2)",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if !same_project {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "both cards must be on the same board".into(),
-        ));
-    }
-    // Would this edge close a loop? Walk the new blocker's own blockers all
-    // the way up; finding this card there means A→B→…→A.
-    let cycles: bool = sqlx::query_scalar(
-        "WITH RECURSIVE up AS (
-             SELECT blocked_by FROM task_deps WHERE task_id = $2
-             UNION
-             SELECT d.blocked_by FROM task_deps d JOIN up ON d.task_id = up.blocked_by
-         )
-         SELECT EXISTS (SELECT 1 FROM up WHERE blocked_by = $1)",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if cycles {
-        return Err((
-            StatusCode::CONFLICT,
-            "that would make these cards wait for each other — neither could ever start".into(),
-        ));
-    }
-    sqlx::query(
-        "INSERT INTO task_deps (task_id, blocked_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    Ok(Json(json!({ "ok": true })))
 }
 
 async fn remove_blocker(
