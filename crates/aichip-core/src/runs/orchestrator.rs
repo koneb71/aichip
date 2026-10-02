@@ -481,6 +481,14 @@ impl Orchestrator {
             .map(|l| l.seen.elapsed())
     }
 
+    /// A sign of life that is not an event — a parked run allowed to go on.
+    /// Memory only.
+    pub fn mark_seen(&self, run_id: Uuid) {
+        if let Some(l) = self.liveness.lock().unwrap().get_mut(&run_id) {
+            l.seen = std::time::Instant::now();
+        }
+    }
+
     /// Pretend an executing run last spoke `ago` ago. For the reaper's tests.
     #[cfg(test)]
     pub(crate) fn backdate(&self, run_id: Uuid, ago: std::time::Duration) {
@@ -4795,6 +4803,30 @@ this workflow manually."
         // leaves through, and a routine's whole point is running while nobody
         // watches. A no-op unless the run was a routine firing.
         crate::routines::announce_finished(&self.db, run_id, status).await;
+        // A review pass that did not complete is still a review that ended:
+        // a verdict it gave before dying is acted on, and one that gave none
+        // is recorded fail-closed and put to a person. A person's own cancel
+        // with no verdict is left alone — they stopped it on purpose.
+        if matches!(status, RunStatus::Failed | RunStatus::Canceled) {
+            if let Ok(Some((task_id, decided, reaped))) = sqlx::query_as::<_, (Uuid, bool, bool)>(
+                "SELECT r.task_id,
+                            EXISTS (SELECT 1 FROM review_decisions d WHERE d.run_id = r.id),
+                            r.reaped IS NOT NULL
+                       FROM runs r WHERE r.id = $1 AND r.task_id IS NOT NULL AND r.trigger = $2",
+            )
+            .bind(run_id)
+            .bind(crate::review::PEER_REVIEW)
+            .fetch_optional(&self.db.pool)
+            .await
+            {
+                if status == RunStatus::Failed || decided || reaped {
+                    // Boxed: settling can start a fix through the follow-up
+                    // door, which can end a summary through `finish` — a
+                    // cycle an async fn cannot size without the indirection.
+                    Box::pin(self.settle_review(task_id, run_id, crate::review::PEER_REVIEW)).await;
+                }
+            }
+        }
         // A card's work that failed is news to its project's manager. Not a
         // cancel (a person did that), and not aichip's own passes.
         if status == RunStatus::Failed {

@@ -64,6 +64,10 @@ pub struct Prior<'a> {
     /// A plain card run. False for chat, workflow, org, comment-reply and KB
     /// runs, which each end somewhere this cannot put them back.
     pub is_task_run: bool,
+    /// A review or summary pass: read-only by its trigger, which a resume
+    /// does not carry — resumed, it would come back as a writable work run
+    /// in the card's worktree. Such a pass is started again, never resumed.
+    pub read_only_pass: bool,
 }
 
 /// Why this run cannot be picked up.
@@ -95,6 +99,8 @@ pub enum Refusal {
     /// and their own side effects; a generic resume would post a second reply
     /// or re-run a paid pipeline.
     NotATaskRun,
+    /// A review or summary pass. See `Prior::read_only_pass`.
+    ReadOnlyPass,
 }
 
 impl Refusal {
@@ -120,6 +126,9 @@ impl Refusal {
                 "the worktree this session was working in has been reclaimed".into()
             }
             Self::NotATaskRun => "only a card's own run can be resumed".into(),
+            Self::ReadOnlyPass => {
+                "a review or summary pass is started again, not resumed — use Review again".into()
+            }
         }
     }
 }
@@ -131,6 +140,9 @@ impl Refusal {
 pub fn decide(p: &Prior<'_>) -> Result<String, Refusal> {
     if !p.is_task_run {
         return Err(Refusal::NotATaskRun);
+    }
+    if p.read_only_pass {
+        return Err(Refusal::ReadOnlyPass);
     }
     if !p.status.is_terminal() {
         return Err(Refusal::StillOwesAnOutcome(p.status));
@@ -213,7 +225,7 @@ pub async fn resume_dead_run(
         // `COALESCE(r.worktree_path, t.worktree_path)` mirrors what
         // `execute_task_run` picks: a bake-off variant has its own checkout,
         // everything else works in the card's.
-        "SELECT r.status, r.session_id, r.session_engine, r.engine, r.task_id,
+        "SELECT r.status, r.session_id, r.session_engine, r.engine, r.task_id, r.trigger,
                 r.chat_id, r.workflow_id, r.team_id, r.comment_id, r.kb_brief,
                 COALESCE(r.worktree_path, t.worktree_path) AS worktree_path,
                 p.vcs
@@ -260,6 +272,10 @@ pub async fn resume_dead_run(
             && row.get::<Option<uuid::Uuid>, _>("team_id").is_none()
             && row.get::<Option<uuid::Uuid>, _>("comment_id").is_none()
             && row.get::<Option<String>, _>("kb_brief").is_none(),
+        read_only_pass: matches!(
+            row.get::<String, _>("trigger").as_str(),
+            "summary" | crate::review::PEER_REVIEW
+        ),
     };
     let session = decide(&prior).map_err(|r| Refusal::Conflict(r.message()))?;
     let task_id: uuid::Uuid = row
@@ -310,7 +326,18 @@ mod tests {
             engine_can_resume: true,
             cwd: Cwd::Worktree("/tmp/wt"),
             is_task_run: true,
+            read_only_pass: false,
         }
+    }
+
+    /// A review or summary pass resumed would come back writable.
+    #[test]
+    fn a_read_only_pass_is_never_resumed() {
+        let p = Prior {
+            read_only_pass: true,
+            ..ok()
+        };
+        assert_eq!(decide(&p), Err(Refusal::ReadOnlyPass));
     }
 
     #[test]
@@ -447,6 +474,7 @@ mod tests {
             Refusal::EngineCannotResume { engine: "b".into() },
             Refusal::WorktreeGone,
             Refusal::NotATaskRun,
+            Refusal::ReadOnlyPass,
         ] {
             let m = r.message();
             assert!(!m.is_empty(), "{r:?}");

@@ -206,6 +206,34 @@ async fn start(
 
 #[cfg(test)]
 mod tests {
+    /// Everything before the file's test module. Cut at a `#[cfg(test)]`
+    /// that opens a `mod`, not at the first one: the attribute covers only
+    /// the next item, and a test-only helper halfway down a file must not
+    /// hide the shipped code after it from the scan.
+    fn shipped(source: &str) -> &str {
+        let mut at = 0;
+        while let Some(i) = source[at..].find("#[cfg(test)]") {
+            let start = at + i;
+            let rest = source[start + "#[cfg(test)]".len()..].trim_start();
+            if rest.starts_with("mod ")
+                || rest.starts_with("pub(crate) mod ")
+                || rest.starts_with("pub mod ")
+            {
+                return &source[..start];
+            }
+            at = start + 1;
+        }
+        source
+    }
+
+    #[test]
+    fn a_test_only_helper_does_not_hide_the_code_after_it() {
+        let src = "#[cfg(test)]\nfn helper() {}\nfn shipped() { \"UPDATE x\" }\n#[cfg(test)]\nmod tests { \"INSERT y\" }";
+        let kept = shipped(src);
+        assert!(kept.contains("UPDATE x"));
+        assert!(!kept.contains("INSERT y"));
+    }
+
     /// The policy decides what Merge requires; a second writer would be a
     /// way around that. Same rule, same scan, as `project_checks`.
     #[test]
@@ -234,8 +262,10 @@ mod tests {
                 let source = std::fs::read_to_string(&path).unwrap();
                 // Shipped code only: a database test sets up the policy it
                 // tests directly.
-                let shipped = source.split("#[cfg(test)]").next().unwrap_or("");
-                let flat = shipped.split_whitespace().collect::<Vec<_>>().join(" ");
+                let flat = shipped(&source)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 if writes.iter().any(|w| flat.contains(w)) {
                     offenders.push(path.display().to_string());
                 }

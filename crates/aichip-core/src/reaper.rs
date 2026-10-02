@@ -201,6 +201,8 @@ impl Orchestrator {
             "SELECT r.id FROM runs r
               WHERE r.reaped IS NOT NULL AND r.auto_resumed_at IS NULL
                 AND r.status IN ('failed', 'canceled')
+                -- A review or summary pass is started again, never resumed.
+                AND r.trigger NOT IN ('summary', 'peer_review')
                 AND r.finished_at > now() - interval '1 hour'
                 AND NOT EXISTS (SELECT 1 FROM runs n WHERE n.resumed_from = r.id)",
         )
@@ -441,12 +443,24 @@ mod db_tests {
         assert_eq!(reaped.as_deref(), Some("silent"));
         assert_eq!(reason.as_deref(), Some("no output for 15 minutes"));
 
-        // Waiting on a person is not silence.
+        // Waiting on a person is not silence — not while parked, and not
+        // the moment they click Allow either.
         let waiting = f.run("waiting_permission", 30).await;
         let _w = f.orch.alive(waiting);
         f.orch.backdate(waiting, Duration::from_secs(60 * 60));
         f.orch.reap().await;
         assert_eq!(f.state(waiting).await.1, None);
+        let orch = f.orch.clone();
+        let gate = crate::runs::gate::DbGate::new(f.t.db.clone(), |_| {})
+            .on_unpark(move |run| orch.mark_seen(run));
+        crate::runs::gate::RunGate::unpark(&gate, waiting).await;
+        assert_eq!(f.state(waiting).await.0, "running");
+        f.orch.reap().await;
+        assert_eq!(
+            f.state(waiting).await.1,
+            None,
+            "allowed just now — not silent"
+        );
         f.t.finish().await;
     }
 

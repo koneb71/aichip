@@ -117,6 +117,10 @@ impl Window for FixedWindow {
 pub struct DbGate {
     db: Db,
     cancel: Box<dyn Fn(Uuid) + Send + Sync>,
+    /// Told when a parked run is allowed to go on. The reaper measures
+    /// silence from a run's last sign of life, and the time a person took to
+    /// answer is not the run's silence.
+    on_unpark: Option<Box<dyn Fn(Uuid) + Send + Sync>>,
 }
 
 impl DbGate {
@@ -128,7 +132,13 @@ impl DbGate {
         Self {
             db,
             cancel: Box::new(cancel),
+            on_unpark: None,
         }
+    }
+
+    pub fn on_unpark(mut self, f: impl Fn(Uuid) + Send + Sync + 'static) -> Self {
+        self.on_unpark = Some(Box::new(f));
+        self
     }
 }
 
@@ -172,6 +182,9 @@ impl RunGate for DbGate {
         .bind(run_id)
         .execute(&self.db.pool)
         .await;
+        if let Some(f) = &self.on_unpark {
+            f(run_id);
+        }
     }
 
     async fn abandon(&self, run_id: Uuid, reason: String) {

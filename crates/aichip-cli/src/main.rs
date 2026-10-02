@@ -320,11 +320,15 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // orchestrator's slots so a run waiting on a person stops occupying one.
     let permissions = {
         let cancel_orchestrator = orchestrator.clone();
+        let seen_orchestrator = orchestrator.clone();
         PermissionBroker::new(
             bus.clone(),
-            Arc::new(DbGate::new(db.clone(), move |run_id| {
-                cancel_orchestrator.cancel(run_id);
-            })),
+            Arc::new(
+                DbGate::new(db.clone(), move |run_id| {
+                    cancel_orchestrator.cancel(run_id);
+                })
+                .on_unpark(move |run_id| seen_orchestrator.mark_seen(run_id)),
+            ),
             orchestrator.slots(),
             // Asked per prompt, so it can never disagree with the engine
             // timeout the orchestrator derives from the same setting.

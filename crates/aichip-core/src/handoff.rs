@@ -154,9 +154,10 @@ pub async fn settle(orch: &Orchestrator, task_id: Uuid) -> anyhow::Result<Option
         orch.enqueue_follow_up(task_id, FollowUp::Handoff { note: note.clone() })
             .await
     } else {
-        // Nothing was done yet, so this is the card's own start — with the
-        // note beside the brief, since it is still the reason for the change.
-        match orch.enqueue_task(task_id).await {
+        // Nothing was done yet, so this is the card's own start — through the
+        // Start button's door, which vets the new agent's engine and mode and
+        // moves the card — with the note beside the brief.
+        match orch.start_card(task_id).await {
             Ok(run_id) => {
                 sqlx::query(
                     "UPDATE runs r SET prompt_override = t.prompt || $2
@@ -175,6 +176,12 @@ pub async fn settle(orch: &Orchestrator, task_id: Uuid) -> anyhow::Result<Option
     };
     match started {
         Ok(run_id) => {
+            // Stopping the old run sent the card to Review; it is being
+            // worked on again.
+            sqlx::query("UPDATE tasks SET board_column = 'running' WHERE id = $1 AND board_column <> 'done'")
+                .bind(task_id)
+                .execute(&orch.db.pool)
+                .await?;
             if let Some(from) = from {
                 sqlx::query("UPDATE runs SET handed_to_run_id = $2 WHERE id = $1")
                     .bind(from)
@@ -417,6 +424,15 @@ mod db_tests {
                 .unwrap();
         assert_eq!(trigger, "handoff");
         assert!(prompt.contains("tests are missing; add them"));
+        let column: String = sqlx::query_scalar("SELECT board_column FROM tasks WHERE id = $1")
+            .bind(f.card)
+            .fetch_one(&f.t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            column, "running",
+            "being worked on again, not left in Review"
+        );
         let handed: Option<Uuid> =
             sqlx::query_scalar("SELECT handed_to_run_id FROM runs WHERE id = $1")
                 .bind(f.run)

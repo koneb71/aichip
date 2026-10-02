@@ -79,6 +79,17 @@ export function TaskDrawer({
   // permission prompts, the plan panel — stays bound to regardless.
   const [viewing, setViewing] = useState<string | null>(null);
   useEffect(() => setViewing(null), [task.id, task.runId]);
+  // The drawer is reused when another card is picked. Anything pinned about
+  // the last card — a refused merge, the gate it hit, a half-written note to
+  // merge anyway — must not carry over, or its buttons act on the new card.
+  useEffect(() => {
+    setGate(null);
+    setOverride("");
+    setConfirm(null);
+    setBlocked(null);
+    setConflicted(false);
+    setError(null);
+  }, [task.id]);
   const events = useRunStream(viewing ?? task.runId);
   const [diff, setDiff] = useState<string | null>(null);
   // Whether the Diff tab is chosen — separate from whether the diff has

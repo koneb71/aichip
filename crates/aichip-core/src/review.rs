@@ -974,4 +974,73 @@ mod db_tests {
         assert!(gate(&f.t.db, f.card).await.unwrap().is_empty());
         f.t.finish().await;
     }
+
+    #[tokio::test]
+    async fn a_review_that_dies_still_ends_as_a_review() {
+        let Some(f) = fixture(3).await else { return };
+        let work = f.work("manual").await;
+        f.orch.settle_review(f.card, work, "manual").await;
+        // Round 1 fails before giving a verdict: recorded fail-closed.
+        let (r1, _) = f.finish_queued().await;
+        sqlx::query("UPDATE runs SET status = 'running', finished_at = NULL WHERE id = $1")
+            .bind(r1)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        f.orch
+            .finish(r1, aichip_shared::RunStatus::Failed, Some("exit 1".into()))
+            .await
+            .unwrap();
+        let submitted: bool =
+            sqlx::query_scalar("SELECT submitted FROM review_decisions WHERE run_id = $1")
+                .bind(r1)
+                .fetch_one(&f.t.db.pool)
+                .await
+                .unwrap();
+        assert!(!submitted);
+        assert_eq!(f.inbox_reviews().await, 1);
+
+        // A person asks again; this one gives its verdict, then dies.
+        start(&f.orch, f.card, Start::Person)
+            .await
+            .unwrap()
+            .unwrap();
+        let (r2, _) = f.finish_queued().await;
+        sqlx::query("UPDATE runs SET status = 'running', finished_at = NULL WHERE id = $1")
+            .bind(r2)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        submit(&f.t.db, r2, "request_changes", "rename it", &[])
+            .await
+            .unwrap();
+        f.orch
+            .finish(r2, aichip_shared::RunStatus::Failed, Some("exit 1".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            f.queued().await.first().map(|q| q.0.clone()),
+            Some("review".to_string()),
+            "its verdict is acted on: one fix run"
+        );
+        f.t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_dead_review_is_not_resumed_as_work() {
+        let Some(f) = fixture(2).await else { return };
+        let work = f.work("manual").await;
+        f.orch.settle_review(f.card, work, "manual").await;
+        let (review, _) = f.finish_queued().await;
+        sqlx::query("UPDATE runs SET status = 'failed', session_id = 's', session_engine = 'mock' WHERE id = $1")
+            .bind(review)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        let refused = crate::runs::resume::resume_dead_run(&f.orch, review)
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("not resumed"), "{refused}");
+        f.t.finish().await;
+    }
 }
