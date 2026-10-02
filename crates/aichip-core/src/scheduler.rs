@@ -132,6 +132,7 @@ impl Scheduler {
             tracing::warn!(error = %e, "could not settle card landings");
         }
         self.orchestrator.settle_handoffs().await;
+        self.orchestrator.drain_wakeups().await;
         self.prune_ledger().await;
         self.tick_workflows().await?;
         self.tick_routines().await

@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Agent, Manager, ManagerPass, api } from "../lib/api";
+import { Agent, Manager, ManagerPass, WakeKind, api } from "../lib/api";
+import { Checkbox, Select } from "./ui/Field";
 import { Preset, WEEKDAYS, compile, describeCron, recognize, relative } from "../lib/cron";
 import { Icon } from "./ui/Icon";
+
+/** What can wake the manager before its schedule, as the editor says it. */
+const WAKES: { kind: WakeKind; label: string }[] = [
+  { kind: "failed", label: "a card's run fails" },
+  { kind: "landed", label: "a card lands" },
+  { kind: "unblocked", label: "a blocked card can start" },
+  { kind: "question", label: "an agent asks a question" },
+  { kind: "review_exhausted", label: "a review runs out of rounds" },
+  { kind: "checks_exhausted", label: "checks still fail after fixes" },
+  { kind: "stalled", label: "a run stalls" },
+];
 
 /**
  * Assign someone to run this board while you are not looking.
@@ -41,6 +53,9 @@ export function ManagerPanel({
   const [monthday, setMonthday] = useState(1);
   const [custom, setCustom] = useState("0 9 * * *");
   const [maxStarts, setMaxStarts] = useState(2);
+  const [onEvents, setOnEvents] = useState<WakeKind[]>([]);
+  const [cooldownSecs, setCooldownSecs] = useState(900);
+  const [maxPassesPerDay, setMaxPassesPerDay] = useState(6);
   const [nextThree, setNextThree] = useState<string[]>([]);
 
   const cronExpr = compile(preset, time, weekday, monthday, custom);
@@ -76,6 +91,9 @@ export function ManagerPanel({
       setMonthday(r.monthday);
       setCustom(m.cronExpr);
       setMaxStarts(m.maxStarts);
+      setOnEvents(m.onEvents ?? []);
+      setCooldownSecs(m.cooldownSecs ?? 900);
+      setMaxPassesPerDay(m.maxPassesPerDay ?? 6);
     });
   }, [load]);
 
@@ -110,9 +128,12 @@ export function ManagerPanel({
       (manager.agentId ?? "") !== agentId ||
       manager.brief !== brief.trim() ||
       manager.cronExpr !== cronExpr ||
-      manager.maxStarts !== maxStarts
+      manager.maxStarts !== maxStarts ||
+      [...(manager.onEvents ?? [])].sort().join() !== [...onEvents].sort().join() ||
+      manager.cooldownSecs !== cooldownSecs ||
+      manager.maxPassesPerDay !== maxPassesPerDay
     );
-  }, [manager, agentId, brief, cronExpr, maxStarts]);
+  }, [manager, agentId, brief, cronExpr, maxStarts, onEvents, cooldownSecs, maxPassesPerDay]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -134,6 +155,9 @@ export function ManagerPanel({
         brief: brief.trim(),
         cronExpr,
         maxStarts,
+        onEvents,
+        cooldownSecs,
+        maxPassesPerDay,
         enabled: manager?.enabled ?? true,
       }),
     );
@@ -303,6 +327,48 @@ export function ManagerPanel({
                 : `A hard limit, counted server-side — not a request. Past ${maxStarts}, the ${
                     maxStarts === 1 ? "next card" : "rest"
                   } stays in the backlog and it says so in its summary. Cards imported from GitHub are never started by the manager, whatever this says.`}
+            </p>
+          </div>
+
+          <div>
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-dim">
+              Wake it early when…
+            </span>
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {WAKES.map((w) => (
+                <Checkbox
+                  key={w.kind}
+                  checked={onEvents.includes(w.kind)}
+                  onChange={(on) =>
+                    setOnEvents((cur) => (on ? [...cur, w.kind] : cur.filter((k) => k !== w.kind)))
+                  }
+                  label={w.label}
+                />
+              ))}
+            </div>
+            {onEvents.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+                At most every
+                <Select className="w-28" aria-label="Cooldown" value={cooldownSecs} onChange={(e) => setCooldownSecs(Number(e.target.value))}>
+                  <option value={300}>5 minutes</option>
+                  <option value={900}>15 minutes</option>
+                  <option value={3600}>hour</option>
+                  <option value={14400}>4 hours</option>
+                </Select>
+                and
+                <Select className="w-20" aria-label="Early passes a day" value={maxPassesPerDay} onChange={(e) => setMaxPassesPerDay(Number(e.target.value))}>
+                  {[1, 2, 4, 6, 12, 24].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </Select>
+                times a day.
+              </div>
+            )}
+            <p className="mt-1 max-w-lg text-[11px] text-ink-dim">
+              Each early pass is a run, and costs like one. It waits while the manager is mid-turn,
+              and whatever happened is waiting at the top of its next pass either way.
             </p>
           </div>
 

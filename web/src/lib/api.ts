@@ -1554,8 +1554,24 @@ export interface Manager {
   chatId: string | null;
   /** Cards one pass may start. 0 means review and report only. */
   maxStarts: number;
+  /** News that wakes it before its schedule. Empty: only the schedule. */
+  onEvents: WakeKind[];
+  /** Least time between two passes a wake may fire. */
+  cooldownSecs: number;
+  /** Early passes a day, at most. */
+  maxPassesPerDay: number;
   nextAt: string | null;
 }
+
+/** What can wake a manager early. See `aichip_core::wake::Kind`. */
+export type WakeKind =
+  | "landed"
+  | "unblocked"
+  | "failed"
+  | "checks_exhausted"
+  | "review_exhausted"
+  | "question"
+  | "stalled";
 
 export interface ManagerDraft {
   agentId?: string | null;
@@ -1567,6 +1583,9 @@ export interface ManagerDraft {
   modelTier?: string | null;
   effort?: string | null;
   maxStarts?: number;
+  onEvents?: WakeKind[];
+  cooldownSecs?: number;
+  maxPassesPerDay?: number;
 }
 
 /** Something the manager did during one pass. */

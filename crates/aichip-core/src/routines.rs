@@ -193,7 +193,16 @@ async fn dispatch(
                 anyhow::bail!("a document space has no board to manage");
             }
             let max_starts = crate::manager::clamp_starts(r.get("max_starts"));
-            fire_chat(
+            // What happened since the last pass opens this one, whatever
+            // fired it — and is read once: consumed only if the turn queued.
+            let news = crate::wake::pending(db, routine_id)
+                .await
+                .unwrap_or_default();
+            let mut brief = crate::manager::pass_prompt(&prompt, max_starts);
+            if let Some(section) = crate::wake::render(&news) {
+                brief = format!("{section}\n\n{brief}");
+            }
+            let fired = fire_chat(
                 db,
                 orchestrator,
                 routine_id,
@@ -201,13 +210,18 @@ async fn dispatch(
                 Some(project_id),
                 r.get("chat_id"),
                 &r.get::<String, _>("name"),
-                &crate::manager::pass_prompt(&prompt, max_starts),
+                &brief,
                 &engine,
                 tier,
                 effort,
                 Some(pass_id),
             )
-            .await
+            .await?;
+            let ids: Vec<Uuid> = news.iter().map(|w| w.id).collect();
+            if !ids.is_empty() {
+                crate::wake::consume(db, &ids, pass_id).await?;
+            }
+            Ok(fired)
         }
         "research" => {
             let (research_id, run_id) = orchestrator

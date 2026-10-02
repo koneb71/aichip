@@ -83,6 +83,11 @@ pub const GOAL_END: &str = "<<<END GOAL CONTEXT>>>";
 pub const DIFF_BEGIN: &str = "<<<BEGIN CHANGE UNDER REVIEW>>>";
 pub const DIFF_END: &str = "<<<END CHANGE UNDER REVIEW>>>";
 
+/// What happened on the board since a manager's last pass. See `crate::wake`.
+/// Card titles in it are anyone's words.
+pub const WAKE_BEGIN: &str = "<<<BEGIN EVENTS SINCE LAST PASS>>>";
+pub const WAKE_END: &str = "<<<END EVENTS SINCE LAST PASS>>>";
+
 /// Every marker, and the whole reason this module is not four constants.
 pub const ALL: &[&str] = &[
     BRAIN_BEGIN,
@@ -103,6 +108,8 @@ pub const ALL: &[&str] = &[
     GOAL_END,
     DIFF_BEGIN,
     DIFF_END,
+    WAKE_BEGIN,
+    WAKE_END,
 ];
 
 /// What a stripped marker becomes.

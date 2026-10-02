@@ -44,7 +44,8 @@ async fn manager_row(
     sqlx::query(
         "SELECT rt.id, rt.name, rt.prompt, rt.cron_expr, rt.catch_up, rt.enabled,
                 rt.engine, rt.model_tier, rt.effort, rt.chat_id, rt.agent_id,
-                rt.max_starts, a.name AS agent_name
+                rt.max_starts, rt.on_events, rt.cooldown_secs, rt.max_passes_per_day,
+                a.name AS agent_name
            FROM routines rt
            LEFT JOIN agents a ON a.id = rt.agent_id
           WHERE rt.kind = 'manage' AND rt.project_id = $1",
@@ -92,6 +93,9 @@ async fn read(
             "effort": r.get::<Option<String>, _>("effort"),
             "chatId": r.get::<Option<Uuid>, _>("chat_id"),
             "maxStarts": manager::clamp_starts(r.get::<Option<i32>, _>("max_starts")),
+            "onEvents": r.get::<Vec<String>, _>("on_events"),
+            "cooldownSecs": r.get::<i32, _>("cooldown_secs"),
+            "maxPassesPerDay": r.get::<i32, _>("max_passes_per_day"),
             "nextAt": next_at(&expr, enabled),
         }
     })))
@@ -115,6 +119,16 @@ pub(crate) struct ManagerBody {
     effort: Option<String>,
     /// Cards one pass may start. Clamped, never trusted.
     max_starts: Option<i32>,
+    /// What news wakes this manager before its schedule (`aichip_core::wake`
+    /// kinds). Absent leaves it as it is; unknown kinds are dropped.
+    #[serde(default)]
+    on_events: Option<Vec<String>>,
+    /// Least time between two passes a wake may fire. Clamped.
+    #[serde(default)]
+    cooldown_secs: Option<i32>,
+    /// Early passes a day, at most. Clamped.
+    #[serde(default)]
+    max_passes_per_day: Option<i32>,
 }
 
 /// This project's manager routine, if it has one.
@@ -214,9 +228,11 @@ pub(crate) async fn upsert(
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO routines
             (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up,
-             enabled, engine, model_tier, effort, agent_id, max_starts)
+             enabled, engine, model_tier, effort, agent_id, max_starts,
+             on_events, cooldown_secs, max_passes_per_day)
          VALUES ($1,$2,'manage',$3,$4,$5,coalesce($6,'run_once'),
-                 coalesce($7,true),$8,$9,$10,$11,$12)
+                 coalesce($7,true),$8,$9,$10,$11,$12,
+                 coalesce($13,'{}'),coalesce($14,900),coalesce($15,6))
          ON CONFLICT (project_id) WHERE kind = 'manage'
          DO UPDATE SET name = EXCLUDED.name,
                        prompt = EXCLUDED.prompt,
@@ -228,6 +244,9 @@ pub(crate) async fn upsert(
                        effort = EXCLUDED.effort,
                        agent_id = EXCLUDED.agent_id,
                        max_starts = EXCLUDED.max_starts,
+                       on_events = coalesce($13, routines.on_events),
+                       cooldown_secs = coalesce($14, routines.cooldown_secs),
+                       max_passes_per_day = coalesce($15, routines.max_passes_per_day),
                        updated_at = now()
          RETURNING id",
     )
@@ -243,6 +262,9 @@ pub(crate) async fn upsert(
     .bind(&body.effort)
     .bind(body.agent_id)
     .bind(max_starts)
+    .bind(body.on_events.as_deref().map(aichip_core::wake::known))
+    .bind(body.cooldown_secs.map(|s| s.clamp(60, 86_400)))
+    .bind(body.max_passes_per_day.map(|n| n.clamp(1, 48)))
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;

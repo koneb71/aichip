@@ -182,7 +182,16 @@ impl Orchestrator {
                 return;
             }
         };
+        crate::wake::raise(&self.db, task_id, None, crate::wake::Kind::Landed, "").await;
         for card in unblocked {
+            crate::wake::raise(
+                &self.db,
+                card.task_id,
+                None,
+                crate::wake::Kind::Unblocked,
+                "",
+            )
+            .await;
             // Started only after `land` committed: `enqueue_task` re-checks
             // the blockers on its own connection, and must see this one done.
             let outcome = if card.start {

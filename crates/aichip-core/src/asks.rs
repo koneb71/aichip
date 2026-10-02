@@ -90,6 +90,7 @@ pub async fn ask(
         ..crate::attention::ctx_for_run(db, run_id, None).await
     };
     crate::attention::fire(db, crate::attention::Event::Question, ctx).await;
+    crate::wake::raise(db, task_id, Some(run_id), crate::wake::Kind::Question, "").await;
     Ok(id)
 }
 

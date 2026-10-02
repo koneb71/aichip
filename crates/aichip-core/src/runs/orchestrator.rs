@@ -4735,6 +4735,27 @@ this workflow manually."
         // leaves through, and a routine's whole point is running while nobody
         // watches. A no-op unless the run was a routine firing.
         crate::routines::announce_finished(&self.db, run_id, status).await;
+        // A card's work that failed is news to its project's manager. Not a
+        // cancel (a person did that), and not aichip's own passes.
+        if status == RunStatus::Failed {
+            if let Ok(Some((task_id, reason))) = sqlx::query_as::<_, (Uuid, Option<String>)>(
+                "SELECT task_id, error_reason FROM runs WHERE id = $1 AND task_id IS NOT NULL
+                    AND trigger NOT IN ('summary', 'peer_review')",
+            )
+            .bind(run_id)
+            .fetch_optional(&self.db.pool)
+            .await
+            {
+                crate::wake::raise(
+                    &self.db,
+                    task_id,
+                    Some(run_id),
+                    crate::wake::Kind::Failed,
+                    reason.as_deref().unwrap_or(""),
+                )
+                .await;
+            }
+        }
         Ok(())
     }
 

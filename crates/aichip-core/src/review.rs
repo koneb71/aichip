@@ -447,6 +447,14 @@ impl Orchestrator {
             ..crate::attention::ctx_for_run(&self.db, run_id, None).await
         };
         crate::attention::fire(&self.db, crate::attention::Event::Review, ctx).await;
+        crate::wake::raise(
+            &self.db,
+            task_id,
+            Some(run_id),
+            crate::wake::Kind::ReviewExhausted,
+            "",
+        )
+        .await;
         Ok(())
     }
 }

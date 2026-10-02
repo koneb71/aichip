@@ -37,6 +37,7 @@ pub mod tasks;
 #[cfg(test)]
 pub(crate) mod testdb;
 pub mod usage;
+pub mod wake;
 pub mod worktrees;
 
 pub use bus::EventBus;

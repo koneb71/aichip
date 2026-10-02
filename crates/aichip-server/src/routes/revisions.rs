@@ -100,6 +100,9 @@ async fn restore(
                 "modelTier": snap["model_tier"],
                 "effort": snap["effort"],
                 "maxStarts": snap["max_starts"],
+                "onEvents": snap["on_events"],
+                "cooldownSecs": snap["cooldown_secs"],
+                "maxPassesPerDay": snap["max_passes_per_day"],
             });
             let Json(_) =
                 super::manager::upsert(s, Path(uuid(project)?), Json(body(mapped)?)).await?;

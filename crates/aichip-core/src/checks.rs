@@ -558,6 +558,14 @@ impl crate::runs::orchestrator::Orchestrator {
         .unwrap_or(i64::MAX);
         if attempts >= config.auto_fix_attempts as i64 {
             tracing::info!(%task_id, attempts, "checks still fail; leaving it for a person");
+            crate::wake::raise(
+                &self.db,
+                task_id,
+                None,
+                crate::wake::Kind::ChecksExhausted,
+                &format!("after {attempts} fix attempts"),
+            )
+            .await;
             return false;
         }
         match self
