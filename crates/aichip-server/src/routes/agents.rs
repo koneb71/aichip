@@ -22,6 +22,20 @@ pub fn router() -> Router<AppState> {
         .route("/agents/{id}/retire", post(retire))
         .route("/agents/{id}/memories", get(memories))
         .route("/agent-memories/{id}", axum::routing::delete(forget))
+        .route("/workspaces/{id}/org-chart", get(org_chart))
+}
+
+/// The workspace's agents as a reporting tree, with what each is doing.
+async fn org_chart(
+    State(state): State<AppState>,
+    Path(workspace): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let nodes = aichip_core::org_chart::chart(&state.db, workspace)
+        .await
+        .map_err(internal)?;
+    Ok(Json(
+        json!({ "nodes": nodes, "maxDepth": aichip_core::org_chart::MAX_DEPTH }),
+    ))
 }
 
 /// What this agent remembers, newest first — shown in the agent drawer so the
@@ -85,6 +99,11 @@ fn agent_json(r: &sqlx::postgres::PgRow) -> Value {
         "maxConcurrent": r.get::<Option<i32>, _>("max_concurrent"),
         "maxDailyRuns": r.get::<Option<i32>, _>("max_daily_runs"),
         "cooldownSecs": r.get::<Option<i32>, _>("cooldown_secs"),
+        // The org chart: who this agent reports to, and what it is called there.
+        "reportsTo": r.get::<Option<Uuid>, _>("reports_to"),
+        "title": r.get::<Option<String>, _>("title"),
+        "heartbeatSecs": r.get::<Option<i32>, _>("heartbeat_secs"),
+        "lastHeartbeatAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_heartbeat_at"),
     })
 }
 
@@ -236,7 +255,19 @@ pub(crate) struct AgentPatch {
     max_daily_runs: Option<Option<i32>>,
     #[serde(default, deserialize_with = "double_option")]
     cooldown_secs: Option<Option<i32>>,
+    /// Present-but-null puts the agent at the top of the chart.
+    #[serde(default, deserialize_with = "double_option")]
+    reports_to: Option<Option<Uuid>>,
+    /// Present-but-null (or blank) clears it.
+    #[serde(default, deserialize_with = "double_option")]
+    title: Option<Option<String>>,
+    /// Seconds between heartbeats; present-but-null turns them off.
+    #[serde(default, deserialize_with = "double_option")]
+    heartbeat_secs: Option<Option<i32>>,
 }
+
+/// Heartbeat intervals a person can pick. Matches the column's CHECK.
+pub const HEARTBEATS: [i32; 4] = [300, 900, 3600, 14_400];
 
 /// Distinguish "field absent" from "field set to null" so clearing works.
 fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
@@ -257,6 +288,18 @@ pub(crate) async fn update(
         body.max_daily_runs.flatten(),
         body.cooldown_secs.flatten(),
     ])?;
+    if let Some(Some(secs)) = body.heartbeat_secs {
+        if !HEARTBEATS.contains(&secs) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "a heartbeat is every 5 minutes, 15 minutes, an hour or 4 hours".into(),
+            ));
+        }
+    }
+    let title = body.title.clone().map(|t| {
+        t.map(|t| t.trim().chars().take(80).collect::<String>())
+            .filter(|t| !t.is_empty())
+    });
     let tier = body.model_tier.map(|t| {
         serde_json::to_value(t)
             .unwrap()
@@ -270,6 +313,14 @@ pub(crate) async fn update(
         &id.to_string(),
     )
     .await;
+    // The manager on its own: the one field whose rules span other rows (no
+    // loops, same workspace), so it is checked and written under a lock.
+    if let Some(manager) = body.reports_to {
+        aichip_core::org_chart::set_manager(&state.db, id, manager)
+            .await
+            .map_err(internal)?
+            .map_err(|why| (StatusCode::CONFLICT, why.to_string()))?;
+    }
     let row = sqlx::query(
         "UPDATE agents SET
             name = COALESCE($1, name), icon = COALESCE($2, icon),
@@ -281,7 +332,9 @@ pub(crate) async fn update(
             engine = CASE WHEN $14 THEN $13 ELSE engine END,
             max_concurrent = CASE WHEN $15 THEN $16 ELSE max_concurrent END,
             max_daily_runs = CASE WHEN $17 THEN $18 ELSE max_daily_runs END,
-            cooldown_secs = CASE WHEN $19 THEN $20 ELSE cooldown_secs END
+            cooldown_secs = CASE WHEN $19 THEN $20 ELSE cooldown_secs END,
+            title = CASE WHEN $21 THEN $22 ELSE title END,
+            heartbeat_secs = CASE WHEN $23 THEN $24 ELSE heartbeat_secs END
          WHERE id = $11 RETURNING *",
     )
     .bind(body.name)
@@ -304,6 +357,10 @@ pub(crate) async fn update(
     .bind(body.max_daily_runs.flatten())
     .bind(body.cooldown_secs.is_some())
     .bind(body.cooldown_secs.flatten())
+    .bind(title.is_some())
+    .bind(title.flatten())
+    .bind(body.heartbeat_secs.is_some())
+    .bind(body.heartbeat_secs.flatten())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -339,6 +396,10 @@ async fn remove(
         &id.to_string(),
     )
     .await;
+    // Its reports move up to its own manager either way — deleted or retired.
+    aichip_core::org_chart::lift(&state.db, id)
+        .await
+        .map_err(internal)?;
     let deleted = sqlx::query("DELETE FROM agents WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)

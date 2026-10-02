@@ -22,6 +22,7 @@ import SettingsPage from "./pages/SettingsPage";
 import TeamsPage from "./pages/TeamsPage";
 import InboxPage from "./pages/InboxPage";
 import AuditPage from "./pages/AuditPage";
+import OrgChartPage from "./pages/OrgChartPage";
 import { InboxProvider } from "./lib/inbox";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -84,6 +85,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="connections" element={<ConnectionsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="audit" element={<AuditPage />} />
+              <Route path="org" element={<OrgChartPage />} />
               <Route path="teams" element={<TeamsPage />} />
             </Route>
           </Routes>

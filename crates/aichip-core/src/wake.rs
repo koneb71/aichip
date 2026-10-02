@@ -77,6 +77,14 @@ impl Kind {
     }
 }
 
+/// The kinds that also go up to the card's agent's manager.
+pub const ESCALATES: [Kind; 4] = [
+    Kind::Failed,
+    Kind::Question,
+    Kind::ReviewExhausted,
+    Kind::Stalled,
+];
+
 /// Keep only the kinds this version knows, in a stable order. What a manager
 /// is woken for is stored as text, so an unknown one is dropped, not trusted.
 pub fn known(events: &[String]) -> Vec<String> {
@@ -103,9 +111,15 @@ async fn try_raise(
     detail: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
+        // The card's own project's manager — and, for trouble, the manager
+        // routine of whoever the card's agent reports to: escalation flows up
+        // the org chart. DISTINCT, since one routine can be both.
         "INSERT INTO wakeups (routine_id, kind, task_id, run_id, detail)
-         SELECT rt.id, $2, t.id, $3, $4
-           FROM tasks t JOIN routines rt ON rt.project_id = t.project_id
+         SELECT DISTINCT rt.id, $2, t.id, $3::uuid, $4
+           FROM tasks t
+           LEFT JOIN agents a ON a.id = t.agent_id
+           JOIN routines rt ON rt.project_id = t.project_id
+                            OR (rt.agent_id = a.reports_to AND $2 = ANY($5))
           WHERE t.id = $1 AND rt.kind = 'manage' AND rt.enabled AND $2 = ANY(rt.on_events)
          ON CONFLICT (routine_id, kind, COALESCE(task_id, '00000000-0000-0000-0000-000000000000'::uuid))
             WHERE consumed_at IS NULL AND routine_id IS NOT NULL
@@ -116,6 +130,7 @@ async fn try_raise(
     .bind(kind.as_str())
     .bind(run_id)
     .bind(detail.chars().take(300).collect::<String>())
+    .bind(ESCALATES.map(Kind::as_str).as_slice())
     .execute(&db.pool)
     .await?;
     Ok(())

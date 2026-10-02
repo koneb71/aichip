@@ -199,6 +199,15 @@ async fn dispatch(
                 .await
                 .unwrap_or_default();
             let mut brief = crate::manager::pass_prompt(&prompt, max_starts);
+            // Its reports, if this manager agent has any: who it delegates to.
+            if let Some(manager) = agent {
+                let reports = crate::org_chart::reports(db, manager)
+                    .await
+                    .unwrap_or_default();
+                if let Some(section) = crate::org_chart::render_reports(&reports) {
+                    brief = format!("{brief}\n\n{section}");
+                }
+            }
             if let Some(section) = crate::wake::render(&news) {
                 brief = format!("{section}\n\n{brief}");
             }

@@ -412,13 +412,18 @@ impl Orchestrator {
     /// — the runs, comments and spend it is named in still say who did them.
     /// Whatever it is doing stops. Returns how many runs were stopped.
     pub async fn retire_agent(&self, agent_id: Uuid) -> anyhow::Result<usize> {
+        // Its reports move up to its own manager in the same breath: nobody
+        // is left reporting to someone who will never manage again.
+        let mut tx = self.db.pool.begin().await?;
         sqlx::query(
             "UPDATE agents SET status = 'retired', paused_at = COALESCE(paused_at, now())
               WHERE id = $1",
         )
         .bind(agent_id)
-        .execute(&self.db.pool)
+        .execute(&mut *tx)
         .await?;
+        crate::org_chart::lift_reports(&mut tx, agent_id).await?;
+        tx.commit().await?;
         self.stop_agent_runs(agent_id).await
     }
 

@@ -1,4 +1,6 @@
 import { TreePage } from "./kbTree";
+import type { OrgNode } from "./orgChart";
+export type { OrgNode };
 export type Tier = "easy" | "medium" | "complex";
 /**
  * What a person picked for a card, which is not the same as what a run gets.
@@ -665,6 +667,12 @@ export interface Agent {
   maxConcurrent: number | null;
   maxDailyRuns: number | null;
   cooldownSecs: number | null;
+  /** Who it reports to on the org chart; null at the top. */
+  reportsTo?: string | null;
+  title?: string | null;
+  /** Seconds between heartbeats; null when off. */
+  heartbeatSecs?: number | null;
+  lastHeartbeatAt?: string | null;
 }
 
 export interface AgentDraft {
@@ -2769,6 +2777,8 @@ export const api = {
     post(`/api/agents/${id}/retire`).then((r) => json<{ retired: boolean; stopped: number }>(r)),
   createAgent: (body: Record<string, unknown>) =>
     post("/api/agents", body).then((r) => json<Agent>(r)),
+  orgChart: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/org-chart`).then((r) => json<{ nodes: OrgNode[]; maxDepth: number }>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>
     patch(`/api/agents/${id}`, body).then((r) => json<Agent>(r)),
   deleteAgent: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }),

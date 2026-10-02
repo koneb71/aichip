@@ -21,6 +21,7 @@ pub mod leftovers;
 pub mod local_models;
 pub mod manager;
 pub mod mcp_servers;
+pub mod org_chart;
 pub mod previews;
 pub mod queue;
 pub mod rag;

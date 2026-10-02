@@ -397,6 +397,13 @@ async fn call_tool(
             let skill_id = skill.as_ref().map(|(id, _)| *id);
             let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
             let pass = aichip_core::manager::pass_for_chat(&state.db, chat_id).await;
+            // A manager with reports delegates down its own tree, never
+            // across it — refused here, with the names it may use.
+            if let (Some(pass), Some(agent)) = (pass.as_ref(), agent_id) {
+                aichip_core::org_chart::may_delegate(&state.db, pass.id, agent)
+                    .await
+                    .map_err(|e| e.to_string())??;
+            }
             // Checked before the card exists, so a refusal does not leave a
             // half-made card behind. `None` for the task: this one is about to
             // be created here, so it cannot have come from outside — only the
@@ -593,9 +600,10 @@ async fn call_tool(
         }
         "list_agents" => {
             let rows = sqlx::query(
-                "SELECT name, description, model_tier, status FROM agents
-                  WHERE workspace_id=$1 AND status <> 'retired'
-                 ORDER BY name ASC",
+                "SELECT a.name, a.description, a.model_tier, a.status, a.title, m.name AS manager
+                   FROM agents a LEFT JOIN agents m ON m.id = a.reports_to AND m.status <> 'retired'
+                  WHERE a.workspace_id=$1 AND a.status <> 'retired'
+                 ORDER BY a.name ASC",
             )
             .bind(workspace_id)
             .fetch_all(&state.db.pool)
@@ -609,6 +617,8 @@ async fn call_tool(
                     // A paused agent can be given a card, but it will not
                     // start until a person resumes it.
                     "paused": r.get::<String, _>("status") != "active",
+                    "title": r.get::<Option<String>, _>("title"),
+                    "reports_to": r.get::<Option<String>, _>("manager"),
                 })).collect::<Vec<_>>()
             }))
         }

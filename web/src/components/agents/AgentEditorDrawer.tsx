@@ -37,6 +37,11 @@ export function AgentEditorDrawer({
   const [maxConcurrent, setMaxConcurrent] = useState(agent?.maxConcurrent?.toString() ?? "");
   const [maxDaily, setMaxDaily] = useState(agent?.maxDailyRuns?.toString() ?? "");
   const [cooldown, setCooldown] = useState(agent?.cooldownSecs?.toString() ?? "");
+  // Its place on the org chart, and whether it pulls its own work.
+  const [title, setTitle] = useState(agent?.title ?? "");
+  const [reportsTo, setReportsTo] = useState<string>(agent?.reportsTo ?? "");
+  const [heartbeat, setHeartbeat] = useState<string>(agent?.heartbeatSecs?.toString() ?? "");
+  const [colleagues, setColleagues] = useState<Agent[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which connected MCP servers this agent may use. Opt-in per agent: a
@@ -44,6 +49,13 @@ export function AgentEditorDrawer({
   // connection just because the workspace has one configured.
   const [servers, setServers] = useState<McpServer[]>([]);
   const [enabledServers, setEnabledServers] = useState<string[]>([]);
+
+  useEffect(() => {
+    api
+      .agents(workspaceId)
+      .then((r) => setColleagues(r.agents.filter((a) => a.id !== agent?.id)))
+      .catch(() => {});
+  }, [workspaceId, agent]);
 
   useEffect(() => {
     api.mcpServers(workspaceId).then((r) => setServers(r.servers)).catch(() => {});
@@ -81,6 +93,14 @@ export function AgentEditorDrawer({
       effort: effort || null,
       engine,
       ...limits,
+      // Only an existing agent has a place on the chart to change.
+      ...(agent
+        ? {
+            title: title.trim() || null,
+            reports_to: reportsTo || null,
+            heartbeat_secs: heartbeat ? Number(heartbeat) : null,
+          }
+        : {}),
     };
     try {
       // A new agent has no id until it exists, so the server list is saved
@@ -129,6 +149,54 @@ export function AgentEditorDrawer({
             className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </Field>
+        {agent && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Title">
+              <input
+                value={title}
+                maxLength={80}
+                placeholder="e.g. Backend lead"
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+              />
+            </Field>
+            <Field label="Reports to">
+              <select
+                value={reportsTo}
+                onChange={(e) => setReportsTo(e.target.value)}
+                aria-label="Reports to"
+                className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
+              >
+                <option value="">Nobody — top of the chart</option>
+                {colleagues.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        )}
+        {agent && (
+          <Field label="Heartbeat">
+            <select
+              value={heartbeat}
+              onChange={(e) => setHeartbeat(e.target.value)}
+              aria-label="Heartbeat"
+              className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm outline-none focus:border-accent"
+            >
+              <option value="">Off — it works only when given a card</option>
+              <option value="300">Every 5 minutes</option>
+              <option value="900">Every 15 minutes</option>
+              <option value="3600">Every hour</option>
+              <option value="14400">Every 4 hours</option>
+            </select>
+            <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">
+              On a heartbeat it starts its next unblocked card from the backlog — through the Start button's own
+              checks, so budgets, limits and Full Auto still apply. With nothing to do it records an idle beat, at no cost.
+            </p>
+          </Field>
+        )}
         <Field label="Color">
           <div className="flex gap-2">
             {COLORS.map((c) => (
