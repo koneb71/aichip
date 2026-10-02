@@ -484,6 +484,14 @@ impl Orchestrator {
                             )
                             .await?;
                             self.set_status(run_id, RunStatus::AwaitingApproval).await?;
+                            // The same knock a card's plan gets: a team plan
+                            // waiting on a person is no less waiting.
+                            let ctx = crate::attention::Ctx {
+                                title: "aichip: a team plan needs your review".to_string(),
+                                ..crate::attention::ctx_for_run(&self.db, run_id, None).await
+                            };
+                            crate::attention::fire(&self.db, crate::attention::Event::Plan, ctx)
+                                .await;
                             return Ok(());
                         }
                         session

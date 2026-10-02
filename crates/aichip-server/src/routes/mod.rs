@@ -63,6 +63,18 @@ pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
     }
 }
 
+/// An answer to something waiting on a person, refused — said in HTTP.
+pub fn answer_refused(e: aichip_core::approvals::Refusal) -> ApiError {
+    use aichip_core::approvals::Refusal;
+    match e {
+        Refusal::NotFound(m) => (StatusCode::NOT_FOUND, m),
+        Refusal::Conflict(m) => (StatusCode::CONFLICT, m),
+        Refusal::Invalid(m) => (StatusCode::BAD_REQUEST, m),
+        Refusal::Gated(e) => run_refused(e),
+        Refusal::Internal(e) => internal(e),
+    }
+}
+
 pub fn internal(e: impl std::fmt::Display) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }

@@ -307,68 +307,22 @@ struct AnswerQuestion {
     answers: Vec<Vec<String>>,
 }
 
-/// Answer a clarifying question.
-///
-/// One action rather than "mark answered" plus "send a message": the two must
-/// not come apart. An answer recorded without a turn leaves the assistant
-/// waiting for something that already happened, and a turn sent without the
-/// answer recorded leaves a live button offering to send it again.
+/// Answer a clarifying question, and start the turn that reads the answer.
 async fn answer_question(
     State(state): State<AppState>,
     Path((chat_id, question_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<AnswerQuestion>,
 ) -> Result<Json<Value>, ApiError> {
-    if active_run(&state, chat_id).await?.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            "the assistant is still working on the previous message".into(),
-        ));
-    }
-
-    // Conditional, so a double click lands once — the second finds nothing
-    // open. The `RETURNING` is what gives us the questions to phrase against.
-    let row = sqlx::query(
-        "UPDATE chat_questions SET answered_at = now(), answer = $3
-          WHERE id = $1 AND chat_id = $2 AND answered_at IS NULL
-        RETURNING questions",
+    let turn = aichip_core::approvals::answer_chat_question(
+        &state.orchestrator,
+        chat_id,
+        question_id,
+        &body.answers,
     )
-    .bind(question_id)
-    .bind(chat_id)
-    .bind(serde_json::to_value(&body.answers).map_err(internal)?)
-    .fetch_optional(&state.db.pool)
     .await
-    .map_err(internal)?
-    .ok_or((
-        StatusCode::CONFLICT,
-        "that question has already been answered".to_string(),
-    ))?;
-
-    let questions: Vec<aichip_core::runs::questions::Question> =
-        serde_json::from_value(row.get("questions")).map_err(internal)?;
-    let content = aichip_core::runs::questions::answer_message(&questions, &body.answers);
-
-    let message = sqlx::query(
-        "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
-    )
-    .bind(chat_id)
-    .bind(&content)
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-
-    sqlx::query("UPDATE chats SET updated_at = now() WHERE id = $1")
-        .bind(chat_id)
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?;
-
-    let run_id = state
-        .orchestrator
-        .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
-        .await
-        .map_err(super::run_refused)?;
+    .map_err(super::answer_refused)?;
     Ok(Json(
-        json!({ "messageId": message.get::<Uuid, _>("id"), "runId": run_id }),
+        json!({ "messageId": turn.message_id, "runId": turn.run_id }),
     ))
 }
 
@@ -382,74 +336,23 @@ struct ApprovePlan {
     plan: Option<String>,
 }
 
-/// Carry out a plan.
-///
-/// Approving *leaves* plan mode, which is the whole point: the next turn is
-/// the one that acts, so it needs the tools plan mode took away. Turning it
-/// back on afterwards would be a second decision, and the toggle is right
-/// there.
-///
-/// A plain turn rather than a resumed parked run, because a chat turn cannot
-/// park: `active_run` counts every non-terminal run as active and refuses the
-/// next message, so a parked plan would freeze the conversation it belongs to.
+/// Carry out a plan. Approving leaves plan mode — see
+/// `aichip_core::approvals::approve_chat_plan`.
 async fn approve_plan(
     State(state): State<AppState>,
     Path((chat_id, message_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<ApprovePlan>,
 ) -> Result<Json<Value>, ApiError> {
-    if active_run(&state, chat_id).await?.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            "the assistant is still working on the previous message".into(),
-        ));
-    }
-
-    // Only an open plan, and only this chat's. Doing it as one conditional
-    // update rather than a read-then-write is what makes a double click
-    // land once: the second finds no open plan and is refused.
-    let claimed = sqlx::query(
-        "UPDATE chat_messages SET plan_outcome = 'approved'
-          WHERE id = $1 AND chat_id = $2 AND is_plan AND plan_outcome IS NULL",
+    let turn = aichip_core::approvals::approve_chat_plan(
+        &state.orchestrator,
+        chat_id,
+        message_id,
+        body.plan.as_deref(),
     )
-    .bind(message_id)
-    .bind(chat_id)
-    .execute(&state.db.pool)
     .await
-    .map_err(internal)?;
-    if claimed.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "that plan has already been answered".into(),
-        ));
-    }
-
-    sqlx::query("UPDATE chats SET plan_mode = false, updated_at = now() WHERE id = $1")
-        .bind(chat_id)
-        .execute(&state.db.pool)
-        .await
-        .map_err(internal)?;
-
-    let row = sqlx::query(
-        "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
-    )
-    .bind(chat_id)
-    .bind(aichip_core::runs::chat_plan::approval(
-        body.plan
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty()),
-    ))
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-
-    let run_id = state
-        .orchestrator
-        .enqueue_chat_turn(chat_id, &state.orchestrator.default_engine())
-        .await
-        .map_err(super::run_refused)?;
+    .map_err(super::answer_refused)?;
     Ok(Json(
-        json!({ "messageId": row.get::<Uuid, _>("id"), "runId": run_id }),
+        json!({ "messageId": turn.message_id, "runId": turn.run_id }),
     ))
 }
 

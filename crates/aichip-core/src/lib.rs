@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod approvals;
 pub mod apps;
 pub mod attention;
 pub mod brain;

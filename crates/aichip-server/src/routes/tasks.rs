@@ -2203,31 +2203,9 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    // A paused agent's plan can be approved later; it is not run now.
-    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+    aichip_core::approvals::approve_task_plan(&state.orchestrator, run_id)
         .await
-        .map_err(super::run_refused)?;
-    let updated = sqlx::query(
-        "UPDATE runs SET plan_approved_at = now(), status = 'queued'
-         WHERE id = $1 AND status = 'awaiting_approval'",
-    )
-    .bind(run_id)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    // Re-queued rather than resumed in place: the planning dispatch already
-    // released its slot, so this takes a fresh one when the queue has room.
-    state
-        .orchestrator
-        .queue(run_id, 10)
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(json!({ "approved": true })))
 }
 
@@ -2242,45 +2220,9 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
-    // A paused agent's plan can be approved later; it is not run now.
-    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+    aichip_core::approvals::revise_task_plan(&state.orchestrator, run_id, &body.note)
         .await
-        .map_err(super::run_refused)?;
-    if body.note.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "say what to change — a rejection with no reason just burns another pass".into(),
-        ));
-    }
-    // The rejected plan stays on file: the next pass is shown it alongside the
-    // feedback, so it can answer the objection rather than start from nothing.
-    // A written-but-unapproved plan re-plans rather than runs, which is what
-    // makes leaving the row safe.
-    //
-    // The status check is in the WHERE clause rather than a separate read
-    // beforehand. Checking and then writing unconditionally leaves a window in
-    // which the run is approved and dispatched between the two, and this would
-    // then re-queue a run that was already working.
-    let updated = sqlx::query(
-        "UPDATE runs SET plan_note = $2, plan_edited = FALSE, status = 'queued'
-         WHERE id = $1 AND status = 'awaiting_approval'",
-    )
-    .bind(run_id)
-    .bind(body.note.trim())
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "this run is not waiting for approval".into(),
-        ));
-    }
-    state
-        .orchestrator
-        .queue(run_id, 10)
-        .await
-        .map_err(internal)?;
+        .map_err(super::answer_refused)?;
     Ok(Json(json!({ "revising": true })))
 }
 

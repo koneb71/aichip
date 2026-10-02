@@ -414,7 +414,7 @@ async fn apply_schema(
     Json(body): Json<PlanId>,
 ) -> Result<Json<Value>, ApiError> {
     load(&state, id).await?;
-    let applied = apps::apply_plan(&state.db, body.plan_id)
+    let applied = apps::apply_plan(&state.db, id, body.plan_id)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
     Ok(Json(json!({ "applied": applied.len() })))
@@ -426,9 +426,9 @@ async fn discard_schema(
     Json(body): Json<PlanId>,
 ) -> Result<Json<Value>, ApiError> {
     load(&state, id).await?;
-    apps::discard_plan(&state.db, body.plan_id)
+    apps::discard_plan(&state.db, id, body.plan_id)
         .await
-        .map_err(internal)?;
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
 }
 
