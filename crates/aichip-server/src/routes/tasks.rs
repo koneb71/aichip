@@ -89,7 +89,8 @@ async fn list(
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
                 t.start_when_unblocked, t.blocked_note,
                 a.name AS agent_name, a.color AS agent_color, a.status AS agent_status,
-                t.skill_id, sk.name AS skill_name,
+                t.skill_id, sk.name AS skill_name, t.goal_id,
+                (SELECT title FROM goals WHERE id = t.goal_id) AS goal_title,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 t.parent_id, parent.title AS parent_title,
                 COALESCE(kids.total, 0) AS child_count,
@@ -234,6 +235,8 @@ async fn list(
                 "agentName": r.get::<Option<String>, _>("agent_name"),
                 "skillId": r.get::<Option<Uuid>, _>("skill_id"),
                 "skillName": r.get::<Option<String>, _>("skill_name"),
+                "goalId": r.get::<Option<Uuid>, _>("goal_id"),
+                "goalTitle": r.get::<Option<String>, _>("goal_title"),
                 "agentColor": r.get::<Option<String>, _>("agent_color"),
                 "teamId": r.get::<Option<Uuid>, _>("team_id"),
                 "teamName": r.get::<Option<String>, _>("team_name"),
@@ -346,6 +349,9 @@ struct CreateTask {
     /// The person saw the forecast and starts anyway.
     #[serde(default)]
     acknowledge_forecast: bool,
+    /// The goal this card serves.
+    #[serde(default)]
+    goal_id: Option<Uuid>,
 }
 
 async fn create(
@@ -366,8 +372,11 @@ async fn create(
             .to_string()
     });
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked, goal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12,
+                 -- Only a goal of the project's own workspace.
+                 (SELECT g.id FROM goals g JOIN projects p ON p.workspace_id = g.workspace_id
+                   WHERE g.id = $13 AND p.id = $1)) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -381,6 +390,7 @@ async fn create(
     .bind(body.plan_first)
     .bind(body.effort.map(|e| e.as_str().to_string()))
     .bind(body.start_when_unblocked)
+    .bind(body.goal_id)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -892,6 +902,9 @@ pub(crate) struct MoveTask {
     /// Dropping it into In Progress after seeing the forecast.
     #[serde(default)]
     acknowledge_forecast: bool,
+    /// The goal it serves. Absent leaves it; null clears it.
+    #[serde(default, deserialize_with = "present")]
+    goal_id: Option<Option<Uuid>>,
     /// With a new agent on a card that is running: stop the running agent and
     /// hand the work over, this note being the new agent's brief.
     #[serde(default)]
@@ -1059,6 +1072,9 @@ pub(crate) async fn move_task(
     if let Some(Some(skill_id)) = body.skill_id {
         require_same_workspace(&state, id, "skills", skill_id).await?;
     }
+    if let Some(Some(goal)) = body.goal_id {
+        super::goals::vet_card_goal(&state, id, goal).await?;
+    }
 
     // A move into "running" is a start, and the start must be vetted BEFORE
     // the column is written. Vet-after-update was tried and left a refused
@@ -1091,7 +1107,8 @@ pub(crate) async fn move_task(
                           effort = CASE WHEN $11 THEN $12 ELSE effort END,
                           skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END,
                           prompt = coalesce($15, prompt),
-                          start_when_unblocked = coalesce($16, start_when_unblocked)
+                          start_when_unblocked = coalesce($16, start_when_unblocked),
+                          goal_id = CASE WHEN $17 THEN $18 ELSE goal_id END
          WHERE id = $1",
     )
     .bind(id)
@@ -1110,6 +1127,8 @@ pub(crate) async fn move_task(
     .bind(body.skill_id.flatten())
     .bind(body.prompt.as_deref().map(str::trim))
     .bind(body.start_when_unblocked)
+    .bind(body.goal_id.is_some())
+    .bind(body.goal_id.flatten())
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;

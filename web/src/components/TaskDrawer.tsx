@@ -36,6 +36,7 @@ import { Tabs, TabPanel } from "./ui/Tabs";
 import { Timeline } from "./task/Timeline";
 import { ReviewPanel } from "./task/ReviewPanel";
 import { HandOff } from "./task/HandOff";
+import { GoalPicker } from "./GoalPicker";
 import { Textarea } from "./ui/Field";
 import { Building2, FileDiff, GitMerge, MoreHorizontal, Play, RotateCcw, Scale, Square, Trash2, X } from "lucide-react";
 
@@ -807,6 +808,18 @@ export function TaskDrawer({
             />
           </div>
         )}
+        {/* What the work is for: every run of this card is told the goal
+            chain. Hidden until the workspace has goals. */}
+        <div className="mt-3 empty:hidden">
+          <GoalPicker
+            workspaceId={workspaceId}
+            value={task.goalId ?? null}
+            onChange={async (goal) => {
+              await api.moveTask(task.id, { goal_id: goal });
+              onChanged();
+            }}
+          />
+        </div>
         <div className="mt-3">
           <ArticlePicker
             workspaceId={workspaceId}

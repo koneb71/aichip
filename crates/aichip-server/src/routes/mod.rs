@@ -10,6 +10,7 @@ pub mod engines;
 pub mod files;
 pub mod fs;
 pub mod github;
+pub mod goals;
 pub mod inbox;
 pub mod kb;
 pub mod manager;
@@ -112,6 +113,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(tasks::router())
         .merge(checks::router())
         .merge(reviews::router())
+        .merge(goals::router())
         .merge(budgets::router())
         .merge(inbox::router())
         .merge(audit::router())

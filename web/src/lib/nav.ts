@@ -3,6 +3,7 @@ import {
   BookOpen,
   Bot,
   CalendarClock,
+  Flag,
   FolderKanban,
   House,
   Inbox,
@@ -52,6 +53,7 @@ export const NAV: NavItem[] = [
   { to: "/org", label: "Org chart", icon: Network, group: "Organization", keywords: ["reports", "manager", "hierarchy", "who reports"] },
   { to: "/agents", label: "Agents", icon: Bot, group: "Organization", keywords: ["people", "specialists"] },
   { to: "/teams", label: "Teams", icon: Users, group: "Organization" },
+  { to: "/goals", label: "Goals", icon: Flag, group: "Organization", keywords: ["objectives", "okr", "why", "alignment"] },
   { to: "/routines", label: "Routines", icon: CalendarClock, group: "Organization", keywords: ["cron", "schedule", "manager"] },
   { to: "/knowledge", label: "Knowledge", icon: BookOpen, group: "Knowledge", keywords: ["wiki", "kb", "docs"] },
   { to: "/research", label: "Research", icon: Telescope, group: "Knowledge" },
@@ -98,6 +100,7 @@ export function searchRows(r: SearchResults): SearchRow[] {
     ...r.workflows.map(row("Workflows", (h) => (h.projectId ? `/projects/${h.projectId}` : "/projects"))),
     ...r.agents.map(row("Agents", (h) => `/agents?agent=${h.id}`)),
     ...r.teams.map(row("Teams", () => "/teams")),
+    ...(r.goals ?? []).map(row("Goals", (h) => `/goals?goal=${h.id}`)),
   ];
 }
 

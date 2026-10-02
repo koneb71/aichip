@@ -208,6 +208,12 @@ async fn dispatch(
                     brief = format!("{brief}\n\n{section}");
                 }
             }
+            let goals = crate::goals::list(db, workspace_id)
+                .await
+                .unwrap_or_default();
+            if let Some(section) = crate::goals::render_for_pass(&goals) {
+                brief = format!("{brief}\n\n{section}");
+            }
             if let Some(section) = crate::wake::render(&news) {
                 brief = format!("{section}\n\n{brief}");
             }

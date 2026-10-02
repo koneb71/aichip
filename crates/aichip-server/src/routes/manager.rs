@@ -44,7 +44,7 @@ async fn manager_row(
     sqlx::query(
         "SELECT rt.id, rt.name, rt.prompt, rt.cron_expr, rt.catch_up, rt.enabled,
                 rt.engine, rt.model_tier, rt.effort, rt.chat_id, rt.agent_id,
-                rt.max_starts, rt.on_events, rt.cooldown_secs, rt.max_passes_per_day,
+                rt.max_starts, rt.on_events, rt.cooldown_secs, rt.max_passes_per_day, rt.goal_id,
                 a.name AS agent_name
            FROM routines rt
            LEFT JOIN agents a ON a.id = rt.agent_id
@@ -96,6 +96,7 @@ async fn read(
             "onEvents": r.get::<Vec<String>, _>("on_events"),
             "cooldownSecs": r.get::<i32, _>("cooldown_secs"),
             "maxPassesPerDay": r.get::<i32, _>("max_passes_per_day"),
+            "goalId": r.get::<Option<Uuid>, _>("goal_id"),
             "nextAt": next_at(&expr, enabled),
         }
     })))
@@ -129,6 +130,17 @@ pub(crate) struct ManagerBody {
     /// Early passes a day, at most. Clamped.
     #[serde(default)]
     max_passes_per_day: Option<i32>,
+    /// The goal the cards it files serve. Absent leaves it; null clears it.
+    #[serde(default, deserialize_with = "present")]
+    goal_id: Option<Option<Uuid>>,
+}
+
+fn present<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(de).map(Some)
 }
 
 /// This project's manager routine, if it has one.
@@ -229,10 +241,11 @@ pub(crate) async fn upsert(
         "INSERT INTO routines
             (workspace_id, name, kind, project_id, prompt, cron_expr, catch_up,
              enabled, engine, model_tier, effort, agent_id, max_starts,
-             on_events, cooldown_secs, max_passes_per_day)
+             on_events, cooldown_secs, max_passes_per_day, goal_id)
          VALUES ($1,$2,'manage',$3,$4,$5,coalesce($6,'run_once'),
                  coalesce($7,true),$8,$9,$10,$11,$12,
-                 coalesce($13,'{}'),coalesce($14,900),coalesce($15,6))
+                 coalesce($13,'{}'),coalesce($14,900),coalesce($15,6),
+                 (SELECT id FROM goals WHERE id = $17 AND workspace_id = $1))
          ON CONFLICT (project_id) WHERE kind = 'manage'
          DO UPDATE SET name = EXCLUDED.name,
                        prompt = EXCLUDED.prompt,
@@ -247,6 +260,7 @@ pub(crate) async fn upsert(
                        on_events = coalesce($13, routines.on_events),
                        cooldown_secs = coalesce($14, routines.cooldown_secs),
                        max_passes_per_day = coalesce($15, routines.max_passes_per_day),
+                       goal_id = CASE WHEN $16 THEN EXCLUDED.goal_id ELSE routines.goal_id END,
                        updated_at = now()
          RETURNING id",
     )
@@ -265,6 +279,8 @@ pub(crate) async fn upsert(
     .bind(body.on_events.as_deref().map(aichip_core::wake::known))
     .bind(body.cooldown_secs.map(|s| s.clamp(60, 86_400)))
     .bind(body.max_passes_per_day.map(|n| n.clamp(1, 48)))
+    .bind(body.goal_id.is_some())
+    .bind(body.goal_id.flatten())
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;

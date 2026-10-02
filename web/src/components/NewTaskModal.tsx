@@ -7,6 +7,7 @@ import { AttachmentBar } from "./AttachmentBar";
 import { useMentionPicker } from "./MentionPicker";
 import { AssigneePicker, assigneeValue, parseAssignee } from "./AssigneePicker";
 import { SkillPicker } from "./SkillPicker";
+import { GoalPicker } from "./GoalPicker";
 import { useTierModel } from "../lib/models";
 import { EnginePicker, useEngines } from "../lib/engines";
 import { ArticlePicker } from "./kb/ArticlePicker";
@@ -34,6 +35,7 @@ export function NewTaskModal({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [assignee, setAssignee] = useState<string>("");
   const [skillId, setSkillId] = useState<string | null>(null);
+  const [goalId, setGoalId] = useState<string | null>(null);
   // null = the machine default, which is what the server picks.
   const [engine, setEngine] = useState<string | null>(null);
   // null = inherit: the agent's budget if it has one, else the machine default.
@@ -101,6 +103,7 @@ export function NewTaskModal({
         agent_id: kind === "agent" ? id : null,
         team_id: kind === "team" ? id : null,
         skill_id: skillId,
+        goal_id: goalId,
         start,
         engine: engine ?? undefined,
         plan_first: planFirst,
@@ -268,6 +271,12 @@ export function NewTaskModal({
           </div>
           <EffortPicker value={effort} onChange={setEffort} />
         </div>
+
+        {!!active && (
+          <div className="mb-4">
+            <GoalPicker workspaceId={active.id} value={goalId} onChange={setGoalId} />
+          </div>
+        )}
 
         {!!active && (
           <div className="mb-4">

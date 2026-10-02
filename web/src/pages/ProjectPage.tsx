@@ -67,6 +67,9 @@ export default function ProjectPage() {
   const { active } = useWorkspace();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Narrow the board to the cards serving one goal. Offered only once a card
+  // on this board serves one.
+  const [goalFilter, setGoalFilter] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -262,7 +265,12 @@ export default function ProjectPage() {
                   {moveError}
                 </div>
               )}
-              <Board tasks={tasks} onSelect={openTask} onMove={move} />
+              <GoalFilter tasks={tasks} value={goalFilter} onChange={setGoalFilter} />
+              <Board
+                tasks={goalFilter ? tasks.filter((t) => t.goalId === goalFilter) : tasks}
+                onSelect={openTask}
+                onMove={move}
+              />
             </>
           )}
           {activeTab === "workflows" && <WorkflowsPanel projectId={projectId} />}
@@ -431,5 +439,30 @@ function AutonomyToggle({
           the unqualified promise this used to make was one it could not keep. */}
       {project.fullAutoOptIn ? "Allows working without asking" : "Asks before acting"}
     </button>
+  );
+}
+
+/** "Serving: [goal]" above the board, when any card here serves a goal. */
+function GoalFilter({ tasks, value, onChange }: { tasks: Task[]; value: string; onChange: (v: string) => void }) {
+  const goals = new Map<string, string>();
+  for (const t of tasks) if (t.goalId && t.goalTitle) goals.set(t.goalId, t.goalTitle);
+  if (goals.size === 0) return null;
+  return (
+    <div className="flex items-center gap-2 px-4 pt-3 text-xs text-fg-muted lg:px-5">
+      Serving
+      <select
+        aria-label="Filter by goal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="ring-focus h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+      >
+        <option value="">any goal</option>
+        {[...goals].map(([id, title]) => (
+          <option key={id} value={id}>
+            {title}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

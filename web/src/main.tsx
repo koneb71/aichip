@@ -23,6 +23,7 @@ import TeamsPage from "./pages/TeamsPage";
 import InboxPage from "./pages/InboxPage";
 import AuditPage from "./pages/AuditPage";
 import OrgChartPage from "./pages/OrgChartPage";
+import GoalsPage from "./pages/GoalsPage";
 import { InboxProvider } from "./lib/inbox";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -86,6 +87,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="settings" element={<SettingsPage />} />
               <Route path="audit" element={<AuditPage />} />
               <Route path="org" element={<OrgChartPage />} />
+              <Route path="goals" element={<GoalsPage />} />
               <Route path="teams" element={<TeamsPage />} />
             </Route>
           </Routes>

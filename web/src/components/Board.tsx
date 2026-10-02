@@ -13,7 +13,7 @@ import { Badge, StatusDot } from "./ui/Badge";
 import { Avatar } from "./ui/Avatar";
 import { Progress } from "./ui/Layout";
 import { cn } from "./ui/cn";
-import { Building2, CornerDownRight, GitPullRequest, Hand, Lock, LockOpen, TriangleAlert, Users } from "lucide-react";
+import { Building2, CornerDownRight, Flag, GitPullRequest, Hand, Lock, LockOpen, TriangleAlert, Users } from "lucide-react";
 
 const COLUMNS: {
   key: Task["boardColumn"];
@@ -254,6 +254,11 @@ function TaskCard({
             className="tabular"
           >
             {chip.label}
+          </Badge>
+        )}
+        {task.goalTitle && (
+          <Badge tone="neutral" icon={<Flag className="size-3" />} title={`Serves the goal “${task.goalTitle}”`} className="max-w-[140px]">
+            <span className="truncate">{task.goalTitle}</span>
           </Badge>
         )}
         {pr && (

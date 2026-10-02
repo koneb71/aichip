@@ -2171,6 +2171,16 @@ impl Orchestrator {
         )
         .await;
         let prompt = standing.apply(&prompt);
+        // What the card's work is for: the goal chain and the epic, fenced,
+        // after everything else — background, never the brief.
+        let prompt = match crate::goals::why_this_matters(&self.db, task_id).await {
+            Ok(Some(why)) => format!("{prompt}\n\n{why}"),
+            Ok(None) => prompt,
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "could not load the card's goals");
+                prompt
+            }
+        };
         let memory_block = match bound_agent {
             Some(agent_id) => memory::recall(&self.db, agent_id, Some(project_id))
                 .await

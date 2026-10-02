@@ -20,7 +20,7 @@ import { toast } from "../ui/Toast";
  * handful of things people reach for from anywhere.
  */
 
-const EMPTY: SearchResults = { projects: [], tasks: [], agents: [], teams: [], workflows: [] };
+const EMPTY: SearchResults = { projects: [], tasks: [], agents: [], teams: [], workflows: [], goals: [] };
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const navigate = useNavigate();

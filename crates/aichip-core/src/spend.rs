@@ -110,6 +110,8 @@ pub enum Dimension {
     Agent,
     /// Which routine fired the run, for runs a routine started.
     Routine,
+    /// The goal the card served.
+    Goal,
 }
 
 impl Dimension {
@@ -125,6 +127,9 @@ impl Dimension {
             // Unused: `by` answers `Agent` with `by_agent`.
             Self::Agent => "NULL",
             Self::Routine => ROUTINE_NAME,
+            Self::Goal => {
+                "COALESCE((SELECT g.title FROM goals g WHERE g.id = t.goal_id), 'no goal')"
+            }
         }
     }
 
@@ -137,6 +142,7 @@ impl Dimension {
             "pattern" => Some(Self::Pattern),
             "agent" => Some(Self::Agent),
             "routine" => Some(Self::Routine),
+            "goal" => Some(Self::Goal),
             _ => None,
         }
     }

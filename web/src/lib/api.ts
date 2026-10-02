@@ -1,6 +1,8 @@
 import { TreePage } from "./kbTree";
 import type { OrgNode } from "./orgChart";
 export type { OrgNode };
+import type { Goal } from "./goals";
+export type { Goal };
 export type Tier = "easy" | "medium" | "complex";
 /**
  * What a person picked for a card, which is not the same as what a run gets.
@@ -249,6 +251,9 @@ export interface Task {
   /** How this job gets done — composes with the agent. */
   skillId?: string | null;
   skillName?: string | null;
+  /** The goal this card serves. */
+  goalId?: string | null;
+  goalTitle?: string | null;
   agentColor: string | null;
   teamId: string | null;
   teamName: string | null;
@@ -908,6 +913,8 @@ export interface SearchResults {
   agents: SearchHit[];
   teams: SearchHit[];
   workflows: SearchHit[];
+  /** Absent from servers older than goals. */
+  goals?: SearchHit[];
 }
 
 export interface WorkflowDef {
@@ -2253,6 +2260,7 @@ export const api = {
     start: boolean;
     agent_id?: string | null;
     skill_id?: string | null;
+    goal_id?: string | null;
     team_id?: string | null;
     engine?: string;
     plan_first?: boolean;
@@ -2306,6 +2314,8 @@ export const api = {
       /** Start by itself once every blocker has landed. */
       start_when_unblocked?: boolean;
       /** Dropping it into In Progress after seeing the forecast. */
+      /** The goal it serves; null clears it. */
+      goal_id?: string | null;
       acknowledge_forecast?: boolean;
     },
   ) =>
@@ -2777,6 +2787,28 @@ export const api = {
     post(`/api/agents/${id}/retire`).then((r) => json<{ retired: boolean; stopped: number }>(r)),
   createAgent: (body: Record<string, unknown>) =>
     post("/api/agents", body).then((r) => json<Agent>(r)),
+  goals: (workspaceId: string) =>
+    fetch(`/api/workspaces/${workspaceId}/goals`).then((r) => json<{ goals: Goal[]; maxDepth: number }>(r)),
+  createGoal: (
+    workspaceId: string,
+    body: { title: string; description?: string; parentId?: string | null; targetDate?: string | null },
+  ) => post(`/api/workspaces/${workspaceId}/goals`, body).then((r) => json<{ id: string }>(r)),
+  updateGoal: (
+    id: string,
+    body: Partial<{ title: string; description: string; status: Goal["status"]; parentId: string | null; targetDate: string | null }>,
+  ) => patch(`/api/goals/${id}`, body).then((r) => json<{ updated: boolean }>(r)),
+  deleteGoal: (id: string) => fetch(`/api/goals/${id}`, { method: "DELETE" }).then((r) => json<{ deleted: boolean }>(r)),
+  goal: (id: string) =>
+    fetch(`/api/goals/${id}`).then((r) =>
+      json<{
+        goal: Goal;
+        chain: string[];
+        cards: { id: string; title: string; column: string; projectId: string; agent: string | null; direct: boolean }[];
+        projects: { id: string; name: string }[];
+        spendUsd: number;
+        runs: number;
+      }>(r),
+    ),
   orgChart: (workspaceId: string) =>
     fetch(`/api/workspaces/${workspaceId}/org-chart`).then((r) => json<{ nodes: OrgNode[]; maxDepth: number }>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>

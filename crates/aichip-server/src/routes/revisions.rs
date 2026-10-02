@@ -103,6 +103,7 @@ async fn restore(
                 "onEvents": snap["on_events"],
                 "cooldownSecs": snap["cooldown_secs"],
                 "maxPassesPerDay": snap["max_passes_per_day"],
+                "goalId": snap["goal_id"],
             });
             let Json(_) =
                 super::manager::upsert(s, Path(uuid(project)?), Json(body(mapped)?)).await?;
