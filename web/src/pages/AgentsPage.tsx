@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -6,7 +7,8 @@ import { AgentEditorDrawer } from "../components/agents/AgentEditorDrawer";
 import { GenerateWizard } from "../components/agents/GenerateWizard";
 import { Card, Empty, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button } from "../components/ui/Button";
+import { Plus, Sparkles } from "lucide-react";
 import { tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 
@@ -24,6 +26,29 @@ export default function AgentsPage() {
 
   useEffect(refresh, [refresh]);
 
+  // `?new=1` (the top bar's New menu) and `?agent=<id>` (a palette hit) open
+  // the editor; the param is consumed so a reload does not reopen it.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const want = params.get("agent");
+    if (params.get("new") === "1") {
+      setEditing("new");
+      setParams((p) => {
+        p.delete("new");
+        return p;
+      }, { replace: true });
+    } else if (want) {
+      const found = agents.find((a) => a.id === want);
+      if (found) {
+        setEditing(found);
+        setParams((p) => {
+          p.delete("agent");
+          return p;
+        }, { replace: true });
+      }
+    }
+  }, [params, agents, setParams]);
+
   const working = agents.filter((a) => a.status !== "retired");
   const retired = agents.filter((a) => a.status === "retired");
 
@@ -34,22 +59,12 @@ export default function AgentsPage() {
         subtitle="Reusable specialists you can bind to tasks — or let the assistant pick from."
         actions={
           <>
-            <motion.button
-              {...tappable}
-              onClick={() => setWizard(true)}
-              className="ring-focus flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.06] px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
-            >
-              <Icon name="sparkle" size={15} />
+            <Button size="sm" icon={<Sparkles className="size-3.5" />} onClick={() => setWizard(true)}>
               Generate with AI
-            </motion.button>
-            <motion.button
-              {...tappable}
-              onClick={() => setEditing("new")}
-              className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
-            >
-              <Icon name="plus" size={15} strokeWidth={2.5} />
+            </Button>
+            <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setEditing("new")}>
               New agent
-            </motion.button>
+            </Button>
           </>
         }
       />

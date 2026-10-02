@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { displayTier, Task, tierColor, tierSoft } from "../lib/api";
+import { displayTier, Task, tierColor } from "../lib/api";
 import { useTierModel } from "../lib/models";
 import { ActivityLine } from "./RunStream";
 import { useRunStream } from "../lib/ws";
@@ -9,6 +9,11 @@ import { checksChip } from "../lib/checks";
 import { springy } from "../lib/motion";
 import { isWorking, needsYou, statusLabel, stopReason, unblocked, unresolvedBlockers } from "../lib/runStatus";
 import { RunError } from "./ui/RunError";
+import { Badge, StatusDot } from "./ui/Badge";
+import { Avatar } from "./ui/Avatar";
+import { Progress } from "./ui/Layout";
+import { cn } from "./ui/cn";
+import { Building2, CornerDownRight, GitPullRequest, Hand, Lock, LockOpen, TriangleAlert, Users } from "lucide-react";
 
 const COLUMNS: {
   key: Task["boardColumn"];
@@ -17,10 +22,10 @@ const COLUMNS: {
   dot: string;
   empty: string;
 }[] = [
-  { key: "backlog", label: "Backlog", dot: "bg-ink-dim/40", empty: "Create a task to get started" },
-  { key: "running", label: "In Progress", dot: "bg-accent", empty: "Drag a card here to start it" },
-  { key: "review", label: "Review", dot: "bg-amber-400", empty: "Nothing waiting for review" },
-  { key: "done", label: "Done", dot: "bg-tier-easy", empty: "Nothing done yet" },
+  { key: "backlog", label: "Backlog", dot: "border-[1.5px] border-fg-subtle", empty: "Create a card to get started" },
+  { key: "running", label: "In progress", dot: "bg-accent", empty: "Drag a card here to start it" },
+  { key: "review", label: "Review", dot: "bg-warning", empty: "Nothing waiting for review" },
+  { key: "done", label: "Done", dot: "bg-success", empty: "Nothing done yet" },
 ];
 
 /** Position for a card dropped before `before` (or at the end when null). */
@@ -60,16 +65,16 @@ export function Board({
   // when there isn't — four columns squeezed onto a phone would fit nothing
   // but the card titles.
   return (
-    <div className="grid h-full grid-cols-[repeat(4,minmax(240px,1fr))] gap-3 overflow-x-auto bg-surface p-3 sm:gap-4 sm:p-5">
+    <div className="grid h-full grid-cols-[repeat(4,minmax(248px,1fr))] gap-3 overflow-x-auto bg-bg p-3 sm:p-4">
       {COLUMNS.map((col) => {
         const colTasks = tasks.filter((t) => t.boardColumn === col.key);
         return (
           <div
             key={col.key}
-            className={`flex min-h-0 min-w-0 flex-col rounded-2xl bg-panel-2/45 p-2 transition-colors duration-200 ${
+            className={`flex min-h-0 min-w-0 flex-col rounded-lg p-1.5 transition-colors duration-200 ${
               dragId && overCol === col.key
-                ? "bg-accent/[0.06] ring-2 ring-accent/40"
-                : ""
+                ? "bg-accent-subtle ring-1 ring-[color-mix(in_oklab,var(--color-accent)_45%,transparent)]"
+                : "bg-[color-mix(in_oklab,var(--color-panel-2)_55%,transparent)]"
             }`}
             onDragOver={(e) => {
               e.preventDefault();
@@ -83,21 +88,15 @@ export function Board({
               drop(col.key, null);
             }}
           >
-            <div className="flex items-center gap-2 px-1.5 pb-2 pt-1">
-              <span className={`size-2 shrink-0 rounded-full ${col.dot}`} aria-hidden />
-              <span className="text-sm font-semibold">{col.label}</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs ${
-                  colTasks.length > 0 ? "bg-panel text-ink" : "bg-panel/60 text-ink-dim"
-                }`}
-              >
-                {colTasks.length}
-              </span>
+            <div className="flex h-8 items-center gap-2 px-1.5">
+              <span className={`size-2.5 shrink-0 rounded-full ${col.dot}`} aria-hidden />
+              <span className="text-[13px] font-medium">{col.label}</span>
+              <span className="tabular text-xs text-fg-subtle">{colTasks.length}</span>
               {col.key === "running" && dragId && (
-                <span className="text-[10px] font-medium text-accent">drop to start</span>
+                <span className="text-[10px] font-medium text-accent-fg">drop to start</span>
               )}
             </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-3">
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-px pb-2 pt-0.5">
               {colTasks.map((task) => (
                 <div
                   key={task.id}
@@ -122,7 +121,7 @@ export function Board({
                 </div>
               ))}
               {colTasks.length === 0 && (
-                <div className="mt-2 rounded-xl border border-dashed border-line/80 px-3 py-8 text-center text-xs text-ink-dim/70">
+                <div className="mt-1 rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-fg-subtle">
                   {col.empty}
                 </div>
               )}
@@ -152,191 +151,144 @@ function TaskCard({
   const waiting = needsYou(task.runStatus);
   const stopped = stopReason(task.runStatus, task.runError);
 
+  const blockers = unresolvedBlockers(task);
+  const chip = checksChip(task.localChecks);
+  const pr = prOnCard(task);
+  const cost = task.totalCostUsd ?? task.costUsd;
+
   return (
     <motion.button
       layout
       layoutId={task.id}
-      initial={{ opacity: 0, scale: 0.97 }}
+      initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.97 }}
-      whileHover={{ y: -2 }}
-      whileTap={{ scale: 0.99 }}
+      exit={{ opacity: 0, scale: 0.98 }}
+      whileTap={{ scale: 0.995 }}
       onClick={() => onSelect(task)}
       transition={springy}
       // `w-full min-w-0` is load-bearing: a button sizes to its content, and a
       // running card's activity line carries an unbreakable worktree path —
-      // without a constrained width the card grows past its column and lies
-      // on top of the next one, and ActivityLine's truncate never engages.
-      className="ring-focus card-shadow group relative block w-full min-w-0 overflow-hidden rounded-xl border border-line bg-panel p-3 text-left transition-[box-shadow,border-color] hover:card-shadow-md hover:border-ink-dim/25"
-      style={
+      // without a constrained width the card grows past its column.
+      className={cn(
+        "ring-focus group relative block w-full min-w-0 overflow-hidden rounded-lg border bg-panel px-2.5 py-2 text-left shadow-[var(--shadow-xs)] transition-[box-shadow,border-color] duration-[var(--dur-fast)] hover:border-border-strong hover:shadow-[var(--shadow-sm)]",
         running
-          ? { boxShadow: `0 0 0 1.5px ${accent}66, 0 4px 14px -4px ${accent}44` }
+          ? "border-[color-mix(in_oklab,var(--color-accent)_45%,var(--color-border))]"
           : waiting
-            ? { boxShadow: "0 0 0 1.5px #d9770655" }
-            : undefined
-      }
+            ? "border-[color-mix(in_oklab,var(--color-warning)_50%,var(--color-border))]"
+            : "border-border",
+      )}
     >
       {running && (
         <motion.span
           aria-hidden
-          className="absolute inset-x-0 top-0 h-[2px] origin-left"
+          className="absolute inset-x-0 top-0 h-px origin-left"
           style={{ background: `linear-gradient(90deg, transparent, ${accent}, transparent)` }}
           animate={{ x: ["-100%", "100%"] }}
           transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
         />
       )}
-      {running && (
-        <motion.span
-          className="absolute right-3 top-3 h-2 w-2 rounded-full"
-          style={{ background: accent }}
-          animate={{ opacity: [1, 0.3, 1] }}
-          transition={{ repeat: Infinity, duration: 1.6 }}
-        />
-      )}
-      {waiting && (
-        <span
-          className="absolute right-3 top-3 text-[11px] font-medium text-amber-600"
-          // The parked run's own sentence — "waiting for you to allow Bash" —
-          // one hover away rather than nowhere.
-          title={stopped?.tone === "note" ? stopped.text : undefined}
-        >
-          ⏸ {statusLabel(task.runStatus)}
-        </span>
-      )}
+
       {/* Which epic this belongs to, above its own title — a sub-ticket read on
           its own says what to do but not what it is part of. */}
       {task.parentTitle && (
-        <div className="mb-0.5 truncate pr-5 text-[11px] text-ink-dim" title={task.parentTitle}>
-          ↳ {task.parentTitle}
+        <div className="mb-0.5 flex items-center gap-1 truncate pr-5 text-[11px] text-fg-subtle" title={task.parentTitle}>
+          <CornerDownRight className="size-3 shrink-0" />
+          <span className="truncate">{task.parentTitle}</span>
         </div>
       )}
-      <div className="line-clamp-3 pr-5 text-sm font-medium leading-snug">{task.title}</div>
+      <div className="flex items-start gap-2">
+        <div className="line-clamp-2 min-w-0 flex-1 text-[13px] font-medium leading-snug text-fg">{task.title}</div>
+        {running && <StatusDot tone="accent" pulse className="mt-1" label="Running" />}
+      </div>
+      {waiting && (
+        <div className="mt-1.5" title={stopped?.tone === "note" ? stopped.text : undefined}>
+          <Badge tone="warning" icon={<Hand className="size-3" />}>
+            {statusLabel(task.runStatus)}
+          </Badge>
+        </div>
+      )}
       {running && <CardActivity runId={task.runId} />}
 
-      {/* An epic's own progress. Derived from the children's columns, so it
-          still reads correctly long after the run that created them is gone. */}
+      {/* An epic's own progress, derived from the children's columns. */}
       {task.childCount > 0 && (
-        <div className="mt-2">
-          <div className="flex items-center justify-between text-[11px] text-ink-dim">
-            <span>
-              {task.childResolved} of {task.childCount} done
-            </span>
-            {task.childResolved === task.childCount && <span>✓</span>}
-          </div>
-          <div className="mt-1 h-1 overflow-hidden rounded-full bg-panel-2">
-            <motion.div
-              className="h-full rounded-full"
-              style={{ background: accent }}
-              initial={false}
-              animate={{
-                width: `${(task.childResolved / task.childCount) * 100}%`,
-              }}
-              transition={{ type: "spring", stiffness: 200, damping: 30 }}
-            />
-          </div>
+        <div className="mt-2 flex items-center gap-2">
+          <Progress value={task.childResolved} max={task.childCount} tone={task.childResolved === task.childCount ? "success" : "accent"} label="Sub-cards done" />
+          <span className="tabular shrink-0 text-[11px] text-fg-muted">
+            {task.childResolved}/{task.childCount}
+          </span>
         </div>
       )}
 
-      {stopped && stopped.tone !== "note" && (
-        <RunError reason={stopped.text} tone={stopped.tone} compact className="mt-2" />
-      )}
+      {stopped && stopped.tone !== "note" && <RunError reason={stopped.text} tone={stopped.tone} compact className="mt-2" />}
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-dim">
+      <div className="mt-2 flex flex-wrap items-center gap-1">
         <StepOutcome status={task.stepStatus} />
-        {(() => {
-          const waiting = unresolvedBlockers(task);
-          if (task.blockedNote && waiting.length === 0) {
-            return (
-              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700" title={task.blockedNote}>
-                ⚠ agent is stuck
-              </span>
-            );
-          }
-          if (waiting.length > 0) {
-            return (
-              <span
-                className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
-                title={`Waiting for: ${waiting.map((b) => b.title).join(", ")}${
-                  task.startWhenUnblocked ? " — starts by itself when they land" : ""
-                }`}
-              >
-                ⛓ blocked{waiting.length > 1 ? ` · ${waiting.length}` : ""}
-                {task.startWhenUnblocked && " · auto"}
-              </span>
-            );
-          }
-          return unblocked(task) ? (
-            <span
-              className="rounded-full bg-tier-easy/10 px-2 py-0.5 text-tier-easy"
-              title="Everything it was waiting for has landed — it can start"
-            >
-              ✓ unblocked
-            </span>
-          ) : null;
-        })()}
-        {!teamRun && (
-          <span
-            className="rounded-full px-2 py-0.5"
-            style={{ background: tierSoft[shown], color: tierColor[shown] }}
-            // An auto card says so, because "Medium" on a card nobody set to
-            // Medium would read as a choice someone made.
-            title={task.tierIsAuto ? "Tier picked automatically for each run" : undefined}
+        {task.blockedNote && blockers.length === 0 ? (
+          <Badge tone="warning" icon={<TriangleAlert className="size-3" />} title={task.blockedNote}>
+            stuck
+          </Badge>
+        ) : blockers.length > 0 ? (
+          <Badge
+            tone="warning"
+            icon={<Lock className="size-3" />}
+            title={`Waiting for: ${blockers.map((b) => b.title).join(", ")}${task.startWhenUnblocked ? " — starts by itself when they land" : ""}`}
           >
+            blocked{blockers.length > 1 ? ` · ${blockers.length}` : ""}
+            {task.startWhenUnblocked && " · auto"}
+          </Badge>
+        ) : unblocked(task) ? (
+          <Badge tone="success" icon={<LockOpen className="size-3" />} title="Everything it was waiting for has landed — it can start">
+            unblocked
+          </Badge>
+        ) : null}
+        {!teamRun && (
+          <Badge tone={shown} title={task.tierIsAuto ? "Tier picked automatically for each run" : undefined}>
             {task.tierIsAuto && "auto · "}
             {tierModel(shown)}
-          </span>
+          </Badge>
         )}
-        {task.agentName && (
-          <span
-            className={`rounded-full px-2 py-0.5 text-white ${task.agentStatus === "paused" ? "opacity-60" : ""}`}
-            style={{ background: task.agentColor ?? "#9ca3af" }}
-            title={task.agentStatus === "paused" ? `${task.agentName} is paused — this card will not start` : undefined}
+        {chip && (
+          <Badge
+            tone={{ good: "success", bad: "danger", busy: "neutral", warn: "warning" }[chip.tone] as "success"}
+            title={chip.title}
+            className="tabular"
           >
-            {task.agentName}
-            {task.agentStatus === "paused" && " · paused"}
-          </span>
+            {chip.label}
+          </Badge>
         )}
-        {task.teamName && (
-          <span
-            className="rounded-full bg-panel-2 px-2 py-0.5"
-            title={`Assigned to the ${task.teamName} ${task.teamPattern}`}
-          >
-            {task.teamPattern === "org" ? "🏛" : "👥"} {task.teamName}
-          </span>
-        )}
-        {(() => {
-          const chip = checksChip(task.localChecks);
-          if (!chip) return null;
-          const tone = {
-            good: "bg-tier-easy-soft text-tier-easy",
-            bad: "bg-red-50 text-danger",
-            busy: "bg-panel-2 text-ink-dim",
-            warn: "bg-amber-50 text-amber-700",
-          }[chip.tone];
-          return (
-            <span className={`rounded-full px-2 py-0.5 tabular-nums ${tone}`} title={chip.title}>
-              {chip.label}
-            </span>
-          );
-        })()}
-        {(() => {
-          const pr = prOnCard(task);
-          return pr ? (
-            <span
-              className={`rounded-full bg-panel-2 px-2 py-0.5 ${prTone(pr).text}`}
-              title={`Pull request #${pr.number} — ${prSummary(pr)}`}
-            >
-              ⑂ #{pr.number}
-            </span>
-          ) : null;
-        })()}
-        {/* Every run's dollars, not only the newest — a retry costs money too. */}
-        {(task.totalCostUsd ?? task.costUsd) != null && (
-          <span title={(task.runCount ?? 0) > 1 ? `over ${task.runCount} runs` : undefined}>
-            ${(task.totalCostUsd ?? task.costUsd)!.toFixed(3)}
-          </span>
+        {pr && (
+          <Badge tone="neutral" icon={<GitPullRequest className="size-3" />} title={`Pull request #${pr.number} — ${prSummary(pr)}`}>
+            <span className={prTone(pr).text}>#{pr.number}</span>
+          </Badge>
         )}
       </div>
+
+      {(task.agentName || task.teamName || cost != null) && (
+        <div className="mt-2 flex items-center gap-1.5 border-t border-border pt-1.5 text-[11px] text-fg-muted">
+          {task.agentName && (
+            <span
+              className={cn("flex min-w-0 items-center gap-1.5", task.agentStatus === "paused" && "opacity-60")}
+              title={task.agentStatus === "paused" ? `${task.agentName} is paused — this card will not start` : task.agentName}
+            >
+              <Avatar name={task.agentName} color={task.agentColor} size={16} />
+              <span className="truncate">{task.agentName}</span>
+              {task.agentStatus === "paused" && <span>· paused</span>}
+            </span>
+          )}
+          {task.teamName && (
+            <span className="flex min-w-0 items-center gap-1" title={`Assigned to the ${task.teamName} ${task.teamPattern}`}>
+              {task.teamPattern === "org" ? <Building2 className="size-3.5" /> : <Users className="size-3.5" />}
+              <span className="truncate">{task.teamName}</span>
+            </span>
+          )}
+          {/* Every run's dollars, not only the newest — a retry costs money too. */}
+          {cost != null && (
+            <span className="tabular ml-auto font-mono" title={(task.runCount ?? 0) > 1 ? `over ${task.runCount} runs` : undefined}>
+              ${cost.toFixed(3)}
+            </span>
+          )}
+        </div>
+      )}
     </motion.button>
   );
 }
@@ -353,10 +305,8 @@ function StepOutcome({ status }: { status: string | null }) {
   if (status !== "failed" && status !== "canceled" && status !== "skipped") return null;
   const failed = status !== "skipped";
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 font-medium ${
-        failed ? "bg-red-50 text-danger" : "bg-panel-2 text-ink-dim"
-      }`}
+    <Badge
+      tone={failed ? "danger" : "neutral"}
       title={
         failed
           ? "This assignment did not finish. Open it to see how far it got."
@@ -364,7 +314,7 @@ function StepOutcome({ status }: { status: string | null }) {
       }
     >
       {status === "failed" ? "failed" : status === "canceled" ? "canceled" : "dropped"}
-    </span>
+    </Badge>
   );
 }
 

@@ -23,24 +23,41 @@ import { ProjectSettings } from "../components/ProjectSettings";
 import { BrainPanel } from "../components/BrainPanel";
 import { StoragePanel } from "../components/StoragePanel";
 import { PublishModal } from "../components/PublishModal";
-import { Icon } from "../components/ui/Icon";
 import { gradientFor } from "../components/ui/Surface";
-import { springy, tappable } from "../lib/motion";
 import { ManagerPanel } from "../components/ManagerPanel";
+import { Tabs } from "../components/ui/Tabs";
+import { Button, IconButton } from "../components/ui/Button";
+import { Badge } from "../components/ui/Badge";
+import { useCrumbs } from "../lib/crumbs";
+import {
+  Brain,
+  FileCode2,
+  CircleDot,
+  HardDrive,
+  KanbanSquare,
+  MessageSquare,
+  MonitorPlay,
+  Network,
+  Plus,
+  Settings2,
+  SquareTerminal,
+  UserCog,
+  Workflow,
+} from "lucide-react";
 
 const TABS = [
-  { key: "board", label: "Tasks Board" },
-  { key: "workflows", label: "Workflows" },
-  { key: "files", label: "Files" },
-  { key: "map", label: "Map" },
-  { key: "terminal", label: "Terminal" },
-  { key: "previews", label: "Previews" },
-  { key: "brain", label: "Brain" },
-  { key: "manager", label: "Manager" },
-  { key: "storage", label: "Storage" },
+  { key: "board", label: "Board", icon: KanbanSquare },
+  { key: "workflows", label: "Workflows", icon: Workflow },
+  { key: "files", label: "Files", icon: FileCode2 },
+  { key: "map", label: "Map", icon: Network },
+  { key: "terminal", label: "Terminal", icon: SquareTerminal },
+  { key: "previews", label: "Previews", icon: MonitorPlay },
+  { key: "brain", label: "Brain", icon: Brain },
+  { key: "manager", label: "Manager", icon: UserCog },
+  { key: "storage", label: "Storage", icon: HardDrive },
   // Docked beside the board on a wide screen; below `lg` there is no room for
   // a 380px column, so the chat becomes a tab like the others.
-  { key: "chat", label: "Chat", narrowOnly: true },
+  { key: "chat", label: "Chat", icon: MessageSquare, narrowOnly: true },
 ] as const;
 
 type Tab = (typeof TABS)[number]["key"];
@@ -59,6 +76,7 @@ export default function ProjectPage() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [teamRoom, setTeamRoom] = useState<string | null>(null);
   const narrow = useMediaQuery(NARROW);
+  useCrumbs(project ? [{ label: project.name }] : [], project?.name ?? "");
 
   // Which card is open lives in the URL, not in state.
   //
@@ -139,118 +157,87 @@ export default function ProjectPage() {
       {!narrow && <ChatPanel projectId={projectId} workspaceId={project?.workspaceId} projectKind={project?.kind} />}
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        <header className="border-b border-line bg-panel px-4 py-3 lg:px-6">
-          {/* Two jobs, two sides. The left is identity — name on top, quiet
-              facts underneath — and the right is the controls. One wrap-row of
-              nine equal-weight chips read as clutter; a hierarchy reads at a
-              glance. */}
-          <div className="flex items-start gap-3">
-            <motion.span
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={springy}
-              className="mt-0.5 size-8 shrink-0 rounded-xl"
+        <header className="border-b border-border bg-panel">
+          {/* Identity on the left — name, then quiet facts — and the project's
+              own controls on the right. The breadcrumb above already says
+              "Projects", so this does not repeat it. */}
+          <div className="flex items-center gap-3 px-4 pt-3 lg:px-5">
+            <span
+              className="size-7 shrink-0 rounded-md"
               style={{ background: gradientFor(project?.name ?? "Project") }}
+              aria-hidden
             />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-base font-semibold leading-tight">
-                {project?.name ?? "Project"}
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-dim">
+              <div className="truncate text-[15px] font-semibold leading-tight">{project?.name ?? "Project"}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-fg-muted">
                 {project?.githubRepo && (
                   <a
                     href={`https://github.com/${project.githubRepo}`}
                     target="_blank"
                     rel="noreferrer"
                     title="Open this repository on GitHub"
-                    className="truncate font-mono hover:text-ink"
+                    className="truncate font-mono text-[11px] hover:text-fg"
                   >
                     {project.githubRepo}
                   </a>
                 )}
                 {project?.vcs === "none" && (
-                  <span title={project.vcsNote ?? undefined} className="text-amber-700">
+                  <Badge tone="warning" title={project.vcsNote ?? undefined}>
                     edits in place
-                  </span>
+                  </Badge>
                 )}
-                {/* Publishing turns a local-only project into one the whole
-                    GitHub arc works on, so it stands where the repo name will. */}
                 {project?.vcs === "git" && !project.githubRepo && (
                   <button
                     onClick={() => setPublishing(true)}
                     title="Create a GitHub repository for this project"
-                    className="hover:text-accent"
+                    className="hover:text-accent-fg"
                   >
-                    publish to GitHub
+                    Publish to GitHub
                   </button>
                 )}
-                {project?.vcs === "git" && (
-                  <GitSync projectId={project.id} onOpenFiles={() => setTab("files")} />
-                )}
+                {project?.vcs === "git" && <GitSync projectId={project.id} onOpenFiles={() => setTab("files")} />}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1.5">
               {project && <AutonomyToggle project={project} onChanged={setProject} />}
               {project && (
-                <button
-                  onClick={() => setSettings(true)}
-                  title="Project settings"
-                  aria-label="Project settings"
-                  className="ring-focus grid size-7 shrink-0 place-items-center rounded-lg text-ink-dim transition-colors hover:bg-panel-2 hover:text-ink"
-                >
-                  <Icon name="settings" size={15} />
-                </button>
+                <IconButton label="Project settings" onClick={() => setSettings(true)}>
+                  <Settings2 className="size-4" />
+                </IconButton>
               )}
             </div>
           </div>
 
-          <div className="mt-3 flex flex-nowrap items-center gap-3">
-          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto rounded-xl bg-panel-2 p-1">
-            {TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`ring-focus relative shrink-0 rounded-lg px-3 py-1.5 text-xs transition-colors ${
-                  activeTab === t.key ? "text-ink" : "text-ink-dim hover:text-ink"
-                }`}
-              >
-                {/* The white pill slides between tabs rather than blinking, so
-                    the eye follows it to the new section instead of hunting
-                    for where the highlight went. */}
-                {activeTab === t.key && (
-                  <motion.span
-                    layoutId="project-tab"
-                    transition={springy}
-                    className="absolute inset-0 rounded-lg bg-panel shadow-sm"
-                  />
+          <div className="mt-2 flex items-end gap-3 px-2 lg:px-3">
+            <Tabs<Tab>
+              className="min-w-0 flex-1"
+              listClassName="border-b-0"
+              value={activeTab}
+              onValueChange={setTab}
+              tabs={TABS.filter((t) => narrow || !("narrowOnly" in t)).map((t) => ({
+                value: t.key,
+                label: (
+                  <>
+                    <t.icon className="size-3.5" />
+                    {t.label}
+                  </>
+                ),
+              }))}
+            />
+            {activeTab === "board" && (
+              <div className="mb-1.5 flex shrink-0 items-center gap-2 pr-1">
+                {/* Only when the project actually is a GitHub repository — a
+                    button that could only refuse is worse than no button. */}
+                {project?.githubRepo && (
+                  <Button size="sm" variant="secondary" icon={<CircleDot className="size-3.5" />} onClick={() => setShowImport(true)}>
+                    Import issues
+                  </Button>
                 )}
-                <span className={`relative ${activeTab === t.key ? "font-semibold" : ""}`}>
-                  {t.label}
-                </span>
-              </button>
-            ))}
-          </div>
-          {/* Only when the project actually is a GitHub repository — a button
-              that could only refuse is worse than no button. */}
-          {activeTab === "board" && project?.githubRepo && (
-            <motion.button
-              {...tappable}
-              onClick={() => setShowImport(true)}
-              className="ring-focus shrink-0 rounded-xl border border-line px-3 py-1.5 text-xs transition-colors hover:border-ink-dim/40 hover:bg-panel-2"
-            >
-              Import issues
-            </motion.button>
-          )}
-          {activeTab === "board" && (
-            <motion.button
-              {...tappable}
-              onClick={() => setShowNew(true)}
-              className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
-            >
-              <Icon name="plus" size={14} strokeWidth={2.5} />
-              New task
-            </motion.button>
-          )}
+                <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setShowNew(true)}>
+                  New card
+                </Button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -271,7 +258,7 @@ export default function ProjectPage() {
           {activeTab === "board" && (
             <>
               {moveError && (
-                <div className="mx-4 mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger lg:mx-5">
+                <div className="mx-4 mt-3 rounded-md border border-[color-mix(in_oklab,var(--color-danger)_25%,transparent)] bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg lg:mx-5">
                   {moveError}
                 </div>
               )}
@@ -432,16 +419,17 @@ function AutonomyToggle({
           ? "Agents may work straight through here — unless the agent on a card carries its own permission setting, which wins. Each card shows which applies. Click to make them ask again."
           : "Agents stop to ask before edits and commands. Click to let them work uninterrupted — the run stays in an isolated worktree you review.")
       }
-      className={`rounded-full px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+      className={`ring-focus inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors disabled:opacity-50 ${
         project.fullAutoOptIn
-          ? "bg-tier-easy-soft text-tier-easy"
-          : "bg-panel-2 text-ink-dim hover:text-ink"
+          ? "border-[color-mix(in_oklab,var(--color-success)_30%,transparent)] bg-success-subtle text-success-fg"
+          : "border-border bg-panel text-fg-muted hover:text-fg"
       }`}
     >
+      <span className={`size-1.5 rounded-full ${project.fullAutoOptIn ? "bg-success" : "bg-fg-subtle"}`} />
       {/* "allows" rather than "works": this unlocks working without asking, it
           does not guarantee it. An agent's own preset outranks the project, so
           the unqualified promise this used to make was one it could not keep. */}
-      {project.fullAutoOptIn ? "✓ allows working without asking" : "asks before acting"}
+      {project.fullAutoOptIn ? "Allows working without asking" : "Asks before acting"}
     </button>
   );
 }
