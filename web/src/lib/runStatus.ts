@@ -62,7 +62,7 @@ export function statusColor(status?: string | null): string {
       return "var(--color-fg-muted)";
     case "awaiting_approval":
     case "waiting_permission":
-      return "#d97706"; // amber: blocked on the user
+      return "var(--color-warning)"; // blocked on the user
     default:
       return "var(--color-tier-medium)";
   }

@@ -12,11 +12,9 @@
  * `var(--color-*)`, so the dark block below re-themes every utility at once
  * without a single class changing.
  *
- * Two names for most things, while the sweep is under way: the semantic set
- * (`bg`, `surface`, `fg`, `fg-muted`, `border`…) is what new code uses; the
- * older names (`surface`, `panel`, `ink`, `line`…) are the same values and go
- * once nothing reads them. `lib/contrast.test.ts` holds both themes to WCAG
- * AA for every text pair, reading this file.
+ * Screens use only these: `lib/design-scan.test.ts` refuses Tailwind's own
+ * palette, raw hex and white/black in the source, and `lib/contrast.test.ts`
+ * holds both themes to WCAG AA for every text pair, reading this file.
  */
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
