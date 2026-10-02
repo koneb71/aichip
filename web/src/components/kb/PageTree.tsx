@@ -130,7 +130,7 @@ function Row({
       <NavLink
         to={`/knowledge/${node.id}`}
         className={`ring-focus min-w-0 flex-1 truncate rounded py-1.5 text-sm transition-colors ${
-          active ? "font-semibold text-accent" : "hover:text-ink"
+          active ? "font-semibold text-accent-fg" : "hover:text-ink"
         }`}
       >
         <span className="mr-1.5">{node.icon || "▦"}</span>
@@ -160,7 +160,7 @@ function Row({
       <button
         onClick={onCreateChild}
         title="Add a page inside this one"
-        className="shrink-0 px-1 text-xs text-ink-dim opacity-0 group-hover:opacity-100 hover:text-accent"
+        className="shrink-0 px-1 text-xs text-ink-dim opacity-0 group-hover:opacity-100 hover:text-accent-fg"
       >
         +
       </button>

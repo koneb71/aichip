@@ -63,7 +63,7 @@ export function GitSync({
   const behind = state.behind ?? 0;
   const ahead = state.ahead ?? 0;
   const btn =
-    "shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-line disabled:hover:text-ink-dim";
+    "shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent-fg disabled:opacity-40 disabled:hover:border-line disabled:hover:text-ink-dim";
 
   return (
     <span className="flex min-w-0 items-center gap-1.5">

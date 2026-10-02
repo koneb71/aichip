@@ -122,7 +122,7 @@ export function FolderBrowserModal({
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-ink-dim">
-            <button onClick={() => load()} className="hover:text-accent">
+            <button onClick={() => load()} className="hover:text-accent-fg">
               ~
             </button>
             {crumbs.map((c, i) => (
@@ -130,7 +130,7 @@ export function FolderBrowserModal({
                 <span>/</span>
                 <button
                   onClick={() => load("/" + crumbs.slice(0, i + 1).join("/"))}
-                  className="hover:text-accent"
+                  className="hover:text-accent-fg"
                 >
                   {c}
                 </button>

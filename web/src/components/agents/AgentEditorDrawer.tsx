@@ -179,7 +179,7 @@ export function AgentEditorDrawer({
             <button
               onClick={() => setEffort("")}
               className={`rounded-lg border px-2 py-1.5 text-xs ${
-                effort === "" ? "border-accent text-accent" : "border-line text-ink-dim"
+                effort === "" ? "border-accent text-accent-fg" : "border-line text-ink-dim"
               }`}
             >
               default
@@ -189,7 +189,7 @@ export function AgentEditorDrawer({
                 key={e}
                 onClick={() => setEffort(e)}
                 className={`flex-1 rounded-lg border px-1 py-1.5 text-xs ${
-                  effort === e ? "border-accent text-accent" : "border-line text-ink-dim"
+                  effort === e ? "border-accent text-accent-fg" : "border-line text-ink-dim"
                 }`}
               >
                 {e}
@@ -227,7 +227,7 @@ export function AgentEditorDrawer({
                 onClick={() => setPreset(value)}
                 className={`rounded-lg border px-3 py-2 text-sm ${
                   preset === value
-                    ? "border-accent text-accent"
+                    ? "border-accent text-accent-fg"
                     : "border-line text-ink-dim"
                 }`}
               >

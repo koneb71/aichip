@@ -171,7 +171,7 @@ export function ManagerPanel({
               disabled={busy}
               className={`ring-focus shrink-0 rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
                 manager.enabled
-                  ? "border-accent bg-accent/10 font-medium text-accent"
+                  ? "border-accent bg-accent/10 font-medium text-accent-fg"
                   : "border-line text-ink-dim hover:border-accent/50"
               }`}
             >
@@ -325,14 +325,14 @@ export function ManagerPanel({
                 <button
                   onClick={() => run(() => api.managerRunNow(projectId))}
                   disabled={busy}
-                  className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent disabled:opacity-40"
+                  className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent-fg disabled:opacity-40"
                 >
                   Run a pass now
                 </button>
                 {manager.chatId && (
                   <Link
                     to={`/chat?project=${projectId}&chat=${manager.chatId}`}
-                    className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent"
+                    className="ring-focus rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent-fg"
                   >
                     Open its thread
                   </Link>
@@ -412,7 +412,7 @@ export function ManagerPanel({
                             <span
                               className={`shrink-0 rounded px-1.5 text-[10px] ${
                                 a.kind === "start"
-                                  ? "bg-accent/10 text-accent"
+                                  ? "bg-accent/10 text-accent-fg"
                                   : a.kind === "cancel"
                                     ? "bg-danger/10 text-danger"
                                     : "bg-panel-2 text-ink-dim"
@@ -427,7 +427,7 @@ export function ManagerPanel({
                             {a.taskId ? (
                               <Link
                                 to={`/projects/${projectId}?task=${a.taskId}`}
-                                className="truncate hover:text-accent hover:underline"
+                                className="truncate hover:text-accent-fg hover:underline"
                               >
                                 {a.title}
                               </Link>

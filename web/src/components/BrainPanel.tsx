@@ -173,7 +173,7 @@ export function BrainPanel({ projectId }: { projectId: string }) {
                         the version it replaced. */}
                     <button
                       onClick={() => setDraft(r.body)}
-                      className="text-[11px] text-accent underline"
+                      className="text-[11px] text-accent-fg underline"
                     >
                       put this in the editor
                     </button>

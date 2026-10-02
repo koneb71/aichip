@@ -20,7 +20,12 @@ import ActivityPage from "./pages/ActivityPage";
 import ConnectionsPage from "./pages/ConnectionsPage";
 import SettingsPage from "./pages/SettingsPage";
 import TeamsPage from "./pages/TeamsPage";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
+import { ThemeProvider } from "./lib/theme";
+import { TooltipProvider } from "./components/ui/Overlay";
+import { Toaster } from "./components/ui/Toast";
 
 // Reading a page must not download an editor. Only the edit route is lazy —
 // the editor is far larger than any single page view, and a wiki is read far
@@ -33,6 +38,8 @@ const PageEditor = React.lazy(() => import("./pages/knowledge/PageEditor"));
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <ThemeProvider>
+    <TooltipProvider>
     <WorkspaceProvider>
       <EnginesProvider>
       <ModelsProvider>
@@ -60,7 +67,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={
                     <React.Suspense
                       fallback={
-                        <div className="p-8 text-sm text-ink-dim">Loading the editor…</div>
+                        <div className="p-8 text-sm text-fg-muted">Loading the editor…</div>
                       }
                     >
                       <PageEditor />
@@ -75,9 +82,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             </Route>
           </Routes>
         </BrowserRouter>
+        <Toaster />
         </ActivityProvider>
       </ModelsProvider>
       </EnginesProvider>
     </WorkspaceProvider>
+    </TooltipProvider>
+    </ThemeProvider>
   </React.StrictMode>,
 );

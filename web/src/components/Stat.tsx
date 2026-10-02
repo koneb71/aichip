@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { Icon, IconName } from "./ui/Icon";
+import type { LucideIcon } from "lucide-react";
 import { itemVariants } from "../lib/motion";
 import { TintIcon, Tint } from "./ui/Surface";
 
@@ -31,28 +32,32 @@ export function Stat({
   /** Where this number is explained. Makes the tile a link. */
   to?: string;
   hint?: string;
-  icon?: IconName;
+  /** A lucide icon, or one of the older hand-drawn names while those remain. */
+  icon?: IconName | LucideIcon;
   tint?: Tint;
 }) {
   const body = (
     <div
       className={
-        "card-shadow relative h-full min-w-0 overflow-hidden rounded-2xl border border-line bg-panel p-4 " +
-        (to ? "lift hover:border-ink-dim/30" : "")
+        "card-shadow relative h-full min-w-0 overflow-hidden rounded-lg border border-border bg-panel p-3.5 " +
+        (to ? "lift hover:border-border-strong" : "")
       }
     >
       {icon && (
-        <TintIcon tint={tint} size={34} className="mb-2.5">
-          <Icon name={icon} size={17} />
+        <TintIcon tint={tint} size={26} className="mb-2.5">
+          {typeof icon === "string" ? <Icon name={icon} size={14} /> : (() => {
+            const L = icon;
+            return <L className="size-3.5" />;
+          })()}
         </TintIcon>
       )}
       <div
-        className="truncate text-[26px] font-bold leading-none tracking-tight"
+        className="tabular truncate text-[22px] font-semibold leading-none tracking-tight"
         style={{ color: accent }}
       >
         {value}
       </div>
-      <div className="mt-1.5 truncate text-xs text-ink-dim">{label}</div>
+      <div className="mt-1.5 truncate text-xs text-fg-muted">{label}</div>
       {hint && <div className="mt-0.5 truncate text-[10px] text-ink-dim/80">{hint}</div>}
       {/* The arrow only appears on a tile that goes somewhere, and only under
           the pointer — a permanent one on every tile is four arrows competing
@@ -67,7 +72,7 @@ export function Stat({
   return (
     <motion.div variants={itemVariants} className="group min-w-0">
       {to ? (
-        <Link to={to} className="ring-focus block h-full min-w-0 rounded-2xl">
+        <Link to={to} className="ring-focus block h-full min-w-0 rounded-lg">
           {body}
         </Link>
       ) : (

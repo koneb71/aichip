@@ -34,7 +34,7 @@ export function menuRenderer<T extends MenuItem>() {
       row.type = "button";
       row.className =
         "flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left " +
-        (i === selected ? "bg-accent/10 text-accent" : "hover:bg-panel-2");
+        (i === selected ? "bg-accent/10 text-accent-fg" : "hover:bg-panel-2");
       const name = document.createElement("span");
       name.className = "truncate text-xs font-medium";
       name.textContent = item.label;

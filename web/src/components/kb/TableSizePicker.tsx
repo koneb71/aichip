@@ -101,7 +101,7 @@ export function TableSizePicker({
         onClick={() => setOpen((v) => !v)}
         title="Insert a table"
         className={`rounded-md px-2 py-1 text-xs ${
-          open ? "bg-accent/10 text-accent" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
+          open ? "bg-accent/10 text-accent-fg" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
         }`}
       >
         ▦

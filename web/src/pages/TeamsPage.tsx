@@ -484,7 +484,7 @@ function TeamEditor({
                 pattern === p.key ? "border-accent" : "border-line"
               }`}
             >
-              <div className={`text-sm font-semibold ${pattern === p.key ? "text-accent" : ""}`}>
+              <div className={`text-sm font-semibold ${pattern === p.key ? "text-accent-fg" : ""}`}>
                 {p.label}
               </div>
               <div className="mt-1 text-[11px] leading-snug text-ink-dim">{p.blurb}</div>

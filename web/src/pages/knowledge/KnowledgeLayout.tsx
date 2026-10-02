@@ -180,7 +180,7 @@ export default function KnowledgeLayout() {
         <motion.button
           {...tappable}
           onClick={() => setGenerating(true)}
-          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent"
+          className="ring-focus flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent-fg"
         >
           <Icon name="sparkle" size={13} />
           Ask an agent to write one

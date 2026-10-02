@@ -133,7 +133,7 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
         }}
         onClick={() => fileRef.current?.click()}
         className={`cursor-pointer rounded-lg border border-dashed px-2 py-2 text-center text-[11px] ${
-          dragging ? "border-accent bg-accent/5 text-accent" : "border-line text-ink-dim hover:border-ink-dim"
+          dragging ? "border-accent bg-accent/5 text-accent-fg" : "border-line text-ink-dim hover:border-ink-dim"
         }`}
       >
         {busy ? "Uploading…" : "Drop documents here, or click to pick"}

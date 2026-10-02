@@ -198,7 +198,7 @@ function InsertOutput({
             key={s.id}
             onClick={() => onInsert(token)}
             title={token}
-            className="rounded-full border border-line px-1.5 py-0.5 font-mono text-[10px] hover:border-accent hover:text-accent"
+            className="rounded-full border border-line px-1.5 py-0.5 font-mono text-[10px] hover:border-accent hover:text-accent-fg"
           >
             {s.id}
           </button>

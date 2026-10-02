@@ -128,7 +128,7 @@ export function ComposerSettings({
                             title={m.id}
                             className={`ring-focus max-w-full truncate rounded-lg border px-1.5 py-0.5 font-mono text-[10px] ${
                               modelId === m.id
-                                ? "border-accent bg-accent/10 text-accent"
+                                ? "border-accent bg-accent/10 text-accent-fg"
                                 : "border-line text-ink-dim hover:border-accent/50"
                             }`}
                           >

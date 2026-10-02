@@ -49,7 +49,7 @@ export function PageToc({ html }: { html: string }) {
                 e.preventDefault();
                 document.getElementById(h.id)?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="block truncate text-xs text-ink-dim hover:text-accent"
+              className="block truncate text-xs text-ink-dim hover:text-accent-fg"
             >
               {h.text}
             </a>

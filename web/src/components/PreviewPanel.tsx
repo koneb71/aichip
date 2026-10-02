@@ -85,7 +85,7 @@ export function PreviewPanel({
             href={url}
             target="_blank"
             rel="noreferrer"
-            className="font-medium text-accent hover:underline"
+            className="font-medium text-accent-fg hover:underline"
           >
             {url.replace(/^https?:\/\//, "")}
           </a>

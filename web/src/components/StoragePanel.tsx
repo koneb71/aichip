@@ -183,7 +183,7 @@ function Section({
         <button
           onClick={action.run}
           disabled={action.busy}
-          className="mt-3 text-[11px] text-accent underline disabled:opacity-50"
+          className="mt-3 text-[11px] text-accent-fg underline disabled:opacity-50"
         >
           {action.busy ? "reclaiming…" : action.label}
         </button>

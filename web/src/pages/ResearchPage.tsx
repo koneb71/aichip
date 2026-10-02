@@ -547,7 +547,7 @@ function LiveInvestigation({
                 rel="noreferrer"
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-accent hover:underline"
+                className="self-start rounded-full border border-line bg-panel px-3 py-1 text-xs text-accent-fg hover:underline"
               >
                 📖 {hostOf(url)}
               </motion.a>
@@ -672,7 +672,7 @@ function ReportView({ detail }: { detail: Detail }) {
               href={s.url}
               target="_blank"
               rel="noreferrer"
-              className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-[11px] text-accent hover:underline"
+              className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-[11px] text-accent-fg hover:underline"
             >
               {s.host}
             </a>

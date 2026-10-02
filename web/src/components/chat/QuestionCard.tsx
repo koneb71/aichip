@@ -63,7 +63,7 @@ export function QuestionCard({
       transition={{ duration: 0.15, ease: "easeOut" }}
       className="self-start w-full max-w-[85%] rounded-2xl border border-accent/40 bg-panel px-3 py-2.5"
     >
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-accent">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-accent-fg">
         ? Before going further
       </div>
 
@@ -89,7 +89,7 @@ export function QuestionCard({
                     title={o.description}
                     className={`ring-focus rounded-lg border px-2.5 py-1 text-left text-xs transition-colors disabled:opacity-50 ${
                       on
-                        ? "border-accent bg-accent/10 font-medium text-accent"
+                        ? "border-accent bg-accent/10 font-medium text-accent-fg"
                         : "border-line hover:border-accent/50 hover:bg-panel-2"
                     }`}
                   >

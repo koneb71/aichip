@@ -271,7 +271,7 @@ function BlockPicker({ editor }: { editor: Editor }) {
                 type="button"
                 onClick={() => choose(fn as () => void)}
                 className={`block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-panel-2 ${
-                  current === label ? "text-accent" : ""
+                  current === label ? "text-accent-fg" : ""
                 }`}
               >
                 {label as string}
@@ -338,7 +338,7 @@ function T({
       title={title}
       onClick={() => go(ed.chain().focus()).run()}
       className={`rounded-md px-2 py-1 text-xs ${cls} ${
-        active ? "bg-accent/10 text-accent" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
+        active ? "bg-accent/10 text-accent-fg" : "text-ink-dim hover:bg-panel-2 hover:text-ink"
       }`}
     >
       {children}

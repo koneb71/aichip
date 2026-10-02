@@ -338,7 +338,7 @@ function LastOutcome({ routine: r }: { routine: Routine }) {
     );
   }
   if (r.lastRunStatus && !["completed", "failed", "canceled"].includes(r.lastRunStatus)) {
-    return <span className="text-accent">running now</span>;
+    return <span className="text-accent-fg">running now</span>;
   }
   if (r.lastRunStatus === "failed") {
     return <span className="text-danger">last run failed</span>;
@@ -352,7 +352,7 @@ function ResultLink({ routine: r }: { routine: Routine }) {
     return (
       <Link
         to={`/chat?project=${r.projectId ?? GENERAL}&chat=${r.chatId}`}
-        className="text-accent hover:underline"
+        className="text-accent-fg hover:underline"
       >
         Open thread
       </Link>
@@ -360,7 +360,7 @@ function ResultLink({ routine: r }: { routine: Routine }) {
   }
   if (r.kind === "task" && r.projectId) {
     return (
-      <Link to={`/projects/${r.projectId}`} className="text-accent hover:underline">
+      <Link to={`/projects/${r.projectId}`} className="text-accent-fg hover:underline">
         Open board
       </Link>
     );
@@ -371,14 +371,14 @@ function ResultLink({ routine: r }: { routine: Routine }) {
 function FiringLink({ run: h, routine: r }: { run: RoutineRun; routine: Routine }) {
   if (h.researchId) {
     return (
-      <Link to={`/research/${h.researchId}`} className="text-accent hover:underline">
+      <Link to={`/research/${h.researchId}`} className="text-accent-fg hover:underline">
         {h.researchTitle || "report"}
       </Link>
     );
   }
   if (h.taskId) {
     return (
-      <Link to={`/projects/${h.taskProjectId ?? r.projectId}`} className="text-accent hover:underline">
+      <Link to={`/projects/${h.taskProjectId ?? r.projectId}`} className="text-accent-fg hover:underline">
         {h.taskTitle || "card"}
       </Link>
     );
@@ -387,7 +387,7 @@ function FiringLink({ run: h, routine: r }: { run: RoutineRun; routine: Routine 
     return (
       <Link
         to={`/chat?project=${r.projectId ?? GENERAL}&chat=${h.chatId}`}
-        className="text-accent hover:underline"
+        className="text-accent-fg hover:underline"
       >
         thread
       </Link>

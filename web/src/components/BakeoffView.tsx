@@ -255,7 +255,7 @@ function BakeoffSetup({
               key={m}
               onClick={() => setMode(m)}
               className={`rounded-lg border px-3 py-1.5 text-xs ${
-                mode === m ? "border-accent bg-accent/5 text-accent" : "border-line"
+                mode === m ? "border-accent bg-accent/5 text-accent-fg" : "border-line"
               }`}
             >
               {m === "tiers"

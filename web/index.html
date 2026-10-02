@@ -1,9 +1,25 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>aichip</title>
+    <script>
+      // Before first paint, so a dark reload never flashes white. Mirrors
+      // lib/theme.tsx: same key, same rule, every storage access guarded.
+      (function () {
+        var choice = "system";
+        try {
+          var v = localStorage.getItem("aichip.theme");
+          if (v === "light" || v === "dark" || v === "system") choice = v;
+        } catch (e) {}
+        var dark =
+          choice === "dark" ||
+          (choice === "system" && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

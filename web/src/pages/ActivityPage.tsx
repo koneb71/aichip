@@ -311,7 +311,7 @@ function NotifyToggle() {
           : "Get a browser notification when a run needs you"
       }
       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors disabled:opacity-50 ${
-        on ? "border-accent bg-accent/5 text-accent" : "border-line bg-panel hover:bg-panel-2"
+        on ? "border-accent bg-accent/5 text-accent-fg" : "border-line bg-panel hover:bg-panel-2"
       }`}
     >
       {on ? "🔔 Notifications on" : "🔕 Notify me"}

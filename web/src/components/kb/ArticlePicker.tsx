@@ -130,7 +130,7 @@ export function ArticlePicker({
         ))}
         <button
           onClick={() => setOpen((v) => !v)}
-          className="ring-focus select-none rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
+          className="ring-focus select-none rounded-lg border border-dashed border-line px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent-fg"
         >
           {open ? "Done" : chosen.length ? "+ article" : "+ knowledge-base article"}
         </button>

@@ -38,8 +38,8 @@ export function TintIcon({
   const c = TINT[tint];
   return (
     <span
-      className={`grid shrink-0 place-items-center rounded-[14px] ${className}`}
-      style={{ width: size, height: size, background: c.bg, color: c.fg }}
+      className={`grid shrink-0 place-items-center ${className}`}
+      style={{ width: size, height: size, background: c.bg, color: c.fg, borderRadius: Math.round(size * 0.26) }}
     >
       {children}
     </span>
@@ -77,7 +77,7 @@ export function Page({
       animate="show"
       className={`h-full overflow-y-auto ${className}`}
     >
-      <div className={`${wide ? "" : "mx-auto max-w-6xl"} px-5 py-7 sm:px-8 sm:py-10`}>
+      <div className={`${wide ? "" : "mx-auto max-w-6xl"} px-4 py-6 sm:px-8 sm:py-8`}>
         {children}
       </div>
     </motion.div>
@@ -99,15 +99,15 @@ export function PageHead({
       variants={itemVariants}
       initial="hidden"
       animate="show"
-      className="mb-7 flex flex-wrap items-start justify-between gap-4"
+      className="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-3"
     >
       <div className="min-w-0">
-        <h1 className="text-[26px] font-bold leading-tight tracking-tight">{title}</h1>
+        <h1 className="text-xl font-semibold leading-tight tracking-tight">{title}</h1>
         {subtitle && (
-          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-dim">{subtitle}</p>
+          <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-fg-muted">{subtitle}</p>
         )}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </motion.div>
   );
 }
@@ -122,7 +122,7 @@ export function SectionLabel({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-3">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-dim">
+      <h2 className="text-xs font-medium text-fg-muted">
         {children}
       </h2>
       {action}
@@ -174,8 +174,8 @@ export function Card({
   onClick?: () => void;
   interactive?: boolean;
 }) {
-  const cls = `group relative rounded-2xl border border-line bg-panel card-shadow ${
-    to || onClick || interactive ? "lift hover:border-ink-dim/30 ring-focus" : ""
+  const cls = `group relative rounded-lg border border-border bg-panel card-shadow ${
+    to || onClick || interactive ? "lift hover:border-border-strong ring-focus" : ""
   } ${className}`;
   if (to) {
     return (
@@ -209,11 +209,11 @@ export function Empty({
   return (
     <motion.div
       variants={itemVariants}
-      className="rounded-2xl border border-dashed border-line px-6 py-12 text-center"
+      className="rounded-lg border border-dashed border-border px-6 py-10 text-center"
     >
-      {icon && <div className="mb-3 flex justify-center opacity-60">{icon}</div>}
-      <div className="text-sm font-medium">{title}</div>
-      {hint && <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-ink-dim">{hint}</p>}
+      {icon && <div className="mb-3 flex justify-center text-fg-muted">{icon}</div>}
+      <div className="text-[13px] font-medium">{title}</div>
+      {hint && <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-fg-muted">{hint}</p>}
       {action && <div className="mt-4 flex justify-center">{action}</div>}
     </motion.div>
   );
@@ -221,5 +221,5 @@ export function Empty({
 
 /** Placeholder blocks with a shimmer, for a page that is still fetching. */
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`skeleton rounded-xl ${className}`} />;
+  return <div className={`skeleton rounded-lg ${className}`} />;
 }

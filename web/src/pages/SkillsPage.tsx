@@ -67,7 +67,7 @@ export default function SkillsPage() {
           <motion.button
             {...tappable}
             onClick={() => setInstalling(true)}
-            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent"
+            className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-medium hover:border-accent hover:text-accent-fg"
           >
             Add from a registry
           </motion.button>

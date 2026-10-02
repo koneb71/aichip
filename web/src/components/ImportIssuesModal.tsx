@@ -146,7 +146,7 @@ export function ImportIssuesModal({
                     )}
                     <button
                       onClick={() => setOpen(open === issue.number ? null : issue.number)}
-                      className="mt-1 text-[11px] text-accent hover:underline"
+                      className="mt-1 text-[11px] text-accent-fg hover:underline"
                     >
                       {open === issue.number ? "Hide" : "Read"} what it says
                     </button>

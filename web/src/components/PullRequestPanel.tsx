@@ -118,7 +118,7 @@ export function PullRequestPanel({
               href={pr.url ?? undefined}
               target="_blank"
               rel="noreferrer"
-              className="font-medium text-accent hover:underline"
+              className="font-medium text-accent-fg hover:underline"
             >
               #{pr.number}
             </a>
@@ -145,7 +145,7 @@ export function PullRequestPanel({
           {refusal.includes("Connections") && (
             <>
               {" "}
-              <Link to="/connections" className="text-accent hover:underline">
+              <Link to="/connections" className="text-accent-fg hover:underline">
                 Open Connections
               </Link>
             </>
@@ -159,7 +159,7 @@ export function PullRequestPanel({
               {" "}
               <button
                 onClick={() => setPublishing(true)}
-                className="text-accent hover:underline"
+                className="text-accent-fg hover:underline"
               >
                 Publish it to GitHub
               </button>

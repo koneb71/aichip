@@ -115,7 +115,7 @@ export function PreviewsPanel({ projectId }: { projectId: string }) {
               <button
                 onClick={() => act("reclaim", api.reclaimPreviewDisk)}
                 disabled={busy === "reclaim"}
-                className="text-accent hover:underline disabled:opacity-50"
+                className="text-accent-fg hover:underline disabled:opacity-50"
               >
                 reclaim {reclaimable}
               </button>

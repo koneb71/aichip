@@ -557,7 +557,7 @@ export function ChatThread({
                   }
                   className={`ring-focus rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
                     planMode
-                      ? "bg-accent/10 font-medium text-accent"
+                      ? "bg-accent/10 font-medium text-accent-fg"
                       : "text-ink-dim hover:bg-line/40 hover:text-ink"
                   }`}
                 >
@@ -636,7 +636,7 @@ function Message({
       }`}
     >
       {message.isPlan && (
-        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-accent-fg">
           ◷ Plan — nothing has happened yet
         </div>
       )}

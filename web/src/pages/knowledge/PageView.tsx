@@ -80,7 +80,7 @@ export default function PageView() {
                 ) : (
                   <Link
                     to={`/knowledge/${c.id}`}
-                    className="rounded transition-colors hover:text-accent"
+                    className="rounded transition-colors hover:text-accent-fg"
                   >
                     {c.icon} {c.title}
                   </Link>
@@ -124,7 +124,7 @@ export default function PageView() {
             {page.currentSeq > 0 && (
               <>
                 <span>·</span>
-                <Link to={`/knowledge/${page.id}/history`} className="hover:text-accent">
+                <Link to={`/knowledge/${page.id}/history`} className="hover:text-accent-fg">
                   revision {page.currentSeq}
                 </Link>
               </>
@@ -197,7 +197,7 @@ export default function PageView() {
                 This page is empty.{" "}
                 <button
                   onClick={() => navigate(`/knowledge/${page.id}/edit`)}
-                  className="text-accent hover:underline"
+                  className="text-accent-fg hover:underline"
                 >
                   Write something
                 </button>
@@ -263,7 +263,7 @@ export default function PageView() {
                     <span
                       className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
                         t.attached
-                          ? "bg-accent/10 text-accent"
+                          ? "bg-accent/10 text-accent-fg"
                           : "bg-panel-2 text-ink-dim"
                       }`}
                       title={

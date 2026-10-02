@@ -510,7 +510,7 @@ function ServerEditor({
               onClick={() => setTransport(t)}
               className={`rounded-lg border px-3 py-1.5 text-xs ${
                 transport === t
-                  ? "border-accent bg-accent/5 text-accent"
+                  ? "border-accent bg-accent/5 text-accent-fg"
                   : "border-line hover:bg-panel-2"
               }`}
             >
