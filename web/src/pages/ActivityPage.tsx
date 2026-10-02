@@ -12,6 +12,7 @@ import { ActivityLine } from "../components/RunStream";
 import { Stat } from "../components/Stat";
 import { SpendBars } from "../components/spend/SpendBars";
 import { SpendPanel } from "../components/spend/SpendPanel";
+import { BudgetsPanel } from "../components/spend/BudgetsPanel";
 import { UsagePanel } from "../components/usage/UsagePanel";
 import { useRunStream } from "../lib/ws";
 import { Page, PageHead, Stagger } from "../components/ui/Surface";
@@ -243,12 +244,13 @@ export default function ActivityPage() {
                 across {(data?.spend.daily ?? []).reduce((n, d) => n + d.runs, 0)} runs
               </span>
             </div>
-            <BudgetControl current={data?.budgetUsd ?? null} onSaved={load} />
           </div>
           <div className="mt-4">
             <SpendBars daily={data?.spend.daily ?? []} />
           </div>
         </div>
+
+        <BudgetsPanel onChanged={load} />
 
         {(data?.spend.byAgent.length ?? 0) > 0 && (
           <div className="card-shadow mt-4 rounded-xl border border-line bg-panel p-5">
@@ -290,82 +292,6 @@ export default function ActivityPage() {
   );
 }
 
-/** Set or clear the daily cap. Lives inside the spend card because the number
- *  it governs is right there — a cap in a settings page elsewhere is a cap
- *  nobody sets. */
-function BudgetControl({
-  current,
-  onSaved,
-}: {
-  current: number | null;
-  onSaved: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState("");
-
-  async function save(cap: number | null) {
-    await api.setBudget(cap);
-    setEditing(false);
-    onSaved();
-  }
-
-  if (!editing) {
-    return (
-      <button
-        onClick={() => {
-          setValue(current ? String(current) : "");
-          setEditing(true);
-        }}
-        className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:bg-panel-2 hover:text-ink"
-      >
-        {current ? `Daily cap $${current.toFixed(2)} — change` : "Set a daily cap"}
-      </button>
-    );
-  }
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const n = parseFloat(value);
-        save(Number.isFinite(n) && n > 0 ? n : null);
-      }}
-      className="flex items-center gap-1.5"
-    >
-      <span className="text-xs text-ink-dim">$</span>
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        inputMode="decimal"
-        placeholder="25"
-        className="w-20 rounded-lg border border-line bg-panel px-2 py-1 text-xs outline-none focus:border-accent"
-      />
-      <button
-        type="submit"
-        className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white"
-      >
-        Save
-      </button>
-      {current != null && (
-        <button
-          type="button"
-          onClick={() => save(null)}
-          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:border-danger hover:text-danger"
-        >
-          Remove
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={() => setEditing(false)}
-        className="px-1 text-xs text-ink-dim hover:text-ink"
-      >
-        ✕
-      </button>
-    </form>
-  );
-}
 
 /** Opt-in to browser notifications. The prompt has to hang off a click, so
  *  this can't just be a setting read at startup. */
@@ -511,6 +437,11 @@ function RunRow({
         </div>
         {/* The operations view is exactly where "running" is too vague. */}
         {isWorking(run.status) && <LiveAction runId={run.id} />}
+        {run.holdReason && (
+          <div className="mt-0.5 text-[11px] text-amber-700" title={run.holdReason}>
+            Held — {run.holdReason}
+          </div>
+        )}
       </div>
       <Elapsed since={run.startedAt ?? run.createdAt} />
       {run.costUsd != null && (

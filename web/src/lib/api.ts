@@ -952,6 +952,8 @@ export interface ActivityRun {
   model: string | null;
   startedAt: string | null;
   createdAt: string;
+  /** Why a queued run is not starting: the budget holding it. */
+  holdReason: string | null;
 }
 
 /** Something that will not move until a person does something about it. */
@@ -1700,10 +1702,92 @@ const put = (url: string, body: unknown) =>
 // Deliberately no headers: the browser must set multipart/form-data itself so
 // it can include the boundary. Setting Content-Type here would omit it and the
 // server would fail to parse the body.
+/** A write that lifts or sets a limit on spending: carries the header no
+ *  cross-origin page can send, like the attention and file writes. */
+const guarded = (method: "POST" | "PATCH" | "DELETE", url: string, body?: unknown) =>
+  fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
 const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
+export type BudgetScopeKind = "machine" | "workspace" | "project" | "agent" | "team" | "routine";
+export type BudgetCap = "usd" | "tokens" | "runs";
+
+export interface BudgetPolicy {
+  id: string;
+  name: string;
+  scopeKind: BudgetScopeKind;
+  scopeId: string | null;
+  windowKind: "day" | "week" | "month";
+  capUsd: number | null;
+  capOutputTokens: number | null;
+  capRuns: number | null;
+  warnPercent: number;
+  /** `true` for on_exceed = "stop": a run in flight is stopped at a token cap. */
+  stopsInFlight: boolean;
+  confirmAboveUsd: number | null;
+  enabled: boolean;
+}
+
+export interface BudgetStanding {
+  policy: BudgetPolicy;
+  used: { usd: number; outputTokens: number; runs: number };
+  verdict: { state: "open" } | { state: "warn"; percent: number } | { state: "exceeded"; cap: BudgetCap };
+  windowStart: string;
+  windowEnd: string;
+  scopeLabel: string;
+  /** Queued runs this policy is holding right now. */
+  held: number;
+  /** At this rate: which cap runs out first, and when (null: lasts the window). */
+  forecast: { cap: BudgetCap; runsOutAt: string | null } | null;
+}
+
+export interface BudgetBody {
+  name: string;
+  scope_kind: BudgetScopeKind;
+  scope_id: string | null;
+  window_kind: "day" | "week" | "month";
+  cap_usd: number | null;
+  cap_output_tokens: number | null;
+  cap_runs: number | null;
+  warn_percent: number;
+  on_exceed: "hold" | "stop";
+  confirm_above_usd: number | null;
+  enabled: boolean;
+}
+
+export interface CostEstimate {
+  medianUsd: number;
+  p90Usd: number;
+  runs: number;
+  basis: "project" | "tier" | "engine";
+}
+
 export const api = {
+  budgets: () =>
+    fetch("/api/budgets").then((r) =>
+      json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),
+    ),
+  createBudget: (body: BudgetBody) => guarded("POST", "/api/budgets", body).then((r) => json<{ id: string }>(r)),
+  updateBudget: (id: string, body: BudgetBody) =>
+    guarded("PATCH", `/api/budgets/${id}`, body).then((r) => json<{ updated: boolean }>(r)),
+  deleteBudget: (id: string) => guarded("DELETE", `/api/budgets/${id}`).then((r) => json<{ deleted: boolean }>(r)),
+  overrideBudget: (id: string, body: { usd?: number; tokens?: number; runs?: number; note: string }) =>
+    guarded("POST", `/api/budgets/${id}/override`, body).then((r) =>
+      json<{ overridden: boolean; released: number }>(r),
+    ),
+  taskEstimate: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/estimate`).then((r) => json<{ estimate: CostEstimate | null }>(r)),
+  estimate: (projectId: string, tier?: string, engine?: string) => {
+    const q = new URLSearchParams({ project_id: projectId });
+    if (tier) q.set("tier", tier);
+    if (engine) q.set("engine", engine);
+    return fetch(`/api/estimate?${q}`).then((r) => json<{ estimate: CostEstimate | null }>(r));
+  },
   // Probed live rather than cached: `gh auth login` happens in a terminal
   // while aichip is running, and this is what tells you to go and do it.
   github: () => fetch("/api/github").then((r) => json<GitHubStatus>(r)),

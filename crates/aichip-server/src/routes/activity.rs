@@ -83,8 +83,9 @@ async fn activity(
                 r.goal, t.title AS task_title, w.name AS workflow_name,
                 rs.question AS research_question,
                 tm.name AS team_name, p.name AS project_name, p.id AS project_id,
-                r.team_id, r.task_id
+                r.team_id, r.task_id, q.hold_reason
          FROM runs r
+         LEFT JOIN queue q ON q.run_id = r.id
          LEFT JOIN tasks t ON t.id = r.task_id
          LEFT JOIN workflows w ON w.id = r.workflow_id
          LEFT JOIN teams tm ON tm.id = r.team_id
@@ -138,6 +139,8 @@ async fn activity(
                 "model": r.get::<Option<String>, _>("model"),
                 "startedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at"),
                 "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                // Why a queued run is not starting: the budget holding it.
+                "holdReason": r.get::<Option<String>, _>("hold_reason"),
             })
         })
         .collect();

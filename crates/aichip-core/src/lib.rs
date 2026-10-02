@@ -6,6 +6,7 @@ pub mod budgets;
 pub mod bus;
 pub mod checks;
 pub mod db;
+pub mod estimate;
 pub mod fence;
 pub mod github;
 pub mod kb;

@@ -2,6 +2,7 @@ pub mod activity;
 pub mod agents;
 pub mod apps;
 pub mod attachments;
+pub mod budgets;
 pub mod chat;
 pub mod checks;
 pub mod engines;
@@ -65,6 +66,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(apps::router())
         .merge(tasks::router())
         .merge(checks::router())
+        .merge(budgets::router())
         .merge(agents::router())
         .merge(skills::router())
         .merge(teams::router())
