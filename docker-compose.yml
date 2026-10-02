@@ -12,6 +12,13 @@
 #     a container has no keychain and no browser to log in with. Read the
 #     "Running in Docker" section of README.md first.
 #
+#   docker compose --profile storage up -d
+#     Adds object storage for knowledge-base attachments. Optional, and in a
+#     profile of its own so that nothing else waits on it: the knowledge base
+#     works without it, and an image that cannot be pulled must not stop
+#     Postgres or Eren from starting. Profiles combine:
+#     `--profile app --profile storage`.
+#
 # Why some names here still say aichip, the project's old name: they name
 # data that already exists. A Docker volume is found by its name, and the
 # Postgres image creates its role and database only when the volume is new,
@@ -51,30 +58,45 @@ services:
   # Object storage for knowledge-base attachments — images and files pasted
   # into an article. Article text lives in Postgres; only the blobs come here.
   # The knowledge base works without this, you just can't attach files.
-  minio:
-    image: minio/minio:latest
-    container_name: eren-minio
+  #
+  # RustFS, an S3-compatible server. This used to be MinIO, until MinIO
+  # stopped publishing its image: `minio/minio` no longer exists on Docker
+  # Hub, and a pull of it failed the whole `up`. Pinned rather than `latest`,
+  # so the next upstream change is a decision, not a surprise. Eren speaks
+  # plain S3 (path-style, SigV4), so any S3 server works here.
+  storage:
+    profiles: ["storage"]
+    image: rustfs/rustfs:1.0.0
+    container_name: eren-storage
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${EREN_S3_ACCESS_KEY:-${AICHIP_S3_ACCESS_KEY:-aichip}}
-      MINIO_ROOT_PASSWORD: ${EREN_S3_SECRET_KEY:-${AICHIP_S3_SECRET_KEY:-aichip-dev-secret}}
+      RUSTFS_ACCESS_KEY: ${EREN_S3_ACCESS_KEY:-${AICHIP_S3_ACCESS_KEY:-aichip}}
+      RUSTFS_SECRET_KEY: ${EREN_S3_SECRET_KEY:-${AICHIP_S3_SECRET_KEY:-aichip-dev-secret}}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
     ports:
-      # 9100/9101 on the host, so a MinIO you already run on 9000 keeps working.
-      - "127.0.0.1:${MINIO_PORT:-9100}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9101}:9001"
+      # 9100/9101 on the host, so an S3 server you already run on 9000 keeps
+      # working. MINIO_* are the names these had before.
+      - "127.0.0.1:${S3_PORT:-${MINIO_PORT:-9100}}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-${MINIO_CONSOLE_PORT:-9101}}:9001"
     volumes:
-      - aichip-minio:/data
+      # A new volume, not MinIO's `aichip-minio`: that holds MinIO's own
+      # on-disk format. It is left exactly as it was — see README.md for
+      # moving old attachments across.
+      - eren-objects:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 20s
 
   # The app profile needs CLAUDE_CODE_OAUTH_TOKEN and EREN_PROJECTS_DIR in
   # `.env`. They are defaulted rather than declared required, because Compose
   # interpolates every service whatever profile you asked for — a required
-  # variable here made `docker compose up -d minio` fail too. Without a real
+  # variable here made `docker compose --profile storage up -d` fail too. Without a real
   # token the container starts and reports "not logged in" on its first run.
   eren:
     profiles: ["app"]
@@ -125,6 +147,6 @@ services:
       - aichip-state:/home/eren/.eren
 
 volumes:
-  aichip-minio:
   aichip-pgdata:
   aichip-state:
+  eren-objects:
