@@ -199,13 +199,13 @@ mod tests {
             "\n",
         );
         let bin = crate::replaying(dir.path(), fixture);
-        let cmd = eren_shared::env_guard::command(&bin);
-        let mut proc = spawn(
-            cmd,
-            Box::new(crate::claude::compat::ClaudeCompat { label: "Qwen Code" }),
-            "test",
-        )
-        .unwrap();
+        let mut proc = crate::once_not_busy(|| {
+            spawn(
+                eren_shared::env_guard::command(&bin),
+                Box::new(crate::claude::compat::ClaudeCompat { label: "Qwen Code" }),
+                "test",
+            )
+        });
         let mut events = vec![];
         while let Some(e) = proc.events.recv().await {
             events.push(e);

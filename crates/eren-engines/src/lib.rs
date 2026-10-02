@@ -332,7 +332,7 @@ pub(crate) fn test_spec() -> RunSpec {
 /// Every event an engine sends for one run, to the end.
 #[cfg(test)]
 pub(crate) async fn drain(engine: &dyn Engine, spec: RunSpec) -> Vec<ErenEvent> {
-    let mut proc = engine.start(spec).unwrap();
+    let mut proc = once_not_busy(|| engine.start(spec.clone()));
     let mut events = vec![];
     while let Some(e) = proc.events.recv().await {
         events.push(e);
@@ -359,6 +359,33 @@ pub(crate) fn stand_in(dir: &std::path::Path, body: &str) -> String {
     bin.display().to_string()
 }
 
+/// Start a [`stand_in`], waiting out the moment its file is still "busy".
+///
+/// The script was just written, and if another test thread forked while it
+/// was open for writing, that child holds the descriptor until its own exec —
+/// running the script then fails with ETXTBSY. Nothing reopens the file for
+/// writing, so the window closes for good within milliseconds; a retry is the
+/// fix, not a mask. Anything else fails at once.
+#[cfg(test)]
+pub(crate) fn once_not_busy<T>(mut start: impl FnMut() -> anyhow::Result<T>) -> T {
+    const TEXT_BUSY: i32 = 26; // ETXTBSY on Linux and macOS alike
+    for _ in 0..100 {
+        match start() {
+            Err(e)
+                if e.chain().any(|c| {
+                    c.downcast_ref::<std::io::Error>()
+                        .and_then(std::io::Error::raw_os_error)
+                        == Some(TEXT_BUSY)
+                }) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other.unwrap(),
+        }
+    }
+    start().unwrap()
+}
+
 /// A stand-in that prints `fixture` on stdout and exits 0.
 #[cfg(all(test, unix))]
 pub(crate) fn replaying(dir: &std::path::Path, fixture: &str) -> String {
@@ -370,6 +397,26 @@ pub(crate) fn replaying(dir: &std::path::Path, fixture: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stand_in_still_open_for_writing_is_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = stand_in(dir.path(), "exit 0");
+        // What a forked sibling test does by accident: hold the script open
+        // for writing. Running it then fails — shown, not assumed.
+        let held = std::fs::OpenOptions::new().write(true).open(&bin).unwrap();
+        let busy = eren_shared::env_guard::command(&bin).spawn().unwrap_err();
+        assert_eq!(busy.raw_os_error(), Some(26), "{busy}");
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(held);
+        });
+        let mut child = once_not_busy(|| Ok(eren_shared::env_guard::command(&bin).spawn()?));
+        assert!(child.wait().await.unwrap().success());
+        release.join().unwrap();
+    }
 
     struct Fake(Capabilities);
 
