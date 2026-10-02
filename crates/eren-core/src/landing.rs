@@ -340,6 +340,20 @@ mod db_tests {
             b,
         )
         .await;
+        // The note is written after `start_card` returns, and the other
+        // dependent is told after that: the run existing says neither is
+        // there yet.
+        for (card, what) in [
+            (b, "the started card's note"),
+            (c, "the waiting card's note"),
+        ] {
+            t.until(
+                what,
+                "SELECT EXISTS (SELECT 1 FROM task_comments WHERE task_id = $1 AND author = 'system')",
+                card,
+            )
+            .await;
+        }
         let started: Vec<String> = sqlx::query_scalar(
             "SELECT content FROM task_comments WHERE task_id = $1 AND author = 'system'",
         )
