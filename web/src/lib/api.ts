@@ -6,7 +6,7 @@ export type { Goal };
 export type Tier = "easy" | "medium" | "complex";
 /**
  * What a person picked for a card, which is not the same as what a run gets.
- * `auto` means aichip decides per run and records which tier it chose and why.
+ * `auto` means Eren decides per run and records which tier it chose and why.
  */
 export type TierChoice = Tier | "auto";
 
@@ -231,7 +231,7 @@ export interface Task {
   /** The tier the latest run actually used. Null before the first run. */
   tierResolved: Tier | null;
   /**
-   * Why aichip picked that tier, when aichip picked it. Null when a person
+   * Why Eren picked that tier, when Eren picked it. Null when a person
    * chose — a choice that was already explicit needs no explanation.
    */
   tierReason: string | null;
@@ -412,7 +412,7 @@ export interface TaskPreview {
 /**
  * Where to send someone for a preview.
  *
- * The port is this page's own — aichip proxies preview hostnames on the port it
+ * The port is this page's own — Eren proxies preview hostnames on the port it
  * is already served on, so the browser's location is the authority on it and
  * the server never has to be told which port it is behind.
  */
@@ -463,7 +463,7 @@ export interface ProjectPreview {
 /**
  * One of the user's plan limits, as their own CLI reported it.
  *
- * Not fetched from Anthropic — aichip holds no credential. This is telemetry
+ * Not fetched from Anthropic — Eren holds no credential. This is telemetry
  * the CLI prints while it works, so it is as fresh as the last run.
  */
 export interface PlanLimit {
@@ -491,9 +491,9 @@ export interface UsageEvent {
 /**
  * Whether a limit is a wall you meet often, or met once.
  *
- * `daysSeen` counts only the days aichip actually heard from the limit, which
+ * `daysSeen` counts only the days Eren actually heard from the limit, which
  * is the days you ran something — so these are counts, never a percentage of
- * "the time". aichip learns nothing on a day it runs nothing.
+ * "the time". Eren learns nothing on a day it runs nothing.
  */
 export interface UsagePattern {
   limitType: string;
@@ -503,7 +503,7 @@ export interface UsagePattern {
 }
 
 /**
- * The pull request a card was finished as, as aichip last saw it.
+ * The pull request a card was finished as, as Eren last saw it.
  *
  * Every field but `number` and `url` is a cache of what `gh` reported, which
  * is why `syncedAt` is here: "checks are passing" and "checks were passing an
@@ -803,7 +803,7 @@ export const MAX_ATTACHMENTS = 10;
 
 export interface TaskComment {
   id: string;
-  /** `system` is aichip itself — how a card's checks went, say. */
+  /** `system` is Eren itself — how a card's checks went, say. */
   author: "user" | "agent" | "system";
   agentId: string | null;
   agentName: string | null;
@@ -1295,7 +1295,7 @@ export interface AppAction {
 /**
  * Which of the two kinds of app this is.
  *
- * `module` executes nothing and aichip draws it; the other two are real code in
+ * `module` executes nothing and Eren draws it; the other two are real code in
  * a container. The manifest's `runtime:` is what picks, and it cannot be
  * changed afterwards — that would be a different app, not an edit.
  */
@@ -1390,7 +1390,7 @@ export interface ChartBucket {
   value: string | null;
 }
 
-/** An app a project offers under `.aichip/apps/`. */
+/** An app a project offers under `.eren/apps/`. */
 export interface RepoApp {
   dir: string;
   name: string;
@@ -1416,7 +1416,7 @@ export interface AppGrants {
   /** What the manifest asks for. Never itself a grant. */
   requested: string[];
   granted: { scope: string; grantedAt: string; lastUsedAt: string | null }[];
-  /** Every scope aichip has, with a sentence each. */
+  /** Every scope Eren has, with a sentence each. */
   all: { scope: string; blurb: string; write: boolean }[];
 }
 
@@ -1579,7 +1579,7 @@ export interface Manager {
   nextAt: string | null;
 }
 
-/** What can wake a manager early. See `aichip_core::wake::Kind`. */
+/** What can wake a manager early. See `eren_core::wake::Kind`. */
 export type WakeKind =
   | "landed"
   | "unblocked"
@@ -1749,7 +1749,7 @@ const put = (url: string, body: unknown) =>
 const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?: unknown) =>
   fetch(url, {
     method,
-    headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+    headers: { "Content-Type": "application/json", "X-Eren-Write": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -1764,7 +1764,7 @@ export interface Beat {
   detail: string;
 }
 
-/** What aichip does about runs that stop showing signs of life. See `aichip_core::reaper`. */
+/** What Eren does about runs that stop showing signs of life. See `eren_core::reaper`. */
 export interface Unattended {
   /** Stop a run that has said nothing for this long. 0 is off. */
   silenceMinutes: number;
@@ -1772,7 +1772,7 @@ export interface Unattended {
   autoResume: boolean;
 }
 
-/** What a project's Merge requires. See `aichip_core::review`. */
+/** What a project's Merge requires. See `eren_core::review`. */
 export interface ReviewPolicy {
   requireChecks: boolean;
   requireReview: boolean;
@@ -1836,7 +1836,7 @@ export type InboxKind =
   | "review"
   | "recipe";
 
-/** One thing waiting on a person. See `aichip_core::inbox`. */
+/** One thing waiting on a person. See `eren_core::inbox`. */
 export interface InboxItem {
   key: string;
   kind: InboxKind;
@@ -1857,11 +1857,11 @@ export interface InboxItem {
   options: string[];
 }
 
-/** One line of the ledger. See `aichip_core::audit`. */
+/** One line of the ledger. See `eren_core::audit`. */
 export interface AuditEntry {
   id: number;
   at: string;
-  /** "api" is anything through the dashboard's API — aichip has no login,
+  /** "api" is anything through the dashboard's API — Eren has no login,
    *  so it does not claim "a person". */
   actorKind: "api" | "agent" | "system";
   actorRunId: string | null;
@@ -1912,7 +1912,7 @@ export type RevisionKind =
   | "review_policy"
   | "unattended";
 
-/** A setting as it was before one change. See `aichip_core::revisions`. */
+/** A setting as it was before one change. See `eren_core::revisions`. */
 export interface ConfigRevision {
   id: number;
   entityKind: RevisionKind;
@@ -2024,7 +2024,7 @@ export const api = {
     return fetch(`/api/estimate?${q}`).then((r) => json<{ estimate: CostEstimate | null }>(r));
   },
   // Probed live rather than cached: `gh auth login` happens in a terminal
-  // while aichip is running, and this is what tells you to go and do it.
+  // while Eren is running, and this is what tells you to go and do it.
   github: () => fetch("/api/github").then((r) => json<GitHubStatus>(r)),
   /** Create a GitHub repository for a project that only exists on this disk. */
   publishProject: (
@@ -2107,7 +2107,7 @@ export const api = {
       default_effort?: Effort | null;
     },
   ) => patch(`/api/projects/${projectId}`, body).then((r) => json<Project>(r)),
-  /** Take a project out of aichip. Its folder is not touched. */
+  /** Take a project out of Eren. Its folder is not touched. */
   unloadProject: (projectId: string) =>
     fetch(`/api/projects/${projectId}`, { method: "DELETE" }).then((r) =>
       json<{ unloaded: boolean }>(r),
@@ -2307,7 +2307,7 @@ export const api = {
       position?: number;
       engine?: string;
       plan_first?: boolean;
-      /** "auto" included — a card may hand the tier choice back to aichip. */
+      /** "auto" included — a card may hand the tier choice back to Eren. */
       model_tier?: TierChoice;
       /**
        * Three states, and JSON gives us all three: omit the key to leave it
@@ -2378,7 +2378,7 @@ export const api = {
   /**
    * Begin GitHub's device flow.
    *
-   * aichip never sees the token: `gh` runs the flow, GitHub hands the
+   * Eren never sees the token: `gh` runs the flow, GitHub hands the
    * credential straight to `gh`, and `gh` stores it. What comes back is a
    * one-time code whose whole purpose is to be shown.
    */
@@ -2452,7 +2452,7 @@ export const api = {
   }) =>
     fetch("/api/settings/attention", {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+      headers: { "Content-Type": "application/json", "X-Eren-Write": "1" },
       body: JSON.stringify({
         enabled: v.enabled,
         command: v.command,
@@ -2705,7 +2705,7 @@ export const api = {
   saveProjectChecks: (projectId: string, v: ProjectChecks) =>
     fetch(`/api/projects/${projectId}/checks`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Aichip-Write": "1" },
+      headers: { "Content-Type": "application/json", "X-Eren-Write": "1" },
       body: JSON.stringify({
         commands: v.commands,
         timeout_secs: v.timeoutSecs,
@@ -2720,7 +2720,7 @@ export const api = {
   runChecks: (taskId: string) =>
     fetch(`/api/tasks/${taskId}/checks`, {
       method: "POST",
-      headers: { "X-Aichip-Write": "1" },
+      headers: { "X-Eren-Write": "1" },
     }).then((r) => json<{ checkRunId: string }>(r)),
   fixChecks: (taskId: string) =>
     post(`/api/tasks/${taskId}/checks/fix`).then((r) => json<{ runId: string }>(r)),
@@ -2951,7 +2951,7 @@ export const api = {
         "Content-Type": "application/json",
         // A header a cross-origin simple request cannot set. There is no CORS
         // layer, so the preflight for it is never answered.
-        "X-Aichip-Write": "1",
+        "X-Eren-Write": "1",
       },
       body: JSON.stringify({ path, content, base_hash: baseHash }),
     }).then(async (r) => {
@@ -3056,7 +3056,7 @@ export const api = {
 
   // code map
   /** Also the on-open trigger: reading this is what keeps the index honest
-   *  about edits made outside aichip. */
+   *  about edits made outside Eren. */
   repoIndexStatus: (projectId: string) =>
     fetch(`/api/projects/${projectId}/map/status`).then((r) => json<RepoIndexStatus>(r)),
   /** A strict read — unlike the status call, this never triggers a reconcile. */

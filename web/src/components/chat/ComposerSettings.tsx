@@ -40,7 +40,7 @@ export function ComposerSettings({
   effort: Effort | null;
   onEffort: (next: Effort | null) => void;
   disabled?: boolean;
-  /** False for a chat with no project: it is never handed aichip's tools, so
+  /** False for a chat with no project: it is never handed Eren's tools, so
    *  an engine without them is no reason to warn. */
   usesTools?: boolean;
 }) {
@@ -99,7 +99,7 @@ export function ComposerSettings({
             The models are listed as buttons rather than hidden in a
             datalist. A datalist shows nothing until you guess what to
             type, which meant somebody with LM Studio running still had
-            no way to tell aichip could see it — the discovery worked
+            no way to tell Eren could see it — the discovery worked
             and the person could not find it, which is the same as it
             not working. */}
         <div className="mt-2">

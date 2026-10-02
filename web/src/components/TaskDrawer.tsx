@@ -484,7 +484,7 @@ export function TaskDrawer({
                 </span>
               )}
             </div>
-            {/* Why aichip picked this tier, whenever aichip did the picking — a
+            {/* Why Eren picked this tier, whenever Eren did the picking — a
                 choice made on someone's behalf that they cannot see is the
                 silent downgrade this project refuses elsewhere. */}
             {task.tierIsAuto && task.tierReason && (

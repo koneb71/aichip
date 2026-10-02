@@ -11,7 +11,7 @@ import { Menu } from "../ui/Overlay";
  * The isolation here is the **distinct origin**, not the `sandbox` attribute.
  * `allow-same-origin` is required rather than conceded: without it the frame
  * gets an opaque origin, which costs it cookies, storage, and its own
- * `/__aichip/*` calls — those fail the bridge's origin check, because
+ * `/__eren/*` calls — those fail the bridge's origin check, because
  * `Origin: null` is the absence of an origin rather than this app's.
  *
  * The usual warning that `allow-scripts allow-same-origin` lets a frame remove
@@ -46,13 +46,13 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
     refresh();
   }, [refresh]);
 
-  // Does this browser resolve *.localhost at all? Asked once, of a name aichip
+  // Does this browser resolve *.localhost at all? Asked once, of a name Eren
   // answers to itself, so "your browser cannot get here" is distinguishable
   // from "that container is down" — which otherwise look like the same blank
   // box. Safari has historically sent these to DNS instead of loopback.
   useEffect(() => {
     const port = window.location.port ? `:${window.location.port}` : "";
-    fetch(`http://probe.app.localhost${port}/__aichip/health`, { mode: "no-cors" })
+    fetch(`http://probe.app.localhost${port}/__eren/health`, { mode: "no-cors" })
       .then(() => setResolves(true))
       .catch(() => setResolves(false));
   }, []);
@@ -61,7 +61,7 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
   const building = status === "building";
 
   // Only while something is happening. A running container has nothing further
-  // to say to this page, and never talks to aichip on its own.
+  // to say to this page, and never talks to Eren on its own.
   useEffect(() => {
     if (!building) return;
     const t = setInterval(refresh, 2000);
@@ -86,9 +86,9 @@ export function AppFrame({ app, path = "" }: { app: App; path?: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Where aichip stops and the app begins, said once and quietly.
+      {/* Where Eren stops and the app begins, said once and quietly.
           Deliberately not removed when everything is fine: an app can draw a
-          convincing "aichip needs your token" dialog inside itself, and the
+          convincing "eren needs your token" dialog inside itself, and the
           only thing that gives it away is a line saying the content below is
           the app's. What moved into the menu is the *controls* — they are
           maintenance, and maintenance does not belong in the middle of a

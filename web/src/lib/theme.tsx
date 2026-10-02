@@ -17,7 +17,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 export type ThemeChoice = "system" | "light" | "dark";
 export type Theme = "light" | "dark";
 
-export const THEME_KEY = "aichip.theme";
+export const THEME_KEY = "eren.theme";
 
 export function readChoice(): ThemeChoice {
   try {

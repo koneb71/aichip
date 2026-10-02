@@ -1,7 +1,7 @@
-# aichip in a container.
+# Eren in a container.
 #
 # Read the "Running in Docker" section of README.md before using this. The
-# short version: aichip works by spawning the official `claude` CLI, so the
+# short version: Eren works by spawning the official `claude` CLI, so the
 # container needs both the CLI and a way to authenticate. Inside a container
 # there is no keychain and no browser, which leaves exactly one option — a
 # long-lived token from `claude setup-token`, supplied as an environment
@@ -27,7 +27,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-RUN cargo build --release --locked -p aichip-cli
+RUN cargo build --release --locked -p eren-cli
 
 # ── 3. Runtime ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -45,26 +45,32 @@ RUN apt-get update \
 # uid is overridable so files it writes into your mounted code stay yours.
 ARG UID=1000
 ARG GID=1000
-RUN groupadd -g "${GID}" aichip 2>/dev/null || true \
-    && useradd -m -u "${UID}" -g "${GID}" -s /bin/bash aichip 2>/dev/null || true
+RUN groupadd -g "${GID}" eren 2>/dev/null || true \
+    && useradd -m -u "${UID}" -g "${GID}" -s /bin/bash eren 2>/dev/null || true \
+    && install -d -o "${UID}" -g "${GID}" /home/eren/.eren
+# The project was called aichip, and its state volume was mounted at
+# /home/aichip/.aichip. The same volume is now mounted at ~/.eren, and paths
+# stored before the rename — worktrees in the database, git's own worktree
+# links — still name the old place, so the old place points at the new one.
+RUN mkdir -p /home/aichip && ln -s /home/eren/.eren /home/aichip/.aichip
 
-COPY --from=server /src/target/release/aichip /usr/local/bin/aichip
-COPY --from=web /web/dist /srv/aichip/web
+COPY --from=server /src/target/release/eren /usr/local/bin/eren
+COPY --from=web /web/dist /srv/eren/web
 
-ENV AICHIP_WEB_DIST=/srv/aichip/web
+ENV EREN_WEB_DIST=/srv/eren/web
 # Bind wide inside the container: the container's own loopback is not the
 # host's, so nothing outside the namespace could reach it otherwise. What is
 # actually exposed is decided by the port mapping you declare in compose — and
 # `-p 4820:4820` publishes on every interface, so it is reachable from your
-# network. aichip has no authentication, so bind `127.0.0.1:4820:4820` unless
+# network. Eren has no authentication, so bind `127.0.0.1:4820:4820` unless
 # you mean to share it.
-ENV AICHIP_BIND=0.0.0.0
+ENV EREN_BIND=0.0.0.0
 # Acknowledged here because binding wide is the only way a container can work,
-# not because the exposure is smaller. See `aichip_server::exposure`.
-ENV AICHIP_TRUST_NETWORK=1
+# not because the exposure is smaller. See `eren_server::exposure`.
+ENV EREN_TRUST_NETWORK=1
 EXPOSE 4820
 
-USER aichip
-WORKDIR /home/aichip
-ENTRYPOINT ["aichip"]
+USER eren
+WORKDIR /home/eren
+ENTRYPOINT ["eren"]
 CMD ["serve", "--headless"]

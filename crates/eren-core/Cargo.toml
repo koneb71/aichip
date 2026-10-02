@@ -1,0 +1,77 @@
+[package]
+name = "eren-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eren-shared = { workspace = true }
+eren-engines = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+rand = { workspace = true }
+# Research reports are markdown; the knowledge base stores HTML. Converted
+# server-side so the stored article does not depend on which client clicked
+# Save — the web side's react-markdown renders to DOM, not to a string.
+pulldown-cmark = { workspace = true }
+# Local semantic embeddings for space documents. ONNX inference on this
+# machine — never a model API. rustls features to match the workspace; the
+# model itself is fetched once at runtime and cached under ~/.eren/models.
+fastembed = { workspace = true }
+futures = "0.3"
+# `dyn RunGate` for the permission broker: async fn in traits is not
+# object-safe, and the test double is the whole reason the trait exists —
+# there is no database-backed test in this workspace.
+async-trait = "0.1"
+croner = "3"
+# Object storage (MinIO / any S3-compatible endpoint). SigV4 is signed by hand
+# rather than pulling an SDK: the request surface is four verbs, and an SDK
+# would also bring credential *discovery* — wandering off to read `~/.aws` or
+# instance metadata is precisely what this project promises not to do.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+# HTML sanitisation for knowledge-base bodies. Servo's sanitiser rather than
+# anything hand-rolled: article HTML arrives from a browser editor, is stored,
+# and is rendered back — the textbook stored-XSS shape.
+ammonia = "4"
+# Line diffing for the revision review UI. A hand-rolled LCS underneath a
+# "is this agent rewrite correct?" decision is exactly where a wrong diff
+# gets approved, so this is one small pure-Rust dependency worth having.
+similar = "2"
+serde_yaml = "0.9"
+pdf-extract = "0.12"
+# Document text extraction for the space index, all local: pdf-extract for
+# PDF, calamine for xlsx/xls, zip+quick-xml to read the XML inside docx/pptx
+# (both are ZIP containers). Extraction only — rendering stays with the CLI's
+# own Read tool.
+calamine = "0.36"
+zip = "8"
+quick-xml = "0.41"
+# Real parsers for the code map, rather than regexes over source text. A
+# regex cannot tell a function from the same words inside a string or a
+# comment, and a map that names definitions which do not exist sends an agent
+# to read a line that is not there. The grammars are C, compiled once.
+#
+# The versions look mismatched and are not: every grammar here depends on the
+# `tree-sitter-language` 0.1 ABI shim rather than on the core crate, which is
+# what lets a 0.23 grammar load into a 0.26 parser.
+tree-sitter = "0.26"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+
+[dev-dependencies]
+tempfile = "3"
+# Paused-clock tests. The permission window is 24 hours by default and what
+# happens when it closes is exactly the thing worth asserting — not a wait any
+# test suite can afford to actually take.
+tokio = { workspace = true, features = ["test-util"] }

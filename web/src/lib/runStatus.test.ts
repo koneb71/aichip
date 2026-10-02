@@ -11,11 +11,11 @@ describe("stopReason", () => {
   });
 
   it("treats a run that was stopped as an explanation, not a fault", () => {
-    // What the attention timeout writes. Nothing crashed — aichip chose to
+    // What the attention timeout writes. Nothing crashed — Eren chose to
     // stop rather than tell the engine a person had refused.
     const r = stopReason(
       "canceled",
-      "nobody answered the request to allow Bash after 24h; aichip stopped the run rather than telling it you had refused",
+      "nobody answered the request to allow Bash after 24h; Eren stopped the run rather than telling it you had refused",
     );
     expect(r?.tone).toBe("amber");
   });

@@ -1,6 +1,6 @@
-# Every child process goes through `aichip_shared::env_guard::command`, which
-# strips the secrets aichip holds before the child inherits its environment.
+# Every child process goes through `eren_shared::env_guard::command`, which
+# strips the secrets Eren holds before the child inherits its environment.
 disallowed-methods = [
-    { path = "std::process::Command::new", reason = "use aichip_shared::env_guard::command, which strips AICHIP_OWN_SECRETS" },
-    { path = "tokio::process::Command::new", reason = "use aichip_shared::env_guard::command, which strips AICHIP_OWN_SECRETS" },
+    { path = "std::process::Command::new", reason = "use eren_shared::env_guard::command, which strips env_guard::OWN_SECRETS" },
+    { path = "tokio::process::Command::new", reason = "use eren_shared::env_guard::command, which strips env_guard::OWN_SECRETS" },
 ]

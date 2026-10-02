@@ -13,7 +13,7 @@ import { Field, Input } from "./ui/Field";
  * space you were in. If the folder has since gone, the server refuses and the
  * picker is one click away.
  */
-const LAST_PARENT = "aichip.clone.parent";
+const LAST_PARENT = "eren.clone.parent";
 
 /**
  * Clone a repository from GitHub into a new project.
@@ -47,7 +47,7 @@ export function CloneRepoModal({
   const cloneId = useRef<string | null>(null);
 
   // The default location, asked of the server rather than guessed: it is
-  // `AICHIP_BROWSE_ROOT` or `$HOME`, and only the server knows which.
+  // `EREN_BROWSE_ROOT` or `$HOME`, and only the server knows which.
   useEffect(() => {
     if (parent) return;
     api
@@ -127,7 +127,7 @@ export function CloneRepoModal({
       title="Clone from GitHub"
       description={
         <>
-          Cloned with your own <code className="font-mono">gh</code> login — aichip holds no
+          Cloned with your own <code className="font-mono">gh</code> login — Eren holds no
           credential and never asks for one.
         </>
       }
@@ -162,7 +162,7 @@ export function CloneRepoModal({
       <div className="mt-3">
         <span className="mb-1.5 block text-xs font-medium text-fg">Location</span>
         <div className="flex items-center gap-2">
-          {/* Shown rather than assumed. It used to be the folder aichip
+          {/* Shown rather than assumed. It used to be the folder Eren
               browses from, silently — so the only way to find out where a
               repository had gone was to go looking for it. */}
           <span className="min-w-0 flex-1 truncate rounded-md border border-border bg-panel-2 px-2.5 py-1.5 font-mono text-xs text-fg-muted">

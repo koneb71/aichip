@@ -3,9 +3,9 @@ import { api } from "../../lib/api";
 import { Button } from "../ui/Button";
 
 /**
- * The Dockerfile a container app builds from, when it is no longer aichip's.
+ * The Dockerfile a container app builds from, when it is no longer Eren's.
  *
- * Silent in the common case, which is the point of aichip owning the runtime
+ * Silent in the common case, which is the point of Eren owning the runtime
  * Dockerfiles: nobody reads the fifth agent-written one carefully, and a gate
  * people click through manufactures consent rather than obtaining it. This
  * appears only when the committed file differs from ours — and then it is not
@@ -56,7 +56,7 @@ export function DockerfileGate({
   return (
     <div className="mb-4 rounded-xl border border-warning/40 bg-warning-subtle p-4">
       <div className="text-sm font-semibold text-warning-fg">
-        This app's Dockerfile is not the one aichip wrote.
+        This app's Dockerfile is not the one Eren wrote.
       </div>
       <p className="mt-1 text-xs text-warning-fg/80">
         It is what will be built, and its <span className="font-mono">RUN</span> lines execute

@@ -183,9 +183,9 @@ export function ProjectSettings({
               Your folder stays exactly where it is. Nothing on disk is deleted.
             </div>
             <div className="mt-1">
-              aichip forgets this project: its cards, their runs and comments, its chats,
-              and the <code className="font-mono">aichip/*</code> branches and checkouts
-              aichip created for it. Load the folder again to start over.
+              Eren forgets this project: its cards, their runs and comments, its chats,
+              and the <code className="font-mono">eren/*</code> branches and checkouts
+              Eren created for it. Load the folder again to start over.
             </div>
             <div className="mt-2 flex items-center gap-2">
               <Button variant="danger" size="sm" onClick={unload} disabled={busy}>

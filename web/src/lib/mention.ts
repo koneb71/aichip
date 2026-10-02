@@ -5,7 +5,7 @@
  * counts as a line range — are unit-tested rather than only clickable, and so
  * that typing `@api.ts:10-25` by hand behaves exactly like picking it in the UI.
  *
- * The agent half of this file exists twice: `crates/aichip-core/src/runs/
+ * The agent half of this file exists twice: `crates/eren-core/src/runs/
  * mentions.rs` decides which agent a task actually binds to, and this side only
  * draws the chip. They read the same corpus — `mention_cases.json`, next to the
  * Rust — because a chip drawn for a mention that did not bind is worse than no

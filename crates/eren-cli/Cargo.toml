@@ -1,0 +1,23 @@
+[package]
+name = "eren-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "eren"
+path = "src/main.rs"
+
+[dependencies]
+eren-shared = { workspace = true }
+eren-core = { workspace = true }
+eren-engines = { workspace = true }
+eren-server = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+axum = { workspace = true }
+postgresql_embedded = "0.19"
+rand = { workspace = true }

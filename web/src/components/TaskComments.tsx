@@ -227,7 +227,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
 }
 
 function CommentRow({ comment }: { comment: TaskComment }) {
-  // aichip's own line — how the checks went — is neither side of the
+  // Eren's own line — how the checks went — is neither side of the
   // conversation, so it sits between them, small.
   if (comment.author === "system") {
     return (

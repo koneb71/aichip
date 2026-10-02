@@ -8,7 +8,7 @@
  * ## There is no percentage here, and that is not an omission
  *
  * Claude Code's `rate_limit_event` carries a *status*, a window and a reset
- * time. It does not carry how much of the window is spent, and aichip has no
+ * time. It does not carry how much of the window is spent, and Eren has no
  * other way to know: reading the CLI's config or calling Anthropic are both
  * things this project does not do. So a "68% used" bar would be a number we
  * invented, which is worse than no number. Everything below is derived only

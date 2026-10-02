@@ -104,7 +104,7 @@ export function searchRows(r: SearchResults): SearchRow[] {
   ];
 }
 
-const COLLAPSE_KEY = "aichip.sidebar.collapsed";
+const COLLAPSE_KEY = "eren.sidebar.collapsed";
 
 /** Whether the sidebar was left as an icon rail. Guarded: storage can throw. */
 export function readCollapsed(): boolean {

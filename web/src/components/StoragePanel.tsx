@@ -76,7 +76,7 @@ export function StoragePanel({ projectId }: { projectId: string }) {
         {held.checkouts.items.map((c) => (
           <Row
             key={c.branch}
-            name={c.branch.replace(/^aichip\//, "")}
+            name={c.branch.replace(/^Eren\//, "")}
             bytes={c.bytes}
             why={c.keptBecause}
           />

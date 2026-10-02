@@ -4,14 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>aichip</title>
+    <title>Eren</title>
     <script>
       // Before first paint, so a dark reload never flashes white. Mirrors
       // lib/theme.tsx: same key, same rule, every storage access guarded.
+      // The old key too, on the one load before lib/brand.ts has moved it.
       (function () {
         var choice = "system";
         try {
-          var v = localStorage.getItem("aichip.theme");
+          var v = localStorage.getItem("eren.theme") || localStorage.getItem("aichip.theme");
           if (v === "light" || v === "dark" || v === "system") choice = v;
         } catch (e) {}
         var dark =

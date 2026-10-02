@@ -53,7 +53,7 @@ export function useActivity(): ActivityContext {
   return useContext(Ctx);
 }
 
-const STORAGE_KEY = "aichip:notify";
+const STORAGE_KEY = "eren:notify";
 
 /** Whether the user has opted in *and* the browser still agrees. */
 export function notificationsOn(): boolean {

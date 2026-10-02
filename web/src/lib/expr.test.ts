@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import cases from "../../../crates/aichip-core/src/apps/expr_cases.json";
+import cases from "../../../crates/eren-core/src/apps/expr_cases.json";
 import { ExprError, fieldsUsed, parse, run, showIf, type Record_, type Val } from "./expr";
 
 /**
  * The shared specification.
  *
- * This file and `crates/aichip-core/src/apps/expr.rs` read the same corpus, and
+ * This file and `crates/eren-core/src/apps/expr.rs` read the same corpus, and
  * that is the only thing keeping two implementations of one language honest
  * with each other. A case added there fails on whichever side has not caught
  * up — which is the point, and why the corpus lives next to the Rust rather

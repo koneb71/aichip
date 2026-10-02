@@ -25,7 +25,7 @@ export interface KnowledgeContext {
  * can read the route, which the app's providers cannot: they are mounted
  * outside the router.
  */
-const SPACE_KEY = "aichip.kb.space";
+const SPACE_KEY = "eren.kb.space";
 
 export default function KnowledgeLayout() {
   const { active } = useWorkspace();

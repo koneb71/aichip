@@ -4,7 +4,7 @@ import { Button } from "../ui/Button";
 import { Select } from "../ui/Field";
 
 /**
- * Apps a project offers under `.aichip/apps/`.
+ * Apps a project offers under `.eren/apps/`.
  *
  * How a team shares one: commit the manifest and it arrives in a pull request
  * like anything else. Nothing syncs on its own and nothing is watched —
@@ -86,7 +86,7 @@ export function RepoApps({
           ))}
         </Select>
         <span className="text-[11px] text-fg-muted">
-          Anything committed under <span className="font-mono">.aichip/apps/</span>.
+          Anything committed under <span className="font-mono">.eren/apps/</span>.
         </span>
       </div>
 
@@ -96,7 +96,7 @@ export function RepoApps({
 
       {found?.length === 0 && (
         <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-fg-muted">
-          This project has no apps in <span className="font-mono">.aichip/apps/</span>. Export one
+          This project has no apps in <span className="font-mono">.eren/apps/</span>. Export one
           as <strong>Share</strong> and commit its manifest there to offer it to everyone working
           on this repository.
         </div>

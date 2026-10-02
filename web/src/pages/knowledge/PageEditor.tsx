@@ -26,7 +26,7 @@ type SaveState =
   | { kind: "error"; message: string };
 
 const DEBOUNCE_MS = 1500;
-const DRAFT_KEY = (id: string) => `aichip.kb.draft.${id}`;
+const DRAFT_KEY = (id: string) => `eren.kb.draft.${id}`;
 
 export default function PageEditor() {
   const { pageId } = useParams();

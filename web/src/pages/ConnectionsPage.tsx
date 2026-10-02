@@ -11,23 +11,23 @@ import { Dialog } from "../components/ui/Dialog";
  * MCP servers the user connects.
  *
  * Every agent could previously do exactly three things — read files, write
- * files, run bash — because the only MCP server in play was aichip's own.
+ * files, run bash — because the only MCP server in play was Eren's own.
  * This is where that stops being the ceiling: connect a browser, a database,
  * an issue tracker, then tick it on for the agents that should have it.
  *
- * Nothing here touches credentials. aichip spawns the official CLI and hands
+ * Nothing here touches credentials. Eren spawns the official CLI and hands
  * it a `--mcp-config` file, which is the same thing you'd write by hand.
  */
 /**
  * GitHub, which is a connection but not an MCP server.
  *
  * It sits above the server list rather than in it because there is nothing to
- * configure — aichip drives the `gh` CLI you already have, so the only question
+ * configure — Eren drives the `gh` CLI you already have, so the only question
  * is whether it is installed and logged in. There is no field to fill in and no
  * token to paste, which is the point.
  *
  * Re-checked on every visit, because `gh auth login` happens in a terminal
- * while aichip is running, and telling someone to go and run it is most of what
+ * while Eren is running, and telling someone to go and run it is most of what
  * this card is for.
  */
 function GitHubCard() {
@@ -101,10 +101,10 @@ function GitHubCard() {
 
       <p className="mt-1.5 max-w-xl text-xs text-fg-muted">
         {state.usable
-          ? "Clone a repo, open a pull request from a finished task, and pull issues in as cards. aichip runs your own gh CLI and never sees a token."
+          ? "Clone a repo, open a pull request from a finished task, and pull issues in as cards. Eren runs your own gh CLI and never sees a token."
           : state.installed
-            ? "aichip drives the gh CLI you already have, so there is no token to paste here — it just needs to be logged in."
-            : "Install the GitHub CLI and log in, and cloning, pull requests and issue import become available. aichip never handles a token of its own."}
+            ? "eren drives the gh CLI you already have, so there is no token to paste here — it just needs to be logged in."
+            : "Install the GitHub CLI and log in, and cloning, pull requests and issue import become available. Eren never handles a token of its own."}
       </p>
 
       {/* `gh`'s own words. "Not logged in" alone would send someone to re-auth
@@ -149,7 +149,7 @@ function GitHubCard() {
                     <code className="text-[11px]">{r}</code>
                   </span>
                 ))}{" "}
-                and will not go below that. aichip asks for nothing more unless
+                and will not go below that. Eren asks for nothing more unless
                 you tick it.
               </div>
               {scopes.optional.map((o) => (
@@ -185,7 +185,7 @@ function GitHubCard() {
       {flow && (
         <div className="mt-2 rounded-xl border border-border bg-panel-2 p-3">
           <div className="text-xs text-fg-muted">
-            Enter this code on GitHub. aichip never sees the token — GitHub
+            Enter this code on GitHub. Eren never sees the token — GitHub
             gives it straight to your <code className="text-[11px]">gh</code>.
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -527,7 +527,7 @@ function ServerEditor({
               className="mt-1 w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent"
             />
             <div className="mt-1 text-[11px] text-fg-muted">
-              Anthropic API keys are refused here — aichip runs on your CLI's own
+              Anthropic API keys are refused here — Eren runs on your CLI's own
               login and never handles credentials.
             </div>
           </>

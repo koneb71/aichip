@@ -214,7 +214,7 @@ async function insertUploaded(
 function StatusBar({ editor }: { editor: Editor }) {
   const chars = editor.storage.characterCount.characters();
   const words = editor.storage.characterCount.words();
-  // Matches MAX_PAGE_CHARS in crates/aichip-core/src/kb/mod.rs.
+  // Matches MAX_PAGE_CHARS in crates/eren-core/src/kb/mod.rs.
   const over = chars > 6000;
   return (
     <div className="flex items-center gap-3 border-t border-border px-3 py-1.5 text-[10px] text-fg-muted">
