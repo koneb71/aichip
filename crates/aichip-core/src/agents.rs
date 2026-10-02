@@ -580,9 +580,17 @@ mod tests {
                     continue;
                 };
                 let body = &source[start..at];
-                // A test writing a run row as a fixture starts no agent.
+                // A test writing a run row as a fixture starts no agent:
+                // a test fn, or anything inside an inline test module
+                // (which in this codebase always closes the file).
                 let before = source[..start].trim_end();
-                let is_test = before.ends_with("#[test]") || before.ends_with("#[tokio::test]");
+                let in_test_module = source[..at]
+                    .rfind("#[cfg(test)]\nmod ")
+                    .and_then(|i| source[i..].lines().nth(1))
+                    .is_some_and(|line| line.trim_end().ends_with('{'));
+                let is_test = in_test_module
+                    || before.ends_with("#[test]")
+                    || before.ends_with("#[tokio::test]");
                 if is_test
                     || body.contains("agents::assert_")
                     || NO_AGENT.iter().any(|(n, _)| *n == name)

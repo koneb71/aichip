@@ -343,6 +343,9 @@ struct CreateTask {
     /// Start by itself once every card blocking it has landed.
     #[serde(default)]
     start_when_unblocked: bool,
+    /// The person saw the forecast and starts anyway.
+    #[serde(default)]
+    acknowledge_forecast: bool,
 }
 
 async fn create(
@@ -400,6 +403,16 @@ async fn create(
         // Same gate as `start`: a card created with start=true must not slip
         // past the capability check.
         vet_task(&state, task_id).await?;
+        // The card exists now, in the backlog. Say which, so "start anyway"
+        // starts this one rather than making a second.
+        if let Err((code, message)) =
+            ask_about_cost(&state, task_id, body.acknowledge_forecast).await
+        {
+            let mut ask: Value =
+                serde_json::from_str(&message).unwrap_or_else(|_| json!({ "message": message }));
+            ask["taskId"] = json!(task_id);
+            return Err((code, ask.to_string()));
+        }
         let id = state
             .orchestrator
             .enqueue_task(task_id)
@@ -417,11 +430,25 @@ async fn create(
     Ok(Json(json!({ "id": task_id, "runId": run_id })))
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct StartBody {
+    /// The person saw the forecast and starts anyway.
+    acknowledge_forecast: bool,
+}
+
 async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    body: Option<Json<StartBody>>,
 ) -> Result<Json<Value>, ApiError> {
     vet_task(&state, id).await?;
+    ask_about_cost(
+        &state,
+        id,
+        body.is_some_and(|Json(b)| b.acknowledge_forecast),
+    )
+    .await?;
     let run_id = state
         .orchestrator
         .enqueue_task(id)
@@ -433,6 +460,28 @@ async fn start(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "runId": run_id })))
+}
+
+/// Ask first when similar runs say this start could overrun a budget. The
+/// 409's body is JSON, so the client can show the numbers and offer "start
+/// anyway", which re-sends with `acknowledge_forecast`.
+async fn ask_about_cost(
+    state: &AppState,
+    task_id: Uuid,
+    acknowledged: bool,
+) -> Result<(), ApiError> {
+    match aichip_core::budgets::forecast_check(&state.db, task_id, acknowledged)
+        .await
+        .map_err(internal)?
+    {
+        Ok(()) => Ok(()),
+        Err(ask) => {
+            let mut body = serde_json::to_value(&ask).map_err(internal)?;
+            body["kind"] = json!("forecast");
+            body["message"] = json!(ask.to_string());
+            Err((StatusCode::CONFLICT, body.to_string()))
+        }
+    }
 }
 
 /// Refuse to queue a card its engine cannot honour, or that is already being
@@ -757,6 +806,9 @@ pub(crate) struct MoveTask {
     /// it alone.
     #[serde(default)]
     start_when_unblocked: Option<bool>,
+    /// Dropping it into In Progress after seeing the forecast.
+    #[serde(default)]
+    acknowledge_forecast: bool,
 }
 
 impl MoveTask {
@@ -905,6 +957,7 @@ pub(crate) async fn move_task(
         body.board_column.as_deref() == Some("running") && current == "backlog" && !run_active;
     if starting {
         vet_task(&state, id).await?;
+        ask_about_cost(&state, id, body.acknowledge_forecast).await?;
     }
 
     sqlx::query(

@@ -694,6 +694,73 @@ pub async fn set_daily_cap(db: &Db, cap: Option<f64>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Starting this card could, by the look of similar runs, cost more than a
+/// budget has left — so the person is asked first. Only on a policy with
+/// `confirm_above_usd`, and only when the likely worst case is above both
+/// that line and what is left: a start the budget can absorb asks nothing.
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[error("this could cost up to ${p90_usd:.2} (median ${median_usd:.2}, from {runs} similar runs) and only ${headroom_usd:.2} is left of budget \u{201c}{policy}\u{201d}")]
+pub struct ForecastAsk {
+    pub policy: String,
+    pub policy_id: Uuid,
+    pub median_usd: f64,
+    pub p90_usd: f64,
+    pub runs: i64,
+    pub headroom_usd: f64,
+}
+
+/// Ask before a start whose forecast could overrun a budget. With
+/// `acknowledged`, the start goes ahead and the choice is recorded
+/// (`forecast_ack`) — it adds no room: if the budget is truly spent when the
+/// run comes up, the queue still holds it.
+pub async fn forecast_check(
+    db: &Db,
+    task_id: Uuid,
+    acknowledged: bool,
+) -> anyhow::Result<Result<(), ForecastAsk>> {
+    let scope = scope_of_task(db, task_id).await?;
+    let policies: Vec<Policy> = policies_for(db, &scope, true)
+        .await?
+        .into_iter()
+        .filter(|p| p.confirm_above_usd.is_some() && p.cap_usd.is_some())
+        .collect();
+    if policies.is_empty() {
+        return Ok(Ok(()));
+    }
+    let Some(estimate) = crate::estimate::for_card(db, task_id).await? else {
+        return Ok(Ok(()));
+    };
+    for policy in policies {
+        let line = policy.confirm_above_usd.unwrap_or(0.0);
+        let standing = standing(db, policy).await?;
+        let headroom = (standing.policy.cap_usd.unwrap_or(0.0) - standing.used.usd).max(0.0);
+        if estimate.p90_usd <= line || estimate.p90_usd <= headroom {
+            continue;
+        }
+        if !acknowledged {
+            return Ok(Err(ForecastAsk {
+                policy: standing.policy.name.clone(),
+                policy_id: standing.policy.id,
+                median_usd: estimate.median_usd,
+                p90_usd: estimate.p90_usd,
+                runs: estimate.runs,
+                headroom_usd: headroom,
+            }));
+        }
+        sqlx::query(
+            "INSERT INTO budget_incidents (policy_id, window_start, kind, usd, note)
+             VALUES ($1, $2, 'forecast_ack', $3, 'started past the forecast')",
+        )
+        .bind(standing.policy.id)
+        .bind(standing.window_start)
+        .bind(estimate.p90_usd)
+        .execute(&db.pool)
+        .await?;
+    }
+    Ok(Ok(()))
+}
+
 /// Let go of every queued run a policy was holding — after an override, an
 /// edit or a delete, the question has a new answer and the queue should ask
 /// it again rather than wait out the window.

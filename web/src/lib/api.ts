@@ -2047,8 +2047,11 @@ export const api = {
     article_ids?: string[];
     attachment_ids?: string[];
   }) => post("/api/tasks", body).then((r) => json<{ id: string; runId: string | null }>(r)),
-  startTask: (taskId: string) =>
-    post(`/api/tasks/${taskId}/start`).then((r) => json<{ runId: string }>(r)),
+  /** `acknowledgeForecast`: the person saw what it could cost and starts anyway. */
+  startTask: (taskId: string, acknowledgeForecast = false) =>
+    post(`/api/tasks/${taskId}/start`, { acknowledge_forecast: acknowledgeForecast }).then((r) =>
+      json<{ runId: string }>(r),
+    ),
   deleteTask: (taskId: string) =>
     fetch(`/api/tasks/${taskId}`, { method: "DELETE" }).then((r) =>
       json<{ deleted: boolean }>(r),
@@ -2089,6 +2092,8 @@ export const api = {
       prompt?: string;
       /** Start by itself once every blocker has landed. */
       start_when_unblocked?: boolean;
+      /** Dropping it into In Progress after seeing the forecast. */
+      acknowledge_forecast?: boolean;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>

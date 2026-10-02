@@ -229,3 +229,117 @@ mod tests {
         assert_eq!(burn_at(&s, now), None);
     }
 }
+
+/// Against a real database — see `crate::testdb`.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb;
+
+    /// History from six weeks ago: inside the estimate's 90 days, outside
+    /// today's budget window.
+    async fn history(t: &testdb::TestDb, card: Uuid, costs: &[f64]) {
+        for cost in costs {
+            sqlx::query(
+                "INSERT INTO runs (task_id, status, trigger, engine, tier_resolved, cost_usd,
+                                   created_at, started_at, finished_at)
+                 VALUES ($1, 'completed', 'manual', 'mock', 'medium', $2,
+                         now() - interval '40 days', now() - interval '40 days', now() - interval '40 days')",
+            )
+            .bind(card)
+            .bind(cost)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_estimate_widens_until_it_has_enough_history() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (_, here) = t.project(dir.path(), true).await;
+        let (_, there) = t.project(&dir.path().join("there"), true).await;
+        let fresh = t.card(here, "new").await;
+        assert_eq!(
+            for_card(&t.db, fresh).await.unwrap(),
+            None,
+            "no history, no number"
+        );
+
+        // Six runs elsewhere: not enough here, so it reads the tier anywhere.
+        let old = t.card(there, "old").await;
+        history(&t, old, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).await;
+        let e = for_card(&t.db, fresh).await.unwrap().unwrap();
+        assert_eq!((e.basis, e.runs), ("tier", 6));
+        assert!((e.median_usd - 3.5).abs() < 1e-9 && e.p90_usd > 5.0);
+
+        // Five of its own: now it can speak for this project.
+        let mine = t.card(here, "mine").await;
+        history(&t, mine, &[0.1, 0.1, 0.1, 0.1, 0.1]).await;
+        assert_eq!(
+            for_card(&t.db, fresh).await.unwrap().unwrap().basis,
+            "project"
+        );
+        t.finish().await;
+    }
+
+    /// A start that could overrun what is left asks first; acknowledged, it
+    /// goes ahead and the choice is on record.
+    #[tokio::test]
+    async fn a_start_that_could_overrun_a_budget_asks_first() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (_, project) = t.project(dir.path(), true).await;
+        let old = t.card(project, "old").await;
+        history(&t, old, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).await;
+        let card = t.card(project, "new").await;
+        let policy: Uuid = sqlx::query_scalar(
+            "INSERT INTO budget_policies (name, scope_kind, window_kind, cap_usd, confirm_above_usd)
+             VALUES ('Daily', 'machine', 'day', 10, 1) RETURNING id",
+        )
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+
+        // $10 left and a likely worst case near $5.50: nothing to ask.
+        assert_eq!(
+            crate::budgets::forecast_check(&t.db, card, false)
+                .await
+                .unwrap(),
+            Ok(())
+        );
+
+        sqlx::query("UPDATE budget_policies SET cap_usd = 4 WHERE id = $1")
+            .bind(policy)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let ask = crate::budgets::forecast_check(&t.db, card, false)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!((ask.policy.as_str(), ask.headroom_usd), ("Daily", 4.0));
+        assert!(ask.to_string().contains("only $4.00 is left"));
+
+        assert_eq!(
+            crate::budgets::forecast_check(&t.db, card, true)
+                .await
+                .unwrap(),
+            Ok(())
+        );
+        let acks: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM budget_incidents WHERE policy_id = $1 AND kind = 'forecast_ack'",
+        )
+        .bind(policy)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(acks, 1);
+        t.finish().await;
+    }
+}

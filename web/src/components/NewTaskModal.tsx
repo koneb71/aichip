@@ -12,6 +12,7 @@ import { EnginePicker, useEngines } from "../lib/engines";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { TIERS } from "./TierPicker";
 import { EffortPicker } from "./EffortPicker";
+import { estimateLine, ForecastAsk, parseForecastAsk } from "../lib/forecast";
 
 export function NewTaskModal({
   project,
@@ -41,6 +42,10 @@ export function NewTaskModal({
   const [articleIds, setArticleIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What similar runs cost, and — when that could overrun a budget — the
+  // question the server asked before starting the card it just made.
+  const [estimate, setEstimate] = useState<string | null>(null);
+  const [ask, setAsk] = useState<ForecastAsk | null>(null);
   const att = useAttachments(project.id);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
@@ -68,6 +73,13 @@ export function NewTaskModal({
     api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
     api.skills(active.id).then((r) => setSkills(r.skills)).catch(() => {});
   }, [active]);
+
+  useEffect(() => {
+    api
+      .estimate(project.id, tier, engine ?? undefined)
+      .then((r) => setEstimate(estimateLine(r.estimate)))
+      .catch(() => setEstimate(null));
+  }, [project.id, tier, engine]);
 
   // One picker, two kinds of assignee — a task goes to a person or a team,
   // never both.
@@ -99,6 +111,14 @@ export function NewTaskModal({
       att.clear();
       onCreated();
     } catch (e) {
+      // The card was made but not started: similar runs say it could
+      // overrun a budget, so the person decides.
+      const question = parseForecastAsk(String(e));
+      if (question?.taskId) {
+        att.clear();
+        setAsk(question);
+        return;
+      }
       // Without this the modal swallowed every failure silently.
       setError(String(e));
     } finally {
@@ -274,6 +294,35 @@ export function NewTaskModal({
             </span>
           </span>
         </label>
+
+        {ask && (
+          <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <div>
+              The card is in the backlog. {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={async () => {
+                  try {
+                    await api.startTask(ask.taskId!, true);
+                    onCreated();
+                  } catch (e) {
+                    setAsk(null);
+                    setError(String(e));
+                  }
+                }}
+                className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
+              >
+                Start anyway
+              </button>
+              <button onClick={onCreated} className="rounded-md border border-amber-300 px-2.5 py-1 text-[11px]">
+                Leave it in the backlog
+              </button>
+            </div>
+          </div>
+        )}
+
+        {estimate && !ask && <div className="mb-2 text-right text-[11px] text-ink-dim">{estimate}</div>}
 
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-ink-dim hover:text-ink">
