@@ -98,7 +98,9 @@ compatibility promise yet.
 - **macOS or Linux.** Windows is not supported; nothing has been tested there.
 - **A Rust toolchain** (stable, 2021 edition) to build the workspace. On Debian or Ubuntu
   you also need `pkg-config` and `libssl-dev`.
-- **Node 22 and pnpm 10** to build the dashboard (that is what CI pins). The server serves
+- **Node 22 and pnpm 10** to build the dashboard. pnpm's exact version is pinned in
+  `web/package.json` (`packageManager`), so corepack, CI and the Docker build all run the same
+  one. The server serves
   `web/dist`, so a source checkout needs `pnpm build` once before `serve` has a UI to hand
   out.
 - **git** on `PATH`. It is not optional: worktrees are how a task stays reviewable.

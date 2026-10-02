@@ -1,2 +1,10 @@
 allowBuilds:
   esbuild: true
+
+# Refuse any package version published less than a day ago. Most malicious
+# releases are caught and pulled within hours, so a day's wait is the cheap
+# half of supply-chain safety. Newer pnpm applies this by default and checks
+# the lockfile against it; saying it here makes every pnpm — CI's, the
+# Docker build's, yours — agree, rather than a fresh dependency passing CI
+# and then failing the image build.
+minimumReleaseAge: 1440

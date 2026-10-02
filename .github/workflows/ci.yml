@@ -77,9 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version here: it is read from `packageManager` in web/package.json,
+      # the same pin corepack uses in the Docker build. Naming it twice is an
+      # error in this action, and two places for it is how they drift.
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          package_json_file: web/package.json
 
       - uses: actions/setup-node@v4
         with:
