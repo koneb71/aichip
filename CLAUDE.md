@@ -153,7 +153,7 @@ Everything waiting on a person is one list, `eren_core::inbox::list` — a query
 
 ### Config revisions
 
-`eren_core::revisions`: an edit to an agent, team, routine (manager included), skill, project checks, budget policy or the attention setting keeps the row it replaced in `config_revisions` (migration 0080, last `KEEP` = 20 per entity) — `revisions::keep`, called by the entity's own update and delete handlers; `revisions::tests::every_writer_keeps_a_revision` names each one and fails for a writer added without it. Rows are read generically (`to_jsonb`) from a table chosen by the closed `EntityKind` enum, never from request text. **A restore is an edit**: `routes/revisions.rs` maps the snapshot onto that entity's own update body and calls its own handler, so validation, the write header, the single writer of `project_checks` and the audit entry all apply, and the restore is itself a revision.
+`eren_core::revisions`: an edit to an agent, team, routine (manager included), skill, project checks, budget policy, review policy, or the attention or unattended-runs setting keeps the row it replaced in `config_revisions` (migration 0080, last `KEEP` = 20 per entity) — `revisions::keep`, called by the entity's own update and delete handlers; `revisions::tests::every_writer_keeps_a_revision` names each one and fails for a writer added without it. Rows are read generically (`to_jsonb`) from a table chosen by the closed `EntityKind` enum, never from request text. **A restore is an edit**: `routes/revisions.rs` maps the snapshot onto that entity's own update body and calls its own handler, so validation, the write header, the single writer of `project_checks` and the audit entry all apply, and the restore is itself a revision.
 
 ### Permissions
 
