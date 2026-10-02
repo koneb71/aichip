@@ -13,7 +13,8 @@ You need:
 
 - A stable Rust toolchain. CI builds on `stable`, so anything current works.
 - `git` on `PATH`. Eren shells out to it for worktrees, diffs and merges.
-- Node 22 and pnpm 10, if you are touching the dashboard. CI pins those two.
+- Node 22 and pnpm 10, if you are touching the dashboard. pnpm's exact version is the
+  `packageManager` field in `web/package.json`; with corepack enabled you get it automatically.
 - On Debian or Ubuntu, `pkg-config` and `libssl-dev` for the Rust build.
 
 `./scripts/setup.sh` installs all of that on macOS (with Homebrew) or Linux (apt, dnf, pacman
@@ -191,6 +192,12 @@ Open an issue first. Then follow how Gemini CLI, Cursor CLI, Qwen Code and Amp w
    and third are done.
 
 ## Web changes
+
+**A dependency release has to be a day old.** `web/pnpm-workspace.yaml` sets
+`minimumReleaseAge: 1440`, so pnpm will not resolve, and newer pnpm will not install, a package
+version published in the last 24 hours — most malicious releases are pulled within that window.
+If `pnpm install` picks an older version than you expected, that is why; wait a day rather than
+overriding it.
 
 The dashboard has a design system, and two tests hold it:
 
