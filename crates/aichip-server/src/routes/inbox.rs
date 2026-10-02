@@ -51,6 +51,10 @@ struct Resolve {
     /// A revise note, a rejection reason, or an answer.
     #[serde(default)]
     text: Option<String>,
+    /// Approving a proposal to start a card: the person saw what it could
+    /// cost and starts it anyway — the Start button's own acknowledgement.
+    #[serde(default)]
+    acknowledge_forecast: bool,
 }
 
 fn bad(msg: impl Into<String>) -> ApiError {
@@ -124,7 +128,7 @@ async fn resolve(
                 .map_err(answer_refused)?;
             json!("dismissed")
         }
-        ("decision", "approve") => decide(&state, id(0)?).await?,
+        ("decision", "approve") => decide(&state, id(0)?, body.acknowledge_forecast).await?,
         ("decision", "deny") => {
             let claimed = aichip_core::decisions::claim(&state.db, id(0)?, "denied")
                 .await
@@ -201,22 +205,45 @@ async fn resolve(
 
 /// Approve a proposal: claim it, run its effect through the function its own
 /// button calls, and record what happened — including a failure.
-async fn decide(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
-    let effect = aichip_core::decisions::claim(&state.db, id, "approved")
-        .await
-        .map_err(internal)?
-        .ok_or((
-            StatusCode::CONFLICT,
-            "that proposal has already been decided".to_string(),
-        ))?;
-    let result = apply(state, id, &effect).await;
-    aichip_core::decisions::settle(&state.db, id, result.clone().map_err(|(_, m)| m))
-        .await
+///
+/// Claim, effect and record run as one task the request cannot drop: a tab
+/// closed mid-approval used to leave the proposal claimed and the effect
+/// never run. (A crash in between is `recover_orphans`'s to put back.)
+///
+/// A refusal the person can answer — a 409: the card is blocked for now, the
+/// start wants its cost acknowledged — puts the proposal back as it was, so
+/// approving again later works. Only a real failure is recorded as one.
+async fn decide(state: &AppState, id: Uuid, acknowledge_forecast: bool) -> Result<Value, ApiError> {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let effect = aichip_core::decisions::claim(&state.db, id, "approved")
+            .await
+            .map_err(internal)?
+            .ok_or((
+                StatusCode::CONFLICT,
+                "that proposal has already been decided".to_string(),
+            ))?;
+        let result = apply(&state, id, &effect, acknowledge_forecast).await;
+        match &result {
+            Err((StatusCode::CONFLICT, _)) => aichip_core::decisions::reopen(&state.db, id).await,
+            _ => {
+                aichip_core::decisions::settle(&state.db, id, result.clone().map_err(|(_, m)| m))
+                    .await
+            }
+        }
         .map_err(internal)?;
-    result.map(|o| json!(o))
+        result.map(|o| json!(o))
+    })
+    .await
+    .map_err(internal)?
 }
 
-async fn apply(state: &AppState, decision: Uuid, effect: &Effect) -> Result<String, ApiError> {
+async fn apply(
+    state: &AppState,
+    decision: Uuid,
+    effect: &Effect,
+    acknowledge_forecast: bool,
+) -> Result<String, ApiError> {
     use axum::extract::Path;
     let workspace: Uuid = sqlx::query_scalar("SELECT workspace_id FROM decisions WHERE id = $1")
         .bind(decision)
@@ -237,7 +264,11 @@ async fn apply(state: &AppState, decision: Uuid, effect: &Effect) -> Result<Stri
     match effect {
         Effect::StartCard { card_id } => {
             // The Start button itself: its vet, its forecast question, its door.
-            let Json(v) = super::tasks::start(State(state.clone()), Path(*card_id), None).await?;
+            let body = super::tasks::StartBody {
+                acknowledge_forecast,
+            };
+            let Json(v) =
+                super::tasks::start(State(state.clone()), Path(*card_id), Some(Json(body))).await?;
             Ok(format!(
                 "started run {}",
                 v["runId"].as_str().unwrap_or("?")

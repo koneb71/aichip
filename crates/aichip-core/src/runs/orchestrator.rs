@@ -1108,6 +1108,15 @@ impl Orchestrator {
         )
         .execute(&mut *tx)
         .await?;
+        // A proposal claimed for approval whose effect never reported back —
+        // the server went down between the two — goes back to the inbox
+        // rather than reading as approved with nothing done.
+        sqlx::query(
+            "UPDATE decisions SET status = 'open', decided_at = NULL
+              WHERE status = 'approved' AND outcome IS NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
         // Nothing terminal keeps a place in the queue. This is the sweep for
         // rows written before `finish` learned to delete them — without it,
         // every failure this repository has already recorded stays claimable

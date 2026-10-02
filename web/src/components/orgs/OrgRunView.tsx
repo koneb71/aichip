@@ -352,7 +352,7 @@ function MemberCard({
             <motion.span
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
-              className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-tier-easy text-[9px] text-white"
+              className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-tier-easy text-[9px] text-surface"
             >
               ✓
             </motion.span>

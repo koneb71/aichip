@@ -26,11 +26,18 @@ export function InboxProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<InboxItem[] | null>(null);
   const [unread, setUnread] = useState(0);
 
+  // The workspace a poll was sent for. A reply that lands after a switch
+  // belongs to the old one and is dropped.
+  const current = useRef<string | null>(null);
+  current.current = active?.id ?? null;
+
   const refresh = useCallback(() => {
     if (!active) return;
+    const asked = active.id;
     api
-      .inbox(active.id)
+      .inbox(asked)
       .then((r) => {
+        if (current.current !== asked) return;
         setItems(r.items);
         setUnread(r.unread);
       })
@@ -47,7 +54,7 @@ export function InboxProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  useAnnounce(items);
+  useAnnounce(items, active?.id ?? null);
 
   const value = useMemo(() => ({ items, unread, refresh }), [items, unread, refresh]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -63,10 +70,14 @@ export function arrivals(seen: Set<string> | null, items: InboxItem[]): InboxIte
   return items.filter((i) => !seen.has(i.key));
 }
 
-function useAnnounce(items: InboxItem[] | null) {
+function useAnnounce(items: InboxItem[] | null, workspace: string | null) {
   // Seeded on the first poll, so opening the app does not announce
-  // everything already waiting.
+  // everything already waiting — and again after a workspace switch, which
+  // would otherwise announce everything waiting there as new.
   const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    seen.current = null;
+  }, [workspace]);
   useEffect(() => {
     if (!items) return;
     if (notificationsOn()) {

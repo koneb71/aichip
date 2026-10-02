@@ -31,6 +31,22 @@ const SIZE: Record<ButtonSize, string> = {
   md: "h-8 gap-2 rounded-md px-3 text-[13px]",
 };
 
+const BASE =
+  "ring-focus inline-flex shrink-0 select-none items-center [&_svg]:shrink-0 justify-center whitespace-nowrap font-medium transition-[background,border-color,color,transform] duration-[var(--dur-fast)] disabled:pointer-events-none disabled:opacity-50";
+
+/**
+ * A button's look, for an element that is not a button — a link that should
+ * read as one. Nesting a `<Button>` inside a `<Link>` puts interactive inside
+ * interactive: two tab stops, and a name assistive tech reads twice.
+ */
+export function buttonClasses({
+  variant = "secondary",
+  size = "md",
+  className,
+}: { variant?: ButtonVariant; size?: ButtonSize; className?: string } = {}): string {
+  return cn(BASE, VARIANT[variant], SIZE[size], className);
+}
+
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
@@ -53,12 +69,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={type ?? "button"}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
-      className={cn(
-        "ring-focus inline-flex shrink-0 select-none items-center [&_svg]:shrink-0 justify-center whitespace-nowrap font-medium transition-[background,border-color,color,transform] duration-[var(--dur-fast)] disabled:pointer-events-none disabled:opacity-50",
-        VARIANT[variant],
-        SIZE[size],
-        className,
-      )}
+      className={buttonClasses({ variant, size, className })}
       {...rest}
     >
       {loading ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : icon}

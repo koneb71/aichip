@@ -69,7 +69,7 @@ export function TopBar({ onOpenPalette, onOpenNav }: { onOpenPalette: () => void
       <Menu
         align="end"
         trigger={
-          <Button variant="primary" size="sm" icon={<Plus className="size-3.5" />}>
+          <Button variant="primary" size="sm" aria-label="New" icon={<Plus className="size-3.5" />}>
             <span className="hidden sm:inline">New</span>
           </Button>
         }

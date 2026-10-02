@@ -216,6 +216,21 @@ pub async fn claim(db: &Db, id: Uuid, status: &str) -> anyhow::Result<Option<Eff
     })
 }
 
+/// Put a claimed proposal back, untouched, for a refusal the person can
+/// answer — the card is blocked for now, the start wants its cost
+/// acknowledged. Only a claim nothing has settled: an outcome on the row means
+/// the effect ran and is on the record.
+pub async fn reopen(db: &Db, id: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE decisions SET status = 'open', decided_at = NULL
+          WHERE id = $1 AND status = 'approved' AND outcome IS NULL",
+    )
+    .bind(id)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
 /// What happened when an approved effect ran. A failure is recorded, not
 /// hidden: "approved" that did nothing would be a lie on the record.
 pub async fn settle(db: &Db, id: Uuid, result: Result<String, String>) -> anyhow::Result<()> {
@@ -281,5 +296,64 @@ mod tests {
         .vet()
         .is_err());
         assert!(Effect::PauseAgent { agent: " ".into() }.vet().is_err());
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb;
+
+    async fn status(db: &Db, id: Uuid) -> String {
+        sqlx::query_scalar("SELECT status FROM decisions WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    /// A refusal the person can answer puts the proposal back; one that ran
+    /// stays on the record; a restart mid-approval puts it back too.
+    #[tokio::test]
+    async fn a_claim_that_did_not_run_goes_back_to_the_inbox() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "c").await;
+        let effect = Effect::StartCard { card_id: card };
+        let id = propose(
+            &t.db,
+            ws,
+            Some(project),
+            None,
+            "Ada",
+            &effect,
+            "it is ready",
+        )
+        .await
+        .unwrap();
+
+        claim(&t.db, id, "approved").await.unwrap().unwrap();
+        reopen(&t.db, id).await.unwrap();
+        assert_eq!(status(&t.db, id).await, "open");
+
+        // Settled: the effect ran, and nothing puts it back.
+        claim(&t.db, id, "approved").await.unwrap().unwrap();
+        settle(&t.db, id, Ok("started".into())).await.unwrap();
+        reopen(&t.db, id).await.unwrap();
+        assert_eq!(status(&t.db, id).await, "approved");
+
+        // Claimed, then the server went down before the effect reported.
+        let lost = propose(&t.db, ws, Some(project), None, "Ada", &effect, "again")
+            .await
+            .unwrap();
+        claim(&t.db, lost, "approved").await.unwrap().unwrap();
+        let orch = t.orchestrator(dir.path());
+        orch.recover_orphans().await.unwrap();
+        assert_eq!(status(&t.db, lost).await, "open");
+        assert_eq!(status(&t.db, id).await, "approved", "a settled one stays");
+        t.finish().await;
     }
 }

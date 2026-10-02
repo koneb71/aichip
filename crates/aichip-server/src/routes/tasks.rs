@@ -434,7 +434,7 @@ async fn create(
 #[serde(default)]
 pub(crate) struct StartBody {
     /// The person saw the forecast and starts anyway.
-    acknowledge_forecast: bool,
+    pub(crate) acknowledge_forecast: bool,
 }
 
 pub(crate) async fn start(

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Globe, Bot, Cpu } from "lucide-react";
 import { api, AuditEntry, AuditQuery } from "../lib/api";
 import { Page } from "../components/ui/Surface";
 import { EmptyState, PageHeader, Table, Toolbar } from "../components/ui/Layout";
 import { Badge, type Tone } from "../components/ui/Badge";
-import { Button } from "../components/ui/Button";
+import { Button, buttonClasses } from "../components/ui/Button";
 import { Select } from "../components/ui/Field";
 
 /**
@@ -18,12 +18,17 @@ export default function AuditPage() {
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
   const [next, setNext] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which filter's answer is wanted. A slower reply to an earlier filter (or
+  // to "load more" under it) lands after the change and is dropped.
+  const seq = useRef(0);
 
   const load = useCallback(
     async (more: boolean) => {
+      const mine = more ? seq.current : ++seq.current;
       setBusy(true);
       try {
         const r = await api.audit({ ...filter, limit: 100, before: more ? next ?? undefined : undefined });
+        if (mine !== seq.current) return;
         setEntries((prev) => (more && prev ? [...prev, ...r.entries] : r.entries));
         setNext(r.entries.length >= 100 ? r.next : null);
       } catch {
@@ -46,10 +51,9 @@ export default function AuditPage() {
           title="Audit log"
           description="Every change made through the API, every tool an agent called, and what aichip did on its own. Agent and system entries are kept 90 days; API entries for good."
           actions={
-            <a href={api.auditCsvUrl(filter)} download>
-              <Button size="sm" icon={<Download className="size-3.5" />}>
-                Export CSV
-              </Button>
+            <a href={api.auditCsvUrl(filter)} download className={buttonClasses({ size: "sm" })}>
+              <Download className="size-3.5" />
+              Export CSV
             </a>
           }
         />

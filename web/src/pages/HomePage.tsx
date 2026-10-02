@@ -11,7 +11,7 @@ import { SpendBars } from "../components/spend/SpendBars";
 import { isCurrent, resetIn, statusLabel, statusTone, windowLabel } from "../lib/usage";
 import { Card, gradientFor, Item, Page, Stagger } from "../components/ui/Surface";
 import { PageHeader } from "../components/ui/Layout";
-import { Button } from "../components/ui/Button";
+import { buttonClasses } from "../components/ui/Button";
 import { Badge, StatusDot } from "../components/ui/Badge";
 import { ArrowRight, CalendarClock, ChevronRight, CheckCheck, Coins, FolderPlus, Hand, Play, Plus } from "lucide-react";
 
@@ -84,15 +84,13 @@ export default function HomePage() {
         }
         actions={
           <>
-            <Link to="/projects?new=1">
-              <Button size="sm" icon={<FolderPlus className="size-3.5" />}>
-                New project
-              </Button>
+            <Link to="/projects?new=1" className={buttonClasses({ size: "sm" })}>
+              <FolderPlus className="size-3.5" />
+              New project
             </Link>
-            <Link to="/activity">
-              <Button size="sm" variant="ghost" trailing={<ArrowRight className="size-3.5" />}>
-                Activity
-              </Button>
+            <Link to="/activity" className={buttonClasses({ size: "sm", variant: "ghost" })}>
+              Activity
+              <ArrowRight className="size-3.5" />
             </Link>
           </>
         }

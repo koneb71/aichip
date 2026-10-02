@@ -1892,8 +1892,9 @@ export const api = {
     fetch(`/api/inbox?workspace_id=${workspaceId}${all ? "&all=true" : ""}`).then((r) =>
       json<{ items: InboxItem[]; unread: number }>(r),
     ),
-  resolveInbox: (key: string, action: string, text?: string) =>
-    guarded("POST", "/api/inbox/resolve", { key, action, text }).then((r) =>
+  /** `acknowledgeForecast`: approving a start the person saw the cost of. */
+  resolveInbox: (key: string, action: string, text?: string, acknowledgeForecast = false) =>
+    guarded("POST", "/api/inbox/resolve", { key, action, text, acknowledge_forecast: acknowledgeForecast }).then((r) =>
       json<{ ok: boolean; outcome: unknown }>(r),
     ),
   readInbox: (key: string) => guarded("POST", "/api/inbox/read", { key }).then((r) => json<{ ok: boolean }>(r)),

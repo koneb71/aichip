@@ -7,11 +7,12 @@ import { useActivity } from "../lib/activity";
 import { Page } from "../components/ui/Surface";
 import { EmptyState, PageHeader } from "../components/ui/Layout";
 import { Badge, type Tone } from "../components/ui/Badge";
-import { Button } from "../components/ui/Button";
+import { Button, buttonClasses } from "../components/ui/Button";
 import { Textarea } from "../components/ui/Field";
 import { Menu } from "../components/ui/Overlay";
 import { toast } from "../components/ui/Toast";
 import { cn } from "../components/ui/cn";
+import { parseForecastAsk, type ForecastAsk } from "../lib/forecast";
 
 /**
  * Everything waiting on you, in one place, answerable where it stands.
@@ -109,16 +110,22 @@ function Row({ item, first, onDone }: { item: InboxItem; first: boolean; onDone:
   const [busy, setBusy] = useState<string | null>(null);
   const [writing, setWriting] = useState<string | null>(null);
   const [text, setText] = useState("");
+  // Approving a start the budget wants confirmed: the numbers, and the same
+  // "start anyway" the Start button offers. The proposal stays open meanwhile.
+  const [forecast, setForecast] = useState<ForecastAsk | null>(null);
 
-  const act = async (action: string, words?: string) => {
+  const act = async (action: string, words?: string, acknowledgeForecast = false) => {
     setBusy(action);
     try {
-      await api.resolveInbox(item.key, action, words);
+      await api.resolveInbox(item.key, action, words, acknowledgeForecast);
       toast(`${LABEL[action] ?? NEEDS_TEXT[action]?.label ?? action}: ${item.title}`, { tone: "success" });
       setWriting(null);
+      setForecast(null);
       onDone();
     } catch (e) {
-      toast("That did not go through", { tone: "danger", body: String(e).replace(/^Error:\s*/, "") });
+      const ask = parseForecastAsk(String(e));
+      if (ask) setForecast(ask);
+      else toast("That did not go through", { tone: "danger", body: String(e).replace(/^Error:\s*/, "") });
     } finally {
       setBusy(null);
     }
@@ -160,6 +167,20 @@ function Row({ item, first, onDone }: { item: InboxItem; first: boolean; onDone:
             </div>
           )}
 
+          {forecast && (
+            <div className="mt-2 rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
+              <p className="leading-relaxed">{forecast.message}</p>
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" variant="primary" loading={busy === "approve"} onClick={() => act("approve", undefined, true)}>
+                  Start anyway
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setForecast(null)}>
+                  Not now
+                </Button>
+              </div>
+            </div>
+          )}
+
           {writing && (
             <form
               className="mt-2 flex flex-col gap-2"
@@ -198,10 +219,13 @@ function Row({ item, first, onDone }: { item: InboxItem; first: boolean; onDone:
               {LABEL[a] ?? a}
             </Button>
           ))}
-          <Link to={item.link} onClick={() => void api.readInbox(item.key).catch(() => {})}>
-            <Button size="sm" variant="ghost" trailing={<ArrowUpRight className="size-3.5" />}>
-              Open
-            </Button>
+          <Link
+            to={item.link}
+            onClick={() => void api.readInbox(item.key).catch(() => {})}
+            className={buttonClasses({ size: "sm", variant: "ghost" })}
+          >
+            Open
+            <ArrowUpRight className="size-3.5" />
           </Link>
           <Menu
             align="end"

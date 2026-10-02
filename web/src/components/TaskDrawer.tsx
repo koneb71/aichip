@@ -78,6 +78,11 @@ export function TaskDrawer({
   useEffect(() => setViewing(null), [task.id, task.runId]);
   const events = useRunStream(viewing ?? task.runId);
   const [diff, setDiff] = useState<string | null>(null);
+  // Whether the Diff tab is chosen — separate from whether the diff has
+  // arrived, so the tab selects at the click and shows that it is loading,
+  // and a slow fetch landing later never pulls the person back to it.
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffReq = useRef(0);
   // The bake-off panel: same brief, several attempts, compare and keep one.
   const [bakeoff, setBakeoff] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -307,7 +312,20 @@ export function TaskDrawer({
     }
   };
 
-  const loadDiff = async () => setDiff((await api.diff(task.id)).diff);
+  const loadDiff = () => {
+    const req = ++diffReq.current;
+    setDiff(null);
+    api
+      .diff(task.id)
+      .then((r) => {
+        if (diffReq.current === req) setDiff(r.diff);
+      })
+      .catch((e) => {
+        if (diffReq.current !== req) return;
+        setError(`Could not load the diff. ${String(e).replace(/^Error:\s*/, "")}`);
+        setDiffOpen(false);
+      });
+  };
   // Failing checks warn, they do not block: the person may know the failure
   // is old, flaky, or not this card's — but they should know it is there.
   const merge = () => {
@@ -343,7 +361,10 @@ export function TaskDrawer({
       const refusal = parseMergeRefusal(raw);
       const text = refusal?.error ?? raw;
       setError(`Merge failed. ${text}`);
-      setConflicted(refusal?.kind === "conflict" || refusal?.kind === "markers");
+      const conflict = refusal?.kind === "conflict" || refusal?.kind === "markers";
+      setConflicted(conflict);
+      // "Update from main" — the remedy the message names — is on Checks.
+      if (conflict) setTab("checks");
       // The one refusal with something to do about it. The guard names the
       // files in prose; fetching them as data is what lets the buttons below
       // exist, and it asks the same endpoint the guard reads so the list
@@ -385,13 +406,17 @@ export function TaskDrawer({
   // one, so they cannot be missed by looking at the wrong tab.
   const hasChecks =
     task.boardColumn === "review" || task.boardColumn === "done" || !!task.localChecks;
-  const tab: DrawerTab = bakeoff ? "bakeoff" : diff !== null ? "diff" : panel;
-  const setTab = (t: DrawerTab) => {
+  const tab: DrawerTab = bakeoff ? "bakeoff" : diffOpen ? "diff" : panel;
+  function setTab(t: DrawerTab) {
     if (t !== "bakeoff") setBakeoff(false);
-    if (t !== "diff") setDiff(null);
-    if (t === "diff") void loadDiff();
+    setDiffOpen(t === "diff");
+    if (t !== "diff") {
+      diffReq.current++;
+      setDiff(null);
+    }
+    if (t === "diff") loadDiff();
     else if (t === "overview" || t === "comments" || t === "activity" || t === "history" || t === "checks") setPanel(t);
-  };
+  }
   const statusTone = task.runStatus ? runTone(task.runStatus) : "neutral";
   const cost =
     (task.runCount ?? 0) > 1 && task.totalCostUsd != null
@@ -544,94 +569,98 @@ export function TaskDrawer({
         )}
       </header>
 
-      <AnimatePresence>
-        {openPermissions.length > 0 && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="shrink-0 overflow-hidden border-b border-border bg-warning-subtle"
-          >
-            <div className="flex flex-col gap-2 p-4">
-              {openPermissions.map((p) => (
-                <PermissionRow
-                  key={p.requestId}
-                  toolName={p.toolName}
-                  input={p.input}
-                  onAnswer={(allowed) => answer(p.requestId, allowed)}
-                />
-              ))}
-            </div>
-          </motion.div>
+      {/* Everything pinned above the tabs scrolls as one, and never takes more
+          than half the drawer: several prompts stacked up is exactly when you
+          most need to reach all of them, and the tabs below must stay. */}
+      <div className="max-h-[50vh] shrink-0 overflow-y-auto">
+        <AnimatePresence>
+          {openPermissions.length > 0 && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden border-b border-border bg-warning-subtle"
+            >
+              <div className="flex flex-col gap-2 p-4">
+                {openPermissions.map((p) => (
+                  <PermissionRow
+                    key={p.requestId}
+                    toolName={p.toolName}
+                    input={p.input}
+                    onAnswer={(allowed) => answer(p.requestId, allowed)}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {/* `whitespace-pre-wrap`: the merge guard formats the blocking files one
+            per line, and without this they arrived as a single run-on sentence.
+            Same treatment app build errors already get. */}
+        {error && (
+          <div className="whitespace-pre-wrap border-b border-border bg-danger-subtle px-4 py-2 text-xs leading-relaxed text-danger-fg">
+            {error}
+          </div>
         )}
-      </AnimatePresence>
-      {/* `whitespace-pre-wrap`: the merge guard formats the blocking files one
-          per line, and without this they arrived as a single run-on sentence.
-          Same treatment app build errors already get. */}
-      {error && (
-        <div className="whitespace-pre-wrap border-b border-border bg-danger-subtle px-4 py-2 text-xs leading-relaxed text-danger-fg">
-          {error}
-        </div>
-      )}
 
-      {blocked && blocked.dirty.length > 0 && (
-        <div className="border-b border-border bg-amber-50 px-5 py-3">
-          <div className="text-xs font-medium text-amber-900">
-            {blocked.dirty.length === 1
-              ? "One file in your checkout is in the way"
-              : `${blocked.dirty.length} files in your checkout are in the way`}
-            {blocked.branch && <span className="font-normal"> — on {blocked.branch}</span>}
+        {blocked && blocked.dirty.length > 0 && (
+          <div className="border-b border-border bg-amber-50 px-5 py-3">
+            <div className="text-xs font-medium text-amber-900">
+              {blocked.dirty.length === 1
+                ? "One file in your checkout is in the way"
+                : `${blocked.dirty.length} files in your checkout are in the way`}
+              {blocked.branch && <span className="font-normal"> — on {blocked.branch}</span>}
+            </div>
+            <ul className="mt-1.5 max-h-40 overflow-y-auto">
+              {blocked.dirty.map((f) => (
+                <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-amber-900/90">
+                  <span className="w-4 shrink-0 text-amber-700">{`${f.index}${f.worktree}`.trim()}</span>
+                  <span className="truncate">{f.path}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => clearTheWay("stash")}
+                disabled={resolving !== null}
+                className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
+              >
+                {resolving === "stash" ? "Setting aside…" : "Stash them"}
+              </button>
+              <button
+                onClick={() => clearTheWay("commit")}
+                disabled={resolving !== null}
+                className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
+              >
+                {resolving === "commit" ? "Committing…" : "Commit them"}
+              </button>
+              {/* Which one to press is a real choice, so say what each does
+                  rather than leaving it to be discovered. */}
+              <span className="text-[11px] text-amber-900/80">
+                Stashing sets them aside; committing keeps them, in their own commit.
+              </span>
+            </div>
           </div>
-          <ul className="mt-1.5 max-h-40 overflow-y-auto">
-            {blocked.dirty.map((f) => (
-              <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-amber-900/90">
-                <span className="w-4 shrink-0 text-amber-700">{`${f.index}${f.worktree}`.trim()}</span>
-                <span className="truncate">{f.path}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => clearTheWay("stash")}
-              disabled={resolving !== null}
-              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-            >
-              {resolving === "stash" ? "Setting aside…" : "Stash them"}
-            </button>
-            <button
-              onClick={() => clearTheWay("commit")}
-              disabled={resolving !== null}
-              className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-            >
-              {resolving === "commit" ? "Committing…" : "Commit them"}
-            </button>
-            {/* Which one to press is a real choice, so say what each does
-                rather than leaving it to be discovered. */}
-            <span className="text-[11px] text-amber-900/80">
-              Stashing sets them aside; committing keeps them, in their own commit.
-            </span>
-          </div>
-        </div>
-      )}
+        )}
 
-      {confirm && (
-        <div className="border-b border-border bg-amber-50 px-5 py-3 text-xs text-amber-800">
-          <div className="font-medium">{confirm.title}</div>
-          <div className="mt-0.5">{confirm.body}</div>
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={confirm.go}
-              className="inline-flex h-7 items-center rounded-md bg-danger px-3 font-medium text-white"
-            >
-              {confirm.cta}
-            </button>
-            <button onClick={() => setConfirm(null)} className="px-2 py-1 hover:underline">
-              Cancel
-            </button>
+        {confirm && (
+          <div className="border-b border-border bg-amber-50 px-5 py-3 text-xs text-amber-800">
+            <div className="font-medium">{confirm.title}</div>
+            <div className="mt-0.5">{confirm.body}</div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={confirm.go}
+                className="inline-flex h-7 items-center rounded-md bg-danger px-3 font-medium text-white"
+              >
+                {confirm.cta}
+              </button>
+              <button onClick={() => setConfirm(null)} className="px-2 py-1 hover:underline">
+                Cancel
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-
+        )}
+      </div>
 
       <Tabs<DrawerTab>
         className="min-h-0 flex-1"
@@ -651,7 +680,7 @@ export function TaskDrawer({
             label: "History",
             badge: (task.runCount ?? 0) > 1 ? <span className="tabular text-[11px] text-fg-subtle">{task.runCount}</span> : undefined,
           },
-          ...(task.boardColumn === "review" || diff !== null ? [{ value: "diff" as const, label: "Diff" }] : []),
+          ...(task.boardColumn === "review" || diffOpen ? [{ value: "diff" as const, label: "Diff" }] : []),
           ...(bakeoff ? [{ value: "bakeoff" as const, label: "Bake-off" }] : []),
         ]}
       >

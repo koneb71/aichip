@@ -41,7 +41,7 @@ export function PermissionRow({
         <motion.button
           whileTap={{ scale: 0.95 }}
           onClick={() => onAnswer(true)}
-          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-white"
+          className="rounded-lg bg-tier-easy px-3.5 py-1.5 text-xs font-medium text-surface"
         >
           Allow
         </motion.button>

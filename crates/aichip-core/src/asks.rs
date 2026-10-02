@@ -137,13 +137,30 @@ pub async fn answer(orch: &Orchestrator, question_id: Uuid, answer: &str) -> Res
             Ok(run_id)
         }
         Err(e) => {
-            sqlx::query("UPDATE run_questions SET answer = NULL, answered_at = NULL WHERE id = $1")
-                .bind(question_id)
-                .execute(&orch.db.pool)
-                .await?;
+            reopen(&orch.db, question_id).await?;
             Err(Refusal::Gated(e))
         }
     }
+}
+
+/// Take back an answer whose follow-up could not start, so the question is
+/// open again — unless the agent asked something newer meanwhile, which made
+/// this one moot exactly as `ask` would have: then it stays closed,
+/// unanswered, and the card keeps its one open question.
+async fn reopen(db: &Db, question_id: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE run_questions q
+            SET answer = NULL,
+                answered_at = CASE WHEN EXISTS (
+                    SELECT 1 FROM run_questions o
+                     WHERE o.task_id = q.task_id AND o.id <> q.id
+                       AND o.answered_at IS NULL) THEN q.answered_at END
+          WHERE q.id = $1",
+    )
+    .bind(question_id)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
 }
 
 /// Close it without an answer: the person decided it no longer matters.
@@ -177,5 +194,58 @@ mod tests {
         );
         assert!(vet("q", &vec!["a".to_string(); MAX_OPTIONS + 1]).is_err());
         assert!(vet("q", &["x".repeat(MAX_OPTION_CHARS + 1)]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb;
+
+    /// An answer taken back must not leave a card with two open questions.
+    #[tokio::test]
+    async fn a_taken_back_answer_never_reopens_a_question_the_agent_replaced() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (_, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "q").await;
+        let run: Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine) VALUES ($1, 'running', 'manual', 'mock') RETURNING id",
+        )
+        .bind(card)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        let open = |id: Uuid| {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT answered_at IS NULL FROM run_questions WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&t.db.pool)
+        };
+        let q1 = ask(&t.db, run, card, "Which API?", &[]).await.unwrap();
+        // The person's answer is recorded; the agent asks again before the
+        // follow-up is refused.
+        sqlx::query("UPDATE run_questions SET answer = 'v2', answered_at = now() WHERE id = $1")
+            .bind(q1)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let q2 = ask(&t.db, run, card, "Which version?", &[]).await.unwrap();
+        reopen(&t.db, q1).await.unwrap();
+        assert!(!open(q1).await.unwrap(), "replaced, so it stays closed");
+        assert!(open(q2).await.unwrap());
+
+        // With nothing newer, the answer is simply taken back.
+        sqlx::query("UPDATE run_questions SET answer = 'v3', answered_at = now() WHERE id = $1")
+            .bind(q2)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        reopen(&t.db, q2).await.unwrap();
+        assert!(open(q2).await.unwrap());
+        t.finish().await;
     }
 }
