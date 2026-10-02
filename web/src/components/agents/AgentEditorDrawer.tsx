@@ -32,6 +32,10 @@ export function AgentEditorDrawer({
   // null = inherit from the card, which is the right default: an agent
   // describes a skill, not a toolchain.
   const [engine, setEngine] = useState<string | null>(agent?.engine ?? null);
+  // How hard it may be worked. Empty = no limit.
+  const [maxConcurrent, setMaxConcurrent] = useState(agent?.maxConcurrent?.toString() ?? "");
+  const [maxDaily, setMaxDaily] = useState(agent?.maxDailyRuns?.toString() ?? "");
+  const [cooldown, setCooldown] = useState(agent?.cooldownSecs?.toString() ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which connected MCP servers this agent may use. Opt-in per agent: a
@@ -64,6 +68,9 @@ export function AgentEditorDrawer({
       permission_preset: preset,
       effort: effort || null,
       engine,
+      max_concurrent: limit(maxConcurrent),
+      max_daily_runs: limit(maxDaily),
+      cooldown_secs: limit(cooldown),
     };
     try {
       // A new agent has no id until it exists, so the server list is saved
@@ -183,6 +190,19 @@ export function AgentEditorDrawer({
           <div className="mt-1 text-[11px] text-ink-dim">
             How hard this agent thinks before answering. Separate from the model —
             more thinking is usually cheaper than a bigger model.
+          </div>
+        </Field>
+        <Field label="Limits">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
+            <span className="text-ink-dim">at a time</span>
+            <input value={maxDaily} onChange={(e) => setMaxDaily(e.target.value)} inputMode="numeric" placeholder="—" className="w-14 rounded-lg border border-line bg-panel px-2 py-1.5" />
+            <span className="text-ink-dim">runs a day</span>
+            <input value={cooldown} onChange={(e) => setCooldown(e.target.value)} inputMode="numeric" placeholder="—" className="w-16 rounded-lg border border-line bg-panel px-2 py-1.5" />
+            <span className="text-ink-dim">seconds' rest between runs</span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-ink-dim">
+            Empty is no limit. Work over a limit waits its turn in the queue rather than failing.
           </div>
         </Field>
         <Field label="Permissions">
@@ -376,4 +396,10 @@ function EngineWarning({ engine, preset }: { engine: string | null; preset: stri
       {blocker} Cards using this agent would be refused when you start them.
     </div>
   );
+}
+
+/** A limit field: a positive whole number, or no limit. */
+function limit(s: string): number | null {
+  const n = Math.round(Number(s));
+  return s.trim() === "" || !Number.isFinite(n) || n <= 0 ? null : n;
 }

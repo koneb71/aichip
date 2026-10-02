@@ -1488,8 +1488,11 @@ impl Orchestrator {
         if self.queue_paused().await {
             return Ok(None);
         }
-        // No budgets: claiming is exactly what it was before they existed.
-        if !crate::budgets::any_enabled(&self.db).await {
+        // No budgets and no agent limits: claiming is exactly what it was
+        // before either existed.
+        if !crate::budgets::any_enabled(&self.db).await
+            && !crate::agents::any_limits(&self.db).await
+        {
             return self.claim_head().await;
         }
         // A machine-wide budget holds everything, as the daily cap always
@@ -1520,6 +1523,27 @@ impl Orchestrator {
             let scope = crate::budgets::scope_of_run(&self.db, run_id)
                 .await
                 .unwrap_or_default();
+            // An agent's own limits: how many at once, how many a day, how
+            // long to rest between. Over one, the run waits its turn.
+            let limited = crate::agents::hold_for_limits(&self.db, run_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(%run_id, error = %e, "agent limit read failed; letting the run through");
+                    None
+                });
+            if let Some((until, why)) = limited {
+                sqlx::query(
+                    "UPDATE queue SET not_before = $2, hold_reason = $3, held_by = NULL
+                      WHERE run_id = $1",
+                )
+                .bind(run_id)
+                .bind(until)
+                .bind(&why)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                continue;
+            }
             match crate::budgets::check(&self.db, &scope, false).await {
                 Ok(()) => {
                     sqlx::query("DELETE FROM queue WHERE run_id = $1")

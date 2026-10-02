@@ -146,6 +146,40 @@ enum Phase {
 }
 
 impl Orchestrator {
+    /// Drop from a batch the assignments whose member is already at its
+    /// `max_concurrent` — counting the ones this batch would add.
+    async fn within_limits(
+        &self,
+        batch: Vec<usize>,
+        pending: &[Assignment],
+        workers: &[Member],
+    ) -> Vec<usize> {
+        let mut room: HashMap<Uuid, i64> = HashMap::new();
+        let mut kept = Vec::with_capacity(batch.len());
+        for (position, index) in batch.into_iter().enumerate() {
+            let Some(member) = workers.iter().find(|m| m.name == pending[index].assignee) else {
+                kept.push(index);
+                continue;
+            };
+            let left = match room.get(&member.agent_id) {
+                Some(left) => Some(*left),
+                None => crate::agents::room(&self.db, member.agent_id)
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            match left {
+                Some(left) if left <= 0 && position > 0 => continue,
+                Some(left) => {
+                    room.insert(member.agent_id, left - 1);
+                    kept.push(index);
+                }
+                None => kept.push(index),
+            }
+        }
+        kept
+    }
+
     /// Queue an organization run for a goal.
     pub async fn enqueue_org_run(
         &self,
@@ -734,6 +768,10 @@ impl Orchestrator {
             // Everything ready whose file scopes don't collide. Usually one;
             // several when the manager split the work cleanly.
             let batch = parallel_batch(&pending, &satisfied, MAX_PARALLEL_ASSIGNMENTS);
+            // A specialist at its limit of runs at once sits out the rest of
+            // this batch. The first assignment always goes, so the team never
+            // stalls waiting on itself.
+            let batch = self.within_limits(batch, &pending, &workers).await;
             let completed: Vec<&Assignment> =
                 all.iter().filter(|a| a.status == "completed").collect();
 

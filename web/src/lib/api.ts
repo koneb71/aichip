@@ -657,6 +657,10 @@ export interface Agent {
   status: "active" | "paused" | "retired" | "pending_approval";
   pauseReason: string | null;
   pausedAt: string | null;
+  /** How hard it may be worked; null is no limit. */
+  maxConcurrent: number | null;
+  maxDailyRuns: number | null;
+  cooldownSecs: number | null;
 }
 
 export interface AgentDraft {
