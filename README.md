@@ -1,8 +1,8 @@
-# aichip
+# Eren
 
 **A local-first multi-agent workflow platform for coding agents — no API keys.**
 
-aichip is a dashboard for running the coding-agent CLIs you already have installed.
+Eren is a dashboard for running the coding-agent CLIs you already have installed.
 It spawns [Claude Code](https://code.claude.com), [OpenCode](https://opencode.ai),
 [Codex](https://developers.openai.com/codex/cli), [Gemini CLI](https://github.com/google-gemini/gemini-cli),
 [Cursor CLI](https://cursor.com/cli), [Qwen Code](https://github.com/QwenLM/qwen-code) and
@@ -19,9 +19,9 @@ place to see what they did before any of it reaches your working copy.
 ## What makes it different
 
 - **It runs your CLI, not an API.** No API key goes anywhere near it, because none is
-  needed: the binary on your `PATH` is already logged in, and aichip just starts it.
-- **Everything is local.** Postgres runs under `~/.aichip`, the code index and document
-  embeddings are computed on your machine, and nothing is sent anywhere aichip controls.
+  needed: the binary on your `PATH` is already logged in, and Eren just starts it.
+- **Everything is local.** Postgres runs under `~/.eren`, the code index and document
+  embeddings are computed on your machine, and nothing is sent anywhere Eren controls.
 - **The review surface is git.** A board task runs in an isolated worktree, so the thing
   you approve is an ordinary diff on an ordinary branch, and the thing you reject costs
   you a deleted branch rather than an undo.
@@ -60,21 +60,21 @@ place to see what they did before any of it reaches your working copy.
 
 ## How it stays within the terms of service
 
-aichip is **process orchestration, not API access**. The compliance model is structural:
+Eren is **process orchestration, not API access**. The compliance model is structural:
 
-1. Every user runs aichip locally and brings their **own installed CLI** and their **own
-   subscription login**. aichip never provides, shares, proxies, or resells model access.
-2. aichip **never reads, stores, extracts, or forwards credentials** — it does not touch
+1. Every user runs Eren locally and brings their **own installed CLI** and their **own
+   subscription login**. Eren never provides, shares, proxies, or resells model access.
+2. Eren **never reads, stores, extracts, or forwards credentials** — it does not touch
    `~/.claude`, does not set auth environment variables, and does not proxy network traffic.
-3. aichip only spawns the **official binaries found on `PATH`** (e.g. `claude -p
+3. Eren only spawns the **official binaries found on `PATH`** (e.g. `claude -p
    --output-format stream-json`, `opencode run --format json`) and reads their stdout. No
    engine has an HTTP control API in the loop.
-4. `aichip doctor` verifies each CLI is installed and logged in **by running it**, never by
+4. `eren doctor` verifies each CLI is installed and logged in **by running it**, never by
    inspecting its config files. Where a CLI can name its providers (`opencode providers
-   list`), aichip shows the **name and auth type only** — never a credential.
+   list`), Eren shows the **name and auth type only** — never a credential.
 
 These four invariants are stated at the top of
-[`crates/aichip-engines/src/lib.rs`](crates/aichip-engines/src/lib.rs) and are contribution
+[`crates/eren-engines/src/lib.rs`](crates/eren-engines/src/lib.rs) and are contribution
 rules. PRs that violate them will not be merged.
 
 ## Status
@@ -92,7 +92,7 @@ move between commits, and there is no migration story for anything but the datab
 - **git** on `PATH`. It is not optional: worktrees are how a task stays reviewable.
 - **At least one agent CLI on `PATH`** — `claude`, `opencode`, `codex`, `gemini`,
   `cursor-agent`, `qwen` or `amp` — already logged
-  in. `aichip doctor` tells you which ones it found, and where to get the ones it didn't.
+  in. `eren doctor` tells you which ones it found, and where to get the ones it didn't.
 
 Optional:
 
@@ -102,18 +102,18 @@ Optional:
   bucket that holds files pasted into knowledge-base pages. Nothing else needs it.
 
 The first document you index and the first project you map download a small embedding
-model (about 35 MB) into `~/.aichip/models`. That is an artifact download, the same class
+model (about 35 MB) into `~/.eren/models`. That is an artifact download, the same class
 as a cargo dependency; no content leaves the machine in either direction.
 
 ## Quick start
 
 ```bash
-cargo run -p aichip-cli -- doctor   # checks git + every agent CLI it can find
+cargo run -p eren-cli -- doctor   # checks git + every agent CLI it can find
 cd web && pnpm install && pnpm build && cd ..
-cargo run -p aichip-cli -- serve    # starts the dashboard on http://127.0.0.1:4820
+cargo run -p eren-cli -- serve    # starts the dashboard on http://127.0.0.1:4820
 ```
 
-The first `serve` downloads and initializes a private Postgres under `~/.aichip/pgdata`,
+The first `serve` downloads and initializes a private Postgres under `~/.eren/pgdata`,
 so there is nothing to install or configure.
 
 ## The board
@@ -166,14 +166,14 @@ in the agent's editor drawer.
 
 ## Adding a folder
 
-Point aichip at any folder — it does not need to be a git repository. If it
-isn't one, aichip runs `git init` and makes a first commit of whatever is
+Point Eren at any folder — it does not need to be a git repository. If it
+isn't one, Eren runs `git init` and makes a first commit of whatever is
 already there when you add it.
 
 That isn't ceremony. Coding tasks run in an isolated worktree so an agent never
 touches your working copy, and that worktree is also what produces the diff you
 review before anything is merged back. A repository is the price of that
-safety, so aichip creates one rather than asking you to.
+safety, so Eren creates one rather than asking you to.
 
 The Files tab is an editor and does save — to your checkout, and to a card's
 worktree so you can fix up what an agent produced before merging it. That is
@@ -196,7 +196,7 @@ or paste a screenshot straight from the clipboard. The agent reads the file
 itself, so a design mock, a spec PDF, or a CSV can go into a prompt instead of
 being described in prose.
 
-Attachments are stored under `~/.aichip/attachments/`, **outside your repository**,
+Attachments are stored under `~/.eren/attachments/`, **outside your repository**,
 and the run is granted read access to them with `--add-dir`. They are never
 copied into a task worktree: an untracked file there would show up in
 `git status`, and an agent that runs `git add -A` would commit your PDF to the
@@ -335,7 +335,7 @@ refused on save.
 
 ### Installing a skill from a registry
 
-aichip can install Agent Skills into a project:
+Eren can install Agent Skills into a project:
 
 ```
 npx skills add owner/repo
@@ -346,7 +346,7 @@ is run in the project, and what lands is a real skill — `.agents/skills/<name>
 it natively. That folder is the copy with full fidelity: a skill shipping
 `resources/deploy.sh` still has its script.
 
-Each `SKILL.md` is then mirrored into an aichip skill row, so the same skill can be
+Each `SKILL.md` is then mirrored into an Eren skill row, so the same skill can be
 `@name`d in a chat, bound to a card, and carried to an engine that has never heard of the
 format. **The folder is what wins.** The row is re-derived from disk on every install and
 every sync, so an edit made to the mirror is overwritten the next time either happens —
@@ -405,7 +405,7 @@ it is unsure.
 
 Two more rails worth knowing:
 
-- **It cannot start a card that came from outside aichip.** An imported issue was written
+- **It cannot start a card that came from outside Eren.** An imported issue was written
   by somebody who is not the owner of this machine, and a person belongs between that text
   and an agent that can write files.
 - **Board text is material, not instructions.** A card telling the manager to ignore its
@@ -419,7 +419,7 @@ did — which is the question a manager has to answer that a plain routine does 
 Build workflows on a canvas — drag between node handles to say "run after",
 click a node to edit its prompt, model, agent, and fan-out. The canvas is a view
 over YAML, which stays the source of truth: flip to the YAML tab any time, or
-commit files to `.aichip/workflows/` in your repo and press **Sync from repo**.
+commit files to `.eren/workflows/` in your repo and press **Sync from repo**.
 (Canvas edits regenerate the YAML, so comments in a hand-written file don't
 survive a round trip through the canvas.)
 
@@ -482,7 +482,7 @@ review. An app is the other thing: something you ask for, install, switch on,
 and **use**.
 
 An app is a manifest — one YAML file. Models in it become **real Postgres
-tables**; views become screens aichip's own dashboard draws. Nothing you get
+tables**; views become screens Eren's own dashboard draws. Nothing you get
 handed executes:
 
 ```yaml
@@ -531,7 +531,7 @@ it rewrites the manifest; for a container app it writes real source.
 That change **lands on its own** when the card finishes — there is no review
 step, because the diff *is* the app, and asking you to read a patch before you
 can see whether the chart came out right turns a gallery back into a task board.
-The repository being merged into is the one aichip created for that app, never
+The repository being merged into is the one Eren created for that app, never
 your code.
 
 What makes that bargain honest is that the undo is real. Every change records
@@ -553,7 +553,7 @@ tables — what you send someone. **Export with data** carries the rows too — 
 you move to another machine. Import regenerates the DDL from the manifest and
 never runs the bundled `schema.sql`, which is there to be read.
 
-For a team, commit it. Anything under `.aichip/apps/` in a repository you have
+For a team, commit it. Anything under `.eren/apps/` in a repository you have
 added shows up on the gallery page with an **Install** next to it, and a manifest
 being plain YAML is what makes it reviewable in a pull request. Syncing an app
 you already have replaces its manifest and keeps its rows.
@@ -572,7 +572,7 @@ what executes, because deriving it again at that point would mean running
 statements nobody saw.
 
 The comparison is against `information_schema`, not against a registry of what
-aichip thinks the schema is. A registry drifts the first time anything touches a
+Eren thinks the schema is. A registry drifts the first time anything touches a
 table outside the code maintaining it, and then every diff is against a fiction.
 
 ### Switching off is not deleting
@@ -656,9 +656,9 @@ backup:
 
 ```bash
 docker compose up -d minio
-export AICHIP_S3_ENDPOINT=http://127.0.0.1:9100
-export AICHIP_S3_ACCESS_KEY=aichip
-export AICHIP_S3_SECRET_KEY=aichip-dev-secret
+export EREN_S3_ENDPOINT=http://127.0.0.1:9100
+export EREN_S3_ACCESS_KEY=eren
+export EREN_S3_SECRET_KEY=eren-dev-secret
 ```
 
 The bucket is created on boot. Without these variables the wiki still works —
@@ -678,7 +678,7 @@ index. A markdown-first editor would have meant rewriting all four.
 ## What it costs, and spending less
 
 The binding constraint here is a subscription rate limit you cannot see, so
-aichip keeps what your CLI says about its own usage rather than discarding it.
+Eren keeps what your CLI says about its own usage rather than discarding it.
 It asks Anthropic nothing, holds no credential, and prices nothing itself: a
 figure here is one the binary printed.
 
@@ -706,7 +706,7 @@ clears on its own at midnight rather than needing to be resumed.
 
 ### Auto tier
 
-A card's tier can be set to **Auto**, and aichip picks per run.
+A card's tier can be set to **Auto**, and Eren picks per run.
 
 This is worth having because `Medium` is the default and maps to Opus, so
 every card nobody thought about runs on the dearest ordinary model. Auto is
@@ -734,13 +734,13 @@ brief below a floor buys nothing at all.
 
 Every automatic choice is recorded on the run before it starts and shown on
 the card: *Auto → easy: a short brief with nothing attached*. That isn't
-decoration. aichip refuses to quietly downgrade a Reviewed card on an engine
+decoration. Eren refuses to quietly downgrade a Reviewed card on an engine
 that cannot ask, and a router that changed which model ran your work without
 saying so would be the same thing wearing a different hat.
 
 ## Engines
 
-Which ones you're offered depends on what's installed — `aichip doctor` and
+Which ones you're offered depends on what's installed — `eren doctor` and
 `GET /api/engines` both answer by *running* each CLI, never by reading its config.
 
 | | Claude Code | OpenCode | Codex |
@@ -752,8 +752,8 @@ Which ones you're offered depends on what's installed — `aichip doctor` and
 | Providers | your Claude login | whatever you've authenticated (`opencode providers list`) | your OpenAI login |
 | Tier defaults | fixed catalog | derived from `opencode models` | derived from `codex doctor` |
 
-Codex is driven through `codex exec --json`, and everything aichip needs to say about a
-run — the sandbox, the approval stance, the persona, aichip's own MCP endpoint — is passed
+Codex is driven through `codex exec --json`, and everything Eren needs to say about a
+run — the sandbox, the approval stance, the persona, Eren's own MCP endpoint — is passed
 as `-c key=value` overrides rather than written to `~/.codex/config.toml`, which the second
 compliance invariant forbids touching. Your own config still merges in underneath.
 
@@ -766,13 +766,13 @@ compliance invariant forbids touching. Your own config still merges in underneat
 | Ask permission mid-run | **no** | **no** | **no** | **no** |
 | Auto-edit | yes | **no** — `--force` allows commands too | yes | **no** — it never asks about anything |
 | Read-only passes (plans, summaries) | yes (`default` mode denies) | yes (`--mode ask`) | yes (`default` mode, tools excluded) | **refused** — it has no read-only mode |
-| aichip's tools (assistant, manager, team) | **no** | **no** | yes (`--mcp-config`) | **no** (not yet verified) |
+| Eren's tools (assistant, manager, team) | **no** | **no** | yes (`--mcp-config`) | **no** (not yet verified) |
 | Persona | folded into the prompt | folded into the prompt | `--append-system-prompt` | folded into the prompt |
 | Cost | tokens only | tokens only | tokens only | tokens only |
 
 What none of them can do is refused at the click with a reason rather than quietly widened:
 Auto-edit on Cursor or Amp, and the assistant, a project manager or a team on an engine that
-can't be handed aichip's tools for one run. Those tools could only reach Gemini or Cursor
+can't be handed Eren's tools for one run. Those tools could only reach Gemini or Cursor
 through a config file in the run's folder, which would land in the diff — so they don't.
 
 These four adapters were written from each CLI's own source or documentation and tested
@@ -780,7 +780,7 @@ against recorded-shape fixtures and stand-in binaries, **not yet against the rea
 Their fixture folders say so and say how to re-record them.
 
 Because OpenCode cannot stop and ask, starting a **Reviewed** card on it is refused with a
-`409` and a reason, at the click that caused it. Auto-edit works: aichip generates a
+`409` and a reason, at the click that caused it. Auto-edit works: Eren generates a
 permission allow-list from the run's tools instead of answering prompts one at a time. That
 refusal is deliberately *not* a silent downgrade — quietly turning Reviewed into Auto-edit
 would be a privilege escalation performed on your behalf.
@@ -805,10 +805,10 @@ Two things to know before you pick one:
 
 - **The model has to support tool calling.** A coding agent reads and edits files through
   tools, so a chat-only or pure-reasoning model can't do the job — Ollama's `deepseek-r1`,
-  for instance, answers `does not support tools` and the run fails. aichip does not filter
+  for instance, answers `does not support tools` and the run fails. Eren does not filter
   these out, because older Ollama can't say which models are which and silently hiding a
   model you can see in your own library is worse than a clear error.
-- **The context window has to fit the prompt.** aichip's chat prompt is around 13k tokens
+- **The context window has to fit the prompt.** Eren's chat prompt is around 13k tokens
   before your message; a model loaded with an 8k window will refuse it. Raise it in
   LM Studio, or `num_ctx` in Ollama.
 
@@ -820,7 +820,7 @@ installed.
 
 A step that stops to ask holds its concurrency permit for the whole run, so a
 scheduled workflow blocking on a permission prompt at 3am doesn't just go
-unanswered — it eats one of `AICHIP_MAX_CONCURRENT` (default 2) until the server
+unanswered — it eats one of `EREN_MAX_CONCURRENT` (default 2) until the server
 restarts. Two of them and nothing dispatches at all.
 
 So a **scheduled** run whose step resolves to Reviewed fails with a reason
@@ -833,19 +833,19 @@ Reviewed by the safety gate. The failure message says which of the two happened.
 
 ## Database
 
-`aichip serve` manages its own Postgres by default. To use your own instead:
+`eren serve` manages its own Postgres by default. To use your own instead:
 
 ```bash
 docker compose up -d
-export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
-cargo run -p aichip-cli -- serve
+export DATABASE_URL=postgres://eren:eren@localhost:5433/eren
+cargo run -p eren-cli -- serve
 ```
 
 See `.env.example` for the other knobs.
 
 ## Running in Docker
 
-aichip works by spawning *your* `claude` CLI under *your* login, so the interesting
+Eren works by spawning *your* `claude` CLI under *your* login, so the interesting
 question is how a container authenticates. On macOS the login lives in the **Keychain**
 (there is no credentials file to mount), and a container has no keychain and no browser
 to log in with. A container with your `~/.claude` mounted still reports
@@ -857,7 +857,7 @@ The one way in is a long-lived token:
 claude setup-token
 ```
 
-Put it in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, set `AICHIP_PROJECTS_DIR` to the folder
+Put it in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, set `EREN_PROJECTS_DIR` to the folder
 holding your code, then:
 
 ```bash
@@ -865,11 +865,11 @@ docker compose --profile app up -d --build
 ```
 
 That runs everything — dashboard, orchestrator, and the agents — in containers, reachable
-at `http://localhost:4820`. Every port the compose file publishes — aichip, Postgres, MinIO
+at `http://localhost:4820`. Every port the compose file publishes — Eren, Postgres, MinIO
 — is bound to `127.0.0.1` on the host; from another machine, use an SSH tunnel.
 
 **Know what you're trading.** The token is a real credential sitting in a file, valid
-until you revoke it, rather than a keychain entry scoped to your machine. aichip itself
+until you revoke it, rather than a keychain entry scoped to your machine. Eren itself
 still never reads, stores, or forwards it — the container inherits it from the environment
 you set — but a token in `.env` is a broader exposure than the ordinary login, so keep
 `.env` out of version control (it is gitignored) and revoke the token when you're done.
@@ -897,17 +897,17 @@ The mock engine replays recorded stream-json fixtures with configurable pacing a
 backbone of the Rust suite, so a full `cargo test` spends nothing and cannot be rate
 limited. Rust tests live inline in `#[cfg(test)] mod tests` next to the code they cover.
 
-Adding a migration under `crates/aichip-core/migrations/` does not always
+Adding a migration under `crates/eren-core/migrations/` does not always
 retrigger a rebuild, because sqlx embeds them at compile time. If a new column
-comes back as `ColumnNotFound`, `touch crates/aichip-core/src/db.rs` and rebuild.
+comes back as `ColumnNotFound`, `touch crates/eren-core/src/db.rs` and rebuild.
 
 ## Workspace layout
 
-- `crates/aichip-shared` — event types, model tiers, workflow YAML, the auth-env guard
-- `crates/aichip-engines` — engine adapter trait; Claude Code, OpenCode, Codex, Gemini CLI, Cursor CLI, Qwen Code, Amp and local (Ollama / LM Studio) adapters, mock engine
-- `crates/aichip-core` — db, run orchestrator, worktree manager, queue, scheduler, apps, RAG, code map
-- `crates/aichip-server` — axum REST + WebSocket + MCP permission proxy + preview proxy
-- `crates/aichip-cli` — the `aichip` binary (`serve`, `doctor`)
+- `crates/eren-shared` — event types, model tiers, workflow YAML, the auth-env guard
+- `crates/eren-engines` — engine adapter trait; Claude Code, OpenCode, Codex, Gemini CLI, Cursor CLI, Qwen Code, Amp and local (Ollama / LM Studio) adapters, mock engine
+- `crates/eren-core` — db, run orchestrator, worktree manager, queue, scheduler, apps, RAG, code map
+- `crates/eren-server` — axum REST + WebSocket + MCP permission proxy + preview proxy
+- `crates/eren-cli` — the `eren` binary (`serve`, `doctor`)
 - `web/` — React 18 + Vite + Tailwind 4 dashboard
 
 ## Contributing

@@ -14,7 +14,7 @@ import { Icon } from "../ui/Icon";
  * open/closed set is remembered across visits, because re-expanding your way
  * back to where you were is the fastest way to make a tree feel hostile.
  */
-const OPEN_KEY = "aichip.kb.open";
+const OPEN_KEY = "eren.kb.open";
 
 function loadOpen(): Set<string> {
   try {

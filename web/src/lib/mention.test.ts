@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import cases from "../../../crates/aichip-core/src/runs/mention_cases.json";
+import cases from "../../../crates/eren-core/src/runs/mention_cases.json";
 import {
   agentMatches,
   agentMentions,
@@ -123,7 +123,7 @@ describe("formatMention / applyMention", () => {
 /**
  * The shared specification.
  *
- * This corpus and `crates/aichip-core/src/runs/mentions.rs` read the same file,
+ * This corpus and `crates/eren-core/src/runs/mentions.rs` read the same file,
  * and that is the only thing keeping two implementations of one rule honest
  * with each other. The Rust side decides which agent a task binds to; this side
  * only draws the chip — so a case that passes there and fails here means the

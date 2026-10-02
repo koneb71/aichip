@@ -27,7 +27,7 @@ export default function ProjectsPage() {
     <Page>
       <PageHead
         title="Projects"
-        subtitle="Every folder aichip can work in. A card runs in its own git worktree, so nothing an agent does reaches your checkout until you land it."
+        subtitle="Every folder Eren can work in. A card runs in its own git worktree, so nothing an agent does reaches your checkout until you land it."
         actions={
           <>
             <Button onClick={() => setParams({ new: "clone" })}>Clone from GitHub</Button>
@@ -78,7 +78,7 @@ export default function ProjectsPage() {
             <Empty
               icon={<Icon name="folder" size={28} />}
               title="No projects yet"
-              hint="Load a folder from this machine, or clone one from GitHub, and aichip will start working in it."
+              hint="Load a folder from this machine, or clone one from GitHub, and Eren will start working in it."
             />
           </div>
         )}

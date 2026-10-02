@@ -314,7 +314,7 @@ function detail(r: ProjectPreview): React.ReactNode {
   );
 }
 
-/** The port is this page's own — aichip proxies preview names on it. */
+/** The port is this page's own — Eren proxies preview names on it. */
 function named(slug: string): string {
   const port = window.location.port ? `:${window.location.port}` : "";
   return `http://${slug}.preview.localhost${port}`;

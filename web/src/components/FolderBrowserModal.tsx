@@ -29,7 +29,7 @@ export function FolderBrowserModal({
   onPick: (path: string) => Promise<{ vcs: string; vcsNote: string | null } | void>;
   title?: string;
   confirmLabel?: string;
-  /** Where to open. Omitted starts at the folder aichip browses from. */
+  /** Where to open. Omitted starts at the folder Eren browses from. */
   start?: string;
   /**
    * Whether picking this folder makes it a repository. A claim about what the

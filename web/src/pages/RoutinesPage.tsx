@@ -628,7 +628,7 @@ function Editor({
             <option value="max">Max</option>
           </select>
         </div>
-        {/* Only the firings that are handed aichip's tools: a project manager
+        {/* Only the firings that are handed Eren's tools: a project manager
             (listed here though it is edited on its board) and a chat that
             stands in a project. A watch, or a chat with no project, never is. */}
         {toolsWhat && <ToolsNote engine={d.engine ?? null} what={toolsWhat} inheritsDefault />}

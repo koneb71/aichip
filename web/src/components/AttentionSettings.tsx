@@ -4,10 +4,10 @@ import { api, AttentionSettingsValue, AttentionEvent } from "../lib/api";
 import { Button } from "./ui/Button";
 
 /**
- * How long aichip waits for you, and how it reaches you while it waits.
+ * How long Eren waits for you, and how it reaches you while it waits.
  *
  * One panel, because from where you sit they are one question. Everything else
- * aichip has is a browser notification from an open tab, which only helps if
+ * Eren has is a browser notification from an open tab, which only helps if
  * you are at the machine with the dashboard still up — and a run that takes
  * forty minutes and asks one question at minute three is exactly the case
  * where you are not.
@@ -29,10 +29,10 @@ const EVENTS: { id: AttentionEvent; label: string; hint: string }[] = [
 
 /** Ready-made commands, so the first one is a paste rather than a project. */
 const EXAMPLES: { os: string; command: string }[] = [
-  { os: "Linux", command: 'notify-send "$AICHIP_TITLE" "$AICHIP_BODY"' },
-  { os: "macOS", command: `osascript -e "display notification \\"$AICHIP_BODY\\" with title \\"$AICHIP_TITLE\\""` },
+  { os: "Linux", command: 'notify-send "$EREN_TITLE" "$EREN_BODY"' },
+  { os: "macOS", command: `osascript -e "display notification \\"$EREN_BODY\\" with title \\"$EREN_TITLE\\""` },
   { os: "Windows", command: 'powershell -c "[console]::beep(800,400)"' },
-  { os: "Phone", command: 'curl -s -d "$AICHIP_BODY" -H "Title: $AICHIP_TITLE" ntfy.sh/your-topic' },
+  { os: "Phone", command: 'curl -s -d "$EREN_BODY" -H "Title: $EREN_TITLE" ntfy.sh/your-topic' },
 ];
 
 export function AttentionSettings() {

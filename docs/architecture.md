@@ -1,15 +1,15 @@
 # Architecture
 
-This is the document to read before your first change. It describes how aichip is put
+This is the document to read before your first change. It describes how Eren is put
 together and, where the shape is unobvious, why it is that shape rather than the obvious
-one. The README describes what aichip does; this describes what you are about to edit.
+one. The README describes what Eren does; this describes what you are about to edit.
 
 ## The one thing that constrains everything else
 
-aichip drives official coding-agent CLIs — `claude`, `opencode` — as child processes on the
+Eren drives official coding-agent CLIs — `claude`, `opencode` — as child processes on the
 user's own machine, under the user's own subscription login. It is **process orchestration,
 not API access**, and four invariants keep it that way. They are stated at the top of
-[`crates/aichip-engines/src/lib.rs`](../crates/aichip-engines/src/lib.rs) and code that
+[`crates/eren-engines/src/lib.rs`](../crates/eren-engines/src/lib.rs) and code that
 violates them is rejected:
 
 1. Adapters spawn official binaries found on `PATH` and read their stdout. Nothing else.
@@ -18,37 +18,37 @@ violates them is rejected:
 3. Never set authentication environment variables on a spawned process.
 4. Never proxy, intercept, or replay the engine's network traffic.
 
-These are not decorative. Invariant 2 is why `aichip doctor` answers "is this CLI logged
+These are not decorative. Invariant 2 is why `eren doctor` answers "is this CLI logged
 in?" by *running* the CLI rather than by reading its config. Invariant 3 is why there is a
-single function — `aichip_shared::env_guard::is_auth_env` — that decides whether a name
+single function — `eren_shared::env_guard::is_auth_env` — that decides whether a name
 looks like a secret, instead of a prefix list per call site. The first version of that check
 lived in two places and knew only about Anthropic prefixes, which stopped nothing the moment
-a second provider existed. The same file also lists `AICHIP_OWN_SECRETS`, which are stripped
-from every child: a spawned CLI inherits the server's whole environment, so the day aichip
+a second provider existed. The same file also lists `EREN_OWN_SECRETS`, which are stripped
+from every child: a spawned CLI inherits the server's whole environment, so the day Eren
 acquired a credential of its own (object storage for the knowledge base) it would otherwise
 have handed that credential to every agent it launched.
 
 ## The five crates
 
 ```
-aichip-shared  ←  aichip-engines  ←  aichip-core  ←  aichip-server  ←  aichip-cli
+eren-shared  ←  eren-engines  ←  eren-core  ←  eren-server  ←  eren-cli
 ```
 
-Dependencies point strictly leftwards. `aichip-shared` depends on none of the others;
-`aichip-core` never depends on `aichip-server`. The practical consequence: anything both the
+Dependencies point strictly leftwards. `eren-shared` depends on none of the others;
+`eren-core` never depends on `eren-server`. The practical consequence: anything both the
 server and the CLI need, and anything you want to unit-test without a database, belongs in
-`aichip-shared`.
+`eren-shared`.
 
-**`aichip-shared`** — the vocabulary. `AichipEvent` and `EventEnvelope` (the normalized
+**`eren-shared`** — the vocabulary. `ErenEvent` and `EventEnvelope` (the normalized
 event stream), `ModelTier` / `TierChoice` / `EngineTierMapping`, `PermissionMode` /
 `RunStatus`, the workflow YAML types and `interpolate`, `McpWiring`, `env_guard`,
 rate-limit parsing, reasoning effort, secret detection, the auto-tier router. No I/O, no
 database, no engine.
 
-**`aichip-engines`** — the `Engine` trait, `RunSpec`, `Capabilities`, `vet`, and the
+**`eren-engines`** — the `Engine` trait, `RunSpec`, `Capabilities`, `vet`, and the
 adapters (`claude/`, `opencode/`, `codex/`, `local/`, `mock/`). Each adapter spawns its
-CLI, parses that CLI's native stream format, and normalizes it into `AichipEvent`.
-Everything downstream consumes only `AichipEvent`, which is what lets a second engine exist
+CLI, parses that CLI's native stream format, and normalizes it into `ErenEvent`.
+Everything downstream consumes only `ErenEvent`, which is what lets a second engine exist
 at all.
 
 `local/` is the odd one and worth reading before you copy it: Ollama and LM Studio serve a
@@ -58,27 +58,27 @@ and hands the run over. It is an engine because that is how a person thinks abou
 choice, and it keeps invariant 1 because the process it spawns is still an official agent
 binary from `PATH`.
 
-**`aichip-core`** — the substance. Postgres access and embedded migrations (`db`), the run
+**`eren-core`** — the substance. Postgres access and embedded migrations (`db`), the run
 orchestrator and state machine (`runs/`), the queue and its backoff (`queue/`), the worktree
 manager (`worktrees/`), the `EventBus`, the `PermissionBroker`, org/team delegation
 (`runs/org/`), the knowledge base (`kb/`), retrieval (`rag/`, `repo/`), apps (`apps/`),
 previews, GitHub integration, the cron scheduler, spend and usage accounting.
 
-**`aichip-server`** — axum. `/api` REST routes, `/ws` event fan-out, `/mcp` (a hand-rolled
+**`eren-server`** — axum. `/api` REST routes, `/ws` event fan-out, `/mcp` (a hand-rolled
 MCP-over-HTTP endpoint the engines call back into), the preview reverse proxy, and the SPA
 fallback that serves the built dashboard. Every handler takes `AppState`, which carries
 `db`, `bus`, `orchestrator`, `permissions`, `storage` and a mutex serializing Files-tab
 saves.
 
-**`aichip-cli`** — the `aichip` binary: `serve` and `doctor`. It registers the engines with
+**`eren-cli`** — the `eren` binary: `serve` and `doctor`. It registers the engines with
 the orchestrator at boot, brings up the database, and spawns the long-running loops (queue,
 scheduler, sweeps).
 
-`serve` manages its own Postgres under `~/.aichip/pgdata` unless `DATABASE_URL` is set, so a
+`serve` manages its own Postgres under `~/.eren/pgdata` unless `DATABASE_URL` is set, so a
 fresh checkout has nothing to install. Migrations live in
-`crates/aichip-core/migrations/` and are embedded by sqlx **at compile time** — adding a file
+`crates/eren-core/migrations/` and are embedded by sqlx **at compile time** — adding a file
 does not always retrigger a rebuild, so if a new column comes back as `ColumnNotFound`,
-`touch crates/aichip-core/src/db.rs` and rebuild.
+`touch crates/eren-core/src/db.rs` and rebuild.
 
 ## Engines, and why nothing branches on an engine id
 
@@ -121,7 +121,7 @@ workspace tools, no org messaging, and no sign anything was missing. Now the spe
 
 ### `vet`, and why refusals are never downgrades
 
-`aichip_engines::vet` is the single place a capability mismatch is decided, so the answer is
+`eren_engines::vet` is the single place a capability mismatch is decided, so the answer is
 the same whether you arrive from the board, a chat, a team run or a bake-off. It refuses
 `Reviewed` on an engine without `interactive_permissions`, and refuses a resume on an engine
 without `resume_sessions`, with a message naming the engine and offering a way forward.
@@ -146,10 +146,10 @@ start is also a row in `queue` (`run_id` primary key, `priority`, `not_before`,
   runs row  ──▶  queue row ──▶ acquire slot ──▶ claim_next ──▶ build RunSpec
                                   │                │              │
                           (Slots semaphore,   (gate: paused?      ▼
-                           AICHIP_MAX_        over budget?)   engine.start()
+                           EREN_MAX_        over budget?)   engine.start()
                            CONCURRENT=2)                          │
                                                                   ▼
-                                                            AichipEvent stream
+                                                            ErenEvent stream
                                                                   │
                                                     persist to `events` table
                                                                   │
@@ -243,7 +243,7 @@ replay log, and always passed through live.
 
 `run_loop` holds one permit from `Slots` for the whole of `execute`. That is right while a
 run is working and wrong while it is waiting for a person: with the default budget of two
-(`AICHIP_MAX_CONCURRENT`), two runs parked on unanswered permission prompts froze the entire
+(`EREN_MAX_CONCURRENT`), two runs parked on unanswered permission prompts froze the entire
 queue.
 
 So a parked run **lends** its slot back and takes it again on the way out. Reclaiming
@@ -269,13 +269,13 @@ someone chose to start them and is there to answer.
 ## Worktrees
 
 Board tasks run in an isolated git worktree under
-`~/.aichip/worktrees/<project-hash>/<task-id>` — outside the user's repository. Two things
+`~/.eren/worktrees/<project-hash>/<task-id>` — outside the user's repository. Two things
 follow, and they are the same thing seen from two sides: an agent never touches the working
 copy, and the branch it produces *is* the reviewable diff. `diff`, `diff_stat`, `diff_file`,
 `squash_merge`, `push` and `discard` all hang off that. Every git invocation uses an explicit
 argument vector, never a shell string.
 
-This is why aichip runs `git init` on a folder that is not a repository yet, rather than
+This is why Eren runs `git init` on a folder that is not a repository yet, rather than
 refusing it: the repository is the price of the worktree, and the worktree is what buys
 review.
 
@@ -297,14 +297,14 @@ run.
 Two adjacent rules worth knowing before you touch this area:
 
 - **Attachments are never copied into a worktree.** They live under
-  `~/.aichip/attachments/` and are granted with `--add-dir`. An untracked file in the
+  `~/.eren/attachments/` and are granted with `--add-dir`. An untracked file in the
   worktree would show up in `git status`, and an agent running `git add -A` would commit the
   user's PDF to the branch and then to `main` on squash-merge.
 - **The Files tab writes to both trees** — the checkout and a card's worktree — when a
   *person* saves. That does not weaken the rule above, which is about agents. The write path
   carries its own gates (no `.git`, a root allow-list, a content hash, and a header no
   cross-origin request can set), documented at the top of
-  [`crates/aichip-server/src/routes/files.rs`](../crates/aichip-server/src/routes/files.rs).
+  [`crates/eren-server/src/routes/files.rs`](../crates/eren-server/src/routes/files.rs).
 
 ## Permissions
 
@@ -320,7 +320,7 @@ Two places depend on this and will break quietly if it is forgotten:
 
 - Chat runs execute in the user's **real checkout**, not a worktree, so they carry both
   `CHAT_ALLOWED_TOOLS` and `CHAT_DENIED_TOOLS` in
-  [`crates/aichip-core/src/runs/orchestrator.rs`](../crates/aichip-core/src/runs/orchestrator.rs).
+  [`crates/eren-core/src/runs/orchestrator.rs`](../crates/eren-core/src/runs/orchestrator.rs).
   Never add `Bash`, `Edit` or `Write` to the allowed list.
 - A plan-first pass is genuinely read-only because the mutating tools are *denied*, not
   merely left off the allow-list.
@@ -335,7 +335,7 @@ ran it.
 ### The mid-run prompt path
 
 ```
-engine  ──(--permission-prompt-tool mcp__aichip__approve)──▶  POST /mcp/run/{run_id}
+engine  ──(--permission-prompt-tool mcp__eren__approve)──▶  POST /mcp/run/{run_id}
                                                                      │
                                         PermissionBroker::request  ◀──┘
                                                  │
@@ -348,7 +348,7 @@ engine  ──(--permission-prompt-tool mcp__aichip__approve)──▶  POST /mc
                           ParkGuard drops: unpark, reclaim the slot, clear the prompt
 ```
 
-[`crates/aichip-server/src/mcp/`](../crates/aichip-server/src/mcp/) is a hand-rolled
+[`crates/eren-server/src/mcp/`](../crates/eren-server/src/mcp/) is a hand-rolled
 MCP-over-HTTP endpoint implementing exactly what the permission-prompt-tool contract needs —
 `initialize`, `tools/list`, and `tools/call` for a single `approve` tool. The same router
 also serves chat workspace tools and org messaging tools on their own paths.
@@ -359,7 +359,7 @@ Two details are load-bearing.
 `Unanswered { waited }`, `RunGone`. The wire protocol has only allow and deny, so three of
 them travel as a denial, but the *message* keeps them apart. An engine told "denied by the
 user" works around the refusal and spends real money doing it; an engine told "nobody
-answered this request, so aichip stopped the run — this is not a refusal" stops. The old
+answered this request, so Eren stopped the run — this is not a refusal" stops. The old
 behaviour was `_ => false` on timeout.
 
 **`ParkGuard` exists because the future can be dropped.** `request` is awaited inside an
@@ -372,7 +372,7 @@ what makes a resolve racing a cancel settle once rather than twice. The refcount
 stack on one card while the run still holds only one slot.
 
 The broker talks to the rest of the world through two traits, `RunGate` and `Window`
-([`runs/gate.rs`](../crates/aichip-core/src/runs/gate.rs)), because this repository has no
+([`runs/gate.rs`](../crates/eren-core/src/runs/gate.rs)), because this repository has no
 database-backed tests: every test is either pure or drives real git in a temporary
 directory. A refcount, a borrowed queue slot and a timeout that must not be mistaken for a
 refusal deserve to be asserted directly.
@@ -386,7 +386,7 @@ tagged onto the card, then standing context.
 
 ### Standing context
 
-[`runs/context.rs`](../crates/aichip-core/src/runs/context.rs) holds `Standing` — the
+[`runs/context.rs`](../crates/eren-core/src/runs/context.rs) holds `Standing` — the
 project's Brain and the card's Skill, loaded once per run. The Brain is background ("the API
 lives in `api/`"); the Skill is method ("how a migration gets written here"). Brain then
 skill, both after the request.
@@ -414,7 +414,7 @@ knowledge-base page, an imported GitHub issue, a retrieved space document. Each 
 text in a marker pair and says, in the surrounding prose, how to read what is inside.
 
 All the markers live in one place,
-[`crates/aichip-core/src/fence.rs`](../crates/aichip-core/src/fence.rs), and the reason is
+[`crates/eren-core/src/fence.rs`](../crates/eren-core/src/fence.rs), and the reason is
 `scrub_foreign(text, own)`: **every scrubber strips every marker except its own.**
 
 Scrubbing only your own pair is not enough, because the framings are not equally strong. A
@@ -456,7 +456,7 @@ through to :4820. The proxy deliberately leaves `changeOrigin` off: the server a
 only when its `Origin` names the same authority as the request's `Host`, and forwarding the
 browser's own `Host` is what keeps the Vite page same-origin. A loopback origin alone is not
 enough — previews are served from loopback ports too. `pnpm build` produces `web/dist`, which the
-server serves as a fallback (`AICHIP_WEB_DIST` overrides the path).
+server serves as a fallback (`EREN_WEB_DIST` overrides the path).
 
 ### Why pure logic lives in `web/src/lib/*.ts`
 
@@ -475,13 +475,13 @@ cannot exist.
 
 One of these is shared with Rust. The app expression language exists twice — `apps/expr.rs`
 and `web/src/lib/expr.ts` — because `show_if` cannot afford a round trip and computed values
-cannot be decided by a browser. `crates/aichip-core/src/apps/expr_cases.json` is the
+cannot be decided by a browser. `crates/eren-core/src/apps/expr_cases.json` is the
 specification and both test suites read it. Add a case there, not to one side.
 
 ## Testing
 
 `cargo test` runs the whole workspace against the **mock engine**
-([`crates/aichip-engines/src/mock/`](../crates/aichip-engines/src/mock/)), which replays
+([`crates/eren-engines/src/mock/`](../crates/eren-engines/src/mock/)), which replays
 recorded stream-json fixtures with configurable pacing. No model usage, no rate limits, no
 credentials. `cd web && pnpm test` runs vitest.
 
@@ -498,7 +498,7 @@ name says what would break is a test the next person will not delete by accident
 
 ## Before your first pull request
 
-- Re-read the four invariants at the top of `crates/aichip-engines/src/lib.rs`. A change
+- Re-read the four invariants at the top of `crates/eren-engines/src/lib.rs`. A change
   that touches process spawning, environment, or engine detection is judged against them
   first.
 - Gate on a `Capabilities` flag, never on an engine id. If the capability you need does not

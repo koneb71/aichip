@@ -19,8 +19,8 @@ export type CodeTheme = "light" | "dark";
 
 /** Monaco's theme names, registered by `components/editor/CodeEditor`. */
 export const MONACO_THEME_NAME: Record<CodeTheme, string> = {
-  light: "aichip",
-  dark: "aichip-dark",
+  light: "eren",
+  dark: "eren-dark",
 };
 
 /** Monaco's colour overrides, layered on `vs` / `vs-dark`. */

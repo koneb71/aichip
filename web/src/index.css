@@ -423,7 +423,7 @@ h1, h2, h3 {
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
   font-size: 0.88em;
-  /* `mcp__aichip__post_message` and friends have no break opportunity of
+  /* `mcp__eren__post_message` and friends have no break opportunity of
    * their own; anywhere beats overflowing. Block-level code keeps its shape
    * and scrolls instead — see `.md pre code`. */
   overflow-wrap: anywhere;

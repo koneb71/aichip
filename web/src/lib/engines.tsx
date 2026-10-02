@@ -18,7 +18,7 @@ export interface EngineCapabilities {
   reports_cost: boolean;
   /** Holds a pass to read-only. Required of a reviewer's engine. */
   enforces_denied_tools: boolean;
-  /** Can be handed aichip's tools for one run. Required by the chat
+  /** Can be handed Eren's tools for one run. Required by the chat
    *  assistant, a project manager and a team. */
   mcp_tools: boolean;
   /** Can edit without also being handed a shell. */
@@ -96,7 +96,7 @@ export function permissionBlocker(
 }
 
 /**
- * Why this engine can't do work that lives on aichip's tools, or null —
+ * Why this engine can't do work that lives on Eren's tools, or null —
  * naming the installed engines that can, so the advice is never one this
  * machine doesn't have.
  */
@@ -108,7 +108,7 @@ export function toolsBlocker(
   if (!engine || engine.capabilities.mcp_tools !== false) return null;
   const can = installed.filter((e) => e.capabilities.mcp_tools).map((e) => e.label);
   return (
-    `${engine.label} can't be handed aichip's tools for one run, and ${what} works through them.` +
+    `${engine.label} can't be handed Eren's tools for one run, and ${what} works through them.` +
     (can.length ? ` Pick ${can.join(", ")}.` : "")
   );
 }

@@ -214,7 +214,7 @@ export function pageWindow(page: number, total: number, size: number): PageWindo
  * Where a container app is served.
  *
  * Built in the browser rather than by the server, for the same reason
- * `previewUrl` is: the port to put in it is the one aichip is being *served*
+ * `previewUrl` is: the port to put in it is the one Eren is being *served*
  * on, and the browser is the only party that already knows it.
  */
 export function appOrigin(slug: string, port: string): string {
@@ -240,7 +240,7 @@ export function runtimeBlurb(runtime: AppRuntime): string {
  * how most people learn the shape. The module's exercises most of the format in
  * as few lines as possible: two field types, a computed column, a default, a
  * list and a chart. A container's declares tables and a menu of screens — each
- * entry becomes a real HTML page aichip scaffolds, a CRUD page when it names a
+ * entry becomes a real HTML page Eren scaffolds, a CRUD page when it names a
  * model. `views:` belongs to modules and is refused for containers.
  */
 export function starterManifest(runtime: AppRuntime): string {

@@ -149,7 +149,7 @@ export default function CodeEditor({
   useEffect(() => {
     const instance = editor.current;
     if (!instance) return;
-    const uri = monaco.Uri.parse(`aichip:/${path}`);
+    const uri = monaco.Uri.parse(`eren:/${path}`);
     const existing = monaco.editor.getModel(uri);
     const model = existing ?? monaco.editor.createModel(value, language, uri);
     models.current.add(model);

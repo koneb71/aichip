@@ -23,7 +23,7 @@ import { Select } from "../components/ui/Field";
  * page for both routes — `/research` and `/research/:researchId` — so a
  * report is linkable.
  */
-const PROJECT_KEY = "aichip.research.project";
+const PROJECT_KEY = "eren.research.project";
 /** The picker value for a research attached to no project: web-only. */
 const GENERAL = "general";
 
@@ -426,7 +426,7 @@ function phaseOf(events: StreamEvent[]): { label: string; icon: string } {
       const t = String(e.tool_name ?? "");
       if (t === "WebSearch") return { label: "Searching the web", icon: "🔎" };
       if (t === "WebFetch") return { label: "Reading sources", icon: "📖" };
-      if (t === "mcp__aichip__search_documents")
+      if (t === "mcp__eren__search_documents")
         return { label: "Searching the documents", icon: "🗂" };
       if (["Read", "Grep", "Glob"].includes(t))
         return { label: "Reading the repository", icon: "📁" };

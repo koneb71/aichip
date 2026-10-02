@@ -22,7 +22,7 @@ const Ctx = createContext<WorkspaceCtx>({
   refresh: async () => {},
 });
 
-const STORAGE_KEY = "aichip.workspace";
+const STORAGE_KEY = "eren.workspace";
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);

@@ -35,7 +35,7 @@ export function TopBar({ onOpenPalette, onOpenNav }: { onOpenPalette: () => void
       <Breadcrumbs
         className="min-w-0 flex-1"
         items={[
-          ...(section ? [{ label: section.label, to: section.to }] : [{ label: "aichip" }]),
+          ...(section ? [{ label: section.label, to: section.to }] : [{ label: "eren" }]),
           ...trail,
         ]}
       />

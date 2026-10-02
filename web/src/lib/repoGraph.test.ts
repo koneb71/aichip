@@ -50,7 +50,7 @@ function project(): { files: GraphFile[]; edges: GraphEdge[] } {
 
 describe("moduleOf", () => {
   it("groups by the first two segments", () => {
-    expect(moduleOf("crates/aichip-core/src/repo/index.rs")).toBe("crates/aichip-core");
+    expect(moduleOf("crates/eren-core/src/repo/index.rs")).toBe("crates/eren-core");
     expect(moduleOf("web/src/lib/api.ts")).toBe("web/src");
   });
 
@@ -137,7 +137,7 @@ describe("sunflower", () => {
   });
 
   it("never places two of ninety items on top of each other", () => {
-    // aichip-core is 90 files; a naive ring at this count overlaps.
+    // eren-core is 90 files; a naive ring at this count overlaps.
     const pts = Array.from({ length: 90 }, (_, i) => sunflower(i, 90, 200));
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
@@ -240,7 +240,7 @@ describe("layout", () => {
 
   it("opening a big module pushes its neighbours apart rather than drawing over them", () => {
     // Thirty files, because that is when the disc outgrows a shut module's
-    // box — this repository's aichip-core is ninety.
+    // box — this repository's eren-core is ninety.
     const files = [
       ...Array.from({ length: 30 }, (_, i) => file(`web/lib/f${i}.ts`, 1)),
       file("web/pages/Project.tsx", 0, 1),

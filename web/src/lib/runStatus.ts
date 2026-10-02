@@ -1,5 +1,5 @@
 /**
- * Run status predicates, mirroring `RunStatus` in aichip-shared.
+ * Run status predicates, mirroring `RunStatus` in eren-shared.
  *
  * These used to be spelled out inline at half a dozen call sites, which is
  * how a new status (`awaiting_approval`) silently reads as "dead" in one

@@ -2,7 +2,7 @@
  * Bidirectional bridge between workflow YAML and the visual canvas.
  *
  * YAML stays the source of truth — the Rust executor parses it and users
- * commit it to `.aichip/workflows/`. The canvas is a view: we parse YAML
+ * commit it to `.eren/workflows/`. The canvas is a view: we parse YAML
  * into nodes/edges, and re-emit YAML when the graph is edited.
  */
 import { load } from "js-yaml";

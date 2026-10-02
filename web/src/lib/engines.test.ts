@@ -42,7 +42,7 @@ describe("permissionBlocker", () => {
 describe("toolsBlocker", () => {
   it("names the installed engines that can carry the tools", () => {
     const said = toolsBlocker(cursor, "the assistant", [claude, cursor, qwen]);
-    expect(said).toMatch(/^Cursor CLI can't be handed aichip's tools/);
+    expect(said).toMatch(/^Cursor CLI can't be handed Eren's tools/);
     expect(said).toMatch(/Pick Claude Code, Qwen Code\.$/);
   });
 

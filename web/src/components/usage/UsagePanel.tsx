@@ -13,20 +13,20 @@ import {
  * Where your Claude plan stands, and how often it stops you.
  *
  * The sidebar chip answers "can I start this now" and is silent when the
- * answer is yes. This is the place to look on purpose: every window aichip has
+ * answer is yes. This is the place to look on purpose: every window Eren has
  * heard about, whether it is fine, when it turns over, and the history of when
  * it has pinched.
  *
  * ## Why there is no percentage bar
  *
  * Claude Code prints a *status* and a reset time, not a fraction of a quota.
- * aichip has no other source for it — reading the CLI's own config or calling
+ * Eren has no other source for it — reading the CLI's own config or calling
  * Anthropic are both things this project does not do, and one of them is a
  * credential it deliberately never holds. A progress bar here would be a
  * number invented to fill the space, which is worse than the honest shape:
  * these are the facts the CLI stated, with the time it stated them.
  *
- * The counts are days aichip *heard from* a limit, which is days you ran
+ * The counts are days Eren *heard from* a limit, which is days you ran
  * something. They are never a percentage of "the time" — nothing is learned
  * on a day nothing runs, and a denominator that pretends otherwise would make
  * a quiet week look like a healthy one.
@@ -68,7 +68,7 @@ export function UsagePanel() {
     return (
       <p className="text-sm text-fg-muted">
         Nothing heard yet. Your CLI reports where your plan stands as it works,
-        so this fills in after the first run — aichip asks Anthropic nothing.
+        so this fills in after the first run — Eren asks Anthropic nothing.
       </p>
     );
   }
@@ -137,7 +137,7 @@ export function UsagePanel() {
       )}
 
       <p className="text-xs leading-relaxed text-fg-muted">
-        Your CLI prints this as it works and aichip keeps what it said — no
+        Your CLI prints this as it works and Eren keeps what it said — no
         credential, and nothing asked of Anthropic. So it is as fresh as your
         last run, and there is no percentage because the CLI does not report
         one.

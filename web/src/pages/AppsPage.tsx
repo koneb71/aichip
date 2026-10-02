@@ -50,14 +50,14 @@ export default function AppsPage() {
     <Page>
       <PageHead
         title="Apps"
-        subtitle="Small internal tools aichip builds and hosts for you, each with its own data and screens."
+        subtitle="Small internal tools Eren builds and hosts for you, each with its own data and screens."
         actions={
           <>
         <label className={buttonClasses({ variant: "secondary", className: "cursor-pointer" })}>
           Import
           <input
             type="file"
-            accept=".aichipapp,.json,application/json"
+            accept=".erenapp,.json,application/json"
             className="hidden"
             onChange={async (e) => {
               const file = e.target.files?.[0];
@@ -140,7 +140,7 @@ export default function AppsPage() {
             <Empty
               icon={<Icon name="apps" size={28} />}
               title="No apps yet"
-              hint="Describe one and aichip will write the manifest, or paste one you already have. An app gets its own tables, screens and worktree."
+              hint="Describe one and Eren will write the manifest, or paste one you already have. An app gets its own tables, screens and worktree."
             />
           </div>
         )}

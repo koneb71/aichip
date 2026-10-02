@@ -242,7 +242,7 @@ export default function HomePage() {
 
           <Panel title="Plan limits" action={<SoftLink to="/activity">history</SoftLink>}>
             {plan.length === 0 ? (
-              // Not an error, and not a zero: aichip learns this from the CLI as
+              // Not an error, and not a zero: Eren learns this from the CLI as
               // it works, so before the first run there is genuinely nothing.
               <p className="px-4 pb-4 text-xs leading-relaxed text-fg-muted">
                 Nothing heard yet — your CLI reports where your plan stands as it works, so this fills in after a run.

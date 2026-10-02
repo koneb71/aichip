@@ -10,7 +10,7 @@ import { Select } from "../components/ui/Field";
 /**
  * The ledger: what was done, by what, to what. Append-only on the server.
  *
- * "API" is honest rather than flattering: aichip has no login, so a request
+ * "API" is honest rather than flattering: Eren has no login, so a request
  * through the dashboard's API is anything on this machine that made one.
  */
 export default function AuditPage() {
@@ -49,7 +49,7 @@ export default function AuditPage() {
       <div className="mx-auto max-w-6xl">
         <PageHeader
           title="Audit log"
-          description="Every change made through the API, every tool an agent called, and what aichip did on its own. Agent and system entries are kept 90 days; API entries for good."
+          description="Every change made through the API, every tool an agent called, and what Eren did on its own. Agent and system entries are kept 90 days; API entries for good."
           actions={
             <a href={api.auditCsvUrl(filter)} download className={buttonClasses({ size: "sm" })}>
               <Download className="size-3.5" />
@@ -67,7 +67,7 @@ export default function AuditPage() {
             <option value="">Everyone</option>
             <option value="api">Through the API</option>
             <option value="agent">Agents</option>
-            <option value="system">aichip itself</option>
+            <option value="system">Eren itself</option>
           </Select>
           <Select
             className="w-44"
@@ -138,7 +138,7 @@ export default function AuditPage() {
 const ACTOR: Record<AuditEntry["actorKind"], { label: string; tone: Tone; icon: React.ReactNode }> = {
   api: { label: "API", tone: "neutral", icon: <Globe className="size-3" /> },
   agent: { label: "Agent", tone: "complex", icon: <Bot className="size-3" /> },
-  system: { label: "aichip", tone: "info", icon: <Cpu className="size-3" /> },
+  system: { label: "eren", tone: "info", icon: <Cpu className="size-3" /> },
 };
 
 function Actor({ e }: { e: AuditEntry }) {

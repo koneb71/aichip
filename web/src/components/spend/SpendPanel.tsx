@@ -17,7 +17,7 @@ import { useWorkspace } from "../../lib/workspace";
  * has no business being asked at that rate.
  */
 const DIMENSIONS: { id: SpendDimension; label: string; note?: string }[] = [
-  { id: "pattern", label: "By feature", note: "Which part of aichip spent it" },
+  { id: "pattern", label: "By feature", note: "Which part of Eren spent it" },
   { id: "project", label: "By project" },
   { id: "agent", label: "By agent", note: "A team run is charged step by step" },
   { id: "routine", label: "By routine", note: "What your schedules cost" },
@@ -124,7 +124,7 @@ export function SpendPanel() {
       </div>
 
       <p className="mt-4 text-[11px] leading-relaxed text-fg-muted/80">
-        Costs are what each CLI reported as it worked — aichip asks nothing and prices
+        Costs are what each CLI reported as it worked — Eren asks nothing and prices
         nothing itself.
       </p>
     </Card>

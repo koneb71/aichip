@@ -1,24 +1,24 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/aichip-shared",
-    "crates/aichip-engines",
-    "crates/aichip-core",
-    "crates/aichip-server",
-    "crates/aichip-cli",
+    "crates/eren-shared",
+    "crates/eren-engines",
+    "crates/eren-core",
+    "crates/eren-server",
+    "crates/eren-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/neiellcare/aichip"
+repository = "https://github.com/neiellcare/eren"
 
 [workspace.dependencies]
-aichip-shared = { path = "crates/aichip-shared" }
-aichip-engines = { path = "crates/aichip-engines" }
-aichip-core = { path = "crates/aichip-core" }
-aichip-server = { path = "crates/aichip-server" }
+eren-shared = { path = "crates/eren-shared" }
+eren-engines = { path = "crates/eren-engines" }
+eren-core = { path = "crates/eren-core" }
+eren-server = { path = "crates/eren-server" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

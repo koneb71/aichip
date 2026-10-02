@@ -129,7 +129,7 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
           <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
             No workflows yet. Write one here, or drop YAML in
             <code className="mx-1 rounded bg-panel-2 px-1.5 py-0.5 text-xs">
-              .aichip/workflows/
+              .eren/workflows/
             </code>
             and hit “Sync from repo”.
           </div>

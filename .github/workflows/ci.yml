@@ -4,7 +4,7 @@
 # the Rust tests drive the mock engine, which replays recorded stream fixtures,
 # and the web tests are pure vitest over the logic in web/src/lib. Nothing here
 # needs an API key or a subscription. The Rust job brings a throwaway Postgres
-# for the tests that exercise SQL (see crates/aichip-core/src/testdb.rs); each
+# for the tests that exercise SQL (see crates/eren-core/src/testdb.rs); each
 # makes and drops a database of its own, and they skip where none is set.
 name: CI
 
@@ -29,13 +29,13 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: aichip
-          POSTGRES_PASSWORD: aichip
-          POSTGRES_DB: aichip
+          POSTGRES_USER: eren
+          POSTGRES_PASSWORD: eren
+          POSTGRES_DB: eren
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U aichip"
+          --health-cmd "pg_isready -U eren"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -66,7 +66,7 @@ jobs:
       - name: Tests
         run: cargo test --workspace
         env:
-          DATABASE_URL: postgres://aichip:aichip@localhost:5432/aichip
+          DATABASE_URL: postgres://eren:eren@localhost:5432/eren
 
   web:
     name: pnpm test

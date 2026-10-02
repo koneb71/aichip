@@ -210,7 +210,7 @@ export default function SettingsPage() {
           <EffortChoice
             checked={effort?.defaultEffort == null}
             label="Leave it to the CLI"
-            blurb="Whatever claude or opencode does on its own. This is what aichip ships with."
+            blurb="Whatever claude or opencode does on its own. This is what Eren ships with."
             onPick={async () => {
               setEffort((e) => (e ? { ...e, defaultEffort: null } : e));
               await api.setDefaultEffort(null);
@@ -250,7 +250,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Where to look for models this machine serves. Not engines — see
-          aichip_core::local_models — so it sits with the other settings
+          eren_core::local_models — so it sits with the other settings
           rather than beside the engine list, which would imply otherwise. */}
       <section className="mt-8">
         <h2 className="text-sm font-semibold">Local model runtimes</h2>
@@ -447,7 +447,7 @@ function StaleServer() {
       </span>{" "}
       It was started before thinking budgets existed, so it can't store one —
       the dashboard is served from disk, which is why the two can disagree.
-      Restart aichip and reload.
+      Restart Eren and reload.
     </div>
   );
 }

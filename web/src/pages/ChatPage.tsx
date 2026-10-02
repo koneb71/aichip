@@ -17,7 +17,7 @@ import { Pencil, X } from "lucide-react";
  * resolves everything through the chat's project), so the rail opens with a
  * project picker.
  */
-const PROJECT_KEY = "aichip.chat.project";
+const PROJECT_KEY = "eren.chat.project";
 /** The picker value for a chat attached to no project. */
 const GENERAL = "general";
 

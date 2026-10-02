@@ -63,119 +63,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aichip-cli"
-version = "0.1.0"
-dependencies = [
- "aichip-core",
- "aichip-engines",
- "aichip-server",
- "aichip-shared",
- "anyhow",
- "axum",
- "clap",
- "postgresql_embedded",
- "rand 0.9.5",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "aichip-core"
-version = "0.1.0"
-dependencies = [
- "aichip-engines",
- "aichip-shared",
- "ammonia",
- "anyhow",
- "async-trait",
- "calamine",
- "chrono",
- "croner",
- "fastembed",
- "futures",
- "hex",
- "hmac 0.12.1",
- "pdf-extract",
- "pulldown-cmark",
- "quick-xml",
- "rand 0.9.5",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "similar",
- "sqlx",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "tree-sitter",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "aichip-engines"
-version = "0.1.0"
-dependencies = [
- "aichip-shared",
- "anyhow",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aichip-server"
-version = "0.1.0"
-dependencies = [
- "aichip-core",
- "aichip-engines",
- "aichip-shared",
- "anyhow",
- "axum",
- "chrono",
- "croner",
- "futures",
- "hex",
- "portable-pty",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "sqlx",
- "tokio",
- "tower-http",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aichip-shared"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.19",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1096,6 +983,119 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "eren-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "eren-core",
+ "eren-engines",
+ "eren-server",
+ "eren-shared",
+ "postgresql_embedded",
+ "rand 0.9.5",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "eren-core"
+version = "0.1.0"
+dependencies = [
+ "ammonia",
+ "anyhow",
+ "async-trait",
+ "calamine",
+ "chrono",
+ "croner",
+ "eren-engines",
+ "eren-shared",
+ "fastembed",
+ "futures",
+ "hex",
+ "hmac 0.12.1",
+ "pdf-extract",
+ "pulldown-cmark",
+ "quick-xml",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "similar",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "eren-engines"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "eren-shared",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "eren-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "croner",
+ "eren-core",
+ "eren-engines",
+ "eren-shared",
+ "futures",
+ "hex",
+ "portable-pty",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "eren-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "errno"

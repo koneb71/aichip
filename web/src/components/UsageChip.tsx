@@ -12,7 +12,7 @@ import { resetIn, windowPhrase } from "../lib/usage";
  * thing now, or wait for the window to turn over.
  *
  * The numbers come from the user's own CLI, which prints them as it works.
- * aichip asks Anthropic nothing and holds no credential — so this is as fresh
+ * Eren asks Anthropic nothing and holds no credential — so this is as fresh
  * as the last run, and says so rather than implying it is live.
  *
  * It links to the usage panel on Activity, which is the same facts plus the

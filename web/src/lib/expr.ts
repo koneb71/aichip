@@ -4,11 +4,11 @@
  * Used for display-only decisions — chiefly `show_if`, which decides whether a
  * button appears. Anything authoritative (computed columns, defaults, the
  * arguments an action step runs with) is evaluated on the server by
- * `crates/aichip-core/src/apps/expr.rs`, and this must never be the thing that
+ * `crates/eren-core/src/apps/expr.rs`, and this must never be the thing that
  * decides what gets stored.
  *
  * Two implementations of one language drift. The defence is
- * `crates/aichip-core/src/apps/expr_cases.json` — the specification both sides
+ * `crates/eren-core/src/apps/expr_cases.json` — the specification both sides
  * read, and what `expr.test.ts` runs. A case added there fails on whichever
  * side has not caught up.
  *

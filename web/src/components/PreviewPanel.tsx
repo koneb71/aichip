@@ -12,7 +12,7 @@ import { Button } from "./ui/Button";
  * button for the card you happen to have open.
  *
  * Polls only while building. A running preview has nothing further to report
- * to this page, and the container never talks to aichip at all.
+ * to this page, and the container never talks to Eren at all.
  */
 export function PreviewPanel({
   taskId,

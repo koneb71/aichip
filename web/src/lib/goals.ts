@@ -1,4 +1,4 @@
-/** A goal as the server sends it. See `aichip_core::goals`. */
+/** A goal as the server sends it. See `eren_core::goals`. */
 export interface Goal {
   id: string;
   parentId: string | null;

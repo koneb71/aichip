@@ -1,21 +1,31 @@
-# Postgres for aichip, and optionally aichip itself.
+# Postgres for Eren, and optionally Eren itself.
 #
 #   docker compose up -d
 #     Just Postgres. Run the server on your machine against it:
 #       export DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip
-#       cargo run -p aichip-cli -- serve
+#       cargo run -p eren-cli -- serve
 #     This is the recommended shape — see README.md for why.
 #
 #   docker compose --profile app up -d --build
 #     Everything, including the agents, inside containers. Needs
-#     CLAUDE_CODE_OAUTH_TOKEN and AICHIP_PROJECTS_DIR in a .env file, because
+#     CLAUDE_CODE_OAUTH_TOKEN and EREN_PROJECTS_DIR in a .env file, because
 #     a container has no keychain and no browser to log in with. Read the
 #     "Running in Docker" section of README.md first.
+#
+# Why some names here still say aichip, the project's old name: they name
+# data that already exists. A Docker volume is found by its name, and the
+# Postgres image creates its role and database only when the volume is new,
+# so renaming either would leave an existing install looking at an empty
+# volume, or at a role that does not exist. They are names, not branding,
+# and nothing outside this file shows them.
+#
+# Variables you set in `.env` are read as EREN_* first and AICHIP_* second,
+# so an `.env` written before the rename keeps working.
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: aichip-postgres
+    container_name: eren-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aichip}
@@ -28,7 +38,7 @@ services:
       # every interface, which put this database — default password and all —
       # on the network of anyone who followed the one-line setup. Whoever can
       # write to it can register an MCP server or an attention hook, both of
-      # which aichip runs as commands.
+      # which Eren runs as commands.
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - aichip-pgdata:/var/lib/postgresql/data
@@ -43,12 +53,12 @@ services:
   # The knowledge base works without this, you just can't attach files.
   minio:
     image: minio/minio:latest
-    container_name: aichip-minio
+    container_name: eren-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${AICHIP_S3_ACCESS_KEY:-aichip}
-      MINIO_ROOT_PASSWORD: ${AICHIP_S3_SECRET_KEY:-aichip-dev-secret}
+      MINIO_ROOT_USER: ${EREN_S3_ACCESS_KEY:-${AICHIP_S3_ACCESS_KEY:-aichip}}
+      MINIO_ROOT_PASSWORD: ${EREN_S3_SECRET_KEY:-${AICHIP_S3_SECRET_KEY:-aichip-dev-secret}}
     ports:
       # 9100/9101 on the host, so a MinIO you already run on 9000 keeps working.
       - "127.0.0.1:${MINIO_PORT:-9100}:9000"
@@ -61,12 +71,12 @@ services:
       timeout: 5s
       retries: 10
 
-  # The app profile needs CLAUDE_CODE_OAUTH_TOKEN and AICHIP_PROJECTS_DIR in
+  # The app profile needs CLAUDE_CODE_OAUTH_TOKEN and EREN_PROJECTS_DIR in
   # `.env`. They are defaulted rather than declared required, because Compose
   # interpolates every service whatever profile you asked for — a required
   # variable here made `docker compose up -d minio` fail too. Without a real
   # token the container starts and reports "not logged in" on its first run.
-  aichip:
+  eren:
     profiles: ["app"]
     build:
       context: .
@@ -75,7 +85,7 @@ services:
         # belong to you and not to root.
         UID: ${UID:-1000}
         GID: ${GID:-1000}
-    container_name: aichip
+    container_name: eren
     restart: unless-stopped
     depends_on:
       postgres:
@@ -87,23 +97,25 @@ services:
       # beats starting a server whose every run dies logged-out.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       # Your code, at the same path inside and out — see the volume below.
-      AICHIP_BROWSE_ROOT: ${AICHIP_PROJECTS_DIR:-/workspace}
-      AICHIP_MAX_CONCURRENT: ${AICHIP_MAX_CONCURRENT:-2}
+      EREN_BROWSE_ROOT: ${EREN_PROJECTS_DIR:-${AICHIP_PROJECTS_DIR:-/workspace}}
+      EREN_MAX_CONCURRENT: ${EREN_MAX_CONCURRENT:-${AICHIP_MAX_CONCURRENT:-2}}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     ports:
-      # Loopback on the host, whatever the container binds inside. aichip has
+      # Loopback on the host, whatever the container binds inside. Eren has
       # no authentication, so reach it from elsewhere over an SSH tunnel, or
       # drop the 127.0.0.1 knowing that anyone who can reach the port can
       # drive it.
-      - "127.0.0.1:${AICHIP_PORT:-4820}:4820"
+      - "127.0.0.1:${EREN_PORT:-${AICHIP_PORT:-4820}}:4820"
     volumes:
       # Mounted at the *same absolute path* on both sides. A git worktree
       # records absolute paths in .git, so a repo checked out at one path on
       # the host and another in the container has a broken worktree link.
-      - ${AICHIP_PROJECTS_DIR:-/workspace}:${AICHIP_PROJECTS_DIR:-/workspace}
+      - ${EREN_PROJECTS_DIR:-${AICHIP_PROJECTS_DIR:-/workspace}}:${EREN_PROJECTS_DIR:-${AICHIP_PROJECTS_DIR:-/workspace}}
       # Worktrees and agent state. A named volume, so a container restart
-      # doesn't strand half-finished work.
-      - aichip-state:/home/aichip/.aichip
+      # doesn't strand half-finished work. The image links the old home,
+      # /home/aichip/.aichip, to this one, so paths stored before the rename
+      # still resolve.
+      - aichip-state:/home/eren/.eren
 
 volumes:
   aichip-minio:
