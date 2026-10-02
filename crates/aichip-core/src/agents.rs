@@ -363,3 +363,88 @@ mod tests {
         );
     }
 }
+
+/// Against a real database and the mock engine — see `crate::testdb`.
+#[cfg(test)]
+mod db_tests {
+    use crate::testdb;
+    use uuid::Uuid;
+
+    async fn agent(t: &testdb::TestDb, ws: Uuid, name: &str) -> Uuid {
+        sqlx::query_scalar("INSERT INTO agents (workspace_id, name) VALUES ($1, $2) RETURNING id")
+            .bind(ws)
+            .bind(name)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_paused_agent_starts_nothing_until_resumed() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (ws, project) = t.project(dir.path(), true).await;
+        let ada = agent(&t, ws, "Ada").await;
+        let card = t.card(project, "work").await;
+        sqlx::query("UPDATE tasks SET agent_id = $2 WHERE id = $1")
+            .bind(card)
+            .bind(ada)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+
+        orchestrator
+            .pause_agent(ada, Some("over budget"), false)
+            .await
+            .unwrap();
+        let refused = orchestrator.start_card(card).await.unwrap_err();
+        let why = refused
+            .downcast_ref::<super::Unavailable>()
+            .expect("refused as unavailable");
+        assert_eq!(why.reason.as_deref(), Some("over budget"));
+        // Paused, not gone: it can still be handed work for later.
+        super::assert_assignable(&t.db, ada).await.unwrap();
+
+        orchestrator.resume_agent(ada).await.unwrap();
+        orchestrator.start_card(card).await.unwrap();
+
+        t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_retired_agent_takes_no_work_and_a_team_with_one_does_not_start() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (ws, project) = t.project(dir.path(), false).await;
+        let lead = agent(&t, ws, "Lead").await;
+        let dev = agent(&t, ws, "Dev").await;
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO teams (workspace_id, name, pattern, definition)
+             VALUES ($1, 'crew', 'org', $2) RETURNING id",
+        )
+        .bind(ws)
+        .bind(serde_json::json!({
+            "manager": lead.to_string(),
+            "members": [{ "agent_id": dev.to_string(), "role": "dev" }],
+        }))
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+
+        orchestrator.retire_agent(dev).await.unwrap();
+        assert!(super::assert_assignable(&t.db, dev).await.is_err());
+        let refused = orchestrator
+            .enqueue_org_run(team, project, "ship it", false)
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("Dev is retired"), "{refused}");
+
+        t.finish().await;
+    }
+}

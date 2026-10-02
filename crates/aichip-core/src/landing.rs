@@ -255,3 +255,165 @@ mod tests {
         assert!(n.contains("could not start") && n.ends_with("the agent is paused"));
     }
 }
+
+/// Against a real database and the mock engine — see `crate::testdb`.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb;
+
+    /// The loop this module closes, end to end: a card runs, says what it
+    /// did on its thread, lands, and the cards it blocked hear about it —
+    /// the flagged one by starting, the other by a note.
+    #[tokio::test]
+    async fn a_landing_starts_the_flagged_dependent_and_tells_the_other() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        // In place: the run settles straight to done, which is a landing.
+        let (_, project) = t.project(dir.path(), true).await;
+        let a = t.card(project, "schema").await;
+        let b = t.card(project, "api").await;
+        let c = t.card(project, "docs").await;
+        sqlx::query("UPDATE tasks SET start_when_unblocked = TRUE WHERE id = $1")
+            .bind(b)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        add_blocker(&t.db, b, a).await.unwrap();
+        add_blocker(&t.db, c, a).await.unwrap();
+
+        // Blocked cards refuse to start, through the same door as everything.
+        assert!(orchestrator.start_card(b).await.is_err());
+
+        orchestrator.start_card(a).await.unwrap();
+        t.until(
+            "the first card to land",
+            "SELECT landed_at IS NOT NULL FROM tasks WHERE id = $1",
+            a,
+        )
+        .await;
+
+        let report: String = sqlx::query_scalar(
+            "SELECT content FROM task_comments WHERE task_id = $1 AND author = 'agent' AND run_id IS NOT NULL",
+        )
+        .bind(a)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+        assert!(report.starts_with("**Work report**"), "{report}");
+
+        t.until(
+            "the flagged dependent to start",
+            "SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1)",
+            b,
+        )
+        .await;
+        let started: Vec<String> = sqlx::query_scalar(
+            "SELECT content FROM task_comments WHERE task_id = $1 AND author = 'system'",
+        )
+        .bind(b)
+        .fetch_all(&t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(started, vec![note("schema", Ok(()), true)]);
+
+        let told: Vec<String> = sqlx::query_scalar(
+            "SELECT content FROM task_comments WHERE task_id = $1 AND author = 'system'",
+        )
+        .bind(c)
+        .fetch_all(&t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(told, vec![note("schema", Ok(()), false)]);
+        let c_runs: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE task_id = $1")
+            .bind(c)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(c_runs, 0, "an unflagged dependent waits for a person");
+
+        t.finish().await;
+    }
+
+    /// However many writers of done notice one landing, its dependents hear
+    /// about it once; taken back out of done, it is news again.
+    #[tokio::test]
+    async fn a_landing_is_news_once_until_it_is_taken_back() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), false).await;
+        let a = t.card(project, "a").await;
+        let b = t.card(project, "b").await;
+        add_blocker(&t.db, b, a).await.unwrap();
+
+        // Not done: nothing has landed.
+        assert!(land(&t.db, a).await.unwrap().is_none());
+
+        let done = |id| {
+            sqlx::query("UPDATE tasks SET board_column = $2 WHERE id = $1")
+                .bind(id)
+                .bind("done")
+        };
+        done(a).execute(&t.db.pool).await.unwrap();
+        let (title, unblocked) = land(&t.db, a).await.unwrap().unwrap();
+        assert_eq!(title, "a");
+        assert_eq!(
+            unblocked.iter().map(|u| u.task_id).collect::<Vec<_>>(),
+            vec![b]
+        );
+        assert!(
+            land(&t.db, a).await.unwrap().is_none(),
+            "the second notice is silent"
+        );
+
+        sqlx::query("UPDATE tasks SET board_column = 'review' WHERE id = $1")
+            .bind(a)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        orchestrator.settle_landings().await.unwrap();
+        done(a).execute(&t.db.pool).await.unwrap();
+        assert!(
+            land(&t.db, a).await.unwrap().is_some(),
+            "landing again is news again"
+        );
+
+        t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_dependency_that_would_close_a_loop_is_refused() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (_, project) = t.project(dir.path(), false).await;
+        let (_, elsewhere) = t.project(&dir.path().join("other"), false).await;
+        let a = t.card(project, "a").await;
+        let b = t.card(project, "b").await;
+        let c = t.card(project, "c").await;
+        let far = t.card(elsewhere, "far").await;
+        add_blocker(&t.db, b, a).await.unwrap();
+        add_blocker(&t.db, c, b).await.unwrap();
+        let refusal = |e: anyhow::Error| e.downcast::<BlockerRefusal>().unwrap();
+        assert_eq!(
+            refusal(add_blocker(&t.db, a, c).await.unwrap_err()),
+            BlockerRefusal::Cycle
+        );
+        assert_eq!(
+            refusal(add_blocker(&t.db, a, a).await.unwrap_err()),
+            BlockerRefusal::ItsOwnBlocker
+        );
+        assert_eq!(
+            refusal(add_blocker(&t.db, a, far).await.unwrap_err()),
+            BlockerRefusal::OtherBoard
+        );
+        t.finish().await;
+    }
+}

@@ -2096,9 +2096,6 @@ impl Orchestrator {
                     .bind(column)
                     .execute(&self.db.pool)
                     .await?;
-                if in_place {
-                    self.landed(task_id).await;
-                }
             }
 
             // What the run did goes on the card, where a person reading it
@@ -2237,7 +2234,9 @@ impl Orchestrator {
         {
             tracing::warn!(%run_id, error = %e, "an app's change did not land");
         }
-        // A no-op unless the build just landed it.
+        // Either of the two above may just have landed the card: an in-place
+        // run settles straight to done, and an app build squash-merges. A
+        // no-op for every other card.
         self.landed(task_id).await;
 
         // A task spawned from chat reports back into that chat.

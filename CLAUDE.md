@@ -153,3 +153,5 @@ Attachments live under `~/.aichip/attachments/` and are granted via `--add-dir`,
 ## Testing
 
 The mock engine ([crates/aichip-engines/src/mock/](crates/aichip-engines/src/mock/)) replays recorded stream-json `.ndjson`/`.jsonl` fixtures with configurable pacing and is the backbone of all testing — zero model usage. Rust tests are inline `#[cfg(test)] mod tests` next to the code, not a `tests/` directory.
+
+Tests of SQL live in an inline `mod db_tests` and start with `let Some(t) = testdb::fresh().await else { return };` ([crates/aichip-core/src/testdb.rs](crates/aichip-core/src/testdb.rs)): each gets its own migrated database on the server `DATABASE_URL` names, an orchestrator with the mock engine if it asks, and skips when `DATABASE_URL` is unset. CI runs them against a Postgres service. `DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip cargo test` runs them against `docker compose up -d`.

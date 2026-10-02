@@ -24,6 +24,8 @@ pub mod skills;
 pub mod spend;
 pub mod storage;
 pub mod tasks;
+#[cfg(test)]
+pub(crate) mod testdb;
 pub mod usage;
 pub mod worktrees;
 
