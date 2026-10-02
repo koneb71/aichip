@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
 import { api, type CloneProgress } from "../lib/api";
 import { FolderBrowserModal } from "./FolderBrowserModal";
+import { Dialog } from "./ui/Dialog";
+import { Button } from "./ui/Button";
+import { Field, Input } from "./ui/Field";
 
 /**
  * Where the last clone went.
@@ -119,32 +121,32 @@ export function CloneRepoModal({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={busy ? undefined : onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
-    >
-      <motion.div
-        initial={{ scale: 0.97, y: 12, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ scale: 0.97, y: 8 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-lg rounded-2xl bg-panel p-5"
-      >
-        <h3 className="text-sm font-semibold">Clone from GitHub</h3>
-        <p className="mt-1 text-xs text-fg-muted">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && !busy && onClose()}
+      title="Clone from GitHub"
+      description={
+        <>
           Cloned with your own <code className="font-mono">gh</code> login — aichip holds no
           credential and never asks for one.
-        </p>
-
-        <label className="mt-4 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
-            Repository
-          </span>
-          <input
+        </>
+      }
+      width={512}
+      footer={
+        <>
+          <Button variant="ghost" onClick={cancel}>
+            {busy ? "Stop and discard" : "Cancel"}
+          </Button>
+          <Button variant="primary" onClick={start} disabled={busy}>
+            {busy ? "Cloning…" : "Clone"}
+          </Button>
+        </>
+      }
+    >
+      <Field label="Repository">
+        {(fid) => (
+          <Input
+            id={fid}
             autoFocus
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
@@ -153,79 +155,64 @@ export function CloneRepoModal({
             }}
             disabled={busy}
             placeholder="owner/repo, or https://github.com/owner/repo"
-            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
-        </label>
+        )}
+      </Field>
 
-        <div className="mt-3">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
-            Location
+      <div className="mt-3">
+        <span className="mb-1.5 block text-xs font-medium text-fg">Location</span>
+        <div className="flex items-center gap-2">
+          {/* Shown rather than assumed. It used to be the folder aichip
+              browses from, silently — so the only way to find out where a
+              repository had gone was to go looking for it. */}
+          <span className="min-w-0 flex-1 truncate rounded-md border border-border bg-panel-2 px-2.5 py-1.5 font-mono text-xs text-fg-muted">
+            {parent ?? "…"}
           </span>
-          <div className="flex items-center gap-2">
-            {/* Shown rather than assumed. It used to be the folder aichip
-                browses from, silently — so the only way to find out where a
-                repository had gone was to go looking for it. */}
-            <span className="min-w-0 flex-1 truncate rounded-lg border border-border bg-bg px-2 py-1.5 font-mono text-xs text-fg-muted">
-              {parent ?? "…"}
-            </span>
-            <button
-              onClick={() => setBrowsing(true)}
-              disabled={busy}
-              className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:border-fg-muted disabled:opacity-50"
-            >
-              Change
-            </button>
-          </div>
+          <Button onClick={() => setBrowsing(true)} disabled={busy}>
+            Change
+          </Button>
         </div>
+      </div>
 
-        <label className="mt-3 block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
-            Folder name <span className="font-normal normal-case">— optional</span>
-          </span>
-          <input
+      <Field
+        className="mt-3"
+        label={
+          <>
+            Folder name <span className="font-normal text-fg-muted">— optional</span>
+          </>
+        }
+      >
+        {(fid) => (
+          <Input
+            id={fid}
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
             placeholder={defaultName || "the repository's own name"}
-            className="w-full rounded-lg border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
           />
-        </label>
-
-        {/* The whole answer to "where will this end up", in one line, before
-            anything is downloaded. */}
-        {parent && (name.trim() || defaultName) && (
-          <p className="mt-2 truncate font-mono text-[11px] text-fg-muted">
-            → {parent.replace(/\/$/, "")}/{name.trim() || defaultName}
-          </p>
         )}
+      </Field>
 
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
-            {error}
-          </div>
-        )}
+      {/* The whole answer to "where will this end up", in one line, before
+          anything is downloaded. */}
+      {parent && (name.trim() || defaultName) && (
+        <p className="mt-2 truncate font-mono text-[11px] text-fg-muted">
+          → {parent.replace(/\/$/, "")}/{name.trim() || defaultName}
+        </p>
+      )}
 
-        {id && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
-            <span className="size-1.5 animate-pulse rounded-full bg-accent" />
-            Cloning… this can take a while for a large repository.
-          </div>
-        )}
-
-        <div className="mt-4 flex items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={start}
-            disabled={busy}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
-            {busy ? "Cloning…" : "Clone"}
-          </motion.button>
-          <button onClick={cancel} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
-            {busy ? "Stop and discard" : "Cancel"}
-          </button>
+      {error && (
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-[11px] leading-relaxed text-danger-fg">
+          {error}
         </div>
-      </motion.div>
+      )}
+
+      {id && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
+          <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+          Cloning… this can take a while for a large repository.
+        </div>
+      )}
 
       {browsing && (
         <FolderBrowserModal
@@ -242,6 +229,6 @@ export function CloneRepoModal({
           }}
         />
       )}
-    </motion.div>
+    </Dialog>
   );
 }

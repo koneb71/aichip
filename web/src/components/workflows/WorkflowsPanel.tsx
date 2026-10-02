@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { api, WorkflowDef, WorkflowRun } from "../../lib/api";
 import { RunGraphDrawer } from "./RunGraphDrawer";
 import { WorkflowEditor } from "./WorkflowEditor";
+import { Button } from "../ui/Button";
 
 export function WorkflowsPanel({ projectId }: { projectId: string }) {
   const [workflows, setWorkflows] = useState<WorkflowDef[]>([]);
@@ -55,19 +56,12 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
           {workflows.length}
         </span>
         <div className="ml-auto flex gap-2">
-          <button
-            onClick={sync}
-            className="rounded-lg border border-border bg-panel px-3 py-1.5 text-xs hover:bg-panel-2"
-          >
+          <Button variant="secondary" size="sm" onClick={sync}>
             Sync from repo
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setEditing("new")}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white"
-          >
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setEditing("new")}>
             + New workflow
-          </motion.button>
+          </Button>
         </div>
       </div>
 
@@ -102,25 +96,16 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
                     await api.setWorkflowEnabled(w.id, !w.enabled);
                     refresh();
                   }}
-                  className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-mono"
-                  style={
-                    w.enabled
-                      ? {
-                          background: "var(--color-tier-medium-soft)",
-                          color: "var(--color-tier-medium)",
-                        }
-                      : {
-                          background: "var(--color-panel-2)",
-                          color: "var(--color-fg-muted)",
-                        }
-                  }
+                  className={`ring-focus shrink-0 rounded-full px-2 py-0.5 text-[11px] font-mono ${
+                    w.enabled ? "bg-tier-medium-soft text-tier-medium" : "bg-panel-2 text-fg-muted"
+                  }`}
                 >
                   {w.enabled ? "⏱" : "⏸"} {w.cronExpr}
                 </button>
               )}
             </div>
             {w.error ? (
-              <div className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-[11px] text-danger">
+              <div className="mt-2 rounded-lg bg-danger-subtle px-2 py-1 text-[11px] text-danger-fg">
                 {w.error}
               </div>
             ) : (
@@ -131,20 +116,12 @@ export function WorkflowsPanel({ projectId }: { projectId: string }) {
               </div>
             )}
             <div className="mt-3 flex gap-2">
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => runNow(w.id)}
-                disabled={!!w.error}
-                className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
-              >
+              <Button variant="primary" size="xs" onClick={() => runNow(w.id)} disabled={!!w.error}>
                 ▶ Run
-              </motion.button>
-              <button
-                onClick={() => setEditing(w)}
-                className="rounded-lg border border-border px-3 py-1 text-xs hover:bg-panel-2"
-              >
+              </Button>
+              <Button variant="secondary" size="xs" onClick={() => setEditing(w)}>
                 Edit
-              </button>
+              </Button>
             </div>
           </motion.div>
         ))}

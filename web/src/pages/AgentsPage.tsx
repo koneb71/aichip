@@ -75,7 +75,7 @@ export default function AgentsPage() {
             <Card onClick={() => setEditing(a)} className="h-full p-4">
               <div className="flex items-center gap-3">
                 <span
-                  className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-white transition-transform duration-300 group-hover:scale-105"
+                  className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-on-accent transition-transform duration-300 group-hover:scale-105"
                   style={{
                     background: a.color,
                     boxShadow: `0 4px 12px -4px ${a.color}`,
@@ -88,7 +88,7 @@ export default function AgentsPage() {
                     <span className="truncate text-sm font-semibold">{a.name}</span>
                     {a.status === "paused" && (
                       <span
-                        className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                        className="shrink-0 rounded-full bg-warning-subtle px-1.5 py-0.5 text-[10px] font-medium text-warning-fg"
                         title={a.pauseReason ?? "Starts nothing until resumed"}
                       >
                         paused

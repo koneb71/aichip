@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
 import { api, type PullRequestState } from "../lib/api";
 import { PublishModal } from "./PublishModal";
+import { Button } from "./ui/Button";
 import { prSummary, prTone, shouldPoll, syncedLabel } from "../lib/pullRequest";
 
 /**
@@ -97,18 +97,13 @@ export function PullRequestPanel({
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         {canOpen && (
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => act(false)}
-            disabled={busy}
-            className="rounded-lg border border-border px-3 py-1.5 hover:border-fg-muted disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={() => act(false)} disabled={busy}>
             {busy
               ? "Working…"
               : pr
                 ? "Update pull request"
                 : "Open pull request"}
-          </motion.button>
+          </Button>
         )}
 
         {pr && (
@@ -157,12 +152,9 @@ export function PullRequestPanel({
           {projectId && refusal.includes("no GitHub `origin` remote") && (
             <>
               {" "}
-              <button
-                onClick={() => setPublishing(true)}
-                className="text-accent-fg hover:underline"
-              >
+              <Button variant="link" size="xs" onClick={() => setPublishing(true)}>
                 Publish it to GitHub
-              </button>
+              </Button>
             </>
           )}
         </p>
@@ -181,16 +173,14 @@ export function PullRequestPanel({
       )}
 
       {error && (
-        <div className="rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
+        <div className="rounded-lg bg-danger-subtle px-3 py-2 text-[11px] leading-relaxed text-danger-fg">
           {error}
           {needsForce && (
-            <button
-              onClick={() => act(true)}
-              disabled={busy}
-              className="mt-1.5 block rounded-lg border border-danger/40 px-2 py-1 hover:bg-red-100 disabled:opacity-50"
-            >
-              Push anyway, replacing what is there
-            </button>
+            <div className="mt-1.5">
+              <Button variant="danger" size="xs" onClick={() => act(true)} disabled={busy}>
+                Push anyway, replacing what is there
+              </Button>
+            </div>
           )}
         </div>
       )}

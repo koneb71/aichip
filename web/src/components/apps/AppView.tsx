@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   api,
   type AppDetail,
@@ -23,6 +22,9 @@ import {
 } from "../../lib/apps";
 import { showIf } from "../../lib/expr";
 import { FieldInput } from "./FieldInput";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Input } from "../ui/Field";
 
 /** Rows per page. Big enough that most apps never see a pager. */
 const PAGE = 50;
@@ -123,26 +125,22 @@ export function AppView({
         )}
         <div className="flex-1" />
         {searchable && (
-          <input
+          <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={`Search ${fieldLabel(model.fields.find((f) => f.name === searchable)!).toLowerCase()}…`}
-            className="w-48 rounded-lg border border-border bg-bg px-2 py-1 text-xs outline-none focus:border-accent"
+            className="h-7! w-48! text-xs!"
           />
         )}
         {view.kind !== "chart" && (
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setEditing("new")}
-            className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-border/40"
-          >
+          <Button size="sm" onClick={() => setEditing("new")}>
             Add
-          </motion.button>
+          </Button>
         )}
       </div>
 
       {error && (
-        <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       {view.kind === "list" && (
@@ -168,46 +166,36 @@ export function AppView({
           is furniture. */}
       {paged && window.needed && (
         <div className="mt-3 flex items-center gap-2 text-xs">
-          <button
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={!window.hasPrevious}
-            className="rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
-          >
+          <Button size="xs" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={!window.hasPrevious}>
             Previous
-          </button>
+          </Button>
           <span className="text-fg-muted">
             {window.from}–{window.to} of {window.total}
           </span>
-          <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={!window.hasNext}
-            className="rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
-          >
+          <Button size="xs" onClick={() => setPage((p) => p + 1)} disabled={!window.hasNext}>
             Next
-          </button>
+          </Button>
         </div>
       )}
 
-      <AnimatePresence>
-        {editing && (
-          <RowEditor
-            app={app}
-            manifest={manifest}
-            model={model}
-            view={view}
-            row={editing === "new" ? null : editing}
-            onClose={() => setEditing(null)}
-            onSaved={() => {
-              setEditing(null);
-              refresh();
-            }}
-            onGoto={(to) => {
-              setEditing(null);
-              onGoto?.(to);
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {editing && (
+        <RowEditor
+          app={app}
+          manifest={manifest}
+          model={model}
+          view={view}
+          row={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refresh();
+          }}
+          onGoto={(to) => {
+            setEditing(null);
+            onGoto?.(to);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -256,7 +244,7 @@ function ListView({
             <tr
               key={String(row.id)}
               onClick={() => onOpen(row)}
-              className="cursor-pointer border-t border-border hover:bg-border/30"
+              className="cursor-pointer border-t border-border hover:bg-panel-2"
             >
               {columns.map((c) => (
                 <td key={c} className="px-3 py-2">
@@ -303,7 +291,7 @@ function KanbanView({
   return (
     <div className="min-h-0 flex-1 overflow-x-auto">
       {truncated !== null && (
-        <div className="mb-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+        <div className="mb-2 rounded-lg bg-warning-subtle px-3 py-1.5 text-xs text-warning-fg">
           Showing the first {rows.length} of {truncated}. Narrow it with the search box —
           the counts below are for what is on the board, not for everything.
         </div>
@@ -320,7 +308,7 @@ function KanbanView({
                 <button
                   key={String(row.id)}
                   onClick={() => onOpen(row)}
-                  className="card-shadow rounded-lg bg-panel p-2 text-left text-xs hover:bg-border/30"
+                  className="card-shadow rounded-lg bg-panel p-2 text-left text-xs hover:bg-panel-2"
                 >
                   <div className="font-medium">
                     {cellText(row[titleField ?? ""], "text") || "Untitled"}
@@ -598,108 +586,87 @@ function RowEditor({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title={`${row ? "Edit" : "Add"} ${model.name}`}
+      width={512}
+      footer={
+        <>
+          <Button variant="primary" size="sm" onClick={save} disabled={busy}>
+            Save
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <div className="flex-1" />
+          {row?.id != null && (
+            <Button variant="danger" size="sm" onClick={remove} disabled={busy}>
+              Delete
+            </Button>
+          )}
+        </>
+      }
     >
-      <motion.div
-        initial={{ scale: 0.97, y: 8 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.97, y: 8 }}
-        transition={{ type: "spring", stiffness: 420, damping: 32 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-panel p-5"
-      >
-        <h3 className="mb-4 text-sm font-semibold">
-          {row ? "Edit" : "Add"} {model.name}
-        </h3>
-
-        <div className="flex flex-col gap-4">
-          {groups.map((group, i) => (
-            <div key={i} className="grid grid-cols-2 gap-3">
-              {group.map((name) => {
-                const field = model.fields.find((f) => f.name === name);
-                if (!field) return null;
-                return (
-                  <FieldInput
-                    key={name}
-                    field={field}
-                    value={draft[name]}
-                    onChange={(v) => setDraft((d) => ({ ...d, [name]: v }))}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
-
-        {/* Buttons the form declares, hidden by their own condition. The
-            expression runs here, in the browser, which is why there are two
-            implementations of the language and one shared corpus. */}
-        {(form.spec.buttons ?? []).length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            {(form.spec.buttons ?? []).map((name) => {
-              const action = manifest.actions.find((a) => a.name === name);
-              if (!action || !showIf(action.showIf, record, now)) return null;
+      <div className="flex flex-col gap-4">
+        {groups.map((group, i) => (
+          <div key={i} className="grid grid-cols-2 gap-3">
+            {group.map((name) => {
+              const field = model.fields.find((f) => f.name === name);
+              if (!field) return null;
               return (
-                <motion.button
+                <FieldInput
                   key={name}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => press(action.name)}
-                  disabled={busy || !row?.id}
-                  title={row?.id ? undefined : "Save the record first."}
-                  className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-border/40 disabled:opacity-50"
-                >
-                  {action.label}
-                </motion.button>
+                  field={field}
+                  value={draft[name]}
+                  onChange={(v) => setDraft((d) => ({ ...d, [name]: v }))}
+                />
               );
             })}
           </div>
-        )}
-
-        {needsScope && (
-          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            That button needs the <span className="font-mono">{needsScope}</span> permission,
-            which this app does not have. Grant it under Permissions and try again.
-          </div>
-        )}
-        {notices.map((m, i) => (
-          <div key={i} className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-xs">
-            {m}
-          </div>
         ))}
+      </div>
 
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
-        )}
-
-        <div className="mt-5 flex items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={save}
-            disabled={busy}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
-            Save
-          </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
-            Cancel
-          </button>
-          <div className="flex-1" />
-          {row?.id != null && (
-            <button
-              onClick={remove}
-              disabled={busy}
-              className="rounded-lg px-2 py-1.5 text-xs text-danger hover:bg-red-50"
-            >
-              Delete
-            </button>
-          )}
+      {/* Buttons the form declares, hidden by their own condition. The
+          expression runs here, in the browser, which is why there are two
+          implementations of the language and one shared corpus. */}
+      {(form.spec.buttons ?? []).length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          {(form.spec.buttons ?? []).map((name) => {
+            const action = manifest.actions.find((a) => a.name === name);
+            if (!action || !showIf(action.showIf, record, now)) return null;
+            return (
+              <Button
+                key={name}
+                size="sm"
+                onClick={() => press(action.name)}
+                disabled={busy || !row?.id}
+                title={row?.id ? undefined : "Save the record first."}
+              >
+                {action.label}
+              </Button>
+            );
+          })}
         </div>
-      </motion.div>
-    </motion.div>
+      )}
+
+      {needsScope && (
+        <div className="mt-3 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
+          That button needs the <span className="font-mono">{needsScope}</span> permission,
+          which this app does not have. Grant it under Permissions and try again.
+        </div>
+      )}
+      {notices.map((m, i) => (
+        <div key={i} className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-xs">
+          {m}
+        </div>
+      ))}
+
+      {error && (
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
+      )}
+    </Dialog>
   );
 }

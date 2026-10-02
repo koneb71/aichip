@@ -222,7 +222,7 @@ function StatusBar({ editor }: { editor: Editor }) {
         {words} {words === 1 ? "word" : "words"} · {chars.toLocaleString()} characters
       </span>
       {over && (
-        <span className="text-amber-700">
+        <span className="text-warning-fg">
           past ~6,000 characters an agent attached to this page sees only the start
         </span>
       )}

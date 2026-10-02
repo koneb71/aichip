@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { Button } from "./ui/Button";
 import { RunError } from "./ui/RunError";
 
 /**
@@ -71,17 +72,13 @@ export function BaseStatus({
             Resolving conflicts with {base} in {merging.join(", ")}…
           </p>
         ) : (
-          <div className="flex flex-wrap items-center gap-2 rounded-md bg-amber-50 px-2 py-1.5 text-amber-800">
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-warning-subtle px-2 py-1.5 text-warning-fg">
             <span>
               Conflict markers remain in {merging.join(", ")}. Fix them in the Files tab, or
             </span>
-            <button
-              onClick={update}
-              disabled={acting}
-              className="rounded-md border border-amber-300 px-2 py-0.5 text-[11px] hover:bg-amber-100 disabled:opacity-40"
-            >
+            <Button variant="secondary" size="xs" onClick={update} disabled={acting}>
               {acting ? "Starting…" : "ask the agent again"}
-            </button>
+            </Button>
           </div>
         )}
         {error && <RunError reason={error} className="mt-2" />}
@@ -101,15 +98,15 @@ export function BaseStatus({
           {conflicted && " Merging conflicts with it — bring it in here and an agent resolves the conflict on this card's branch."}
         </span>
         {status.behind > 0 && (
-          <button
+          <Button
+            variant={conflicted ? "primary" : "secondary"}
+            size="xs"
             onClick={update}
             disabled={busy || acting}
-            className={`ml-auto rounded-md px-2 py-0.5 text-[11px] disabled:opacity-40 ${
-              conflicted ? "bg-accent font-medium text-white" : "border border-border hover:bg-panel-2"
-            }`}
+            className="ml-auto"
           >
             {acting ? "Updating…" : `Update from ${base}`}
-          </button>
+          </Button>
         )}
       </div>
       {note && <p className="mt-1 text-fg-muted">{note}</p>}

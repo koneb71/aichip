@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
 import { api, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { FolderBrowserModal } from "../components/FolderBrowserModal";
 import { CloneRepoModal } from "../components/CloneRepoModal";
 import { Card, Empty, gradientFor, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button } from "../components/ui/Button";
 
 export default function ProjectsPage() {
   const { active } = useWorkspace();
@@ -31,21 +30,14 @@ export default function ProjectsPage() {
         subtitle="Every folder aichip can work in. A card runs in its own git worktree, so nothing an agent does reaches your checkout until you land it."
         actions={
           <>
-            <motion.button
-              {...tappable}
-              onClick={() => setParams({ new: "clone" })}
-              className="ring-focus rounded-xl border border-border bg-panel px-3.5 py-2 text-sm font-medium transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
-            >
-              Clone from GitHub
-            </motion.button>
-            <motion.button
-              {...tappable}
+            <Button onClick={() => setParams({ new: "clone" })}>Clone from GitHub</Button>
+            <Button
+              variant="primary"
               onClick={() => setParams({ new: "1" })}
-              className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+              icon={<Icon name="plus" size={15} strokeWidth={2.5} />}
             >
-              <Icon name="plus" size={15} strokeWidth={2.5} />
               Load folder
-            </motion.button>
+            </Button>
           </>
         }
       />
@@ -58,7 +50,7 @@ export default function ProjectsPage() {
                 className="sheen relative h-14 w-full overflow-hidden"
                 style={{ background: gradientFor(p.name) }}
               >
-                <div className="absolute inset-0 bg-gradient-to-t from-black/15 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t from-[color-mix(in_oklab,black_15%,transparent)] to-transparent" />
               </div>
               <div className="p-4">
                 <div className="truncate text-sm font-semibold">{p.name}</div>
@@ -71,7 +63,7 @@ export default function ProjectsPage() {
                   ) : (
                     <span
                       title={p.vcsNote ?? undefined}
-                      className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
+                      className="rounded-full bg-warning-subtle px-2 py-0.5 text-warning-fg"
                     >
                       no version control — edits in place
                     </span>
@@ -92,29 +84,27 @@ export default function ProjectsPage() {
         )}
       </Stagger>
 
-      <AnimatePresence>
-        {showClone && active && (
-          <CloneRepoModal
-            workspaceId={active.id}
-            onClose={() => setParams({})}
-            onCloned={(projectId: string) => {
-              setParams({});
-              refresh();
-              navigate(`/projects/${projectId}`);
-            }}
-          />
-        )}
-        {showBrowser && active && (
-          <FolderBrowserModal
-            onClose={() => setParams({})}
-            onPick={async (path) => {
-              const added = await api.addProject(active.id, path);
-              refresh();
-              return { vcs: added.vcs, vcsNote: added.vcsNote };
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {showClone && active && (
+        <CloneRepoModal
+          workspaceId={active.id}
+          onClose={() => setParams({})}
+          onCloned={(projectId: string) => {
+            setParams({});
+            refresh();
+            navigate(`/projects/${projectId}`);
+          }}
+        />
+      )}
+      {showBrowser && active && (
+        <FolderBrowserModal
+          onClose={() => setParams({})}
+          onPick={async (path) => {
+            const added = await api.addProject(active.id, path);
+            refresh();
+            return { vcs: added.vcs, vcsNote: added.vcsNote };
+          }}
+        />
+      )}
     </Page>
   );
 }

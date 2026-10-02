@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { motion } from "framer-motion";
 import { nest, TreeNode, TreePage, visibleRows } from "../../lib/kbTree";
+import { Plus } from "lucide-react";
+import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 
 /**
@@ -109,7 +111,7 @@ function Row({
   return (
     <div
       className={`group relative flex items-center gap-0.5 rounded-lg pr-1 transition-colors ${
-        active ? "bg-accent/[0.09]" : "hover:bg-panel-2"
+        active ? "bg-accent-subtle" : "hover:bg-panel-2"
       }`}
       // Indent by depth, clamped: past five levels the extra offset costs more
       // width than it communicates.
@@ -149,7 +151,7 @@ function Row({
       )}
       {!node.writing && node.hasPending && (
         <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
           title="a proposed revision is waiting for you"
         />
       )}
@@ -157,13 +159,14 @@ function Row({
         <span className="shrink-0 text-[9px] text-fg-muted">draft</span>
       )}
 
-      <button
+      <IconButton
+        size="xs"
         onClick={onCreateChild}
-        title="Add a page inside this one"
-        className="shrink-0 px-1 text-xs text-fg-muted opacity-0 group-hover:opacity-100 hover:text-accent-fg"
+        label="Add a page inside this one"
+        className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-accent-fg!"
       >
-        +
-      </button>
+        <Plus className="size-3.5" />
+      </IconButton>
     </div>
   );
 }

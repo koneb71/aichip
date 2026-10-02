@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { api, RepoGraph, RepoIndexStatus, RepoSearchHit } from "../../lib/api";
 import { Icon } from "../ui/Icon";
+import { Button } from "../ui/Button";
 import { moduleOf } from "../../lib/repoGraph";
 import { GraphCanvas } from "./GraphCanvas";
 import { FileInspector } from "./FileInspector";
@@ -226,7 +227,7 @@ export function RepoMapPanel({
             {/* A failed search that renders as "no results" reads as "your
                 code does not contain this", which is a different claim. */}
             {!searching && hitNote && (
-              <div className="rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger">
+              <div className="rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg">
                 Search did not run — {hitNote}
               </div>
             )}
@@ -384,14 +385,16 @@ export function RepoMapPanel({
           <span className="hidden sm:inline" title="Node size is how many files import it">
             size = imported-by
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={reindex}
             disabled={busy}
             title="Read the project again and rebuild the index"
-            className="ring-focus text-fg-muted hover:text-fg disabled:opacity-50"
+            className="-my-1 -mr-2"
           >
             {busy ? "Reading…" : "↻ Reindex"}
-          </button>
+          </Button>
         </span>
       </div>
     </div>
@@ -414,14 +417,14 @@ function Banners({
           ~35 MB, and every run after that it is reading the cached model
           off disk, which still takes a few seconds. */}
       {status.embedder.state === "downloading" && (
-        <div className="mt-2 max-w-3xl rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+        <div className="mt-2 max-w-3xl rounded-lg bg-warning-subtle px-2 py-1.5 text-[11px] text-warning-fg">
           Loading the embedding model — a few seconds, and ~35 MB the first time
           ever. The map below works now.
         </div>
       )}
       {status.embedder.state === "failed" && (
         <div
-          className="mt-2 max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger"
+          className="mt-2 max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg"
           title={status.embedder.detail}
         >
           The embedder failed — indexing retries on the next pass. The map still
@@ -429,7 +432,7 @@ function Banners({
         </div>
       )}
       {status.error && (
-        <div className="mt-2 max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger">
+        <div className="mt-2 max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg">
           Reading the project failed — {status.error.split("\n").slice(-1)[0]}
         </div>
       )}
@@ -437,7 +440,7 @@ function Banners({
         <button
           onClick={onDismiss}
           title="Dismiss"
-          className="mt-2 block w-full max-w-3xl rounded-lg bg-red-50 px-2 py-1.5 text-left text-[11px] text-danger"
+          className="mt-2 block w-full max-w-3xl rounded-lg bg-danger-subtle px-2 py-1.5 text-left text-[11px] text-danger-fg"
         >
           {error}
         </button>

@@ -7,6 +7,7 @@ import { useTierModel } from "../lib/models";
 import { useEngines } from "../lib/engines";
 import { TIERS } from "./TierPicker";
 import { RunError } from "./ui/RunError";
+import { Button } from "./ui/Button";
 
 /**
  * One brief, several attempts, side by side.
@@ -66,9 +67,9 @@ export function BakeoffView({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <button onClick={onClose} className="text-xs text-fg-muted hover:text-fg">
+        <Button variant="ghost" size="xs" onClick={onClose} className="-ml-2">
           ← back to stream
-        </button>
+        </Button>
         {running && (
           <span className="text-[11px] text-fg-muted">
             {done.length} of {variants?.length} finished…
@@ -113,14 +114,13 @@ export function BakeoffView({
                 </span>
                 <div className="ml-auto flex gap-2">
                   {v.diff && (
-                    <button
-                      onClick={() => setSelected(isOpen ? null : v.runId)}
-                      className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-panel-2"
-                    >
+                    <Button size="sm" onClick={() => setSelected(isOpen ? null : v.runId)}>
                       {isOpen ? "Hide diff" : "See diff"}
-                    </button>
+                    </Button>
                   )}
-                  <button
+                  <Button
+                    variant="primary"
+                    size="sm"
                     onClick={() => keep(v.runId)}
                     disabled={busy || v.status !== "completed"}
                     title={
@@ -128,10 +128,9 @@ export function BakeoffView({
                         ? "Adopt this attempt and discard the others"
                         : "Only a finished attempt can be kept"
                     }
-                    className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
                   >
                     Keep this
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -155,7 +154,7 @@ export function BakeoffView({
                             line.kind === "add"
                               ? "text-tier-easy"
                               : line.kind === "del"
-                                ? "text-red-400"
+                                ? "text-danger-fg"
                                 : line.kind === "hunk"
                                   ? "text-tier-medium"
                                   : "text-fg-muted"
@@ -237,9 +236,9 @@ function BakeoffSetup({
 
   return (
     <div>
-      <button onClick={onClose} className="mb-3 text-xs text-fg-muted hover:text-fg">
+      <Button variant="ghost" size="xs" onClick={onClose} className="-ml-2 mb-3">
         ← back to stream
-      </button>
+      </Button>
       <div className="text-sm font-semibold">Run this task more than one way</div>
       <p className="mt-1 text-xs text-fg-muted">
         Each attempt works in its own checkout and never sees the others. When
@@ -336,14 +335,9 @@ function BakeoffSetup({
       )}
 
       <div className="mt-4 flex items-center gap-3">
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={start}
-          disabled={busy || count < 2}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Button variant="primary" onClick={start} disabled={busy || count < 2}>
           {busy ? "Starting…" : `Run ${count || 0} attempts`}
-        </motion.button>
+        </Button>
         <span className="text-[11px] text-fg-muted">
           {count < 2
             ? "Pick at least two."

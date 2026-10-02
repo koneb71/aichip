@@ -292,7 +292,7 @@ export default function ProjectPage() {
           {activeTab === "terminal" && (
             <Suspense
               fallback={
-                <div className="flex h-full items-center justify-center bg-[#1e1e1e] text-xs text-[#8c8c8c]">
+                <div className="flex h-full items-center justify-center bg-panel text-xs text-fg-muted">
                   Loading terminal…
                 </div>
               }

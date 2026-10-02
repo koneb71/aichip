@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
 import { api, type AppBuild } from "../../lib/api";
+import { Button } from "../ui/Button";
 import { buildLine } from "../../lib/apps";
 
 /**
@@ -82,7 +82,7 @@ export function BuildHistory({
         Changes
       </div>
       {error && (
-        <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
       <div className="flex flex-col gap-1">
         {builds.map((b) => (
@@ -97,7 +97,7 @@ export function BuildHistory({
                   ? "animate-pulse bg-tier-medium"
                   : b.status === "landed"
                     ? b.error
-                      ? "bg-amber-500"
+                      ? "bg-warning"
                       : "bg-accent"
                     : b.status === "reverted"
                       ? "bg-border"
@@ -108,7 +108,7 @@ export function BuildHistory({
               <div className="truncate">{b.brief}</div>
               <div className="truncate text-[11px] text-fg-muted">{buildLine(b)}</div>
               {b.error && (
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-danger">
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-danger-fg">
                   {b.error}
                 </pre>
               )}
@@ -123,15 +123,14 @@ export function BuildHistory({
               </Link>
             )}
             {b.revertible && (
-              <motion.button
-                whileTap={{ scale: 0.96 }}
+              <Button
+                size="xs"
                 onClick={() => revert(b)}
                 disabled={busy}
                 title="Put the app back exactly as it was before this change."
-                className="shrink-0 rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-50"
               >
                 Undo
-              </motion.button>
+              </Button>
             )}
           </div>
         ))}

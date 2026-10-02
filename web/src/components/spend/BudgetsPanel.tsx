@@ -4,6 +4,8 @@ import { api, BudgetBody, BudgetCap, BudgetScopeKind, BudgetStanding } from "../
 import { useWorkspace } from "../../lib/workspace";
 import { compactTokens } from "../../lib/spend";
 import { RunError } from "../ui/RunError";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
 
 /**
  * What each scope may spend, and where it stands this window.
@@ -41,12 +43,9 @@ export function BudgetsPanel({ onChanged }: { onChanged?: () => void }) {
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wider text-fg-muted">Budgets</div>
         {!editing && (
-          <button
-            onClick={() => setEditing("new")}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
-          >
+          <Button size="sm" onClick={() => setEditing("new")}>
             + Add a budget
-          </button>
+          </Button>
         )}
       </div>
       <p className="mt-1 text-[11px] text-fg-muted/80">
@@ -97,24 +96,24 @@ function BudgetRow({
   if (p.capRuns != null) bars.push({ cap: "runs", label: "Runs", used: used.runs, limit: p.capRuns, fmt: String });
 
   return (
-    <div className={`rounded-lg border p-3 ${spent ? "border-amber-300 bg-amber-50/60" : "border-border"} ${p.enabled ? "" : "opacity-60"}`}>
+    <div className={`rounded-lg border p-3 ${spent ? "border-warning/40 bg-warning-subtle" : "border-border"} ${p.enabled ? "" : "opacity-60"}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">{p.name}</span>
         <span className="text-[11px] text-fg-muted">
           {row.scopeLabel} · per {p.windowKind} · {p.stopsInFlight ? "stops runs" : "holds new work"}
         </span>
-        {!p.enabled && <span className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted">off</span>}
+        {!p.enabled && <Badge>off</Badge>}
         {verdict.state === "warn" && (
-          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">{verdict.percent}% spent</span>
+          <Badge tone="warning">{verdict.percent}% spent</Badge>
         )}
-        {spent && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">spent</span>}
+        {spent && <Badge tone="warning">spent</Badge>}
         <div className="ml-auto flex gap-1.5">
-          <button onClick={() => setOverriding((o) => !o)} className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel-2">
+          <Button size="xs" onClick={() => setOverriding((o) => !o)}>
             Override
-          </button>
-          <button onClick={onEdit} className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel-2">
+          </Button>
+          <Button size="xs" onClick={onEdit}>
             Edit
-          </button>
+          </Button>
           <HistoryButton kind="budget_policy" id={row.policy.id} onRestored={onChanged} />
         </div>
       </div>
@@ -129,7 +128,7 @@ function BudgetRow({
               <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-panel-2">
                 <div
                   style={{ width: `${pct}%` }}
-                  className={`h-full rounded-full transition-[width] duration-500 ${over ? "bg-amber-500" : pct >= p.warnPercent ? "bg-amber-400" : "bg-accent"}`}
+                  className={`h-full rounded-full transition-[width] duration-500 ${over ? "bg-warning" : pct >= p.warnPercent ? "bg-warning/70" : "bg-accent"}`}
                 />
               </div>
               <div className="w-36 shrink-0 text-right text-[11px] tabular-nums text-fg-muted">
@@ -143,9 +142,9 @@ function BudgetRow({
       <div className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-fg-muted">
         <span>Resets {new Date(row.windowEnd).toLocaleString()}</span>
         {!spent && row.forecast?.runsOutAt && (
-          <span className="text-amber-700">At this rate it runs out {new Date(row.forecast.runsOutAt).toLocaleString()}</span>
+          <span className="text-warning-fg">At this rate it runs out {new Date(row.forecast.runsOutAt).toLocaleString()}</span>
         )}
-        {row.held > 0 && <span className="text-amber-700">{row.held} queued {row.held === 1 ? "run" : "runs"} held</span>}
+        {row.held > 0 && <span className="text-warning-fg">{row.held} queued {row.held === 1 ? "run" : "runs"} held</span>}
       </div>
 
       {/* Said where it matters: a dollar cap is blind to an engine that never
@@ -205,9 +204,9 @@ function OverrideForm({ row, onDone }: { row: BudgetStanding; onDone: () => void
           placeholder="release day"
           className="min-w-0 flex-1 rounded-md border border-border bg-panel px-2 py-1"
         />
-        <button onClick={save} className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white">
+        <Button variant="primary" size="xs" onClick={save}>
           Override
-        </button>
+        </Button>
       </div>
       {error && <RunError reason={error} className="mt-1.5" />}
     </div>
@@ -393,16 +392,16 @@ function BudgetForm({
       </label>
       {error && <RunError reason={error} className="mt-2" />}
       <div className="mt-3 flex gap-2">
-        <button onClick={save} className="rounded-md bg-accent px-3 py-1 text-[11px] font-medium text-white">
+        <Button variant="primary" size="xs" onClick={save}>
           {p ? "Save" : "Add budget"}
-        </button>
-        <button onClick={onCancel} className="rounded-md border border-border px-3 py-1 text-[11px] hover:bg-panel-2">
+        </Button>
+        <Button size="xs" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
         {p && (
-          <button onClick={remove} className="ml-auto rounded-md px-2 py-1 text-[11px] text-fg-muted hover:text-danger">
+          <Button variant="ghost" size="xs" onClick={remove} className="ml-auto">
             Delete
-          </button>
+          </Button>
         )}
       </div>
     </div>

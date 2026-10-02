@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import * as RP from "@radix-ui/react-popover";
 import { Editor } from "@tiptap/react";
 import { TableSizePicker } from "./TableSizePicker";
+import { Button } from "../ui/Button";
 
 /**
  * The toolbar.
@@ -237,50 +239,66 @@ function BlockPicker({ editor }: { editor: Editor }) {
             ? "Quote"
             : "Text";
 
+  // Set when a block type is chosen: the command has already focused the
+  // editor, and the popover handing focus back to this button would steal it.
+  const chose = useRef(false);
   const choose = (fn: () => void) => {
+    chose.current = true;
     fn();
     setOpen(false);
   };
   const c = () => editor.chain().focus();
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
-      >
-        {current} <span className="text-[8px]">▾</span>
-      </button>
-      {open && (
-        <>
-          {/* Click-away, so the menu doesn't strand itself open. */}
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="card-shadow absolute left-0 top-full z-20 mt-1 w-44 rounded-xl border border-border bg-panel p-1">
-            {[
-              ["Text", () => c().setParagraph().run()],
-              ["Title", () => c().toggleHeading({ level: 1 }).run()],
-              ["Heading", () => c().toggleHeading({ level: 2 }).run()],
-              ["Subheading", () => c().toggleHeading({ level: 3 }).run()],
-              ["Quote", () => c().toggleBlockquote().run()],
-              ["Code", () => c().toggleCodeBlock().run()],
-              ["Toggle", () => c().setDetails().run()],
-            ].map(([label, fn]) => (
-              <button
-                key={label as string}
-                type="button"
-                onClick={() => choose(fn as () => void)}
-                className={`block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-panel-2 ${
-                  current === label ? "text-accent-fg" : ""
-                }`}
-              >
-                {label as string}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
+    <RP.Root
+      open={open}
+      onOpenChange={(o) => {
+        if (o) chose.current = false;
+        setOpen(o);
+      }}
+    >
+      <RP.Trigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg"
+        >
+          {current} <span className="text-[8px]">▾</span>
+        </button>
+      </RP.Trigger>
+      {/* Radix's own outside-click closes it, so the menu doesn't strand
+          itself open — no click-away layer over the editor. */}
+      <RP.Portal>
+        <RP.Content
+          align="start"
+          sideOffset={4}
+          onCloseAutoFocus={(e) => {
+            if (chose.current) e.preventDefault();
+          }}
+          className="z-50 w-44 rounded-xl border border-border bg-raised p-1 text-fg shadow-[var(--shadow-md)] outline-none data-[state=open]:animate-[pop-in_var(--dur-fast)_var(--ease-out-soft)]"
+        >
+          {[
+            ["Text", () => c().setParagraph().run()],
+            ["Title", () => c().toggleHeading({ level: 1 }).run()],
+            ["Heading", () => c().toggleHeading({ level: 2 }).run()],
+            ["Subheading", () => c().toggleHeading({ level: 3 }).run()],
+            ["Quote", () => c().toggleBlockquote().run()],
+            ["Code", () => c().toggleCodeBlock().run()],
+            ["Toggle", () => c().setDetails().run()],
+          ].map(([label, fn]) => (
+            <button
+              key={label as string}
+              type="button"
+              onClick={() => choose(fn as () => void)}
+              className={`block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-panel-2 ${
+                current === label ? "text-accent-fg" : ""
+              }`}
+            >
+              {label as string}
+            </button>
+          ))}
+        </RP.Content>
+      </RP.Portal>
+    </RP.Root>
   );
 }
 
@@ -302,15 +320,9 @@ function P({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-      className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-panel-2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
-    >
+    <Button variant="ghost" size="xs" onClick={onClick} title={title} disabled={disabled}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -338,7 +350,7 @@ function T({
       title={title}
       onClick={() => go(ed.chain().focus()).run()}
       className={`rounded-md px-2 py-1 text-xs ${cls} ${
-        active ? "bg-accent/10 text-accent-fg" : "text-fg-muted hover:bg-panel-2 hover:text-fg"
+        active ? "bg-accent-subtle text-accent-fg" : "text-fg-muted hover:bg-panel-2 hover:text-fg"
       }`}
     >
       {children}

@@ -60,7 +60,7 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
       </p>
 
       {asking.length > 0 && (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="mt-3 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
           This app is asking for{" "}
           {asking.map((s) => (
             <span key={s} className="font-mono">
@@ -95,7 +95,7 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
                 <span className="flex items-center gap-2">
                   <span className="font-mono text-xs">{s.scope}</span>
                   {s.write && (
-                    <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
+                    <span className="rounded bg-warning-subtle px-1 text-[10px] text-warning-fg">
                       changes things
                     </span>
                   )}
@@ -114,7 +114,7 @@ export function ScopeGrant({ appId, onChanged }: { appId: string; onChanged?: ()
         })}
       </div>
 
-      {error && <div className="mt-3 text-xs text-danger">{error}</div>}
+      {error && <div className="mt-3 text-xs text-danger-fg">{error}</div>}
 
       {busy && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2 text-xs text-fg-muted">

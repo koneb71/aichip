@@ -57,11 +57,11 @@ export function prTone(pr: TaskPullRequest): { text: string; dot: string } {
   const summary = prSummary(pr);
   if (summary === "merged") return { text: "text-tier-complex", dot: "bg-tier-complex" };
   if (summary === "checks failing" || summary === "changes requested") {
-    return { text: "text-danger", dot: "bg-red-500" };
+    return { text: "text-danger-fg", dot: "bg-danger" };
   }
   if (summary === "closed") return { text: "text-fg-muted", dot: "bg-fg-muted" };
-  if (summary === "approved") return { text: "text-tier-easy", dot: "bg-emerald-500" };
-  if (summary === "checks running") return { text: "text-amber-900", dot: "bg-amber-500" };
+  if (summary === "approved") return { text: "text-tier-easy", dot: "bg-success" };
+  if (summary === "checks running") return { text: "text-warning-fg", dot: "bg-warning" };
   return { text: "text-fg-muted", dot: "bg-fg-muted" };
 }
 

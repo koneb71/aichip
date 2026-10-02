@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { api, Revision, RevisionDiff } from "../../lib/api";
 import { DiffBody } from "../../components/kb/PendingRevisionBanner";
 import { KnowledgeContext } from "./KnowledgeLayout";
+import { Button } from "../../components/ui/Button";
 
 /**
  * What this page has been.
@@ -55,7 +56,7 @@ export default function PageHistory() {
         <Link to={`/knowledge/${pageId}`} className="text-xs text-fg-muted hover:text-fg">
           ← Back to the page
         </Link>
-        <h1 className="mt-3 text-2xl font-bold tracking-tight">History</h1>
+        <h1 className="mt-3 text-2xl font-bold tracking-tight text-fg">History</h1>
         <p className="mt-1 text-sm text-fg-muted">
           Every version this page has had, including the ones that were turned
           down. Restoring writes a new revision rather than rewinding — history
@@ -76,7 +77,7 @@ export default function PageHistory() {
                   onClick={() => setSelected(selected === r.seq ? null : r.seq)}
                   className="min-w-0 flex-1 text-left"
                 >
-                  <span className="text-sm font-medium">
+                  <span className="text-sm font-medium text-fg">
                     {r.authorKind === "agent" ? "◆" : "●"} Revision {r.seq}
                   </span>
                   <span className="ml-2 text-xs text-fg-muted">{r.title}</span>
@@ -108,11 +109,13 @@ export default function PageHistory() {
                   )}
                   {r.state === "accepted" || r.state === "superseded" ? (
                     confirming === r.seq ? (
-                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs">
-                        <span className="text-amber-900">
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs">
+                        <span className="text-warning-fg">
                           Put revision {r.seq} back as the current version?
                         </span>
-                        <button
+                        <Button
+                          variant="primary"
+                          size="xs"
                           disabled={busy}
                           onClick={async () => {
                             setBusy(true);
@@ -122,24 +125,17 @@ export default function PageHistory() {
                             load();
                             reload();
                           }}
-                          className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white"
                         >
                           Restore
-                        </button>
-                        <button
-                          onClick={() => setConfirming(null)}
-                          className="text-fg-muted hover:text-fg"
-                        >
+                        </Button>
+                        <Button variant="ghost" size="xs" onClick={() => setConfirming(null)}>
                           Cancel
-                        </button>
+                        </Button>
                       </div>
                     ) : (
-                      <button
-                        onClick={() => setConfirming(r.seq)}
-                        className="mt-2 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-panel-2"
-                      >
+                      <Button size="sm" onClick={() => setConfirming(r.seq)} className="mt-2">
                         Restore this version
-                      </button>
+                      </Button>
                     )
                   ) : null}
                 </div>
@@ -170,7 +166,7 @@ function StateBadge({ revision }: { revision: Revision }) {
     <span
       className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
         revision.state === "pending"
-          ? "bg-amber-100 text-amber-800"
+          ? "bg-warning-subtle text-warning-fg"
           : "bg-panel-2 text-fg-muted"
       }`}
     >

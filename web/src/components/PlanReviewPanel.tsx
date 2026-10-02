@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, TaskPlan } from "../lib/api";
 import { Markdown } from "./Markdown";
+import { Button } from "./ui/Button";
 
 /**
  * The plan a card wrote before starting, waiting on you.
@@ -127,18 +128,15 @@ export function PlanReviewPanel({
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="border-b border-border bg-amber-50/40 px-5 py-3"
+      className="border-b border-border bg-warning-subtle/40 px-5 py-3"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-warning-fg">
           Plan — nothing has changed yet
         </span>
-        <button
-          onClick={() => setDraft(editing ? null : plan.content!)}
-          className="text-[11px] text-fg-muted hover:text-fg"
-        >
+        <Button variant="ghost" size="xs" onClick={() => setDraft(editing ? null : plan.content!)}>
           {editing ? "Cancel edit" : "Edit"}
-        </button>
+        </Button>
       </div>
 
       {editing ? (
@@ -156,7 +154,7 @@ export function PlanReviewPanel({
       )}
 
       {error && (
-        <div className="mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+        <div className="mt-2 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">
           {error}
         </div>
       )}
@@ -172,47 +170,40 @@ export function PlanReviewPanel({
             className="w-full resize-none rounded-xl border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
           />
           <div className="mt-2 flex gap-2">
-            <motion.button
-              whileTap={{ scale: 0.96 }}
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={!note.trim() || !!busy}
               onClick={() =>
                 act("revise", () => api.reviseTaskPlan(runId, note.trim()))
               }
-              className="rounded-lg border border-border px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
             >
               {busy === "revise" ? "Sending…" : "Send it back"}
-            </motion.button>
-            <button
-              onClick={() => setAsking(false)}
-              className="text-xs text-fg-muted hover:text-fg"
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setAsking(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
+          <Button
+            variant="primary"
+            size="sm"
             disabled={!!busy || (editing && !draft.trim())}
             onClick={approve}
-            className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {busy === "approve"
               ? "Starting…"
               : dirty
                 ? "Save and start work"
                 : "Approve and start work"}
-          </motion.button>
-          <button
-            onClick={() => setAsking(true)}
-            disabled={!!busy}
-            className="rounded-lg border border-border px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
-          >
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setAsking(true)} disabled={!!busy}>
             Ask for changes
-          </button>
+          </Button>
           {dirty && (
-            <span className="text-[11px] text-amber-800">
+            <span className="text-[11px] text-warning-fg">
               your edits are saved when you start
             </span>
           )}

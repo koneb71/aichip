@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, CheckRun } from "../lib/api";
 import { checksActive, resultPassed, resultVerdict } from "../lib/checks";
 import { duration } from "../lib/runHistory";
+import { Button } from "./ui/Button";
 import { RunError } from "./ui/RunError";
 
 /**
@@ -83,23 +84,20 @@ export function ChecksPanel({
         )}
         <div className="ml-auto flex gap-2">
           {failing && (
-            <button
+            <Button
+              variant="primary"
+              size="xs"
               onClick={() => act("fix")}
               disabled={busy || acting !== null}
               title="A follow-up run in this card's worktree, briefed with what failed"
-              className="rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-white disabled:opacity-40"
             >
               {acting === "fix" ? "Starting…" : "Fix failing checks"}
-            </button>
+            </Button>
           )}
           {configured && (
-            <button
-              onClick={() => act("run")}
-              disabled={busy || active || acting !== null}
-              className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-panel-2 disabled:opacity-40"
-            >
+            <Button variant="secondary" size="xs" onClick={() => act("run")} disabled={busy || active || acting !== null}>
               {acting === "run" ? "Starting…" : latest ? "Run again" : "Run checks"}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -115,7 +113,7 @@ export function ChecksPanel({
                   onClick={() => setOpen(open === key ? null : key)}
                   className="flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-panel-2"
                 >
-                  <span className={ok ? "text-tier-easy" : "text-danger"}>{ok ? "✓" : "✗"}</span>
+                  <span className={ok ? "text-success-fg" : "text-danger-fg"}>{ok ? "✓" : "✗"}</span>
                   <span className="font-medium">{r.name}</span>
                   <span className="text-fg-muted">{resultVerdict(r)}</span>
                   <span className="ml-auto tabular-nums text-fg-muted">{duration(Math.round(r.ms / 1000))}</span>
@@ -135,7 +133,7 @@ export function ChecksPanel({
       )}
 
       {latest && latest.dirtied.length > 0 && (
-        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+        <p className="mt-2 rounded-md bg-warning-subtle px-2 py-1 text-[11px] text-warning-fg">
           The checks left {latest.dirtied.length === 1 ? "a file" : "files"} changed in the worktree —{" "}
           {latest.dirtied.slice(0, 5).join(", ")}
           {latest.dirtied.length > 5 && ` and ${latest.dirtied.length - 5} more`}. Merging would include{" "}

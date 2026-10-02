@@ -1,6 +1,7 @@
 import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
 import { api, AttentionSettingsValue, AttentionEvent } from "../lib/api";
+import { Button } from "./ui/Button";
 
 /**
  * How long aichip waits for you, and how it reaches you while it waits.
@@ -99,11 +100,9 @@ export function AttentionSettings() {
               key={o.secs}
               disabled={busy}
               onClick={() => save({ waitSecs: o.secs })}
-              className="rounded-lg border px-2.5 py-1.5 text-xs disabled:opacity-50"
-              style={{
-                borderColor: v.waitSecs === o.secs ? "var(--color-accent)" : "var(--color-border)",
-                color: v.waitSecs === o.secs ? "var(--color-accent)" : "var(--color-fg-muted)",
-              }}
+              className={`ring-focus rounded-lg border px-2.5 py-1.5 text-xs disabled:opacity-50 ${
+                v.waitSecs === o.secs ? "border-accent text-accent-fg" : "border-border text-fg-muted"
+              }`}
             >
               {o.label}
             </button>
@@ -144,15 +143,15 @@ export function AttentionSettings() {
           />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {EXAMPLES.map((ex) => (
-              <button
+              <Button
                 key={ex.os}
+                size="xs"
                 disabled={busy}
                 onClick={() => save({ command: ex.command })}
                 title={ex.command}
-                className="rounded-md border border-border px-2 py-0.5 text-[10px] text-fg-muted hover:border-fg-muted hover:text-fg"
               >
                 {ex.os}
-              </button>
+              </Button>
             ))}
           </div>
 
@@ -199,12 +198,12 @@ export function AttentionSettings() {
       )}
 
       {warning && (
-        <div className="mt-3 whitespace-pre-wrap rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+        <div className="mt-3 whitespace-pre-wrap rounded-lg bg-warning-subtle px-3 py-2 text-[11px] leading-relaxed text-warning-fg">
           {warning}
         </div>
       )}
       {error && (
-        <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</div>
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-[11px] text-danger-fg">{error}</div>
       )}
     </section>
   );

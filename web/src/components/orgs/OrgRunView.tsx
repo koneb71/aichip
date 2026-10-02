@@ -8,6 +8,7 @@ import { ActivityLine, RunStream } from "../RunStream";
 import { StreamEvent, useRunStream } from "../../lib/ws";
 import { PlanReview } from "./PlanReview";
 import { RunError } from "../ui/RunError";
+import { Dialog } from "../ui/Dialog";
 
 /** What a teammate is doing right now, derived from their assignments. */
 type MemberState = "idle" | "working" | "asking" | "done" | "blocked";
@@ -237,7 +238,7 @@ function PaneTabs({
         >
           {label}
           {id === "tasks" && needsReview && (
-            <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-[#d97706] align-middle" />
+            <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warning align-middle" />
           )}
         </button>
       ))}
@@ -261,43 +262,30 @@ function Shell({
   children: React.ReactNode;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-0 sm:p-4 lg:p-6"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      width={1152}
+      // Full screen on a phone, a tall room everywhere else: three columns of
+      // live work do not fit the kit's default 76vh.
+      className="top-0! h-full max-h-none! w-full! rounded-none! border-0! bg-panel! sm:top-[6vh]! sm:h-[88vh] sm:w-[calc(100vw-32px)]! sm:rounded-xl! sm:border!"
+      title={
+        // Wraps rather than shoving the close button off the edge: a long team
+        // name plus a status chip plus a cost overflows a phone header.
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate">{title}</span>
+          {status && <StatusChip status={status} />}
+          {cost != null && (
+            <span className="text-xs font-normal text-fg-muted">${cost.toFixed(3)}</span>
+          )}
+        </span>
+      }
+      description={subtitle ? <span className="line-clamp-1">{subtitle}</span> : undefined}
     >
-      <motion.div
-        initial={{ y: 24, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
-        exit={{ y: 24, scale: 0.98 }}
-        transition={{ type: "spring", stiffness: 360, damping: 32 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-border bg-panel sm:h-[88vh] sm:rounded-2xl sm:border"
-      >
-        <header className="flex items-start gap-3 border-b border-border px-4 py-3 sm:px-5">
-          <div className="min-w-0 flex-1">
-            {/* Wraps rather than shoving the ✕ off the edge: a long team name
-             *  plus a status chip plus a cost overflows a phone header. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="truncate text-base font-semibold">{title}</span>
-              {status && <StatusChip status={status} />}
-              {cost != null && (
-                <span className="text-xs text-fg-muted">${cost.toFixed(3)}</span>
-              )}
-            </div>
-            {subtitle && (
-              <div className="mt-0.5 line-clamp-1 text-xs text-fg-muted">{subtitle}</div>
-            )}
-          </div>
-          <button onClick={onClose} className="text-fg-muted hover:text-fg">
-            ✕
-          </button>
-        </header>
-        {children}
-      </motion.div>
-    </motion.div>
+      {/* The kit pads and scrolls its body; this room scrolls each column on
+       *  its own, so it takes the body edge to edge. */}
+      <div className="-mx-5 -my-4 flex h-[calc(100%+2rem)] flex-col overflow-hidden">{children}</div>
+    </Dialog>
   );
 }
 
@@ -327,13 +315,13 @@ function MemberCard({
       className="relative rounded-xl border bg-panel p-2.5"
       style={{
         borderColor: busy ? member.color : "var(--color-border)",
-        boxShadow: busy ? `0 0 0 3px ${member.color}1a` : undefined,
+        boxShadow: busy ? `0 0 0 3px color-mix(in oklab, ${member.color} 10%, transparent)` : undefined,
       }}
     >
       <div className="flex items-center gap-2.5">
         <div className="relative">
           <motion.span
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold text-on-accent"
             style={{ background: member.color }}
             animate={busy ? { scale: [1, 1.06, 1] } : { scale: 1 }}
             transition={busy ? { repeat: Infinity, duration: 1.8 } : undefined}
@@ -413,7 +401,7 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
       className="flex gap-2.5"
     >
       <span
-        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-on-accent"
         style={{ background: color }}
       >
         {message.from.slice(0, 1).toUpperCase()}
@@ -424,7 +412,7 @@ function Message({ message, color }: { message: OrgMessage; color: string }) {
           {label && (
             <span
               className="rounded-full px-1.5 py-0.5 text-[10px]"
-              style={{ background: `${accent}1a`, color: accent }}
+              style={{ background: `color-mix(in oklab, ${accent} 10%, transparent)`, color: accent }}
             >
               {label}
             </span>
@@ -467,7 +455,7 @@ function WorkingIndicator({
         {busy.map((m) => (
           <span
             key={m.name}
-            className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-panel text-[9px] font-bold text-white"
+            className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-panel text-[9px] font-bold text-on-accent"
             style={{ background: m.color }}
           >
             {m.name.slice(0, 1).toUpperCase()}
@@ -513,7 +501,7 @@ function AssignmentCard({
       className="rounded-xl border bg-panel p-2.5 text-left"
       style={{
         borderColor: running ? color : "var(--color-border)",
-        boxShadow: running ? `0 0 0 3px ${color}14` : undefined,
+        boxShadow: running ? `0 0 0 3px color-mix(in oklab, ${color} 8%, transparent)` : undefined,
       }}
     >
       <div className="flex items-start gap-2">
@@ -599,8 +587,8 @@ function StatusChip({ status }: { status: string }) {
   const color = statusColor(status);
   return (
     <span
-      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px]"
-      style={{ background: `${color}1a`, color }}
+      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-normal"
+      style={{ background: `color-mix(in oklab, ${color} 10%, transparent)`, color }}
     >
       {live ? (
         <motion.span

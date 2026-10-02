@@ -5,6 +5,8 @@ import { useWorkspace } from "../lib/workspace";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { ChatThread } from "../components/chat/ChatThread";
 import { SpaceDocs } from "../components/chat/SpaceDocs";
+import { Button, IconButton } from "../components/ui/Button";
+import { Pencil, X } from "lucide-react";
 
 /**
  * Chat as a page: the conversation list on the left, one thread full-width.
@@ -207,13 +209,15 @@ export default function ChatPage() {
         )}
       </select>
       {spaceDraft === null ? (
-        <button
+        <Button
+          variant="ghost"
+          size="md"
           onClick={() => setSpaceDraft("")}
-          className="rounded-lg border border-dashed border-border px-2 py-1.5 text-sm text-fg-muted hover:border-fg-muted hover:text-fg"
+          className="border border-dashed border-border"
           title="A space is a folder of documents this chat can read — no repository, no board"
         >
           + New space
-        </button>
+        </Button>
       ) : (
         <input
           autoFocus
@@ -228,12 +232,9 @@ export default function ChatPage() {
           className="rounded-lg border border-accent bg-panel px-2 py-1.5 text-sm outline-none"
         />
       )}
-      <button
-        onClick={startNewChat}
-        className="rounded-lg border border-border px-2 py-1.5 text-sm text-fg-muted hover:bg-panel-2 hover:text-fg"
-      >
+      <Button variant="secondary" size="md" onClick={startNewChat}>
         + New conversation
-      </button>
+      </Button>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && (
           <div className="px-2 py-2 text-xs text-fg-muted">No conversations yet.</div>
@@ -274,23 +275,25 @@ export default function ChatPage() {
                 <span className="ml-1.5 text-[10px] text-fg-muted">{c.messageCount}</span>
               </button>
             )}
-            <button
+            <IconButton
+              size="xs"
+              label="Rename"
               onClick={() => {
                 setRenaming(c.id);
                 setRenameDraft(c.title);
               }}
-              title="Rename"
-              className="shrink-0 px-1 text-xs text-fg-muted opacity-0 hover:text-fg group-hover:opacity-100"
+              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
             >
-              ✎
-            </button>
-            <button
+              <Pencil className="size-3" aria-hidden />
+            </IconButton>
+            <IconButton
+              size="xs"
+              label="Delete conversation"
               onClick={() => removeChat(c.id)}
-              title="Delete conversation"
-              className="shrink-0 px-1 text-xs text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
+              className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
             >
-              ✕
-            </button>
+              <X className="size-3" aria-hidden />
+            </IconButton>
           </div>
         ))}
       </div>
@@ -303,7 +306,7 @@ export default function ChatPage() {
       {error && (
         <button
           onClick={() => setError(null)}
-          className="mx-4 mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-left text-xs text-danger"
+          className="mx-4 mt-2 rounded-lg bg-danger-subtle px-3 py-1.5 text-left text-xs text-danger-fg"
           title="Dismiss"
         >
           {error}

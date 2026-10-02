@@ -53,7 +53,7 @@ export function SpendBars({
                 d.cost > 0 ? "bg-accent/70 group-hover/bar:bg-accent" : "bg-border"
               }`}
             />
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-fg px-2 py-1 text-[11px] text-white group-hover/bar:block">
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-fg px-2 py-1 text-[11px] text-bg group-hover/bar:block">
               {formatDay(d.day)} · ${d.cost.toFixed(2)} · {d.runs} run
               {d.runs === 1 ? "" : "s"}
             </div>

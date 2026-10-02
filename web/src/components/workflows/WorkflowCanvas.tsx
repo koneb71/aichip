@@ -179,7 +179,7 @@ function Canvas({
       </ReactFlow>
 
       {error && (
-        <div className="pointer-events-none absolute inset-x-0 top-3 mx-auto w-fit rounded-lg bg-danger px-3 py-1.5 text-xs text-white shadow">
+        <div className="pointer-events-none absolute inset-x-0 top-3 mx-auto w-fit rounded-lg bg-danger px-3 py-1.5 text-xs text-on-accent shadow">
           {error}
         </div>
       )}

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
 import { Agent, api, WorkflowDef } from "../../lib/api";
 import { useWorkspace } from "../../lib/workspace";
 import {
@@ -13,6 +12,8 @@ import {
 } from "../../lib/workflowGraph";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { StepInspector } from "./StepInspector";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
 
 const STARTER = `name: plan-build-review
 description: Plan a change, implement it, then review the result
@@ -126,33 +127,55 @@ export function WorkflowEditor({
   const selected = steps.find((s) => s.id === selectedId) ?? null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-0 sm:p-4 lg:p-6"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      width={1152}
+      className="top-[7vh]! h-[86vh] max-h-[86vh]!"
+      // The name is the dialog's title, and still editable in place.
+      title={
+        <input
+          value={meta.name}
+          onChange={(e) => setMeta({ ...meta, name: e.target.value })}
+          aria-label="Workflow name"
+          className="-ml-2 rounded-lg bg-transparent px-2 py-0.5 text-[15px] font-semibold outline-none hover:bg-panel-2 focus:bg-panel-2"
+        />
+      }
+      footer={
+        <>
+          {workflow && (
+            <Button
+              variant="danger"
+              className="mr-auto"
+              onClick={async () => {
+                await api.deleteWorkflow(workflow.id);
+                onSaved();
+              }}
+            >
+              Delete workflow
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={save} disabled={busy}>
+            {busy ? "Validating…" : "Save workflow"}
+          </Button>
+        </>
+      }
     >
-      <motion.div
-        initial={{ y: 20, scale: 0.98 }}
-        animate={{ y: 0, scale: 1 }}
-        exit={{ y: 20, scale: 0.98 }}
-        transition={{ type: "spring", stiffness: 380, damping: 30 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex h-full w-full max-w-6xl flex-col overflow-hidden border-border bg-panel sm:h-[86vh] sm:rounded-2xl sm:border"
-      >
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-5">
-          <input
-            value={meta.name}
-            onChange={(e) => setMeta({ ...meta, name: e.target.value })}
-            className="rounded-lg px-2 py-1 text-base font-semibold outline-none hover:bg-panel-2 focus:bg-panel-2"
-          />
+      {/* Edge to edge: the canvas wants the whole body, not the dialog's
+          padded reading column. */}
+      <div className="-mx-5 -my-4 flex h-[calc(100%+2rem)] flex-col">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2 sm:px-5">
           <input
             value={meta.schedule ?? ""}
             onChange={(e) => setMeta({ ...meta, schedule: e.target.value || undefined })}
             placeholder="no schedule"
             title="Cron schedule, e.g. 0 3 * * *"
-            className="w-32 rounded-lg border border-border px-2 py-1 font-mono text-xs outline-none focus:border-accent"
+            className="w-32 rounded-lg border border-border bg-panel px-2 py-1 font-mono text-xs outline-none placeholder:text-fg-subtle focus:border-accent"
           />
 
           <div className="ml-auto flex gap-1 rounded-lg bg-panel-2 p-0.5">
@@ -160,7 +183,7 @@ export function WorkflowEditor({
               <button
                 key={v}
                 onClick={v === "yaml" ? showYaml : showCanvas}
-                className={`rounded-md px-3 py-1 text-xs capitalize ${
+                className={`ring-focus rounded-md px-3 py-1 text-xs capitalize ${
                   view === v ? "bg-panel font-medium shadow-sm" : "text-fg-muted"
                 }`}
               >
@@ -169,12 +192,9 @@ export function WorkflowEditor({
             ))}
           </div>
           {view === "canvas" && (
-            <button
-              onClick={addStep}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-panel-2"
-            >
+            <Button variant="secondary" size="sm" onClick={addStep}>
               + Step
-            </button>
+            </Button>
           )}
         </header>
 
@@ -250,43 +270,11 @@ export function WorkflowEditor({
         </div>
 
         {error && (
-          <div className="mx-5 mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+          <div className="mx-5 my-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
             {error}
           </div>
         )}
-
-        <footer className="flex items-center justify-between border-t border-border p-4">
-          {workflow ? (
-            <button
-              onClick={async () => {
-                await api.deleteWorkflow(workflow.id);
-                onSaved();
-              }}
-              className="text-sm text-danger hover:underline"
-            >
-              Delete workflow
-            </button>
-          ) : (
-            <span />
-          )}
-          <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg"
-            >
-              Cancel
-            </button>
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={save}
-              disabled={busy}
-              className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {busy ? "Validating…" : "Save workflow"}
-            </motion.button>
-          </div>
-        </footer>
-      </motion.div>
-    </motion.div>
+      </div>
+    </Dialog>
   );
 }

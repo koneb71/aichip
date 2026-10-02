@@ -75,7 +75,7 @@ export function SpendPanel() {
               onClick={() => setDim(d.id)}
               className={`rounded-lg px-2 py-1 text-[11px] transition ${
                 dim === d.id
-                  ? "bg-accent text-white"
+                  ? "bg-accent text-on-accent"
                   : "bg-panel-2 text-fg-muted hover:text-fg"
               }`}
             >

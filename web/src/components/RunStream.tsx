@@ -130,7 +130,7 @@ function EventRow({ event }: { event: StreamEvent }) {
       return (
         <div
           className={`${base} font-mono text-xs ${
-            event.is_error ? "text-red-400" : "text-fg-muted/80"
+            event.is_error ? "text-danger-fg" : "text-fg-muted/80"
           }`}
         >
           ↳ {String(event.summary).slice(0, 200)}
@@ -165,13 +165,13 @@ function EventRow({ event }: { event: StreamEvent }) {
       );
     case "run_failed":
       return (
-        <div className={`${base} border border-red-400/40 bg-red-400/10 text-red-400`}>
+        <div className={`${base} border border-danger/40 bg-danger-subtle text-danger-fg`}>
           ✗ {String(event.reason)}
         </div>
       );
     case "rate_limited":
       return (
-        <div className={`${base} border border-amber-300 bg-amber-50 text-xs text-amber-800`}>
+        <div className={`${base} border border-warning/40 bg-warning-subtle text-xs text-warning-fg`}>
           ⏳ {String(event.message)}
         </div>
       );

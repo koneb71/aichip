@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { api, type AppDetail } from "../../lib/api";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Textarea } from "../ui/Field";
 
 /**
  * Hand the app to an agent.
@@ -40,67 +42,53 @@ export function ChangeAppModal({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
-    >
-      <motion.div
-        initial={{ scale: 0.97, y: 12, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ scale: 0.97, y: 8 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-lg rounded-2xl bg-panel p-5"
-      >
-        <h3 className="text-sm font-semibold">Change {app.name}</h3>
-        <p className="mt-1 text-xs text-fg-muted">
-          {app.runtime === "module"
-            ? "An agent rewrites this app's manifest in a worktree."
-            : "An agent changes this app's source in a worktree."}
-        </p>
-
-        <textarea
-          autoFocus
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter is a newline in a brief that may well be a paragraph.
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) start();
-          }}
-          placeholder="add a notes field and show it in the list"
-          className="mt-3 h-28 w-full resize-none rounded-lg border border-border bg-bg p-3 text-sm outline-none focus:border-accent"
-        />
-
-        <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-fg-muted">
-          This lands on its own when the card finishes — there is no review step,
-          because the diff <em>is</em> the app. You can undo the most recent change
-          from the history below.
-          <br />
-          New tables and columns apply themselves. Anything that would lose data
-          still waits for you.
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
-        )}
-
-        <div className="mt-4 flex items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={start}
-            disabled={busy}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
-            {busy ? "Starting…" : "Start"}
-          </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title={`Change ${app.name}`}
+      description={
+        app.runtime === "module"
+          ? "An agent rewrites this app's manifest in a worktree."
+          : "An agent changes this app's source in a worktree."
+      }
+      width={512}
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
+          </Button>
+          <Button variant="primary" size="sm" onClick={start} disabled={busy}>
+            {busy ? "Starting…" : "Start"}
+          </Button>
+        </>
+      }
+    >
+      <Textarea
+        autoFocus
+        value={brief}
+        onChange={(e) => setBrief(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter is a newline in a brief that may well be a paragraph.
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) start();
+        }}
+        placeholder="add a notes field and show it in the list"
+        className="h-28 resize-none p-3! text-sm!"
+      />
+
+      <div className="mt-3 rounded-lg bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-fg-muted">
+        This lands on its own when the card finishes — there is no review step,
+        because the diff <em>is</em> the app. You can undo the most recent change
+        from the history below.
+        <br />
+        New tables and columns apply themselves. Anything that would lose data
+        still waits for you.
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
+      )}
+    </Dialog>
   );
 }

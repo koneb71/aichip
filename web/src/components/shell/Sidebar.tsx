@@ -12,7 +12,7 @@ import { gradientFor } from "../ui/Surface";
 import { cn } from "../ui/cn";
 import { Tooltip, Menu } from "../ui/Overlay";
 import { Input } from "../ui/Field";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
 
 /**
  * The sidebar: four groups, recent projects and active apps, and the
@@ -63,14 +63,15 @@ export function Sidebar({
         {!collapsed && <WorkspaceMenu />}
         {onToggle && (
           <Tooltip content={collapsed ? "Expand sidebar" : "Collapse sidebar"} side="right">
-            <button
-              type="button"
+            <IconButton
+              size="sm"
               onClick={onToggle}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="ring-focus grid size-7 shrink-0 place-items-center rounded-md text-fg-subtle hover:bg-panel-2 hover:text-fg"
+              label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              // The tooltip already names it; a native title would show a second one.
+              title={undefined}
             >
               {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-            </button>
+            </IconButton>
           </Tooltip>
         )}
       </div>
@@ -155,7 +156,7 @@ export function Sidebar({
       {!collapsed && (
         <div className="shrink-0 pb-3">
           <UsageChip />
-          <p className="px-2 text-[11px] leading-relaxed text-fg-subtle">Runs on your own CLI logins. No API keys, ever.</p>
+          <p className="px-2 text-[11px] leading-relaxed text-fg-muted">Runs on your own CLI logins. No API keys, ever.</p>
         </div>
       )}
     </aside>
@@ -288,7 +289,7 @@ function WorkspaceMenu() {
           className="ring-focus flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-panel-2"
         >
           <span
-            className="grid size-6 shrink-0 place-items-center rounded-md text-[10px] font-semibold text-white"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-[10px] font-semibold text-on-accent"
             style={{ background: active?.color ?? "var(--color-accent)" }}
           >
             {initials}

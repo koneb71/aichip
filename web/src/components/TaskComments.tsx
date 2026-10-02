@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { ArrowUp } from "lucide-react";
 import { Agent, api, TaskComment } from "../lib/api";
 import { ArticlePicker } from "./kb/ArticlePicker";
 import { useWorkspace } from "../lib/workspace";
 import { mentionToken } from "../lib/mention";
 import { Markdown } from "./Markdown";
+import { IconButton } from "./ui/Button";
 
 /**
  * The discussion thread under a card. Type `@` to mention an agent — the
@@ -133,7 +135,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
       </div>
 
       {error && (
-        <div className="mb-1 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
+        <div className="mb-1 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">{error}</div>
       )}
 
       <div className="relative mt-2">
@@ -143,7 +145,7 @@ export function TaskComments({ taskId }: { taskId: string }) {
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
-              className="absolute bottom-full left-0 right-0 z-20 mb-1 rounded-xl border border-border bg-panel p-1 shadow-lg"
+              className="absolute bottom-full left-0 right-0 z-20 mb-1 rounded-xl border border-border bg-raised p-1 shadow-[var(--shadow-md)]"
             >
               {candidates.map((a, i) => (
                 <button
@@ -215,14 +217,9 @@ export function TaskComments({ taskId }: { taskId: string }) {
             placeholder="Comment — @ mentions an agent"
             className="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none"
           />
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            onClick={send}
-            disabled={!draft.trim()}
-            className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
-          >
-            ↑
-          </motion.button>
+          <IconButton variant="primary" size="sm" label="Send" onClick={send} disabled={!draft.trim()}>
+            <ArrowUp className="size-4" />
+          </IconButton>
         </div>
       </div>
     </div>
@@ -258,7 +255,7 @@ function CommentRow({ comment }: { comment: TaskComment }) {
             {comment.line ? `:${comment.line}` : ""}
           </div>
         )}
-        <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
+        <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-on-accent">
           {comment.content}
         </div>
       </motion.div>
@@ -273,7 +270,7 @@ function CommentRow({ comment }: { comment: TaskComment }) {
       <div className="mb-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
         <span
           className="h-2 w-2 rounded-full"
-          style={{ background: comment.agentColor ?? "#9ca3af" }}
+          style={{ background: comment.agentColor ?? "var(--color-fg-subtle)" }}
         />
         {comment.agentName ?? "agent"}
       </div>

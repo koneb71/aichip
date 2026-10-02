@@ -10,6 +10,8 @@ import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { useRunStream, StreamEvent } from "../lib/ws";
 import { Markdown } from "../components/Markdown";
 import { isActive } from "../lib/runStatus";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Select } from "../components/ui/Field";
 
 /**
  * Deep research: ask a question about a project, watch the investigation,
@@ -116,10 +118,9 @@ export default function ResearchPage() {
 
   const rail = (
     <div className="flex min-h-0 flex-col gap-3 p-3">
-      <select
+      <Select
         value={projectId ?? GENERAL}
         onChange={(e) => pickProject(e.target.value)}
-        className="w-full rounded-lg border border-border bg-panel px-2 py-1.5 text-sm"
         title="General researches the web alone; pick a project to ground the answer in its repository"
       >
         <option value={GENERAL}>General — web only</option>
@@ -128,11 +129,11 @@ export default function ResearchPage() {
             {p.name}
           </option>
         ))}
-      </select>
+      </Select>
       <Link
         to={projectId ? `/research?project=${projectId}` : "/research"}
         onClick={() => setRailOpen(false)}
-        className="rounded-lg border border-border px-2 py-1.5 text-center text-sm text-fg-muted hover:bg-panel-2 hover:text-fg"
+        className={buttonClasses({ variant: "secondary", size: "md" })}
       >
         + New research
       </Link>
@@ -184,7 +185,7 @@ export default function ResearchPage() {
             : "Ask a question about this project. The agent reads the repository first, then the web, and writes a report that cites both — every web claim with its URL, every repo claim with its file."}
         </p>
         {error && (
-          <div className="mt-4 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
+          <div className="mt-4 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">{error}</div>
         )}
         <div className="mt-6 flex flex-col gap-2 rounded-xl border border-border bg-panel p-3 focus-within:border-accent">
           <textarea
@@ -207,14 +208,14 @@ export default function ResearchPage() {
             <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default engine" />
             <TierPicker value={tier} onChange={setTier} engine={engine ?? undefined} />
             <EffortPicker value={effort} onChange={setEffort} />
-            <motion.button
-              whileTap={{ scale: 0.95 }}
+            <Button
+              variant="primary"
               onClick={start}
               disabled={busy || !question.trim()}
-              className="ml-auto rounded-lg bg-accent px-4 py-1.5 text-sm text-white disabled:opacity-40"
+              className="ml-auto"
             >
               {busy ? "Starting…" : "Research"}
-            </motion.button>
+            </Button>
           </div>
         </div>
       </div>
@@ -363,12 +364,9 @@ function ResearchView({
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {live ? (
-            <button
-              onClick={cancel}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:border-danger hover:text-danger"
-            >
+            <Button variant="secondary" size="sm" onClick={cancel}>
               Cancel
-            </button>
+            </Button>
           ) : (
             <>
               {detail.reportMd &&
@@ -380,36 +378,30 @@ function ResearchView({
                     Open in knowledge base →
                   </Link>
                 ) : (
-                  <button
-                    onClick={saveToKb}
-                    disabled={saving}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                  >
+                  <Button variant="primary" size="sm" onClick={saveToKb} disabled={saving}>
                     {saving ? "Saving…" : "Save to knowledge base"}
-                  </button>
+                  </Button>
                 ))}
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={rerun}
-                className="rounded-lg border border-border px-3 py-1.5 text-xs hover:border-fg-muted"
                 title="Ask again — the report is replaced by the new answer"
               >
                 ↻ Re-run
-              </button>
-              <button
-                onClick={remove}
-                className="ml-auto rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-danger hover:text-danger"
-              >
+              </Button>
+              <Button variant="danger" size="sm" onClick={remove} className="ml-auto">
                 Delete
-              </button>
+              </Button>
             </>
           )}
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">{error}</div>
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">{error}</div>
         )}
         {!live && !detail.reportMd && detail.runError && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
             The run stopped: {detail.runError}
           </div>
         )}
@@ -655,12 +647,9 @@ function ReportView({ detail }: { detail: Detail }) {
             {sources.length} {sources.length === 1 ? "source" : "sources"}
           </span>
         )}
-        <button
-          onClick={copy}
-          className="ml-auto rounded-full border border-border px-2 py-0.5 hover:border-fg-muted hover:text-fg"
-        >
+        <Button variant="secondary" size="xs" onClick={copy} className="ml-auto">
           {copied ? "✓ Copied" : "Copy markdown"}
-        </button>
+        </Button>
       </div>
 
       {/* The bibliography, up front and clickable. */}

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { api, GitHubConnect, GitHubStatus, McpServer, McpTestResult } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
-import { tappable } from "../lib/motion";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Dialog } from "../components/ui/Dialog";
 
 /**
  * MCP servers the user connects.
@@ -175,13 +176,9 @@ function GitHubCard() {
               ))}
             </div>
           )}
-          <button
-            onClick={connect}
-            disabled={busy}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
+          <Button variant="primary" size="sm" onClick={connect} disabled={busy}>
             {busy ? "Starting…" : "Connect GitHub"}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -195,32 +192,34 @@ function GitHubCard() {
             <code className="rounded-md bg-panel px-2.5 py-1.5 font-mono text-sm tracking-widest">
               {flow.code}
             </code>
-            <button
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={() => {
                 navigator.clipboard?.writeText(flow.code);
                 setCopied(true);
               }}
-              className="rounded-lg border border-border px-2 py-1 text-[11px] hover:bg-border/40"
             >
               {copied ? "copied" : "copy"}
-            </button>
+            </Button>
             <a
               href={flow.url}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
+              className={buttonClasses({ variant: "primary", size: "xs" })}
             >
               Open GitHub
             </a>
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => {
                 api.cancelGitHubConnect(flow.id);
                 setFlow(null);
               }}
-              className="text-[11px] text-fg-muted hover:text-fg"
             >
               cancel
-            </button>
+            </Button>
           </div>
           <div className="mt-1.5 text-[11px] text-fg-muted">
             Waiting for you to finish in the browser… GitHub will list your
@@ -250,14 +249,14 @@ export default function ConnectionsPage() {
         title="Connections"
         subtitle="MCP servers give your agents tools beyond reading, writing, and running commands. Connect one here, then switch it on for the agents that should have it."
         actions={
-          <motion.button
-            {...tappable}
+          <Button
+            variant="primary"
+            size="md"
             onClick={() => setEditing("new")}
-            className="ring-focus flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
+            icon={<Icon name="plus" size={15} strokeWidth={2.5} />}
           >
-            <Icon name="plus" size={15} strokeWidth={2.5} />
             Connect a server
-          </motion.button>
+          </Button>
         }
       />
 
@@ -295,19 +294,17 @@ export default function ConnectionsPage() {
         )}
       </div>
 
-      <AnimatePresence>
-        {editing && (
-          <ServerEditor
-            workspaceId={active?.id ?? ""}
-            server={editing === "new" ? null : editing}
-            onClose={() => setEditing(null)}
-            onSaved={() => {
-              setEditing(null);
-              load();
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {editing && (
+        <ServerEditor
+          workspaceId={active?.id ?? ""}
+          server={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
     </Page>
   );
 }
@@ -365,28 +362,22 @@ function ServerCard({
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <button
-            onClick={runTest}
-            disabled={testing}
-            className="rounded-lg border border-border px-3 py-1 text-xs hover:bg-panel-2 disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={runTest} disabled={testing}>
             {testing ? "Connecting…" : "Test"}
-          </button>
-          <button
-            onClick={onEdit}
-            className="rounded-lg border border-border px-3 py-1 text-xs hover:bg-panel-2"
-          >
+          </Button>
+          <Button variant="secondary" size="sm" onClick={onEdit}>
             Edit
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
             onClick={async () => {
               await api.deleteMcpServer(server.id);
               onChanged();
             }}
-            className="rounded-lg border border-border px-3 py-1 text-xs text-fg-muted hover:border-danger hover:text-danger"
           >
             Remove
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -395,7 +386,7 @@ function ServerCard({
           className={`mt-3 rounded-lg px-3 py-2 text-xs ${
             test.ok
               ? "bg-tier-easy-soft text-tier-easy"
-              : "bg-red-50 text-danger"
+              : "bg-danger-subtle text-danger-fg"
           }`}
         >
           {test.ok ? (
@@ -470,26 +461,23 @@ function ServerEditor({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={server ? `Edit ${server.name}` : "Connect an MCP server"}
+      width={512}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="md" onClick={save} disabled={busy || !name.trim()}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
     >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 20, scale: 0.98 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-panel p-6"
-      >
-        <div className="text-base font-semibold">
-          {server ? `Edit ${server.name}` : "Connect an MCP server"}
-        </div>
-
-        <label className="mt-4 block text-xs font-medium text-fg-muted">Name</label>
+        <label className="block text-xs font-medium text-fg-muted">Name</label>
         <input
           autoFocus
           value={name}
@@ -510,7 +498,7 @@ function ServerEditor({
               onClick={() => setTransport(t)}
               className={`rounded-lg border px-3 py-1.5 text-xs ${
                 transport === t
-                  ? "border-accent bg-accent/5 text-accent-fg"
+                  ? "border-accent bg-accent-subtle text-accent-fg"
                   : "border-border hover:bg-panel-2"
               }`}
             >
@@ -556,24 +544,9 @@ function ServerEditor({
         )}
 
         {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+          <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
         )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg">
-            Cancel
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={save}
-            disabled={busy || !name.trim()}
-            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {busy ? "Saving…" : "Save"}
-          </motion.button>
-        </div>
-      </motion.div>
-    </motion.div>
+    </Dialog>
   );
 }
 

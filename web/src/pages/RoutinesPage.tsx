@@ -4,6 +4,7 @@ import { api, Project, Routine, RoutineDraft, RoutineRun } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { EnginePicker } from "../lib/engines";
 import { Icon } from "../components/ui/Icon";
+import { Button } from "../components/ui/Button";
 import { compile, describeCron, Preset, recognize, relative, WEEKDAYS } from "../lib/cron";
 
 /**
@@ -107,17 +108,18 @@ export default function RoutinesPage() {
             was asleep, a missed routine runs once on wake.
           </p>
         </div>
-        <button
+        <Button
+          variant="primary"
+          size="md"
           onClick={startNew}
-          className="ring-focus flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] hover:brightness-110"
+          icon={<Icon name="plus" size={14} strokeWidth={2.5} />}
         >
-          <Icon name="plus" size={14} strokeWidth={2.5} />
           New routine
-        </button>
+        </Button>
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mt-4 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       {editing && (
@@ -260,43 +262,41 @@ function RoutineCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={runNow}
             disabled={busy || !!live}
             title={live ? "Already running" : "Fire once, without touching the schedule"}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs hover:border-fg-muted disabled:opacity-50"
           >
             {busy ? "Firing…" : "Run now"}
-          </button>
-          <button
-            onClick={onEdit}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs hover:border-fg-muted"
-          >
+          </Button>
+          <Button variant="secondary" size="sm" onClick={onEdit}>
             Edit
-          </button>
+          </Button>
           {/* The switch: on = scheduled, off = paused, bookmark reset on re-enable. */}
           <button
             onClick={toggle}
             role="switch"
             aria-checked={r.enabled}
             title={r.enabled ? "Pause the schedule" : "Resume the schedule"}
-            className={`relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-border"}`}
+            className={`ring-focus relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-accent" : "bg-border-strong"}`}
           >
             <span
-              className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left] ${r.enabled ? "left-[18px]" : "left-0.5"}`}
+              className={`absolute top-0.5 size-4 rounded-full shadow transition-[left] ${r.enabled ? "left-[18px] bg-on-accent" : "left-0.5 bg-panel"}`}
             />
           </button>
         </div>
       </div>
 
       <div className="mt-2 flex items-center gap-3 text-[11px]">
-        <button onClick={() => setOpen(!open)} className="text-fg-muted hover:text-fg">
+        <Button variant="ghost" size="xs" className="-ml-2" onClick={() => setOpen(!open)}>
           {open ? "Hide history" : "History"}
-        </button>
+        </Button>
         <ResultLink routine={r} />
-        <button onClick={remove} className="ml-auto text-fg-muted hover:text-danger">
+        <Button variant="ghost" size="xs" className="-mr-2 ml-auto" onClick={remove}>
           Delete
-        </button>
+        </Button>
       </div>
 
       {open && (
@@ -402,7 +402,7 @@ function StatusDot({ status }: { status: string | null }) {
       ? "bg-tier-easy"
       : status === "failed" || status === "canceled"
         ? "bg-danger"
-        : "bg-amber-400";
+        : "bg-warning";
   return <span className={`size-1.5 rounded-full ${color}`} title={status ?? "queued"} />;
 }
 
@@ -478,7 +478,7 @@ function Editor({
               key={k}
               onClick={() => set({ kind: k })}
               className={`rounded-xl border px-3 py-1.5 text-left text-xs ${
-                d.kind === k ? "border-accent bg-accent/5" : "border-border hover:border-fg-muted/40"
+                d.kind === k ? "border-accent bg-accent-subtle" : "border-border hover:border-fg-muted/40"
               }`}
             >
               <div className="font-semibold">{KIND_LABEL[k]}</div>
@@ -629,10 +629,12 @@ function Editor({
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onCancel} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:border-fg-muted">
+          <Button variant="secondary" size="sm" onClick={onCancel}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
             onClick={() => onSave({ ...d, cronExpr })}
             disabled={
               !d.name.trim() ||
@@ -641,10 +643,9 @@ function Editor({
               (d.kind === "task" && !d.projectId) ||
               (d.kind === "watch" && !/^https?:\/\/\S{4,}$/.test((d.url ?? "").trim()))
             }
-            className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
           >
             {isNew ? "Create routine" : "Save changes"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

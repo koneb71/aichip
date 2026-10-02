@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, Project } from "../../lib/api";
 import { EnginePicker } from "../../lib/engines";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Select, Textarea } from "../ui/Field";
 
 /**
  * Ask an agent to write or revise a page.
@@ -75,85 +77,69 @@ export function GenerateModal({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ y: 20, scale: 0.98 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-lg rounded-2xl border border-border bg-panel p-6"
-      >
-        <div className="text-lg font-semibold">
-          {articleId ? "Ask an agent to revise this page" : "Ask an agent to write it"}
-        </div>
-        <p className="mt-1 text-sm text-fg-muted">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      width={512}
+      title={articleId ? "Ask an agent to revise this page" : "Ask an agent to write it"}
+      description={
+        <>
           It reads the repository first and writes only what it can verify there.
           {articleId
             ? " You get a proposal to accept or reject — this page does not change on its own."
             : " You get a draft to correct — nothing is published on your behalf."}
-        </p>
-
-        <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-fg-muted">
-          Repository
-        </label>
-        <select
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          className="mt-1.5 w-full rounded-lg border border-border bg-panel px-2.5 py-2 text-sm"
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-
-        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-fg-muted">
-          {articleId ? "What should change?" : "What should it cover?"}
-        </label>
-        <textarea
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          rows={4}
-          placeholder={
-            articleId
-              ? "The rollback section is out of date — we use make rollback now"
-              : "How the queue works and what happens when a run is rate limited"
-          }
-          className="mt-1.5 w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-        />
-
-        <div className="mt-3">
-          <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default engine" />
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-            {error}
-          </div>
-        )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg">
+        </>
+      }
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={go}
-            disabled={!brief.trim() || !projectId || busy}
-            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+          </Button>
+          <Button variant="primary" onClick={go} disabled={!brief.trim() || !projectId || busy}>
             {busy ? "Starting…" : articleId ? "Propose a revision" : "Write it"}
-          </motion.button>
+          </Button>
+        </>
+      }
+    >
+      <label className="block text-xs font-semibold uppercase tracking-wide text-fg-muted">
+        Repository
+      </label>
+      <Select
+        value={projectId}
+        onChange={(e) => setProjectId(e.target.value)}
+        className="mt-1.5 w-full"
+      >
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </Select>
+
+      <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-fg-muted">
+        {articleId ? "What should change?" : "What should it cover?"}
+      </label>
+      <Textarea
+        value={brief}
+        onChange={(e) => setBrief(e.target.value)}
+        rows={4}
+        placeholder={
+          articleId
+            ? "The rollback section is out of date — we use make rollback now"
+            : "How the queue works and what happens when a run is rate limited"
+        }
+        className="mt-1.5 resize-none"
+      />
+
+      <div className="mt-3">
+        <EnginePicker value={engine} onChange={setEngine} inheritLabel="Default engine" />
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
+          {error}
         </div>
-      </motion.div>
-    </motion.div>
+      )}
+    </Dialog>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, SpaceDocument, SpaceDocsStatus } from "../../lib/api";
+import { Button, IconButton } from "../ui/Button";
 
 /**
  * The documents in a space, with their semantic-index status.
@@ -87,24 +88,26 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
     <div className="flex min-h-0 flex-col gap-1.5 border-t border-border pt-3">
       <div className="flex items-center justify-between px-1">
         <span className="text-xs font-medium text-fg-muted">Documents</span>
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={reindex}
           disabled={busy}
           title="Re-scan the folder and refresh the search index"
-          className="text-[11px] text-fg-muted hover:text-fg disabled:opacity-50"
+          className="-mr-2"
         >
           ↻ Reindex
-        </button>
+        </Button>
       </div>
 
       {status?.embedder.state === "downloading" && (
-        <div className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+        <div className="rounded-lg bg-warning-subtle px-2 py-1.5 text-[11px] text-warning-fg">
           Downloading the embedding model — one-time, ~35 MB…
         </div>
       )}
       {status?.embedder.state === "failed" && (
         <div
-          className="rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-danger"
+          className="rounded-lg bg-danger-subtle px-2 py-1.5 text-[11px] text-danger-fg"
           title={status.embedder.detail}
         >
           The embedder failed — indexing will retry. Chat still works via Read.
@@ -113,7 +116,7 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
       {error && (
         <button
           onClick={() => setError(null)}
-          className="rounded-lg bg-red-50 px-2 py-1.5 text-left text-[11px] text-danger"
+          className="rounded-lg bg-danger-subtle px-2 py-1.5 text-left text-[11px] text-danger-fg"
           title="Dismiss"
         >
           {error}
@@ -133,7 +136,7 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
         }}
         onClick={() => fileRef.current?.click()}
         className={`cursor-pointer rounded-lg border border-dashed px-2 py-2 text-center text-[11px] ${
-          dragging ? "border-accent bg-accent/5 text-accent-fg" : "border-border text-fg-muted hover:border-fg-muted"
+          dragging ? "border-accent bg-accent-subtle text-accent-fg" : "border-border text-fg-muted hover:border-fg-muted"
         }`}
       >
         {busy ? "Uploading…" : "Drop documents here, or click to pick"}
@@ -160,13 +163,14 @@ export function SpaceDocs({ projectId }: { projectId: string }) {
             <span className="min-w-0 flex-1 truncate" title={d.relPath}>
               {d.relPath}
             </span>
-            <button
+            <IconButton
+              label="Delete this document"
+              size="xs"
               onClick={() => remove(d.id)}
-              title="Delete this document"
-              className="shrink-0 px-1 text-[11px] text-fg-muted opacity-0 hover:text-danger group-hover:opacity-100"
+              className="size-5! opacity-0 hover:text-danger-fg focus-visible:opacity-100 group-hover:opacity-100"
             >
               ✕
-            </button>
+            </IconButton>
           </div>
         ))}
         {docs.length === 0 && (

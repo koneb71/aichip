@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ProjectBrain } from "../lib/api";
+import { Button } from "./ui/Button";
 
 /**
  * What every run in this project should already know.
@@ -84,6 +85,7 @@ export function BrainPanel({ projectId }: { projectId: string }) {
         <label className="flex shrink-0 items-center gap-2 text-xs">
           <input
             type="checkbox"
+            className="accent-[var(--color-accent)]"
             checked={brain.enabled}
             disabled={busy}
             onChange={(e) => save(e.target.checked)}
@@ -95,7 +97,7 @@ export function BrainPanel({ projectId }: { projectId: string }) {
       </div>
 
       {!brain.enabled && (
-        <p className="mb-3 max-w-2xl rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+        <p className="mb-3 max-w-2xl rounded-lg bg-warning-subtle px-3 py-2 text-[11px] leading-relaxed text-warning-fg">
           Off, so runs behave as though this were empty. It is still here — turning it off
           is how you check whether it is the reason a run went wrong.
         </p>
@@ -115,17 +117,13 @@ export function BrainPanel({ projectId }: { projectId: string }) {
       />
 
       <div className="mt-2 flex max-w-2xl flex-wrap items-center gap-3">
-        <button
-          onClick={() => save()}
-          disabled={busy || !dirty || over}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
+        <Button variant="primary" size="sm" onClick={() => save()} disabled={busy || !dirty || over}>
           {busy ? "Saving…" : dirty ? "Save" : "Saved"}
-        </button>
+        </Button>
         {/* Counted against the budget rather than silently truncated at the
             far end, where the loss would only show up as an agent that had not
             read the last paragraph. */}
-        <span className={`text-[11px] ${over ? "font-medium text-danger" : "text-fg-muted"}`}>
+        <span className={`text-[11px] ${over ? "font-medium text-danger-fg" : "text-fg-muted"}`}>
           {draft.length.toLocaleString()} / {brain.maxChars.toLocaleString()} characters
           {over && " — too long to fit in a prompt"}
         </span>
@@ -134,20 +132,22 @@ export function BrainPanel({ projectId }: { projectId: string }) {
             saved {new Date(brain.updatedAt).toLocaleString()}
           </span>
         )}
-        <button
+        <Button
+          variant="link"
+          size="xs"
           onClick={() =>
             history
               ? setHistory(null)
               : api.brainRevisions(projectId).then((r) => setHistory(r.revisions)).catch(() => {})
           }
-          className="ml-auto text-[11px] text-fg-muted underline hover:text-fg"
+          className="ml-auto font-normal! text-fg-muted! underline hover:text-fg!"
         >
           {history ? "hide history" : "history"}
-        </button>
+        </Button>
       </div>
 
       {error && (
-        <div className="mt-3 max-w-2xl whitespace-pre-wrap rounded-lg bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-danger">
+        <div className="mt-3 max-w-2xl whitespace-pre-wrap rounded-lg bg-danger-subtle px-3 py-2 text-[11px] leading-relaxed text-danger-fg">
           {error}
         </div>
       )}
@@ -171,12 +171,14 @@ export function BrainPanel({ projectId }: { projectId: string }) {
                     {/* Into the editor, not straight to the database: restoring
                         is a save like any other, so it is reviewed and it keeps
                         the version it replaced. */}
-                    <button
+                    <Button
+                      variant="link"
+                      size="xs"
                       onClick={() => setDraft(r.body)}
-                      className="text-[11px] text-accent-fg underline"
+                      className="font-normal! underline"
                     >
                       put this in the editor
-                    </button>
+                    </Button>
                   </div>
                   <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-fg-muted">
                     {r.body}

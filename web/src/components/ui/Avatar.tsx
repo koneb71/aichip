@@ -1,3 +1,4 @@
+import { AVATAR_FALLBACK } from "../../lib/swatches";
 import { cn } from "./cn";
 
 /**
@@ -7,13 +8,11 @@ import { cn } from "./cn";
  * name, so the same agent looks the same everywhere without anyone choosing.
  */
 
-const FALLBACK = ["#4f54d6", "#7c4ddb", "#0a72b5", "#0b7a55", "#b25f05", "#cc2a4a", "#5c6676"];
-
 export function colorFor(name: string, own?: string | null): string {
   if (own) return own;
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return FALLBACK[h % FALLBACK.length];
+  return AVATAR_FALLBACK[h % AVATAR_FALLBACK.length];
 }
 
 export function Avatar({
@@ -34,7 +33,7 @@ export function Avatar({
     <span
       title={title ?? name}
       aria-hidden={title ? undefined : true}
-      className={cn("inline-grid shrink-0 select-none place-items-center rounded-full font-semibold text-white", className)}
+      className={cn("inline-grid shrink-0 select-none place-items-center rounded-full font-semibold text-on-accent", className)}
       style={{
         width: size,
         height: size,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, type GitHubIssue } from "../lib/api";
+import { Dialog } from "./ui/Dialog";
+import { Button } from "./ui/Button";
 
 /**
  * Turn GitHub issues into board cards.
@@ -69,136 +70,127 @@ export function ImportIssuesModal({
   const importable = issues.filter((i) => !i.importedAs);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
-    >
-      <motion.div
-        initial={{ scale: 0.97, y: 12, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        exit={{ scale: 0.97, y: 8 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl bg-panel p-5"
-      >
-        <h3 className="text-sm font-semibold">
-          Import issues{repo && <span className="ml-2 font-mono text-xs text-fg-muted">{repo}</span>}
-        </h3>
-
-        {/* Said before anything is ticked, because it changes what "read this
-            first" means. */}
-        {publicRepo && !refusal && (
-          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
-            Anyone on the internet can open an issue on a public repository, and an
-            imported issue becomes an agent&rsquo;s instructions. Read each one before you
-            tick it. Imported cards always land in Backlog and never start on their own.
-          </p>
-        )}
-
-        {loading && <p className="mt-4 text-xs text-fg-muted">Asking GitHub…</p>}
-        {refusal && <p className="mt-4 text-xs text-fg-muted">{refusal}</p>}
-        {!loading && !refusal && issues.length === 0 && (
-          <p className="mt-4 text-xs text-fg-muted">No open issues.</p>
-        )}
-
-        <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
-          {issues.map((issue) => {
-            const done = Boolean(issue.importedAs);
-            return (
-              <div
-                key={issue.number}
-                className={`rounded-lg border px-3 py-2 ${
-                  done ? "border-border bg-panel-2 opacity-60" : "border-border"
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={chosen.has(issue.number)}
-                    disabled={done || busy}
-                    onChange={() => toggle(issue.number)}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                      <span className="font-mono text-xs text-fg-muted">#{issue.number}</span>
-                      {/* Plain text. React escapes it; nothing renders it as markup. */}
-                      <span className="min-w-0 break-words font-medium">{issue.title}</span>
-                      {issue.author && (
-                        <span className="text-[11px] text-fg-muted">by @{issue.author}</span>
-                      )}
-                      {done && <span className="text-[11px] text-fg-muted">· already a card</span>}
-                    </div>
-                    {issue.labels.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {issue.labels.map((l) => (
-                          <span
-                            key={l}
-                            className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted"
-                          >
-                            {l}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <button
-                      onClick={() => setOpen(open === issue.number ? null : issue.number)}
-                      className="mt-1 text-[11px] text-accent-fg hover:underline"
-                    >
-                      {open === issue.number ? "Hide" : "Read"} what it says
-                    </button>
-                    {open === issue.number && (
-                      // Monospace, plain, scroll-capped: this is the text that
-                      // becomes a prompt, shown as text.
-                      <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-bg p-2 font-mono text-[11px] leading-relaxed text-fg-muted">
-                        {issue.body || "(no description)"}
-                      </pre>
-                    )}
-                  </div>
-                  <a
-                    href={issue.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="shrink-0 text-[11px] text-fg-muted hover:text-fg"
-                  >
-                    open ↗
-                  </a>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</div>
-        )}
-
-        <div className="mt-4 flex items-center gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={importChosen}
-            disabled={busy || chosen.size === 0}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
-            {busy
-              ? "Importing…"
-              : chosen.size === 0
-                ? "Choose issues to import"
-                : `Import ${chosen.size} as ${chosen.size === 1 ? "a card" : "cards"}`}
-          </motion.button>
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-fg-muted">
-            Cancel
-          </button>
-          {importable.length > 0 && (
-            <span className="ml-auto text-[11px] text-fg-muted">
-              {importable.length} not yet imported
-            </span>
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={
+        <>
+          Import issues{repo && <span className="ml-2 font-mono text-xs font-normal text-fg-muted">{repo}</span>}
+        </>
+      }
+      width={768}
+      footer={
+        // The error sits above the buttons, outside the scrolling list, so a
+        // long list of issues never hides why an import failed.
+        <div className="flex w-full min-w-0 flex-col gap-2">
+          {error && (
+            <div className="rounded-lg bg-danger-subtle px-3 py-2 text-[11px] text-danger-fg">{error}</div>
           )}
+          <div className="flex items-center justify-end gap-2">
+            {importable.length > 0 && (
+              <span className="mr-auto text-[11px] text-fg-muted">
+                {importable.length} not yet imported
+              </span>
+            )}
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={importChosen} disabled={busy || chosen.size === 0}>
+              {busy
+                ? "Importing…"
+                : chosen.size === 0
+                  ? "Choose issues to import"
+                  : `Import ${chosen.size} as ${chosen.size === 1 ? "a card" : "cards"}`}
+            </Button>
+          </div>
         </div>
-      </motion.div>
-    </motion.div>
+      }
+    >
+      {/* Said before anything is ticked, because it changes what "read this
+          first" means. */}
+      {publicRepo && !refusal && (
+        <p className="rounded-lg bg-warning-subtle px-3 py-2 text-[11px] leading-relaxed text-warning-fg">
+          Anyone on the internet can open an issue on a public repository, and an
+          imported issue becomes an agent&rsquo;s instructions. Read each one before you
+          tick it. Imported cards always land in Backlog and never start on their own.
+        </p>
+      )}
+
+      {loading && <p className="mt-4 text-xs text-fg-muted">Asking GitHub…</p>}
+      {refusal && <p className="mt-4 text-xs text-fg-muted">{refusal}</p>}
+      {!loading && !refusal && issues.length === 0 && (
+        <p className="mt-4 text-xs text-fg-muted">No open issues.</p>
+      )}
+
+      <div className="mt-3 space-y-1">
+        {issues.map((issue) => {
+          const done = Boolean(issue.importedAs);
+          return (
+            <div
+              key={issue.number}
+              className={`rounded-lg border px-3 py-2 ${
+                done ? "border-border bg-panel-2 opacity-60" : "border-border"
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-1 accent-[var(--color-accent)]"
+                  checked={chosen.has(issue.number)}
+                  disabled={done || busy}
+                  onChange={() => toggle(issue.number)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span className="font-mono text-xs text-fg-muted">#{issue.number}</span>
+                    {/* Plain text. React escapes it; nothing renders it as markup. */}
+                    <span className="min-w-0 break-words font-medium">{issue.title}</span>
+                    {issue.author && (
+                      <span className="text-[11px] text-fg-muted">by @{issue.author}</span>
+                    )}
+                    {done && <span className="text-[11px] text-fg-muted">· already a card</span>}
+                  </div>
+                  {issue.labels.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {issue.labels.map((l) => (
+                        <span
+                          key={l}
+                          className="rounded-full bg-panel-2 px-2 py-0.5 text-[10px] text-fg-muted"
+                        >
+                          {l}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <Button
+                    variant="link"
+                    size="xs"
+                    onClick={() => setOpen(open === issue.number ? null : issue.number)}
+                    className="mt-1 font-normal!"
+                  >
+                    {open === issue.number ? "Hide" : "Read"} what it says
+                  </Button>
+                  {open === issue.number && (
+                    // Monospace, plain, scroll-capped: this is the text that
+                    // becomes a prompt, shown as text.
+                    <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-bg p-2 font-mono text-[11px] leading-relaxed text-fg-muted">
+                      {issue.body || "(no description)"}
+                    </pre>
+                  )}
+                </div>
+                <a
+                  href={issue.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-[11px] text-fg-muted hover:text-fg"
+                >
+                  open ↗
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Dialog>
   );
 }

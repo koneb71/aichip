@@ -1,6 +1,8 @@
 import { HistoryButton } from "./RevisionsPanel";
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { api, CheckCommand, ProjectChecks } from "../lib/api";
+import { Button, IconButton } from "./ui/Button";
 
 /**
  * The commands that decide whether an agent's work passes: `cargo test`,
@@ -67,21 +69,23 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
             placeholder="cargo test --workspace"
             className={`${input} min-w-0 flex-1 font-mono`}
           />
-          <button
+          <IconButton
+            size="xs"
+            label="Remove this check"
             onClick={() => setDraft({ ...draft, commands: draft.commands.filter((_, j) => j !== i) })}
-            className="px-1 text-fg-muted hover:text-danger"
-            title="Remove this check"
+            className="hover:text-danger-fg"
           >
-            ✕
-          </button>
+            <X className="size-3.5" />
+          </IconButton>
         </div>
       ))}
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setDraft({ ...draft, commands: [...draft.commands, { name: "", command: "" }] })}
-        className="text-xs text-fg-muted hover:text-fg"
       >
         + Add a check
-      </button>
+      </Button>
 
       <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
         <label className="flex items-center gap-1.5">
@@ -111,16 +115,12 @@ export function ChecksSettings({ projectId, fullAuto }: { projectId: string; ful
         </label>
         <span className="ml-auto" />
         <HistoryButton kind="project_checks" id={projectId} onRestored={() => setLoads((n) => n + 1)} />
-        <button
-          onClick={save}
-          disabled={!dirty || busy}
-          className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
-        >
+        <Button variant="primary" size="sm" onClick={save} disabled={!dirty || busy}>
           {busy ? "Saving…" : dirty ? "Save checks" : "Saved"}
-        </button>
+        </Button>
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-[11px] text-danger">{error}</p>}
+      {error && <p className="rounded-lg bg-danger-subtle px-3 py-2 text-[11px] text-danger-fg">{error}</p>}
       <p className="text-[11px] leading-relaxed text-fg-muted/80">
         They run in the card's worktree when an agent finishes. Because they execute code the agent may
         have just changed, they start by themselves — and fix failures by themselves — only after a{" "}

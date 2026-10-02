@@ -158,7 +158,7 @@ export function GraphCanvas({
         </ReactFlow>
 
         {laid.cycles.length > 0 && (
-          <div className="pointer-events-none absolute left-3 top-3 rounded-lg bg-red-50 px-2 py-1 text-[10px] text-danger">
+          <div className="pointer-events-none absolute left-3 top-3 rounded-lg bg-danger-subtle px-2 py-1 text-[10px] text-danger-fg">
             {laid.cycles.length} circular dependenc
             {laid.cycles.length === 1 ? "y" : "ies"} between modules — drawn dashed
           </div>

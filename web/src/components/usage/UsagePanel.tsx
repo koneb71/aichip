@@ -120,7 +120,7 @@ export function UsagePanel() {
                   <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${tone.dot}`} />
                   <span className="font-medium">{windowLabel(e.limitType)}</span>
                   <span className="text-fg-muted">{transition(e.previous, e.status)}</span>
-                  {e.usingOverage && <span className="text-amber-700">· paid overage</span>}
+                  {e.usingOverage && <span className="text-warning-fg">· paid overage</span>}
                   <span className="ml-auto shrink-0 text-fg-muted">
                     {new Date(e.observedAt).toLocaleString(undefined, {
                       month: "short",

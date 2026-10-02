@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { api } from "../../lib/api";
 import { depthOf, legalParents, TreePage } from "../../lib/kbTree";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
 
 /**
  * Move a page under a different parent.
@@ -41,61 +42,44 @@ export function MovePicker({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 backdrop-blur-[3px] p-4"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      width={448}
+      title="Move this page"
+      description="Its own children move with it. Pages it contains aren't listed — a page cannot live inside itself."
+      footer={
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      }
     >
-      <motion.div
-        initial={{ y: 16, scale: 0.97, opacity: 0 }}
-        animate={{ y: 0, scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 220, damping: 26 }}
-        onClick={(e) => e.stopPropagation()}
-        className="card-shadow w-full max-w-md rounded-2xl border border-border bg-panel p-5"
-      >
-        <div className="text-base font-semibold">Move this page</div>
-        <p className="mt-1 text-xs text-fg-muted">
-          Its own children move with it. Pages it contains aren't listed — a page
-          cannot live inside itself.
-        </p>
+      {error && (
+        <div className="mb-3 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
+          {error}
+        </div>
+      )}
 
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
-            {error}
-          </div>
-        )}
-
-        <div className="mt-3 max-h-72 overflow-y-auto">
+      <div className="max-h-72 overflow-y-auto">
+        <button
+          disabled={busy}
+          onClick={() => move(null)}
+          className="block w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-fg hover:bg-panel-2 disabled:opacity-50"
+        >
+          Top level
+        </button>
+        {legal.map((p) => (
           <button
+            key={p.id}
             disabled={busy}
-            onClick={() => move(null)}
-            className="block w-full rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-panel-2 disabled:opacity-50"
+            onClick={() => move(p.id)}
+            className="block w-full truncate rounded-lg py-1.5 text-left text-sm text-fg hover:bg-panel-2 disabled:opacity-50"
+            style={{ paddingLeft: 10 + depthOf(pages, p.id) * 14 }}
           >
-            Top level
+            {p.icon || "▦"} {p.title}
           </button>
-          {legal.map((p) => (
-            <button
-              key={p.id}
-              disabled={busy}
-              onClick={() => move(p.id)}
-              className="block w-full truncate rounded-lg py-1.5 text-left text-sm hover:bg-panel-2 disabled:opacity-50"
-              style={{ paddingLeft: 10 + depthOf(pages, p.id) * 14 }}
-            >
-              {p.icon || "▦"} {p.title}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm text-fg-muted hover:text-fg"
-          >
-            Cancel
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
+        ))}
+      </div>
+    </Dialog>
   );
 }

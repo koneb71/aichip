@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, Effort, EffortSettings, EngineModels, LocalHosts, LocalModel, ModelSettings, PermissionMode, PermissionSettings, Tier } from "../lib/api";
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
@@ -7,6 +6,7 @@ import { AttentionSettings } from "../components/AttentionSettings";
 import { UnattendedSettings } from "../components/UnattendedSettings";
 import { Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
+import { Button } from "../components/ui/Button";
 import { tappable } from "../lib/motion";
 
 /**
@@ -175,22 +175,23 @@ export default function SettingsPage() {
           itself to opt in — that switch is on the project, next to its name.
         </p>
         {!!perms?.agentsOverriding && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
             <span className="font-semibold">
               {perms.agentsOverriding} agent{perms.agentsOverriding === 1 ? "" : "s"} set
               their own permission mode
             </span>{" "}
             — a card's agent overrides the setting above, so those runs will keep
             asking whatever you choose here.
-            <button
+            <Button
+              size="xs"
               onClick={async () => {
                 await api.applyPermissionsToAgents();
                 setPerms(await api.permissionSettings());
               }}
-              className="ml-2 rounded-lg border border-amber-400 bg-panel px-2.5 py-1 font-medium hover:bg-amber-100"
+              className="ml-2"
             >
               Make them follow this setting
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -237,7 +238,7 @@ export default function SettingsPage() {
           </p>
         )}
         {!!effort?.agentsOverriding && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
             <span className="font-semibold">
               {effort.agentsOverriding} agent
               {effort.agentsOverriding === 1 ? "" : "s"} set their own
@@ -260,7 +261,7 @@ export default function SettingsPage() {
           default port.
         </p>
         {localError && (
-          <div className="mt-2 max-w-lg rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+          <div className="mt-2 max-w-lg rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
             {localError}
           </div>
         )}
@@ -392,22 +393,19 @@ export default function SettingsPage() {
       </div>
 
       {error && (
-        <div className="mt-3 max-w-2xl rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">
+        <div className="mt-3 max-w-2xl rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">
           {error}
         </div>
       )}
 
       <div className="mt-4 flex max-w-2xl items-center gap-3">
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={save}
-          disabled={!dirty || busy}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Button variant="primary" onClick={save} disabled={!dirty || busy}>
           {busy ? "Saving…" : saved && !dirty ? "Saved" : "Save"}
-        </motion.button>
+        </Button>
         {settings && (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() =>
               setDraft(
                 Object.fromEntries(
@@ -415,10 +413,9 @@ export default function SettingsPage() {
                 ),
               )
             }
-            className="text-xs text-fg-muted hover:text-fg"
           >
             Reset to defaults
-          </button>
+          </Button>
         )}
         <span className="text-[11px] text-fg-muted">
           Runs already in flight keep the model they started with.
@@ -444,7 +441,7 @@ export default function SettingsPage() {
  */
 function StaleServer() {
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+    <div className="rounded-xl border border-warning/40 bg-warning-subtle p-3 text-xs text-warning-fg">
       <span className="font-semibold">
         This server is older than this page.
       </span>{" "}
@@ -547,7 +544,7 @@ function TierField({
         // warning about it would be telling the user off for the thing this
         // feature exists to make easy.
         !localModels.some((m) => m.id === value) && (
-          <span className="text-[10px] text-amber-700">
+          <span className="text-[10px] text-warning-fg">
             not in this install's model list
           </span>
         )}

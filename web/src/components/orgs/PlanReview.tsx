@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { X } from "lucide-react";
 import { api, OrgAssignment, OrgRunDetail } from "../../lib/api";
+import { Button, IconButton } from "../ui/Button";
 
 /**
  * The plan, before anyone starts on it.
@@ -68,7 +70,7 @@ export function PlanReview({
       exit={{ opacity: 0, y: -6 }}
       className="flex min-h-0 flex-col gap-2"
     >
-      <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      <div className="rounded-xl border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning-fg">
         <div className="font-medium">The plan is ready for you</div>
         <div className="mt-0.5">
           Nobody has started. Edit anything below, then approve — or cancel the run.
@@ -99,7 +101,7 @@ export function PlanReview({
       )}
 
       {error && (
-        <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       <div className="sticky bottom-0 flex items-center gap-2 border-t border-border bg-panel pt-2">
@@ -107,21 +109,23 @@ export function PlanReview({
           {assignments.length} assignment{assignments.length === 1 ? "" : "s"} ·{" "}
           {new Set(assignments.map((a) => a.assignee)).size} on it
         </span>
-        <button
+        <Button
+          variant="danger"
+          size="sm"
           onClick={() => act("reject")}
           disabled={!!busy}
-          className="ml-auto rounded-lg border border-border px-3 py-1.5 text-xs hover:border-danger hover:text-danger"
+          className="ml-auto"
         >
           Cancel run
-        </button>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
           onClick={() => act("approve")}
           disabled={!!busy || assignments.length === 0}
-          className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
         >
           {busy === "approve" ? "Starting…" : "Approve & start"}
-        </motion.button>
+        </Button>
       </div>
     </motion.div>
   );
@@ -171,22 +175,23 @@ function PlanRow({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => title !== assignment.title && save({ title })}
-          className="min-w-0 flex-1 rounded border border-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-border focus:border-accent"
+          className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium outline-none hover:border-border focus:border-accent"
         />
-        <button
+        <IconButton
+          size="xs"
+          label="Remove this assignment"
           onClick={() => api.dropAssignment(runId, assignment.id).then(onChanged)}
-          title="Remove this assignment"
-          className="text-fg-muted hover:text-danger"
+          className="hover:text-danger-fg!"
         >
-          ✕
-        </button>
+          <X className="size-3.5" />
+        </IconButton>
       </div>
 
       <div className="mt-1.5 flex items-center gap-1.5">
         <select
           value={assignment.assignee ?? ""}
           onChange={(e) => save({ assignee: e.target.value })}
-          className="rounded-full px-1.5 py-0.5 text-[10px] text-white"
+          className="rounded-full px-1.5 py-0.5 text-[10px] text-on-accent"
           style={{ background: color }}
         >
           {specialists.map((name) => (
@@ -205,12 +210,14 @@ function PlanRow({
             after {assignment.dependsOn.join(", ")}
           </span>
         )}
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={() => setOpen((o) => !o)}
-          className="ml-auto text-[10px] text-fg-muted hover:text-fg"
+          className="ml-auto"
         >
           {open ? "hide brief" : "brief"}
-        </button>
+        </Button>
       </div>
 
       <AnimatePresence>
@@ -226,7 +233,7 @@ function PlanRow({
               onChange={(e) => setBrief(e.target.value)}
               onBlur={() => brief !== assignment.brief && save({ brief })}
               rows={5}
-              className="mt-2 w-full resize-none rounded-lg border border-border px-2 py-1.5 text-[11px] outline-none focus:border-accent"
+              className="mt-2 w-full resize-none rounded-lg border border-border bg-panel px-2 py-1.5 text-[11px] outline-none focus:border-accent"
             />
             {assignment.doneWhen.length > 0 && (
               <ul className="mt-1.5 space-y-0.5 text-[10px] text-fg-muted">

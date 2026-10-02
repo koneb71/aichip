@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
 import { api, type Project, type RepoApp } from "../../lib/api";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Field";
 
 /**
  * Apps a project offers under `.aichip/apps/`.
@@ -72,10 +73,10 @@ export function RepoApps({
         <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
           From a repository
         </span>
-        <select
+        <Select
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
-          className="rounded-lg border border-border bg-bg px-2 py-1 text-xs outline-none focus:border-accent"
+          className="w-auto"
         >
           <option value="">Choose a project…</option>
           {projects.map((p) => (
@@ -83,14 +84,14 @@ export function RepoApps({
               {p.name}
             </option>
           ))}
-        </select>
+        </Select>
         <span className="text-[11px] text-fg-muted">
           Anything committed under <span className="font-mono">.aichip/apps/</span>.
         </span>
       </div>
 
       {error && (
-        <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-danger">{error}</div>
+        <div className="mb-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger-fg">{error}</div>
       )}
 
       {found?.length === 0 && (
@@ -111,7 +112,7 @@ export function RepoApps({
               <div className="truncate font-medium">{a.name}</div>
               <div className="truncate text-[11px] text-fg-muted">
                 {a.error ? (
-                  <span className="text-danger">{a.error}</span>
+                  <span className="text-danger-fg">{a.error}</span>
                 ) : (
                   a.summary || <span className="font-mono">{a.dir}</span>
                 )}
@@ -120,8 +121,8 @@ export function RepoApps({
             {/* "Update" rather than "Install" when it is already here: syncing
                 replaces the manifest of the app of that name and keeps its
                 rows, which is a different promise and worth a different word. */}
-            <motion.button
-              whileTap={{ scale: 0.96 }}
+            <Button
+              size="xs"
               onClick={() => sync(a)}
               disabled={busy !== null || a.error !== null}
               title={
@@ -131,10 +132,9 @@ export function RepoApps({
                     ? "Replace the installed app's manifest. Its rows are kept."
                     : "Install it here."
               }
-              className="shrink-0 rounded-lg border border-border px-2 py-1 hover:bg-border/40 disabled:opacity-40"
             >
               {busy === a.dir ? "…" : a.installedAs ? "Update" : "Install"}
-            </motion.button>
+            </Button>
           </div>
         ))}
       </div>

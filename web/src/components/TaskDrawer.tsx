@@ -488,7 +488,7 @@ export function TaskDrawer({
                 choice made on someone's behalf that they cannot see is the
                 silent downgrade this project refuses elsewhere. */}
             {task.tierIsAuto && task.tierReason && (
-              <div className="mt-1 text-[11px] text-fg-subtle">
+              <div className="mt-1 text-[11px] text-fg-muted">
                 Auto → {task.tierResolved}: {task.tierReason}
               </div>
             )}
@@ -587,7 +587,7 @@ export function TaskDrawer({
             </p>
           )}
         {!running && task.runResumable && (
-          <p className="mt-1.5 text-[11px] leading-snug text-fg-subtle">
+          <p className="mt-1.5 text-[11px] leading-snug text-fg-muted">
             Resume continues where it stopped. Retry starts over from a clean checkout.
           </p>
         )}
@@ -628,8 +628,8 @@ export function TaskDrawer({
         )}
 
         {blocked && blocked.dirty.length > 0 && (
-          <div className="border-b border-border bg-amber-50 px-5 py-3">
-            <div className="text-xs font-medium text-amber-900">
+          <div className="border-b border-border bg-warning-subtle px-5 py-3">
+            <div className="text-xs font-medium text-warning-fg">
               {blocked.dirty.length === 1
                 ? "One file in your checkout is in the way"
                 : `${blocked.dirty.length} files in your checkout are in the way`}
@@ -637,30 +637,22 @@ export function TaskDrawer({
             </div>
             <ul className="mt-1.5 max-h-40 overflow-y-auto">
               {blocked.dirty.map((f) => (
-                <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-amber-900/90">
-                  <span className="w-4 shrink-0 text-amber-700">{`${f.index}${f.worktree}`.trim()}</span>
+                <li key={f.path} className="flex items-baseline gap-2 font-mono text-[11px] text-warning-fg/90">
+                  <span className="w-4 shrink-0 text-warning-fg">{`${f.index}${f.worktree}`.trim()}</span>
                   <span className="truncate">{f.path}</span>
                 </li>
               ))}
             </ul>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => clearTheWay("stash")}
-                disabled={resolving !== null}
-                className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-              >
+              <Button size="sm" onClick={() => clearTheWay("stash")} disabled={resolving !== null}>
                 {resolving === "stash" ? "Setting aside…" : "Stash them"}
-              </button>
-              <button
-                onClick={() => clearTheWay("commit")}
-                disabled={resolving !== null}
-                className="rounded-lg border border-amber-300 bg-panel px-2.5 py-1 text-xs text-amber-900 hover:border-amber-500 disabled:opacity-50"
-              >
+              </Button>
+              <Button size="sm" onClick={() => clearTheWay("commit")} disabled={resolving !== null}>
                 {resolving === "commit" ? "Committing…" : "Commit them"}
-              </button>
+              </Button>
               {/* Which one to press is a real choice, so say what each does
                   rather than leaving it to be discovered. */}
-              <span className="text-[11px] text-amber-900/80">
+              <span className="text-[11px] text-warning-fg/80">
                 Stashing sets them aside; committing keeps them, in their own commit.
               </span>
             </div>
@@ -701,19 +693,16 @@ export function TaskDrawer({
         )}
 
         {confirm && (
-          <div className="border-b border-border bg-amber-50 px-5 py-3 text-xs text-amber-800">
+          <div className="border-b border-border bg-warning-subtle px-5 py-3 text-xs text-warning-fg">
             <div className="font-medium">{confirm.title}</div>
             <div className="mt-0.5">{confirm.body}</div>
             <div className="mt-2 flex gap-2">
-              <button
-                onClick={confirm.go}
-                className="inline-flex h-7 items-center rounded-md bg-danger px-3 font-medium text-white"
-              >
+              <Button size="sm" variant="danger" onClick={confirm.go}>
                 {confirm.cta}
-              </button>
-              <button onClick={() => setConfirm(null)} className="px-2 py-1 hover:underline">
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -735,7 +724,7 @@ export function TaskDrawer({
           {
             value: "history",
             label: "History",
-            badge: (task.runCount ?? 0) > 1 ? <span className="tabular text-[11px] text-fg-subtle">{task.runCount}</span> : undefined,
+            badge: (task.runCount ?? 0) > 1 ? <span className="tabular text-[11px] text-fg-muted">{task.runCount}</span> : undefined,
           },
           ...(task.boardColumn === "review" || diffOpen ? [{ value: "diff" as const, label: "Diff" }] : []),
           ...(bakeoff ? [{ value: "bakeoff" as const, label: "Bake-off" }] : []),
@@ -935,14 +924,9 @@ export function TaskDrawer({
             full={att.full}
           />
           {att.ids.length > 0 && (
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={commitAttachments}
-              disabled={att.busy || attachBusy}
-              className="inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent disabled:opacity-50"
-            >
+            <Button variant="primary" size="sm" onClick={commitAttachments} disabled={att.busy || attachBusy}>
               {attachBusy ? "Attaching…" : `Attach ${att.ids.length}`}
-            </motion.button>
+            </Button>
           )}
         </div>
       </div>
@@ -952,9 +936,9 @@ export function TaskDrawer({
           {viewing && (
             <div className="mb-3 flex items-center justify-between rounded-md bg-panel-2 px-3 py-2 text-[11px] text-fg-muted">
               <span>Showing an earlier run of this card.</span>
-              <button onClick={() => setViewing(null)} className="text-fg hover:underline">
+              <Button variant="link" size="xs" onClick={() => setViewing(null)}>
                 Back to the latest
-              </button>
+              </Button>
             </div>
           )}
           <RunStream events={events} empty="Nothing yet." />
@@ -1153,7 +1137,7 @@ function EpicPanel({
                 )}
                 <span
                   className={`shrink-0 text-[10px] ${
-                    child.stepStatus === "failed" ? "text-danger" : "text-fg-muted"
+                    child.stepStatus === "failed" ? "text-danger-fg" : "text-fg-muted"
                   }`}
                 >
                   {child.stepStatus === "failed" ? "failed" : child.boardColumn}
@@ -1218,9 +1202,9 @@ function DiffView({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <button onClick={onBack} className="text-xs text-fg-muted hover:text-fg">
+        <Button variant="ghost" size="xs" onClick={onBack}>
           ← back to stream
-        </button>
+        </Button>
         <span className="text-[11px] text-fg-muted">Click a line to comment on it</span>
       </div>
 
@@ -1241,7 +1225,7 @@ function DiffView({
                 line.kind === "add"
                   ? "text-tier-easy"
                   : line.kind === "del"
-                    ? "text-red-400"
+                    ? "text-danger-fg"
                     : line.kind === "hunk"
                       ? "text-tier-medium"
                       : "text-fg-muted"
@@ -1271,29 +1255,22 @@ function DiffView({
                   className="mt-1.5 w-full resize-none rounded-lg border border-border bg-panel px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => submit(true)}
-                    disabled={busy || !note.trim()}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                  >
+                  <Button variant="primary" size="sm" onClick={() => submit(true)} disabled={busy || !note.trim()}>
                     {busy ? "…" : "Ask to fix"}
-                  </button>
-                  <button
-                    onClick={() => submit(false)}
-                    disabled={busy || !note.trim()}
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-50"
-                  >
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => submit(false)} disabled={busy || !note.trim()}>
                     Just comment
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setOpenAt(null);
                       setNote("");
                     }}
-                    className="px-2 text-xs text-fg-muted hover:text-fg"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -1360,18 +1337,19 @@ function Description({
           Description
         </span>
         {draft === null && (
-          <button
-            onClick={() => setDraft(text)}
-            disabled={running}
+          // The kit button takes no pointer events while disabled, so the
+          // reason it is disabled rides on a wrapper that still shows it.
+          <span
             title={
               running
                 ? "The agent is working from this brief — cancel the run to rewrite it"
                 : "Edit the card's brief; the next run uses the new text"
             }
-            className="text-[11px] text-fg-muted hover:text-accent-fg disabled:opacity-40 disabled:hover:text-fg-muted"
           >
-            Edit
-          </button>
+            <Button variant="ghost" size="xs" onClick={() => setDraft(text)} disabled={running}>
+              Edit
+            </Button>
+          </span>
         )}
       </div>
 
@@ -1385,12 +1363,9 @@ function Description({
             {text}
           </div>
           {long && (
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="mt-1 text-[11px] text-accent-fg hover:underline"
-            >
+            <Button variant="link" size="xs" onClick={() => setExpanded(!expanded)} className="mt-1">
               {expanded ? "Show less" : "Show more"}
-            </button>
+            </Button>
           )}
         </>
       ) : (
@@ -1403,28 +1378,25 @@ function Description({
             className="w-full resize-y rounded-lg border border-accent bg-panel px-2.5 py-2 text-[13px] leading-relaxed outline-none"
           />
           <div className="mt-1.5 flex items-center gap-2">
-            <button
-              onClick={save}
-              disabled={saving || !draft.trim() || draft === text}
-              className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-40"
-            >
+            <Button variant="primary" size="xs" onClick={save} disabled={saving || !draft.trim() || draft === text}>
               {saving ? "Saving…" : "Save"}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={() => {
                 setDraft(null);
                 setError(null);
               }}
-              className="rounded-lg border border-border px-2.5 py-1 text-[11px] hover:border-fg-muted"
             >
               Cancel
-            </button>
+            </Button>
             {!draft.trim() && (
-              <span className="text-[11px] text-danger">the description can't be empty</span>
+              <span className="text-[11px] text-danger-fg">the description can't be empty</span>
             )}
           </div>
           {error && (
-            <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+            <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
               {error}
             </div>
           )}
@@ -1542,23 +1514,20 @@ function StatusMover({
       </div>
       {estimate && !ask && <div className="mt-1.5 text-[11px] text-fg-muted">Starting it: {estimate}</div>}
       {ask && (
-        <div className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+        <div className="mt-1.5 rounded-lg bg-warning-subtle px-2.5 py-1.5 text-[11px] text-warning-fg">
           {ask.message.charAt(0).toUpperCase() + ask.message.slice(1)}.
           <div className="mt-1.5 flex gap-2">
-            <button
-              onClick={() => move("running", true)}
-              className="rounded-md bg-accent px-2 py-0.5 font-medium text-white"
-            >
+            <Button variant="primary" size="xs" onClick={() => move("running", true)}>
               Start anyway
-            </button>
-            <button onClick={() => setAsk(null)} className="rounded-md border border-amber-300 px-2 py-0.5">
+            </Button>
+            <Button variant="secondary" size="xs" onClick={() => setAsk(null)}>
               Not now
-            </button>
+            </Button>
           </div>
         </div>
       )}
       {error && (
-        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+        <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
           {error}
         </div>
       )}
@@ -1692,17 +1661,14 @@ function Blockers({
           Blocked by
         </span>
         {!adding && candidates.length > 0 && (
-          <button
-            onClick={() => setAdding(true)}
-            className="text-[11px] text-fg-muted hover:text-accent-fg"
-          >
+          <Button variant="ghost" size="xs" onClick={() => setAdding(true)}>
             + Add
-          </button>
+          </Button>
         )}
       </div>
 
       {task.blockedNote && (
-        <div className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+        <div className="mb-2 rounded-lg bg-warning-subtle px-2.5 py-1.5 text-[11px] text-warning-fg">
           <span className="font-medium">The agent reported it is stuck:</span> {task.blockedNote}
         </div>
       )}
@@ -1728,11 +1694,11 @@ function Blockers({
                 className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
                   landed
                     ? "bg-tier-easy/10 text-tier-easy"
-                    : "bg-amber-50 text-amber-700"
+                    : "bg-warning-subtle text-warning-fg"
                 }`}
                 title={landed ? "Landed — no longer blocking" : "Not landed yet — still blocking"}
               >
-                <span className={`size-1.5 rounded-full ${landed ? "bg-tier-easy" : "bg-amber-400"}`} />
+                <span className={`size-1.5 rounded-full ${landed ? "bg-tier-easy" : "bg-warning"}`} />
                 {full && onOpenTask ? (
                   <button onClick={() => onOpenTask(full)} className="hover:underline">
                     {b.title}
@@ -1787,7 +1753,7 @@ function Blockers({
       )}
 
       {error && (
-        <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-danger">
+        <div className="mt-1.5 rounded-lg bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
           {error}
         </div>
       )}

@@ -5,6 +5,7 @@ import { Agent, Manager, ManagerPass, WakeKind, api } from "../lib/api";
 import { Checkbox, Select } from "./ui/Field";
 import { Preset, WEEKDAYS, compile, describeCron, recognize, relative } from "../lib/cron";
 import { Icon } from "./ui/Icon";
+import { Button, buttonClasses } from "./ui/Button";
 
 /** What can wake the manager before its schedule, as the editor says it. */
 const WAKES: { kind: WakeKind; label: string }[] = [
@@ -373,43 +374,37 @@ export function ManagerPanel({
           </div>
 
           {error && (
-            <div className="rounded-lg border border-danger/40 bg-danger/5 px-2.5 py-1.5 text-xs text-danger">
+            <div className="rounded-lg border border-danger/40 bg-danger-subtle px-2.5 py-1.5 text-xs text-danger-fg">
               {error}
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <button
-              onClick={save}
-              disabled={busy || (!dirty && !!manager)}
-              className="ring-focus rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-40"
-            >
+            <Button variant="primary" size="sm" onClick={save} disabled={busy || (!dirty && !!manager)}>
               {manager ? "Save" : "Assign a manager"}
-            </button>
+            </Button>
             {manager && (
               <>
-                <button
-                  onClick={() => run(() => api.managerRunNow(projectId))}
-                  disabled={busy}
-                  className="ring-focus rounded-lg border border-border px-3 py-1.5 text-xs hover:border-accent hover:text-accent-fg disabled:opacity-40"
-                >
+                <Button size="sm" onClick={() => run(() => api.managerRunNow(projectId))} disabled={busy}>
                   Run a pass now
-                </button>
+                </Button>
                 {manager.chatId && (
                   <Link
                     to={`/chat?project=${projectId}&chat=${manager.chatId}`}
-                    className="ring-focus rounded-lg border border-border px-3 py-1.5 text-xs hover:border-accent hover:text-accent-fg"
+                    className={buttonClasses({ size: "sm" })}
                   >
                     Open its thread
                   </Link>
                 )}
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => run(() => api.managerRemove(projectId))}
                   disabled={busy}
-                  className="ring-focus ml-auto rounded-lg px-3 py-1.5 text-xs text-fg-muted hover:text-danger disabled:opacity-40"
+                  className="ml-auto"
                 >
                   Unassign
-                </button>
+                </Button>
               </>
             )}
           </div>
@@ -463,7 +458,7 @@ export function ManagerPanel({
                       )}
                     </div>
                     {p.error ? (
-                      <p className="mt-1 text-xs text-danger">{p.error}</p>
+                      <p className="mt-1 text-xs text-danger-fg">{p.error}</p>
                     ) : p.actions.length === 0 ? (
                       // Said out loud rather than left blank: "it looked and
                       // decided nothing needed doing" is a real outcome, and an
@@ -480,7 +475,7 @@ export function ManagerPanel({
                                 a.kind === "start"
                                   ? "bg-accent/10 text-accent-fg"
                                   : a.kind === "cancel"
-                                    ? "bg-danger/10 text-danger"
+                                    ? "bg-danger-subtle text-danger-fg"
                                     : "bg-panel-2 text-fg-muted"
                               }`}
                             >

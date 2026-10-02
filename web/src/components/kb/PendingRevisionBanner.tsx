@@ -3,6 +3,8 @@ import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { api, Revision, RevisionDiff } from "../../lib/api";
 import { annotateDiff } from "../../lib/diff";
+import { Button } from "../ui/Button";
+import { Textarea } from "../ui/Field";
 
 /**
  * An agent has rewritten this page and is waiting for you.
@@ -68,10 +70,10 @@ export function PendingRevisionBanner({
     <motion.div
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mb-5 rounded-xl border border-amber-300 bg-amber-50/60 p-4"
+      className="mb-5 rounded-xl border border-warning/40 bg-warning-subtle p-4"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold text-amber-900">
+        <span className="text-sm font-semibold text-warning-fg">
           An agent proposed a revision
           {diff && (
             <span className="ml-1.5 font-normal">
@@ -79,18 +81,15 @@ export function PendingRevisionBanner({
             </span>
           )}
         </span>
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="text-xs text-fg-muted hover:text-fg"
-        >
+        <Button variant="ghost" size="xs" onClick={() => setExpanded((v) => !v)}>
           {expanded ? "Hide the diff" : "Show the diff"}
-        </button>
+        </Button>
       </div>
-      <p className="mt-1 text-xs text-amber-900/80">
+      <p className="mt-1 text-xs text-fg">
         Nothing has changed yet — this page is exactly as you left it.
       </p>
       {stale && (
-        <p className="mt-1.5 text-xs font-medium text-amber-900">
+        <p className="mt-1.5 text-xs font-medium text-warning-fg">
           You edited this page after the agent started. The diff below is
           against revision {revision.baseSeq}, not the version you are reading.
         </p>
@@ -103,67 +102,60 @@ export function PendingRevisionBanner({
       )}
 
       {error && (
-        <div className="mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+        <div className="mt-2 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">
           {error}
         </div>
       )}
 
       {asking ? (
         <div className="mt-3">
-          <textarea
+          <Textarea
             autoFocus
             value={note}
             onChange={(e) => setNote(e.target.value)}
             rows={2}
             placeholder="What was wrong with it? Kept on the page's history."
-            className="w-full resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+            className="resize-none"
           />
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
+              size="sm"
               disabled={!!busy}
               onClick={() =>
                 act("discard", () =>
                   api.discardRevision(pageId, revision.seq, note.trim()),
                 )
               }
-              className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs font-medium disabled:opacity-50"
             >
               {busy === "discard" ? "Discarding…" : "Discard it"}
-            </button>
-            <button
-              onClick={() => setAsking(false)}
-              className="text-xs text-fg-muted hover:text-fg"
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setAsking(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap gap-2">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
+          <Button
+            variant="primary"
+            size="sm"
             disabled={!!busy}
             onClick={() => act("accept", () => api.acceptRevision(pageId, revision.seq))}
-            className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {busy === "accept" ? "Accepting…" : "Accept"}
-          </motion.button>
+          </Button>
           {/* The 90%-right case. Retyping feedback and paying for another pass
               to fix one line is worse than fixing the line. */}
-          <button
+          <Button
+            size="sm"
             disabled={!!busy}
             onClick={() => act("edit", () => api.acceptRevision(pageId, revision.seq))}
-            className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
           >
             Accept and edit
-          </button>
-          <button
-            disabled={!!busy}
-            onClick={() => setAsking(true)}
-            className="rounded-lg border border-border bg-panel px-3.5 py-1.5 text-xs hover:bg-panel-2 disabled:opacity-50"
-          >
+          </Button>
+          <Button size="sm" disabled={!!busy} onClick={() => setAsking(true)}>
             Discard
-          </button>
+          </Button>
         </div>
       )}
     </motion.div>
@@ -180,9 +172,9 @@ export function DiffBody({ unified }: { unified: string }) {
           key={i}
           className={
             l.kind === "add"
-              ? "bg-green-50 text-green-900"
+              ? "bg-success-subtle text-success-fg"
               : l.kind === "del"
-                ? "bg-red-50 text-red-900"
+                ? "bg-danger-subtle text-danger-fg"
                 : l.kind === "meta" || l.kind === "hunk"
                   ? "text-fg-muted"
                   : ""

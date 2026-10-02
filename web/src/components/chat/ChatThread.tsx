@@ -20,6 +20,7 @@ import { useMentionPicker } from "../MentionPicker";
 import { ArticlePicker } from "../kb/ArticlePicker";
 import { QuestionCard } from "./QuestionCard";
 import { Markdown } from "../Markdown";
+import { Button } from "../ui/Button";
 
 /**
  * One conversation: the scroller, the live run, and the composer.
@@ -421,7 +422,7 @@ export function ChatThread({
       </div>
 
       {error && (
-        <div className="mx-4 mb-1 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-danger">
+        <div className="mx-4 mb-1 rounded-lg bg-danger-subtle px-3 py-1.5 text-xs text-danger-fg">
           {error}
         </div>
       )}
@@ -503,28 +504,28 @@ export function ChatThread({
                   A separate Stop elsewhere on the page would be a second
                   thing to find at the moment you least want to look. */}
               {activeRunId ? (
-                <motion.button
-                  whileTap={{ scale: 0.92 }}
+                <Button
+                  variant="primary"
                   onClick={stop}
                   disabled={stopping}
                   title="Stop — keeps what it has said so far"
                   aria-label="Stop the assistant"
-                  className="rounded-lg bg-fg px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                  className="bg-fg! px-2.5! text-bg! hover:bg-fg/85! disabled:opacity-40!"
                 >
                   ■
-                </motion.button>
+                </Button>
               ) : (
-                <motion.button
-                  whileTap={{ scale: 0.92 }}
+                <Button
+                  variant="primary"
                   onClick={send}
                   disabled={
                     att.busy ||
                     (!draft.trim() && att.ids.length === 0 && articleIds.length === 0)
                   }
-                  className="rounded-lg bg-accent px-2.5 py-1.5 text-sm text-white disabled:opacity-40"
+                  className="px-2.5! disabled:opacity-40!"
                 >
                   ↑
-                </motion.button>
+                </Button>
               )}
             </div>
             {/* Which CLI, which model, and how hard it thinks. All three stick to
@@ -557,8 +558,8 @@ export function ChatThread({
                   }
                   className={`ring-focus rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
                     planMode
-                      ? "bg-accent/10 font-medium text-accent-fg"
-                      : "text-fg-muted hover:bg-border/40 hover:text-fg"
+                      ? "bg-accent-subtle font-medium text-accent-fg"
+                      : "text-fg-muted hover:bg-panel-2 hover:text-fg"
                   }`}
                 >
                   ◷ Plan{planMode ? " mode" : ""}
@@ -613,7 +614,7 @@ function Message({
           </div>
         )}
         {message.content && (
-          <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-white">
+          <div className="rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm whitespace-pre-wrap text-on-accent">
             <WithMentions text={message.content} agentNames={agentNames} />
           </div>
         )}
@@ -703,18 +704,12 @@ function PlanActions({
           className="ring-focus w-full resize-y rounded-lg border border-border bg-panel p-2 font-mono text-[11px] outline-none focus:border-accent"
         />
         <div className="mt-1.5 flex gap-1.5">
-          <button
-            onClick={() => onApprove(message.id, editing)}
-            className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
-          >
+          <Button variant="primary" size="xs" onClick={() => onApprove(message.id, editing)}>
             Approve this version
-          </button>
-          <button
-            onClick={() => setEditing(null)}
-            className="ring-focus rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:text-fg"
-          >
+          </Button>
+          <Button variant="secondary" size="xs" onClick={() => setEditing(null)}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -722,18 +717,12 @@ function PlanActions({
 
   return (
     <div className="mt-2 flex items-center gap-1.5 border-t border-accent/20 pt-1.5">
-      <button
-        onClick={() => onApprove(message.id)}
-        className="ring-focus rounded-lg bg-accent px-2.5 py-1 text-[11px] text-white"
-      >
+      <Button variant="primary" size="xs" onClick={() => onApprove(message.id)}>
         Approve &amp; run
-      </button>
-      <button
-        onClick={() => setEditing(message.content)}
-        className="ring-focus rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:text-fg"
-      >
+      </Button>
+      <Button variant="secondary" size="xs" onClick={() => setEditing(message.content)}>
         Edit first
-      </button>
+      </Button>
       <span className="text-[10px] text-fg-muted">or just say what to change</span>
     </div>
   );
@@ -758,7 +747,7 @@ function WithMentions({ text, agentNames }: { text: string; agentNames: string[]
     parts.push(
       <span
         key={i}
-        className="rounded bg-white/25 px-1 font-medium"
+        className="rounded bg-[color-mix(in_oklab,var(--color-on-accent)_25%,transparent)] px-1 font-medium"
         title={`Assigned to ${span.name}`}
       >
         {text.slice(span.start, span.end)}

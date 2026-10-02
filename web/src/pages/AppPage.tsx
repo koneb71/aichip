@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppDetail } from "../lib/api";
 import { AppView } from "../components/apps/AppView";
@@ -11,6 +11,8 @@ import { BuildHistory } from "../components/apps/BuildHistory";
 import { ChangeAppModal } from "../components/apps/ChangeAppModal";
 import { DockerfileGate } from "../components/apps/DockerfileGate";
 import { springy } from "../lib/motion";
+import { Button, buttonClasses } from "../components/ui/Button";
+import { Textarea } from "../components/ui/Field";
 
 /** One app: its screens, and the two things that can be wrong with it. */
 export default function AppPage() {
@@ -114,7 +116,7 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, false)}
           download
           title="The app, with empty tables — what you send someone."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
+          className={buttonClasses({ size: "sm" })}
         >
           Share
         </a>
@@ -122,42 +124,29 @@ export default function AppPage() {
           href={api.appExportUrl(app.id, true)}
           download
           title="The app and everything in it — what you carry to another machine."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
+          className={buttonClasses({ size: "sm" })}
         >
           Export with data
         </a>
         <Link
           to={`/projects/${app.projectId}`}
           title="This app's own folder, in the files editor."
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
+          className={buttonClasses({ size: "sm" })}
         >
           Files
         </Link>
-        <button
-          onClick={() => setPerms((p) => !p)}
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
-        >
+        <Button size="sm" onClick={() => setPerms((p) => !p)}>
           Permissions
-        </button>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={() => setChanging(true)}
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110"
-        >
+        </Button>
+        <Button variant="primary" size="sm" onClick={() => setChanging(true)}>
           Change this app
-        </motion.button>
-        <button
-          onClick={() => setEditing(editing === null ? app.manifest : null)}
-          className="ring-focus inline-flex items-center gap-1.5 rounded-xl border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-fg-muted/40 hover:bg-panel-2"
-        >
+        </Button>
+        <Button size="sm" onClick={() => setEditing(editing === null ? app.manifest : null)}>
           {editing === null ? "Manifest" : "Close"}
-        </button>
-        <button
-          onClick={uninstall}
-          className="ring-focus rounded-xl px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-red-50"
-        >
+        </Button>
+        <Button variant="danger" size="sm" onClick={uninstall}>
           Uninstall
-        </button>
+        </Button>
       </div>
 
       {app.pending && (
@@ -171,43 +160,35 @@ export default function AppPage() {
       )}
 
       {app.manifestError && (
-        <div className="mb-4 rounded-xl border border-red-300 bg-red-50 p-4">
-          <div className="text-sm font-semibold text-danger">
+        <div className="mb-4 rounded-xl border border-danger/40 bg-danger-subtle p-4">
+          <div className="text-sm font-semibold text-danger-fg">
             This app's manifest has an error, so none of its screens can be drawn.
           </div>
-          <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-danger">
+          <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-danger-fg">
             {app.manifestError}
           </pre>
-          <button
-            onClick={() => setEditing(app.manifest)}
-            className="ring-focus mt-3 rounded-xl border border-red-300 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-red-50"
-          >
+          <Button variant="danger" size="sm" onClick={() => setEditing(app.manifest)} className="mt-3">
             Fix it
-          </button>
+          </Button>
         </div>
       )}
 
       {error && (
-        <div className="mb-4 rounded-xl bg-red-50 px-3.5 py-2.5 text-xs text-danger">{error}</div>
+        <div className="mb-4 rounded-xl bg-danger-subtle px-3.5 py-2.5 text-xs text-danger-fg">{error}</div>
       )}
 
       {editing !== null ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <textarea
+          <Textarea
             value={editing}
             onChange={(e) => setEditing(e.target.value)}
             spellCheck={false}
-            className="min-h-0 flex-1 resize-none rounded-xl border border-border bg-bg p-3 font-mono text-xs outline-none focus:border-accent"
+            className="min-h-0! flex-1 resize-none rounded-xl! p-3! font-mono text-xs!"
           />
           <div className="mt-3 flex items-center gap-2">
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={saveManifest}
-              disabled={busy}
-              className="ring-focus inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-semibold text-white shadow-[0_2px_10px_-2px_var(--color-accent)] transition-[filter] hover:brightness-110 disabled:opacity-50"
-            >
+            <Button variant="primary" size="sm" onClick={saveManifest} disabled={busy}>
               Save
-            </motion.button>
+            </Button>
             <span className="text-xs text-fg-muted">
               New tables and columns apply themselves. Anything that would lose data waits for
               you.
@@ -276,18 +257,16 @@ export default function AppPage() {
         </>
       )}
 
-      <AnimatePresence>
-        {changing && (
-          <ChangeAppModal
-            app={app}
-            onClose={() => setChanging(false)}
-            onStarted={() => {
-              setChanging(false);
-              refresh();
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {changing && (
+        <ChangeAppModal
+          app={app}
+          onClose={() => setChanging(false)}
+          onStarted={() => {
+            setChanging(false);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
