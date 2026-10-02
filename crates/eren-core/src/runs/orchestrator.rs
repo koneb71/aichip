@@ -2444,7 +2444,7 @@ project, or run this card on an engine with a narrower mode.",
             extra_read_dirs,
             // Nothing to approve during planning, so nothing to ask about.
             permission_prompt_tool: !read_only,
-            extra_env: HashMap::from([
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([
                 ("EREN_RUN_ID".to_string(), run_id.to_string()),
                 // Permission prompts block the MCP tools/call until the user
                 // answers in the dashboard, so the CLI has to be willing to
@@ -2457,7 +2457,7 @@ project, or run this card on an engine with a narrower mode.",
                 // server that misses this window fails every tool call after
                 // it with an unhelpful "operation timed out".
                 ("MCP_TIMEOUT".to_string(), "180000".to_string()),
-            ]),
+            ])),
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
@@ -2958,7 +2958,10 @@ project, or run this card on an engine with a narrower mode.",
             run_key: run_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
-            extra_env: HashMap::from([("EREN_RUN_ID".to_string(), run_id.to_string())]),
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([(
+                "EREN_RUN_ID".to_string(),
+                run_id.to_string(),
+            )])),
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
@@ -3168,11 +3171,7 @@ project, or run this card on an engine with a narrower mode.",
                 // A scratch directory, the utility-run precedent — the agent
                 // has to stand somewhere, and it must not be anywhere with
                 // files worth reading.
-                let scratch = std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".eren")
-                    .join("tmp");
+                let scratch = eren_shared::brand::home().join("tmp");
                 tokio::fs::create_dir_all(&scratch).await?;
                 (
                     scratch,
@@ -3229,7 +3228,10 @@ project, or run this card on an engine with a narrower mode.",
             run_key: run_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
-            extra_env: HashMap::from([("EREN_RUN_ID".to_string(), run_id.to_string())]),
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([(
+                "EREN_RUN_ID".to_string(),
+                run_id.to_string(),
+            )])),
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
@@ -3525,11 +3527,7 @@ project, or run this card on an engine with a narrower mode.",
                 SPACE_CHAT_SYSTEM_PROMPT,
             ),
             None => {
-                let scratch = std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".eren")
-                    .join("tmp");
+                let scratch = eren_shared::brand::home().join("tmp");
                 tokio::fs::create_dir_all(&scratch).await?;
                 (
                     scratch,
@@ -3583,7 +3581,10 @@ project, or run this card on an engine with a narrower mode.",
             run_key: run_id.to_string(),
             extra_read_dirs,
             permission_prompt_tool: false,
-            extra_env: HashMap::from([("EREN_CHAT_ID".to_string(), chat_id.to_string())]),
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([(
+                "EREN_CHAT_ID".to_string(),
+                chat_id.to_string(),
+            )])),
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
@@ -3850,7 +3851,10 @@ project, or run this card on an engine with a narrower mode.",
             run_key: run_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
-            extra_env: HashMap::from([("EREN_RUN_ID".to_string(), run_id.to_string())]),
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([(
+                "EREN_RUN_ID".to_string(),
+                run_id.to_string(),
+            )])),
         };
 
         let seq = SeqAlloc::starting_at(next_seq(&self.db, run_id).await?);
@@ -4187,11 +4191,11 @@ this workflow manually."
                             run_key: db_step_id.to_string(),
                             extra_read_dirs: vec![],
                             permission_prompt_tool: true,
-                            extra_env: HashMap::from([
+                            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([
                                 ("EREN_RUN_ID".to_string(), run_id.to_string()),
                                 ("EREN_STEP".to_string(), step_key.clone()),
                                 ("MCP_TOOL_TIMEOUT".to_string(), tool_timeout_ms.clone()),
-                            ]),
+                            ])),
                         };
                         async move {
                             let outcome = this
@@ -4572,7 +4576,11 @@ this workflow manually."
             effort: r
                 .get::<Option<String>, _>("effort")
                 .and_then(|e| ReasoningEffort::parse(&e)),
-            allowed_tools: r.get("allowed_tools"),
+            allowed_tools: {
+                let mut tools: Vec<String> = r.get("allowed_tools");
+                eren_shared::brand::rename_tools(&mut tools);
+                tools
+            },
             permission_preset: r.get("permission_preset"),
             engine: r.get("engine"),
         }))

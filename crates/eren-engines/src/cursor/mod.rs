@@ -42,7 +42,8 @@ pub struct CursorEngine {
 impl Default for CursorEngine {
     fn default() -> Self {
         Self {
-            binary: std::env::var("EREN_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".to_string()),
+            binary: eren_shared::brand::var("CURSOR_BIN")
+                .unwrap_or_else(|| "cursor-agent".to_string()),
         }
     }
 }

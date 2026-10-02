@@ -20,6 +20,7 @@ pub mod inbox;
 pub mod kb;
 pub mod landing;
 pub mod leftovers;
+pub mod legacy;
 pub mod local_models;
 pub mod manager;
 pub mod mcp_servers;

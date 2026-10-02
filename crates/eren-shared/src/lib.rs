@@ -1,4 +1,5 @@
 pub mod auto_tier;
+pub mod brand;
 pub mod effort;
 pub mod env_guard;
 pub mod events;
@@ -14,7 +15,7 @@ pub use auto_tier::{
     Signals as TierSignals,
 };
 pub use effort::{resolve_effort, EffortSource, ReasoningEffort};
-pub use env_guard::{auth_env_refusal, is_auth_env, EREN_OWN_SECRETS};
+pub use env_guard::{auth_env_refusal, is_auth_env, own_secrets};
 pub use events::{ErenEvent, EventEnvelope, Usage};
 pub use mcp::{McpServerSpec, McpTransport, McpWiring};
 pub use model_tier::{

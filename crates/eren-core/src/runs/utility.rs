@@ -5,7 +5,6 @@
 use eren_engines::{Engine, RunSpec};
 use eren_shared::{ErenEvent, ModelTier, PermissionMode, ReasoningEffort};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,7 +35,7 @@ pub async fn utility_run(
     effort: Option<ReasoningEffort>,
     timeout: Duration,
 ) -> anyhow::Result<String> {
-    let cwd = home().join(".eren").join("tmp");
+    let cwd = eren_shared::brand::home().join("tmp");
     tokio::fs::create_dir_all(&cwd).await?;
 
     let spec = RunSpec {
@@ -125,12 +124,6 @@ pub fn extract_json(text: &str) -> anyhow::Result<serde_json::Value> {
         }
     }
     anyhow::bail!("no parseable JSON in output")
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]

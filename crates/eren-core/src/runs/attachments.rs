@@ -28,13 +28,7 @@ pub struct Attachment {
 /// One directory per attachment, so two files called `screenshot.png` never
 /// collide and deleting one is a single `remove_dir_all`.
 pub fn default_root() -> PathBuf {
-    home().join(".eren").join("attachments")
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    eren_shared::brand::home().join("attachments")
 }
 
 pub async fn for_task(db: &Db, task_id: Uuid) -> anyhow::Result<Vec<Attachment>> {

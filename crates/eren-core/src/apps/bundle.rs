@@ -110,7 +110,7 @@ pub fn write(
 
     let doc = json!({
         "format": FORMAT,
-        "kind": "eren-app",
+        "kind": eren_shared::brand::BUNDLE_KIND,
         "app": {
             "name": parsed.name,
             "icon": parsed.icon,
@@ -136,7 +136,10 @@ pub fn read(text: &str) -> Result<Bundle, BundleError> {
     let doc: Value = serde_json::from_str(text)
         .map_err(|e| BundleError(format!("this is not a bundle: {e}")))?;
 
-    if doc.get("kind").and_then(Value::as_str) != Some("eren-app") {
+    // Either kind: a bundle exported before the rename is a file somebody
+    // saved, and is still a bundle.
+    let kind = doc.get("kind").and_then(Value::as_str).unwrap_or("");
+    if !eren_shared::brand::BUNDLE_KINDS.contains(&kind) {
         return bad("this file is not an Eren app bundle");
     }
     match doc.get("format").and_then(Value::as_u64) {
@@ -279,6 +282,15 @@ mod tests {
         let text = r#"{"kind":"eren-app","format":99,"manifest":"name: T"}"#;
         let e = read(text).unwrap_err();
         assert!(e.0.contains("update Eren"), "{e}");
+    }
+
+    #[test]
+    fn a_bundle_exported_before_the_rename_still_installs() {
+        let m = parsed(TWO);
+        let mut doc: Value = serde_json::from_str(&write("name: T", &m, "", &[])).unwrap();
+        doc["kind"] = json!(eren_shared::brand::BUNDLE_KINDS[1]);
+        let back = read(&doc.to_string()).unwrap();
+        assert_eq!(back.manifest, "name: T");
     }
 
     #[test]

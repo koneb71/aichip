@@ -700,13 +700,12 @@ mod tests {
     #[tokio::test]
     async fn a_check_does_not_inherit_erens_secrets() {
         let dir = tempfile::tempdir().unwrap();
-        let printenv = eren_shared::EREN_OWN_SECRETS
-            .iter()
+        let printenv = eren_shared::own_secrets()
             .map(|k| format!("printf '%s=%s;' {k} \"${k}\""))
             .collect::<Vec<_>>()
             .join("; ");
         let r = run_one(dir.path(), &check(&printenv), Duration::from_secs(10)).await;
-        for key in eren_shared::EREN_OWN_SECRETS {
+        for key in eren_shared::own_secrets() {
             assert!(
                 r.output_tail.contains(&format!("{key}=;")),
                 "{}",

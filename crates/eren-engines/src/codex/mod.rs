@@ -72,7 +72,7 @@ pub struct CodexEngine {
 impl Default for CodexEngine {
     fn default() -> Self {
         Self {
-            binary: std::env::var("EREN_CODEX_BIN").unwrap_or_else(|_| "codex".to_string()),
+            binary: eren_shared::brand::var("CODEX_BIN").unwrap_or_else(|| "codex".to_string()),
         }
     }
 }

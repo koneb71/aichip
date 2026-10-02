@@ -98,7 +98,10 @@ fn local_provider(model_id: &str, extra_env: &HashMap<String, String>) -> Option
         return None;
     }
     let base = extra_env
-        .get(&format!("EREN_{}_HOST", id.to_uppercase()))
+        .get(&eren_shared::brand::env_name(&format!(
+            "{}_HOST",
+            id.to_uppercase()
+        )))
         .map(String::as_str)
         .unwrap_or(default_base)
         .trim_end_matches('/');

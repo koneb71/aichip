@@ -21,6 +21,7 @@ import { ArticlePicker } from "../kb/ArticlePicker";
 import { QuestionCard } from "./QuestionCard";
 import { Markdown } from "../Markdown";
 import { Button } from "../ui/Button";
+import { toolName } from "../../lib/brand";
 
 /**
  * One conversation: the scroller, the live run, and the composer.
@@ -760,7 +761,8 @@ function WithMentions({ text, agentNames }: { text: string; agentNames: string[]
   return <>{parts}</>;
 }
 
-function ToolChip({ name, input }: { name: string; input: unknown }) {
+function ToolChip({ name: recorded, input }: { name: string; input: unknown }) {
+  const name = toolName(recorded);
   const label = (() => {
     const args = (input ?? {}) as Record<string, unknown>;
     if (name === "mcp__eren__create_task") {

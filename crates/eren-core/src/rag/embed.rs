@@ -61,11 +61,7 @@ pub async fn embed_batch(texts: Vec<String>) -> anyhow::Result<Vec<Vec<f32>>> {
         let cell = EMBEDDER.get_or_init(|| Mutex::new(None));
         let mut guard = cell.lock().unwrap();
         if guard.is_none() {
-            let cache = std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".eren")
-                .join("models");
+            let cache = eren_shared::brand::home().join("models");
             std::fs::create_dir_all(&cache)?;
             let model = TextEmbedding::try_new(
                 TextInitOptions::new(EmbeddingModel::BGESmallENV15Q)

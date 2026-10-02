@@ -20,6 +20,17 @@ pub const METHODS: [&str; 8] = [
     "me", "schema", "list", "get", "create", "update", "remove", "api",
 ];
 
+/// The client as served: [`CLIENT_JS`], plus the global an app built before
+/// the rename calls — its own files use the old name, and Eren does not
+/// rewrite an app's files.
+pub fn client_js() -> String {
+    format!(
+        "{CLIENT_JS}window.{} = window.{};\n",
+        eren_shared::brand::LEGACY_APP_GLOBAL,
+        eren_shared::brand::NAME
+    )
+}
+
 pub const CLIENT_JS: &str = r#"// Eren app client. Served by Eren; do not vendor a copy.
 //
 // Every call carries X-Eren-App, which is what makes this API unreachable
@@ -161,6 +172,14 @@ mod tests {
         // ever appears, this is the test that should start failing.
         assert_eq!(CLIENT_JS.matches("fetch(").count(), 1);
         assert!(CLIENT_JS.contains("\"X-Eren-App\": \"1\""));
+        // And an app from before the rename finds the same object under the
+        // name it calls.
+        let served = client_js();
+        assert!(served.starts_with(CLIENT_JS));
+        assert!(served.ends_with(&format!(
+            "window.{} = window.eren;\n",
+            eren_shared::brand::LEGACY_APP_GLOBAL
+        )));
     }
 
     #[test]

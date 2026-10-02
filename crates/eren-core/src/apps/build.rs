@@ -325,7 +325,7 @@ pub async fn revert(db: &Db, id: Uuid) -> anyhow::Result<App> {
 /// folder, happens here — through the same function a person's edit uses, so
 /// there is one path that reconciles a schema and one gate in front of it.
 async fn adopt_manifest(db: &Db, app: &App) -> anyhow::Result<()> {
-    let text = tokio::fs::read_to_string(app.path.join(super::MANIFEST_FILE))
+    let text = tokio::fs::read_to_string(eren_shared::brand::app_manifest(&app.path))
         .await
         .map_err(|_| anyhow::anyhow!("the change removed {}", super::MANIFEST_FILE))?;
     if text.trim() == app.manifest.trim() {

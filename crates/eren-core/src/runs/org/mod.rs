@@ -1476,10 +1476,10 @@ impl Orchestrator {
             run_key: step_id.to_string(),
             extra_read_dirs: vec![],
             permission_prompt_tool: false,
-            extra_env: HashMap::from([
+            extra_env: eren_shared::brand::with_legacy_env(HashMap::from([
                 ("EREN_RUN_ID".to_string(), ctx.run_id.to_string()),
                 ("MCP_TOOL_TIMEOUT".to_string(), tool_timeout_ms.clone()),
-            ]),
+            ])),
         };
 
         // The step row is what the live view reads to show who's busy, so

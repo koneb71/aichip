@@ -706,12 +706,9 @@ async fn create_space(
             s.chars().take(40).collect()
         }
     };
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no HOME".to_string()))?;
     // Suffix on collision rather than ON CONFLICT-reuse: two spaces named
     // "notes" are two spaces, not one folder shared by surprise.
-    let base = home.join(".eren").join("spaces");
+    let base = eren_shared::brand::home().join("spaces");
     let mut dir = base.join(&slug);
     let mut n = 2;
     while dir.exists() {

@@ -95,11 +95,7 @@ impl Default for OpenCodeEngine {
 
 /// Write the persona to a file, because `instructions` takes paths.
 fn write_instructions(run_key: &str, body: &str) -> anyhow::Result<PathBuf> {
-    let dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".eren")
-        .join("prompts");
+    let dir = eren_shared::brand::home().join("prompts");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{run_key}.md"));
     std::fs::write(&path, body)?;

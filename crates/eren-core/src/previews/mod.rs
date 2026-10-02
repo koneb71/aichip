@@ -750,8 +750,7 @@ pub async fn start(db: &Db, task_id: Uuid) -> anyhow::Result<Preview> {
 /// only read while someone is looking at that one preview, and a row that big
 /// would be carried by every query that touches the table.
 pub fn build_log_path(id: Uuid) -> PathBuf {
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join(".eren")
+    eren_shared::brand::home()
         .join("previews")
         .join(format!("{}.log", recipe::container_name(&id)))
 }
@@ -762,8 +761,7 @@ pub fn build_log_path(id: Uuid) -> PathBuf {
 /// immediately afterwards and `compose logs` cannot speak for a project that
 /// is gone. This file is the only remaining record of why.
 pub fn output_log_path(id: Uuid) -> PathBuf {
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join(".eren")
+    eren_shared::brand::home()
         .join("previews")
         .join(format!("{}.out", recipe::container_name(&id)))
 }
@@ -809,8 +807,7 @@ pub async fn logs(db: &Db, preview_id: Uuid) -> anyhow::Result<(String, String)>
 
 /// The rewritten file a preview project name implies.
 fn compose_path_for_name(project: &str) -> PathBuf {
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join(".eren")
+    eren_shared::brand::home()
         .join("previews")
         .join(format!("{project}.yaml"))
 }
@@ -821,8 +818,7 @@ fn compose_path_for_name(project: &str) -> PathBuf {
 /// file to the diff someone is reviewing, and the rewrite is Eren's business
 /// rather than the project's.
 async fn compose_file_for(id: Uuid, contents: &str) -> std::io::Result<PathBuf> {
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    let dir = home.join(".eren").join("previews");
+    let dir = eren_shared::brand::home().join("previews");
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{}.yaml", recipe::container_name(&id)));
     tokio::fs::write(&path, contents).await?;
@@ -1295,11 +1291,14 @@ pub async fn reconcile(db: &Db) -> anyhow::Result<(u64, usize)> {
     // again. Derived from the id rather than read from the row because a
     // preview that died mid-build never recorded one.
     for id in &dead {
-        docker::remove(&recipe::container_name(id)).await;
-        docker::remove_image(&recipe::image_tag(id)).await;
-        // A stack builds one image per service, all under the same prefix.
-        for tag in docker::images_for(&recipe::container_name(id)).await {
-            docker::remove_image(&tag).await;
+        // Under every name, so a preview from before the rename goes too.
+        for (image, container) in recipe::every_name(id) {
+            docker::remove(&container).await;
+            docker::remove_image(&image).await;
+            // A stack builds one image per service, all under the same prefix.
+            for tag in docker::images_for(&container).await {
+                docker::remove_image(&tag).await;
+            }
         }
     }
 

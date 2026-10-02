@@ -92,7 +92,7 @@ impl Runtime {
 
     /// The variable [`config::local_provider`] reads the address out of.
     fn host_env(self) -> String {
-        format!("EREN_{}_HOST", self.id().to_uppercase())
+        eren_shared::brand::env_name(&format!("{}_HOST", self.id().to_uppercase()))
     }
 
     /// Where to look for the runtime's own CLI.

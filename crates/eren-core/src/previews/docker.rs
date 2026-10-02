@@ -15,6 +15,14 @@ const DOCKER: &str = "docker";
 /// and can never touch one the user started themselves.
 pub const OWNER_LABEL: &str = "com.eren.preview";
 
+/// [`OWNER_LABEL`] under every name the product has had. Finding is by all of
+/// them; labelling is only ever by the current one.
+fn owner_labels() -> impl Iterator<Item = String> {
+    eren_shared::brand::NAMES
+        .iter()
+        .map(|n| format!("label=com.{n}.preview=1"))
+}
+
 /// Is Docker here *and* running? `None` means the CLI is missing.
 ///
 /// Checked by running it, for the same reason engine detection is: a socket
@@ -308,25 +316,30 @@ pub async fn image_exists(tag: &str) -> bool {
 /// deduplicated, and a number Eren computed itself would be confidently wrong
 /// in a way the user could not check.
 pub async fn image_disk_bytes() -> u64 {
-    env_guard::command(DOCKER)
-        .args([
-            "images",
-            "--filter",
-            &format!("label={OWNER_LABEL}=1"),
-            "--format",
-            "{{.Size}}",
-            "--no-trunc",
-        ])
-        .output()
-        .await
-        .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(|l| parse_size(l.trim()))
-                .sum()
-        })
-        .unwrap_or(0)
+    let mut total = 0;
+    // One query per label: two label filters in one query must both match.
+    for label in owner_labels() {
+        total += env_guard::command(DOCKER)
+            .args([
+                "images",
+                "--filter",
+                &label,
+                "--format",
+                "{{.Size}}",
+                "--no-trunc",
+            ])
+            .output()
+            .await
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|l| parse_size(l.trim()))
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
+    }
+    total
 }
 
 /// Docker prints sizes as "123MB" / "1.2GB". Parsed rather than asked for in
@@ -394,7 +407,11 @@ pub async fn list_owned_stacks() -> Vec<String> {
         .unwrap_or_default()
         .iter()
         .filter_map(|e| e.get("Name")?.as_str().map(str::to_string))
-        .filter(|n| n.starts_with("eren-preview-"))
+        .filter(|n| {
+            eren_shared::brand::NAMES
+                .iter()
+                .any(|b| n.starts_with(&format!("{b}-preview-")))
+        })
         .collect()
 }
 
@@ -404,26 +421,24 @@ pub async fn list_owned_stacks() -> Vec<String> {
 /// reconciliation that answers "what is actually running", and asking the
 /// database that question is how orphans survive a restart.
 pub async fn list_owned() -> Vec<String> {
-    env_guard::command(DOCKER)
-        .args([
-            "ps",
-            "--all",
-            "--filter",
-            &format!("label={OWNER_LABEL}=1"),
-            "--format",
-            "{{.Names}}",
-        ])
-        .output()
-        .await
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut names = Vec::new();
+    // One query per label: two label filters in one query must both match.
+    for label in owner_labels() {
+        let out = env_guard::command(DOCKER)
+            .args(["ps", "--all", "--filter", &label, "--format", "{{.Names}}"])
+            .output()
+            .await;
+        if let Ok(o) = out {
+            names.extend(
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string),
+            );
+        }
+    }
+    names
 }
 
 /// The last `n` non-empty lines, which is the part of a build log worth

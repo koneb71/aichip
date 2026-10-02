@@ -50,18 +50,25 @@ pub fn app(state: AppState) -> Router {
         // At the root, not under /api: the dashboard dials /ws/terminal/…,
         // and a WebSocket handshake that lands on the SPA fallback gets a 200
         // page instead of a 101 and dies silently.
-        .merge(routes::terminal::router())
-        // The capability bridge exists on app hostnames only, where the proxy
-        // layer above answers it and never calls through to here. Saying so
-        // explicitly, because the SPA fallback would otherwise serve
-        // `index.html` with a 200 for `/__eren/me` on localhost — no
-        // capability leaked, but a very confusing thing to find while probing.
-        .route("/__eren", axum::routing::any(no_bridge_here))
-        .route("/__eren/{*rest}", axum::routing::any(no_bridge_here));
+        .merge(routes::terminal::router());
+    // The capability bridge exists on app hostnames only, where the proxy
+    // layer above answers it and never calls through to here. Saying so
+    // explicitly, because the SPA fallback would otherwise serve `index.html`
+    // with a 200 for `/__eren/me` on localhost — no capability leaked, but a
+    // very confusing thing to find while probing. Under every prefix the
+    // bridge answers to.
+    for prefix in eren_shared::brand::BRIDGE_PREFIXES {
+        router = router
+            .route(&format!("/{prefix}"), axum::routing::any(no_bridge_here))
+            .route(
+                &format!("/{prefix}/{{*rest}}"),
+                axum::routing::any(no_bridge_here),
+            );
+    }
 
     // Dashboard assets: EREN_WEB_DIST overrides; defaults to ./web/dist
     // for dev checkouts. (v1.0 embeds these in the binary via rust-embed.)
-    let dist = std::env::var("EREN_WEB_DIST").unwrap_or_else(|_| "web/dist".into());
+    let dist = eren_shared::brand::var("WEB_DIST").unwrap_or_else(|| "web/dist".into());
     if std::path::Path::new(&dist).join("index.html").exists() {
         let serve = tower_http::services::ServeDir::new(&dist).fallback(
             tower_http::services::ServeFile::new(std::path::Path::new(&dist).join("index.html")),
@@ -245,6 +252,13 @@ pub enum Exposure {
 /// The variable that acknowledges what binding wide means.
 pub const TRUST_NETWORK: &str = "EREN_TRUST_NETWORK";
 
+/// Whether [`TRUST_NETWORK`] is set — under either spelling — to anything but
+/// empty or `0`.
+pub fn network_trusted() -> bool {
+    eren_shared::brand::var("TRUST_NETWORK")
+        .is_some_and(|v| !v.trim().is_empty() && v.trim() != "0")
+}
+
 /// Decide what this bind address means.
 ///
 /// ## Why an acknowledgement rather than a check on the caller
@@ -332,6 +346,8 @@ mod tests {
         );
         // Names the way out, and a safer alternative to it.
         assert!(message.contains(TRUST_NETWORK), "{message}");
+        // The name in the message is the name that is read.
+        assert_eq!(TRUST_NETWORK, eren_shared::brand::env_name("TRUST_NETWORK"));
         assert!(message.contains("SSH tunnel"), "{message}");
     }
 

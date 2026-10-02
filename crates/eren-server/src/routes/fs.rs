@@ -24,7 +24,7 @@ pub fn router() -> Router<AppState> {
 /// `$HOME` when run normally. In a container `$HOME` is the container's, not
 /// yours, so `EREN_BROWSE_ROOT` points it at wherever your code is mounted.
 pub(crate) fn browse_root() -> PathBuf {
-    std::env::var_os("EREN_BROWSE_ROOT")
+    eren_shared::brand::var_os("BROWSE_ROOT")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))

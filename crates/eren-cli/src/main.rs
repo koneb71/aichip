@@ -13,7 +13,6 @@ use eren_engines::opencode::OpenCodeEngine;
 use eren_engines::qwen::QwenEngine;
 use eren_engines::Engine;
 use eren_shared::env_guard;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -146,13 +145,6 @@ fn describe_providers(info: &eren_engines::EngineInfo) -> String {
     }
 }
 
-fn eren_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".eren")
-}
-
 async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // Decided first, before a database is started or a port is claimed: a
     // refusal that arrives ten seconds in has already cost something, and the
@@ -163,12 +155,10 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // this machine. Binding anywhere else spends that, so it has to be said out
     // loud — see `eren_server::exposure`, which also explains why refusing
     // non-loopback *callers* would not work.
-    let bind: std::net::IpAddr = std::env::var("EREN_BIND")
-        .ok()
+    let bind: std::net::IpAddr = eren_shared::brand::var("BIND")
         .and_then(|b| b.parse().ok())
         .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
-    let acknowledged = std::env::var(eren_server::TRUST_NETWORK)
-        .is_ok_and(|v| !v.trim().is_empty() && v.trim() != "0");
+    let acknowledged = eren_server::network_trusted();
     match eren_server::exposure(bind, acknowledged) {
         eren_server::Exposure::Local => {}
         eren_server::Exposure::Network => {
@@ -186,7 +176,9 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         }
     }
 
-    let home = eren_home();
+    // Before the managed Postgres starts, while nothing in the folder is open.
+    adopt_legacy_state()?;
+    let home = eren_shared::brand::home();
     tokio::fs::create_dir_all(&home).await?;
 
     // Database: the user's own DATABASE_URL wins; otherwise boot a private
@@ -208,11 +200,16 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
                     Err(e) => return Err(e),
                 }
             };
-            (pg.settings().url("eren"), Some(pg))
+            (pg.settings().url(eren_shared::brand::DATABASE), Some(pg))
         }
     };
 
     let db = Db::connect(&database_url).await?;
+    match eren_core::legacy::adopt_legacy_manifests(&db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(apps = n, "renamed app manifests to their new name"),
+        Err(e) => tracing::warn!(error = %e, "could not rename every app manifest"),
+    }
     // Before anything serves a request: a half-migrated wiki answers searches
     // wrong for some pages and says nothing about why.
     if let Err(e) = eren_core::kb::backfill::run(&db).await {
@@ -315,7 +312,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
     // a fresh MinIO needs no manual setup step; a failure here is logged and
     // the feature simply stays off rather than taking the server down.
     let storage = match eren_core::storage::Storage::from_env() {
-        Some(s) => match s.ensure_bucket().await {
+        Some(mut s) => match s.ensure_bucket().await {
             Ok(()) => {
                 tracing::info!(bucket = s.bucket(), "object storage ready");
                 Some(s)
@@ -396,6 +393,38 @@ fn displayable(bind: std::net::IpAddr) -> String {
     }
 }
 
+/// Bring state from before the rename across: the home folder once, and a
+/// note for each setting still spelled the old way.
+///
+/// Never silent. Moving a folder in somebody's home directory is something
+/// they should be able to find in the log, and a variable that still works
+/// under its old name is one they will want to rename before it stops.
+fn adopt_legacy_state() -> anyhow::Result<()> {
+    use eren_shared::brand::{adopt_legacy_home, legacy_env_in_use, Adoption};
+    match adopt_legacy_home() {
+        Ok(Adoption::Nothing) => {}
+        Ok(Adoption::Moved { from, to }) => tracing::info!(
+            from = %from.display(),
+            to = %to.display(),
+            "moved the home folder to its new name and left a link at the old one"
+        ),
+        Ok(Adoption::Both { legacy }) => tracing::warn!(
+            legacy = %legacy.display(),
+            using = %eren_shared::brand::home().display(),
+            "found the old home folder beside the new one; using the new one and \
+             leaving the old one alone"
+        ),
+        Err(e) => anyhow::bail!(
+            "could not move the old home folder to {}: {e}",
+            eren_shared::brand::home().display()
+        ),
+    }
+    for (old, new) in legacy_env_in_use() {
+        tracing::warn!("{old} is still read, but has been renamed {new}");
+    }
+    Ok(())
+}
+
 async fn start_embedded_postgres(
     home: &std::path::Path,
 ) -> anyhow::Result<postgresql_embedded::PostgreSQL> {
@@ -431,16 +460,25 @@ async fn start_embedded_postgres(
     let mut pg = PostgreSQL::new(settings);
     pg.setup().await?;
     pg.start().await?;
-    if !pg.database_exists("eren").await? {
-        pg.create_database("eren").await?;
+    let database = eren_shared::brand::DATABASE;
+    if eren_core::legacy::adopt_database(
+        &pg.settings().url("postgres"),
+        eren_shared::brand::LEGACY_DATABASE,
+        database,
+    )
+    .await?
+    {
+        tracing::info!(database, "renamed the managed database to its new name");
+    }
+    if !pg.database_exists(database).await? {
+        pg.create_database(database).await?;
     }
     tracing::info!(port = pg.settings().port, "embedded postgres up");
     Ok(pg)
 }
 
 fn max_concurrent() -> usize {
-    std::env::var("EREN_MAX_CONCURRENT")
-        .ok()
+    eren_shared::brand::var("MAX_CONCURRENT")
         .and_then(|v| v.parse().ok())
         .unwrap_or(2)
 }

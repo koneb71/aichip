@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 
 /// The header every real bridge call carries.
-pub const APP_HEADER: &str = "x-eren-app";
+pub const APP_HEADER: &str = eren_shared::brand::APP_HEADER;
 
 /// How much of a request body the bridge will read.
 ///
@@ -76,7 +76,12 @@ pub async fn handle(
     }
 
     if !route.header_exempt() {
-        if req.headers().get(APP_HEADER).is_none() {
+        // Under either name: apps built before the rename load a client that
+        // sends the old one, from files in their own folders.
+        if !eren_shared::brand::APP_HEADERS
+            .iter()
+            .any(|h| req.headers().contains_key(*h))
+        {
             return oops(
                 StatusCode::FORBIDDEN,
                 "this API is only reachable from the app itself — load \
@@ -105,7 +110,7 @@ pub async fn handle(
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
                 .header(header::CACHE_CONTROL, "no-store")
-                .body(Body::from(apps::client_js::CLIENT_JS))
+                .body(Body::from(apps::client_js::client_js()))
                 .expect("a static script is always well formed")
         }
         Route::AppCss => {

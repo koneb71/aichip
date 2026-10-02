@@ -25,12 +25,22 @@
 /// what Eren owns. Stripping the *user's* variables would be overreach and
 /// would break real setups, since OpenCode authenticates some providers from
 /// the environment on purpose.
-pub const EREN_OWN_SECRETS: &[&str] = &["EREN_S3_ACCESS_KEY", "EREN_S3_SECRET_KEY"];
+///
+/// Named without their prefix, because each is read under two names (see
+/// [`crate::brand::var`]) and both have to go: [`own_secrets`] spells them out.
+pub const OWN_SECRETS: &[&str] = &["S3_ACCESS_KEY", "S3_SECRET_KEY"];
+
+/// Every variable name [`OWN_SECRETS`] can be set under.
+pub fn own_secrets() -> impl Iterator<Item = String> {
+    OWN_SECRETS
+        .iter()
+        .flat_map(|key| crate::brand::env_names(key))
+}
 
 /// A child process, minus the secrets Eren itself holds.
 ///
 /// **The only way anything in this workspace starts a process.** Stripping
-/// [`EREN_OWN_SECRETS`] used to be something each spawn site remembered, and
+/// [`OWN_SECRETS`] used to be something each spawn site remembered, and
 /// seven did; the rest — git, whose repository hooks inherit the environment,
 /// docker, every engine's `--version` probe, and the MCP "test" button, which
 /// runs somebody's `npx` package — handed the object-storage keys to whatever
@@ -39,7 +49,7 @@ pub const EREN_OWN_SECRETS: &[&str] = &["EREN_S3_ACCESS_KEY", "EREN_S3_SECRET_KE
 #[allow(clippy::disallowed_methods)]
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(program);
-    for key in EREN_OWN_SECRETS {
+    for key in own_secrets() {
         cmd.env_remove(key);
     }
     cmd
@@ -221,11 +231,14 @@ mod own_secret_tests {
     #[test]
     fn a_command_does_not_inherit_what_eren_owns() {
         let cmd = command("true");
-        for key in EREN_OWN_SECRETS {
+        let names: Vec<String> = own_secrets().collect();
+        // Both spellings of both keys.
+        assert_eq!(names.len(), OWN_SECRETS.len() * 2, "{names:?}");
+        for key in names {
             let removed = cmd
                 .as_std()
                 .get_envs()
-                .any(|(k, v)| k == std::ffi::OsStr::new(key) && v.is_none());
+                .any(|(k, v)| k == std::ffi::OsStr::new(&key) && v.is_none());
             assert!(removed, "{key} is inherited by a child");
         }
     }
@@ -270,8 +283,8 @@ mod own_secret_tests {
     /// sail past the very check that exists to stop it.
     #[test]
     fn everything_eren_owns_reads_as_a_secret() {
-        for key in EREN_OWN_SECRETS {
-            assert!(is_auth_env(key), "{key} is not recognised as a secret");
+        for key in own_secrets() {
+            assert!(is_auth_env(&key), "{key} is not recognised as a secret");
         }
     }
 
@@ -286,7 +299,7 @@ mod own_secret_tests {
             "AWS_SECRET_ACCESS_KEY",
         ] {
             assert!(
-                !EREN_OWN_SECRETS.contains(&key),
+                !own_secrets().any(|own| own == key),
                 "{key} belongs to the user, not to eren"
             );
         }

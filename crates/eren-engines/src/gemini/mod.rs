@@ -56,7 +56,7 @@ pub struct GeminiEngine {
 impl Default for GeminiEngine {
     fn default() -> Self {
         Self {
-            binary: std::env::var("EREN_GEMINI_BIN").unwrap_or_else(|_| "gemini".to_string()),
+            binary: eren_shared::brand::var("GEMINI_BIN").unwrap_or_else(|| "gemini".to_string()),
         }
     }
 }
@@ -114,16 +114,13 @@ pub fn read_only_policy(spec: &RunSpec) -> String {
 }
 
 fn write_policy(spec: &RunSpec) -> anyhow::Result<PathBuf> {
-    let dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".eren")
-        .join("gemini-policy")
-        .join(if denied_tools(spec).contains(&"web_fetch") {
+    let dir = eren_shared::brand::home().join("gemini-policy").join(
+        if denied_tools(spec).contains(&"web_fetch") {
             "read-only-offline"
         } else {
             "read-only"
-        });
+        },
+    );
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("read-only.toml"), read_only_policy(spec))?;
     Ok(dir)

@@ -130,6 +130,20 @@ pub fn container_name(preview_id: &uuid::Uuid) -> String {
     format!("eren-preview-{}", short(preview_id))
 }
 
+/// [`image_tag`] and [`container_name`] under every name the product has had,
+/// for reclaiming a preview started before the rename.
+pub fn every_name(preview_id: &uuid::Uuid) -> Vec<(String, String)> {
+    eren_shared::brand::NAMES
+        .iter()
+        .map(|n| {
+            (
+                format!("{n}-preview:{}", short(preview_id)),
+                format!("{n}-preview-{}", short(preview_id)),
+            )
+        })
+        .collect()
+}
+
 /// The hostname label a preview answers to: `fix-the-login-a1b2c3`.
 ///
 /// Built from the card's title so the address bar says what you are looking at,

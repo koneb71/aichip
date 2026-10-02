@@ -58,6 +58,11 @@ pub(crate) async fn fresh() -> Option<TestDb> {
 }
 
 impl TestDb {
+    /// The database's name on the server.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Drop the database. Called at the end of a test; one that panics first
     /// leaves its database behind, named so it is obvious what it was.
     pub async fn finish(self) {
@@ -142,7 +147,7 @@ impl TestDb {
 }
 
 /// The same server and credentials, another database.
-fn with_database(url: &str, name: &str) -> String {
+pub(crate) fn with_database(url: &str, name: &str) -> String {
     let (base, query) = match url.split_once('?') {
         Some((b, q)) => (b, Some(q)),
         None => (url, None),

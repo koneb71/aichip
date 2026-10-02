@@ -91,11 +91,7 @@ pub fn write_config(dir: &Path, run_key: &str, config: &Value) -> anyhow::Result
 
 /// Where Eren keeps generated MCP configs.
 pub fn config_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".eren")
-        .join("mcp")
+    eren_shared::brand::home().join("mcp")
 }
 
 #[cfg(test)]

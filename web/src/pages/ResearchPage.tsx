@@ -12,6 +12,7 @@ import { Markdown } from "../components/Markdown";
 import { isActive } from "../lib/runStatus";
 import { Button, buttonClasses } from "../components/ui/Button";
 import { Select } from "../components/ui/Field";
+import { toolName } from "../lib/brand";
 
 /**
  * Deep research: ask a question about a project, watch the investigation,
@@ -423,7 +424,7 @@ function phaseOf(events: StreamEvent[]): { label: string; icon: string } {
     const e = events[i];
     if (e.type === "assistant_text") return { label: "Writing the report", icon: "✍️" };
     if (e.type === "tool_call") {
-      const t = String(e.tool_name ?? "");
+      const t = toolName(String(e.tool_name ?? ""));
       if (t === "WebSearch") return { label: "Searching the web", icon: "🔎" };
       if (t === "WebFetch") return { label: "Reading sources", icon: "📖" };
       if (t === "mcp__eren__search_documents")
@@ -516,7 +517,7 @@ function LiveInvestigation({
       {/* The trail: searches as quoted chips, sources as clickable domains. */}
       <div className="flex flex-col gap-1.5">
         {tools.slice(-12).map((e, i) => {
-          const t = String(e.tool_name ?? "");
+          const t = toolName(String(e.tool_name ?? ""));
           const args = (e.input ?? {}) as Record<string, unknown>;
           if (t === "WebSearch")
             return (

@@ -60,8 +60,6 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/file", get(read_task).put(write_task))
 }
 
-use super::WRITE_HEADER;
-
 /// Anything larger is reported as too-large rather than streamed into a
 /// browser tab that would choke on it.
 const MAX_FILE_BYTES: u64 = 512 * 1024;
@@ -356,7 +354,7 @@ async fn write_in(
     body: WriteBody,
 ) -> Result<Json<Value>, ApiError> {
     // Gate 4.
-    if !headers.contains_key(WRITE_HEADER) {
+    if !super::has_write_header(&headers) {
         return Err((
             StatusCode::BAD_REQUEST,
             "not a write from the dashboard".into(),

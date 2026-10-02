@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// The manifest's filename inside an app's folder.
-pub const MANIFEST_FILE: &str = "eren.app.yaml";
+pub const MANIFEST_FILE: &str = eren_shared::brand::APP_MANIFEST;
 
 /// Where apps live.
 ///
@@ -54,16 +54,10 @@ pub const MANIFEST_FILE: &str = "eren.app.yaml";
 /// projects directory would mean a `git status` somewhere unrelated growing
 /// entries nobody asked for.
 pub fn root() -> PathBuf {
-    match std::env::var("EREN_APPS_DIR") {
-        Ok(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
-        _ => home().join(".eren").join("apps"),
+    match eren_shared::brand::var("APPS_DIR") {
+        Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
+        _ => eren_shared::brand::home().join("apps"),
     }
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// The Postgres schema holding an app's tables.
@@ -388,7 +382,7 @@ async fn write_manifest(path: &Path, text: &str) -> anyhow::Result<()> {
 /// Best-effort by design — a folder that cannot be committed is worth a warning
 /// and not worth failing an install over, since the manifest in the database is
 /// what the app actually runs on.
-async fn commit(path: &Path, message: &str) -> anyhow::Result<()> {
+pub(crate) async fn commit(path: &Path, message: &str) -> anyhow::Result<()> {
     if let Err(e) = crate::worktrees::manager::commit_all(path, message).await {
         tracing::warn!(path = %path.display(), error = %e, "could not commit an app's folder");
     }

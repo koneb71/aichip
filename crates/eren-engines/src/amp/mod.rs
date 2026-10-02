@@ -43,7 +43,7 @@ pub struct AmpEngine {
 impl Default for AmpEngine {
     fn default() -> Self {
         Self {
-            binary: std::env::var("EREN_AMP_BIN").unwrap_or_else(|_| "amp".to_string()),
+            binary: eren_shared::brand::var("AMP_BIN").unwrap_or_else(|| "amp".to_string()),
         }
     }
 }

@@ -11,7 +11,7 @@
 //! Two deliberate choices:
 //!
 //! - The shell gets the user's own login shell with the user's own
-//!   environment — except Eren's own secrets (`EREN_OWN_SECRETS`),
+//!   environment — except Eren's own secrets (`env_guard::OWN_SECRETS`),
 //!   stripped exactly as they are from every engine child. The user can read
 //!   those out of their own process table anyway; stripping them keeps a
 //!   pasted `env` screenshot from leaking them by accident.
@@ -112,7 +112,7 @@ async fn session(mut socket: WebSocket, path: Option<String>) {
     cmd.cwd(&path);
     cmd.env("TERM", "xterm-256color");
     // The same strip every engine child gets, from the same list.
-    for key in eren_shared::EREN_OWN_SECRETS {
+    for key in eren_shared::own_secrets() {
         cmd.env_remove(key);
     }
 

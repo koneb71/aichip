@@ -22,6 +22,9 @@ pub struct Storage {
     /// e.g. `http://127.0.0.1:9000`, no trailing slash.
     endpoint: String,
     bucket: String,
+    /// Whether somebody named the bucket. If not, the default may still be
+    /// the one from before the rename (see [`Storage::ensure_bucket`]).
+    bucket_chosen: bool,
     region: String,
     access_key: String,
     secret_key: String,
@@ -37,14 +40,16 @@ impl Storage {
     /// Absent configuration is a normal state, not an error: a fresh install
     /// has no MinIO, and the knowledge base is still useful without one.
     pub fn from_env() -> Option<Self> {
-        let endpoint = std::env::var("EREN_S3_ENDPOINT").ok()?;
-        let access_key = std::env::var("EREN_S3_ACCESS_KEY").ok()?;
-        let secret_key = std::env::var("EREN_S3_SECRET_KEY").ok()?;
+        let endpoint = eren_shared::brand::var("S3_ENDPOINT")?;
+        let access_key = eren_shared::brand::var("S3_ACCESS_KEY")?;
+        let secret_key = eren_shared::brand::var("S3_SECRET_KEY")?;
+        let bucket = eren_shared::brand::var("S3_BUCKET");
         Some(Self {
             client: reqwest::Client::new(),
             endpoint: endpoint.trim_end_matches('/').to_string(),
-            bucket: std::env::var("EREN_S3_BUCKET").unwrap_or_else(|_| "eren".into()),
-            region: std::env::var("EREN_S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
+            bucket_chosen: bucket.is_some(),
+            bucket: bucket.unwrap_or_else(|| eren_shared::brand::BUCKET.into()),
+            region: eren_shared::brand::var("S3_REGION").unwrap_or_else(|| "us-east-1".into()),
             access_key,
             secret_key,
         })
@@ -120,7 +125,21 @@ impl Storage {
 
     /// Create the bucket if it isn't there. Idempotent — an existing bucket
     /// reports `BucketAlreadyOwnedByYou`, which is success, not a clash.
-    pub async fn ensure_bucket(&self) -> anyhow::Result<()> {
+    ///
+    /// With no bucket named, the default changed with the project's name, and
+    /// every attachment uploaded before that is in the old one. So when the
+    /// new default does not exist yet and the old one does, the old one is
+    /// used: creating an empty bucket beside it would make every existing
+    /// image in the knowledge base a broken link.
+    pub async fn ensure_bucket(&mut self) -> anyhow::Result<()> {
+        if !self.bucket_chosen {
+            let legacy = eren_shared::brand::LEGACY_BUCKET;
+            let current = self.bucket_exists(&self.bucket).await?;
+            if adopt_legacy_bucket(current, self.bucket_exists(legacy).await?) {
+                self.bucket = legacy.to_string();
+                return Ok(());
+            }
+        }
         let path = format!("/{}", sigv4::encode_segment(&self.bucket));
         let res = self.send("PUT", &path, "", vec![], None).await?;
         let status = res.status();
@@ -132,6 +151,12 @@ impl Storage {
             return Ok(());
         }
         anyhow::bail!("could not create bucket {}: {status} {body}", self.bucket);
+    }
+
+    async fn bucket_exists(&self, name: &str) -> anyhow::Result<bool> {
+        let path = format!("/{}", sigv4::encode_segment(name));
+        let res = self.send("HEAD", &path, "", vec![], None).await?;
+        Ok(res.status().is_success())
     }
 
     pub async fn put(&self, key: &str, body: Vec<u8>, content_type: &str) -> anyhow::Result<()> {
@@ -205,8 +230,25 @@ pub fn object_key(asset_id: uuid::Uuid, filename: &str) -> String {
     format!("kb/{asset_id}{ext}")
 }
 
+/// Whether to keep using the bucket from before the rename: only when nobody
+/// named one, the new default has never been made, and the old one exists.
+fn adopt_legacy_bucket(current_exists: bool, legacy_exists: bool) -> bool {
+    !current_exists && legacy_exists
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_old_bucket_is_kept_only_while_it_is_the_only_one() {
+        use super::adopt_legacy_bucket;
+        assert!(adopt_legacy_bucket(false, true));
+        // Once the new one exists it wins — it is where uploads have gone.
+        assert!(!adopt_legacy_bucket(true, true));
+        assert!(!adopt_legacy_bucket(true, false));
+        // A fresh install makes the new one.
+        assert!(!adopt_legacy_bucket(false, false));
+    }
+
     use super::*;
 
     #[test]

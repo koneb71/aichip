@@ -44,8 +44,9 @@ fn parse_numstat(line: &str) -> Option<FileStat> {
 }
 
 /// Every branch Eren creates starts with this, and nothing else it deletes
-/// may be missing it.
-pub const BRANCH_PREFIX: &str = "eren/";
+/// may be missing it — or the prefix it had before the rename (see
+/// [`eren_shared::brand::is_card_branch`]).
+pub use eren_shared::brand::BRANCH_PREFIX;
 
 impl WorktreeManager {
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -53,7 +54,7 @@ impl WorktreeManager {
     }
 
     pub fn default_root() -> PathBuf {
-        dirs_home().join(".eren").join("worktrees")
+        eren_shared::brand::home().join("worktrees")
     }
 
     /// True when `path` is inside this manager's root — the gate FullAuto
@@ -70,7 +71,7 @@ impl WorktreeManager {
     /// resolved, and on macOS a root under `/var` comes back as `/private/var`
     /// — the literal comparison alone silently matches nothing.
     fn owns(&self, path: &Path, branch: &str) -> bool {
-        if !branch.starts_with(BRANCH_PREFIX) {
+        if !eren_shared::brand::is_card_branch(branch) {
             return false;
         }
         if self.manages(path) {
@@ -1330,12 +1331,6 @@ fn short_hash(s: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2001,6 +1996,29 @@ mod tests {
         let held = inventory(&mgr, repo_dir.path(), "main").await.unwrap();
         let branches: Vec<_> = held.iter().map(|h| h.branch.as_str()).collect();
         assert_eq!(branches, vec![ours.branch.as_str()], "{held:?}");
+    }
+
+    #[tokio::test]
+    async fn a_card_branch_from_before_the_rename_is_still_ours() {
+        // Its worktree is under our root and its branch has the old prefix:
+        // still a card's, so still listed — and so still swept and landed.
+        let repo_dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path()).await;
+        let mgr = WorktreeManager::new(root.path());
+        let old_branch = format!("{}card-1a2b3c4d", eren_shared::brand::BRANCH_PREFIXES[1]);
+        assert!(!old_branch.starts_with(BRANCH_PREFIX));
+        let old = root.path().join("old-card");
+        git(
+            repo_dir.path(),
+            &["worktree", "add", old.to_str().unwrap(), "-b", &old_branch],
+        )
+        .await
+        .unwrap();
+
+        let held = inventory(&mgr, repo_dir.path(), "main").await.unwrap();
+        let branches: Vec<_> = held.iter().map(|h| h.branch.as_str()).collect();
+        assert_eq!(branches, vec![old_branch.as_str()], "{held:?}");
     }
 
     #[test]

@@ -236,7 +236,7 @@ async fn sync_from_repo(
         .await
         .map_err(internal)?
         .get("path");
-    let dir = std::path::Path::new(&path).join(".eren").join("workflows");
+    let dir = eren_shared::brand::repo_dir(std::path::Path::new(&path), "workflows");
 
     let mut imported: Vec<Value> = vec![];
     let mut errors: Vec<Value> = vec![];

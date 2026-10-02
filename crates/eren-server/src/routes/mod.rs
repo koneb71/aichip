@@ -75,12 +75,21 @@ pub fn refused_or(status: StatusCode) -> impl Fn(anyhow::Error) -> ApiError {
 /// it gets no `Access-Control-Allow-*` and the browser refuses to send the
 /// real request. The value is not a secret and is checked against nothing.
 /// Belt and braces behind the Origin check in `lib.rs`.
-pub const WRITE_HEADER: &str = "x-eren-write";
+pub const WRITE_HEADER: &str = eren_shared::brand::WRITE_HEADER;
+
+/// Whether a request carries the write header, under its current name or the
+/// one scripts written before the rename send. Either is a header no
+/// cross-origin page can set, which is all the gate asks of it.
+pub fn has_write_header(headers: &axum::http::HeaderMap) -> bool {
+    eren_shared::brand::WRITE_HEADERS
+        .iter()
+        .any(|h| headers.contains_key(*h))
+}
 
 /// Refuse a write that did not come from the dashboard. `what` says what the
 /// endpoint does, so the refusal explains why it is gated.
 pub fn require_write(headers: &axum::http::HeaderMap, what: &str) -> Result<(), ApiError> {
-    if headers.contains_key(WRITE_HEADER) {
+    if has_write_header(headers) {
         Ok(())
     } else {
         Err((
@@ -148,5 +157,22 @@ pub fn api_router() -> Router<AppState> {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "name": "eren" }))
+    Json(json!({ "ok": true, "name": eren_shared::brand::NAME }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_is_recognised_under_either_header_name() {
+        // A script written before the rename sends the old name, and must
+        // still be let through; a request with neither must not.
+        for name in eren_shared::brand::WRITE_HEADERS {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(*name, "1".parse().unwrap());
+            assert!(require_write(&headers, "x").is_ok(), "{name}");
+        }
+        assert!(require_write(&axum::http::HeaderMap::new(), "x").is_err());
+    }
 }

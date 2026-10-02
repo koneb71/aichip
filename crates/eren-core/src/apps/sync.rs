@@ -30,7 +30,7 @@ pub struct Found {
 }
 
 fn apps_dir(project_path: &Path) -> PathBuf {
-    project_path.join(".eren").join("apps")
+    eren_shared::brand::repo_dir(project_path, "apps")
 }
 
 /// Every app a project offers.
@@ -46,7 +46,8 @@ pub async fn scan(db: &Db, workspace_id: Uuid, project_path: &Path) -> anyhow::R
         if !entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        let Ok(manifest) = tokio::fs::read_to_string(entry.path().join(MANIFEST_FILE)).await else {
+        let manifest_path = eren_shared::brand::app_manifest(&entry.path());
+        let Ok(manifest) = tokio::fs::read_to_string(manifest_path).await else {
             continue;
         };
         let dir_name = entry.file_name().to_string_lossy().to_string();
@@ -95,7 +96,7 @@ pub async fn adopt(
         anyhow::bail!("\"{dir}\" is not an app folder name");
     }
 
-    let path = apps_dir(project_path).join(dir).join(MANIFEST_FILE);
+    let path = eren_shared::brand::app_manifest(&apps_dir(project_path).join(dir));
     let manifest = tokio::fs::read_to_string(&path)
         .await
         .map_err(|_| anyhow::anyhow!("there is no {MANIFEST_FILE} in {dir}"))?;

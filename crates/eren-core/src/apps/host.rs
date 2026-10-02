@@ -79,7 +79,7 @@ fn bare(value: &str) -> &str {
 /// not normalise a URI, so `/__eren/../api` reaches the router with its dots
 /// intact and a prefix test would let it through to be resolved later by
 /// something that does normalise.
-pub const BRIDGE_PREFIX: &str = "__eren";
+pub const BRIDGE_PREFIX: &str = eren_shared::brand::BRIDGE_PREFIX;
 
 /// The bridge sub-path, when this request is for the bridge at all.
 ///
@@ -89,7 +89,10 @@ pub const BRIDGE_PREFIX: &str = "__eren";
 /// both safe and simpler than normalising.
 pub fn bridge_path(path: &str) -> Option<Result<Vec<&str>, Traversal>> {
     let mut segments = path.split('/').filter(|s| !s.is_empty());
-    if segments.next() != Some(BRIDGE_PREFIX) {
+    // Either prefix: an app built before the rename has the old one written
+    // into its own files, which Eren does not rewrite.
+    let first = segments.next()?;
+    if !eren_shared::brand::BRIDGE_PREFIXES.contains(&first) {
         return None;
     }
     let rest: Vec<&str> = segments.collect();
@@ -175,6 +178,14 @@ mod tests {
         // A path that merely starts with the same letters is not the bridge —
         // which a `starts_with` test would have got wrong.
         assert_eq!(bridge_path("/__erensomething/me"), None);
+        // An app from before the rename reaches the same bridge, and the
+        // traversal rule holds for it just the same.
+        let old = format!("/{}", eren_shared::brand::LEGACY_BRIDGE_PREFIX);
+        assert_eq!(bridge_path(&format!("{old}/me")), Some(Ok(vec!["me"])));
+        assert_eq!(
+            bridge_path(&format!("{old}/../api/settings")),
+            Some(Err(Traversal))
+        );
     }
 
     #[test]

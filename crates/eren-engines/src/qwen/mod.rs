@@ -46,7 +46,7 @@ pub struct QwenEngine {
 impl Default for QwenEngine {
     fn default() -> Self {
         Self {
-            binary: std::env::var("EREN_QWEN_BIN").unwrap_or_else(|_| "qwen".to_string()),
+            binary: eren_shared::brand::var("QWEN_BIN").unwrap_or_else(|| "qwen".to_string()),
         }
     }
 }

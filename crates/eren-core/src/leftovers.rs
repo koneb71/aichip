@@ -24,20 +24,13 @@
 
 use crate::db::Db;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use uuid::Uuid;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Swept {
     pub files: usize,
     pub bytes: u64,
-}
-
-fn home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join(".eren")
 }
 
 /// Remove the per-run and per-preview files whose owner is finished with.
@@ -71,9 +64,21 @@ pub async fn sweep(db: &Db) -> anyhow::Result<Swept> {
 
     let mut swept = Swept::default();
     for (dir, exts, keep) in [
-        (home().join("mcp"), &["json"][..], &live_runs),
-        (home().join("prompts"), &["md"][..], &live_runs),
-        (home().join("previews"), &["log", "out"][..], &wakeable),
+        (
+            eren_shared::brand::home().join("mcp"),
+            &["json"][..],
+            &live_runs,
+        ),
+        (
+            eren_shared::brand::home().join("prompts"),
+            &["md"][..],
+            &live_runs,
+        ),
+        (
+            eren_shared::brand::home().join("previews"),
+            &["log", "out"][..],
+            &wakeable,
+        ),
     ] {
         swept = add(swept, sweep_dir(&dir, exts, keep).await);
     }

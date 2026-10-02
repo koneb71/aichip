@@ -376,6 +376,10 @@ async fn run_hook(cfg: &Attention, event: Event, ctx: &Ctx) {
         // and is never noticed.
         .kill_on_drop(true);
     for (k, v) in payload(event, ctx) {
+        // Under both names: hooks written before the rename read the old one.
+        if let Some(old) = eren_shared::brand::legacy_env_name(k) {
+            cmd.env(old, &v);
+        }
         cmd.env(k, v);
     }
 
