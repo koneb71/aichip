@@ -136,6 +136,9 @@ async fn restore(
         EntityKind::Attention => {
             let Json(_) = super::settings::set_attention(s, headers, Json(body(snap)?)).await?;
         }
+        EntityKind::Unattended => {
+            let Json(_) = super::settings::set_unattended(s, headers, Json(body(snap)?)).await?;
+        }
         EntityKind::ReviewPolicy => {
             // Through `routes/reviews.rs`, the one writer of review policies.
             let mapped = json!({

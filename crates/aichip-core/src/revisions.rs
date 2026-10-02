@@ -32,6 +32,7 @@ pub enum EntityKind {
     BudgetPolicy,
     Attention,
     ReviewPolicy,
+    Unattended,
 }
 
 impl EntityKind {
@@ -45,6 +46,7 @@ impl EntityKind {
             EntityKind::BudgetPolicy => "budget_policy",
             EntityKind::Attention => "attention",
             EntityKind::ReviewPolicy => "review_policy",
+            EntityKind::Unattended => "unattended",
         }
     }
 
@@ -58,6 +60,7 @@ impl EntityKind {
             "budget_policy" => EntityKind::BudgetPolicy,
             "attention" => EntityKind::Attention,
             "review_policy" => EntityKind::ReviewPolicy,
+            "unattended" => EntityKind::Unattended,
             _ => return None,
         })
     }
@@ -81,6 +84,9 @@ impl EntityKind {
             }
             EntityKind::ReviewPolicy => {
                 "SELECT to_jsonb(x) FROM project_review_policy x WHERE x.project_id::text = $1"
+            }
+            EntityKind::Unattended => {
+                "SELECT value FROM settings WHERE key = 'unattended' AND $1 = 'unattended'"
             }
         }
     }
@@ -234,6 +240,7 @@ mod tests {
             EntityKind::BudgetPolicy,
             EntityKind::Attention,
             EntityKind::ReviewPolicy,
+            EntityKind::Unattended,
         ] {
             assert_eq!(EntityKind::parse(k.as_str()), Some(k));
         }
@@ -261,6 +268,7 @@ mod tests {
             ("routes/activity.rs", "async fn set_budget("),
             ("routes/settings.rs", "async fn set_attention("),
             ("routes/reviews.rs", "async fn put_policy("),
+            ("routes/settings.rs", "async fn set_unattended("),
         ];
         let server = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aichip-server/src");
         for (file, needle) in WRITERS {

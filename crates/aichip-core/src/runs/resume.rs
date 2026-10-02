@@ -200,6 +200,103 @@ pub fn continuation_prompt(original: &str, stop_reason: Option<&str>) -> String 
     p
 }
 
+/// The whole door, for the route and for the reaper alike: read the dead
+/// run, decide with [`decide`], refuse while anything still works on the
+/// card, and write the new run. `(new_run, task_id)` on success.
+pub async fn resume_dead_run(
+    orch: &crate::runs::orchestrator::Orchestrator,
+    run_id: uuid::Uuid,
+) -> Result<(uuid::Uuid, uuid::Uuid), crate::approvals::Refusal> {
+    use crate::approvals::Refusal;
+    use sqlx::Row;
+    let row = sqlx::query(
+        // `COALESCE(r.worktree_path, t.worktree_path)` mirrors what
+        // `execute_task_run` picks: a bake-off variant has its own checkout,
+        // everything else works in the card's.
+        "SELECT r.status, r.session_id, r.session_engine, r.engine, r.task_id,
+                r.chat_id, r.workflow_id, r.team_id, r.comment_id, r.kb_brief,
+                COALESCE(r.worktree_path, t.worktree_path) AS worktree_path,
+                p.vcs
+         FROM runs r
+         LEFT JOIN tasks t ON t.id = r.task_id
+         LEFT JOIN projects p ON p.id = t.project_id
+         WHERE r.id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&orch.db.pool)
+    .await?
+    .ok_or_else(|| Refusal::NotFound("no such run".into()))?;
+
+    let engine_id: String = row.get("engine");
+    let engine = orch.engine(&engine_id);
+    let worktree: Option<String> = row.get("worktree_path");
+    // The one part of the decision that has to touch the disk, done here so
+    // `decide` stays pure. `drop_worktree` nulls the column, but a directory
+    // removed by hand leaves it set and pointing at nothing.
+    let cwd = if row.get::<Option<String>, _>("vcs").as_deref() != Some("git") {
+        Cwd::InPlace
+    } else {
+        match worktree.as_deref() {
+            Some(p) if std::path::Path::new(p).is_dir() => Cwd::Worktree(p),
+            _ => Cwd::Gone,
+        }
+    };
+    let status: String = row.get("status");
+    let session_id: Option<String> = row.get("session_id");
+    let session_engine: Option<String> = row.get("session_engine");
+    let prior = Prior {
+        status: RunStatus::parse(&status)
+            .ok_or_else(|| Refusal::Conflict(format!("this run is {status}")))?,
+        session_id: session_id.as_deref(),
+        session_engine: session_engine.as_deref(),
+        engine: &engine_id,
+        engine_can_resume: engine
+            .map(|e| e.capabilities().resume_sessions)
+            .unwrap_or(false),
+        cwd,
+        is_task_run: row.get::<Option<uuid::Uuid>, _>("task_id").is_some()
+            && row.get::<Option<uuid::Uuid>, _>("chat_id").is_none()
+            && row.get::<Option<uuid::Uuid>, _>("workflow_id").is_none()
+            && row.get::<Option<uuid::Uuid>, _>("team_id").is_none()
+            && row.get::<Option<uuid::Uuid>, _>("comment_id").is_none()
+            && row.get::<Option<String>, _>("kb_brief").is_none(),
+    };
+    let session = decide(&prior).map_err(|r| Refusal::Conflict(r.message()))?;
+    let task_id: uuid::Uuid = row
+        .get::<Option<uuid::Uuid>, _>("task_id")
+        .ok_or_else(|| Refusal::Conflict("only a card's run can be resumed".into()))?;
+
+    // Whether anything at all still works on the card — a run, or a step of
+    // an epic's run — because two engines in one worktree is the failure this
+    // and Retry both prevent.
+    orch.supersede_summary(task_id).await?;
+    let busy: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1
+                           AND status IN ('queued','starting','running','waiting_permission','rate_limited'))
+             OR EXISTS (SELECT 1 FROM steps s JOIN runs r ON r.id = s.run_id
+                         WHERE s.task_id = $1
+                           AND s.status IN ('queued','starting','running','waiting_permission','rate_limited')
+                           AND r.status NOT IN ('completed','failed','canceled'))",
+    )
+    .bind(task_id)
+    .fetch_one(&orch.db.pool)
+    .await?;
+    if busy {
+        return Err(Refusal::Conflict(
+            "this card is already running — cancel it before resuming".into(),
+        ));
+    }
+    let new_run = orch
+        .resume_run(run_id, &session)
+        .await
+        .map_err(Refusal::Gated)?;
+    sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+        .bind(task_id)
+        .execute(&orch.db.pool)
+        .await?;
+    Ok((new_run, task_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

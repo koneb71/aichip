@@ -24,6 +24,7 @@ pub mod mcp_servers;
 pub mod previews;
 pub mod queue;
 pub mod rag;
+pub mod reaper;
 pub mod repo;
 pub mod review;
 pub mod revisions;

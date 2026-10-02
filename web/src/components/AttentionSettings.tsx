@@ -19,6 +19,7 @@ const EVENTS: { id: AttentionEvent; label: string; hint: string }[] = [
   { id: "question", label: "An agent asked you something", hint: "the card waits for your answer in the inbox" },
   { id: "decision", label: "An agent proposed a decision", hint: "only you can approve it, in the inbox" },
   { id: "review", label: "An agent review needs you", hint: "its rounds are spent, or the reviewer gave no verdict" },
+  { id: "stalled", label: "A run stalled", hint: "nothing was running it any more, or it went silent past your limit" },
   { id: "over_budget", label: "A budget is spent", hint: "what it covers holds until its window turns" },
   { id: "routine", label: "A routine delivered", hint: "it ran on its schedule; the result is waiting" },
   { id: "unblocked", label: "A card can start", hint: "the card it was waiting on landed" },

@@ -4,6 +4,7 @@ import { api, Effort, EffortSettings, EngineModels, LocalHosts, LocalModel, Mode
 import { EffortPicker } from "../components/EffortPicker";
 import { PreviewSettings } from "../components/PreviewSettings";
 import { AttentionSettings } from "../components/AttentionSettings";
+import { UnattendedSettings } from "../components/UnattendedSettings";
 import { Page, PageHead } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
 import { tappable } from "../lib/motion";
@@ -297,6 +298,7 @@ export default function SettingsPage() {
 
       <PreviewSettings />
       <AttentionSettings />
+      <UnattendedSettings />
 
       <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-ink-dim">
         Models

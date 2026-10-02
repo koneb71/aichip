@@ -204,12 +204,22 @@ pub struct Orchestrator {
     /// still working on it", which no row can — a row says `running` just as
     /// confidently after the task holding it died. Entered and left only by
     /// [`Alive`], so an `execute` that panics or errors still leaves it.
-    liveness: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    liveness: Arc<Mutex<HashMap<Uuid, Liveness>>>,
+}
+
+/// One executing run's signs of life.
+#[derive(Clone, Copy)]
+struct Liveness {
+    /// The last event it produced (or when it started).
+    seen: std::time::Instant,
+    /// When `runs.last_event_at` was last written for it, so a chatty run
+    /// writes the row every fifteen seconds rather than every event.
+    written: Option<std::time::Instant>,
 }
 
 /// A run's place in [`Orchestrator::liveness`] for as long as it is held.
 pub(crate) struct Alive {
-    map: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    map: Arc<Mutex<HashMap<Uuid, Liveness>>>,
     run_id: Uuid,
 }
 
@@ -439,10 +449,13 @@ impl Orchestrator {
     }
 
     pub(crate) fn alive(&self, run_id: Uuid) -> Alive {
-        self.liveness
-            .lock()
-            .unwrap()
-            .insert(run_id, std::time::Instant::now());
+        self.liveness.lock().unwrap().insert(
+            run_id,
+            Liveness {
+                seen: std::time::Instant::now(),
+                written: None,
+            },
+        );
         Alive {
             map: self.liveness.clone(),
             run_id,
@@ -456,6 +469,52 @@ impl Orchestrator {
     /// its worktree".
     pub fn is_executing(&self, run_id: Uuid) -> bool {
         self.liveness.lock().unwrap().contains_key(&run_id)
+    }
+
+    /// How long since an executing run last showed a sign of life. `None`
+    /// when this process is not executing it.
+    pub fn since_last_sign(&self, run_id: Uuid) -> Option<std::time::Duration> {
+        self.liveness
+            .lock()
+            .unwrap()
+            .get(&run_id)
+            .map(|l| l.seen.elapsed())
+    }
+
+    /// Pretend an executing run last spoke `ago` ago. For the reaper's tests.
+    #[cfg(test)]
+    pub(crate) fn backdate(&self, run_id: Uuid, ago: std::time::Duration) {
+        if let Some(l) = self.liveness.lock().unwrap().get_mut(&run_id) {
+            l.seen = std::time::Instant::now() - ago;
+        }
+    }
+
+    /// A run said something. Cheap: memory every time, the row at most every
+    /// fifteen seconds, and never an error for the run.
+    async fn touch(&self, run_id: Uuid) {
+        let now = std::time::Instant::now();
+        let write = {
+            let mut map = self.liveness.lock().unwrap();
+            match map.get_mut(&run_id) {
+                Some(l) => {
+                    l.seen = now;
+                    let due = l.written.is_none_or(|w| {
+                        now.duration_since(w) >= std::time::Duration::from_secs(15)
+                    });
+                    if due {
+                        l.written = Some(now);
+                    }
+                    due
+                }
+                None => false,
+            }
+        };
+        if write {
+            let _ = sqlx::query("UPDATE runs SET last_event_at = now() WHERE id = $1")
+                .bind(run_id)
+                .execute(&self.db.pool)
+                .await;
+        }
     }
 
     /// What to set `MCP_TOOL_TIMEOUT` to, in milliseconds.
@@ -4414,6 +4473,7 @@ this workflow manually."
                 event = proc.events.recv() => {
                     let Some(event) = event else { break };
                     self.persist_and_publish(run_id, step_id, seq.next(), &event).await?;
+                    self.touch(run_id).await;
                     match &event {
                         AichipEvent::AssistantText { text } => text_parts.push(text.clone()),
                         AichipEvent::RunStarted { session_id: sid, .. } => {

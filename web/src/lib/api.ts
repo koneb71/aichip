@@ -24,7 +24,8 @@ export type AttentionEvent =
   | "budget_warning"
   | "question"
   | "decision"
-  | "review";
+  | "review"
+  | "stalled";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -1737,6 +1738,14 @@ const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+/** What aichip does about runs that stop showing signs of life. See `aichip_core::reaper`. */
+export interface Unattended {
+  /** Stop a run that has said nothing for this long. 0 is off. */
+  silenceMinutes: number;
+  /** Pick a lost or silenced run back up — at most twice along a chain. */
+  autoResume: boolean;
+}
+
 /** What a project's Merge requires. See `aichip_core::review`. */
 export interface ReviewPolicy {
   requireChecks: boolean;
@@ -1874,7 +1883,8 @@ export type RevisionKind =
   | "project_checks"
   | "budget_policy"
   | "attention"
-  | "review_policy";
+  | "review_policy"
+  | "unattended";
 
 /** A setting as it was before one change. See `aichip_core::revisions`. */
 export interface ConfigRevision {
@@ -2641,6 +2651,10 @@ export const api = {
       team_id: assignee?.kind === "team" ? assignee.id : null,
     }).then(json),
 
+  unattended: () =>
+    fetch("/api/settings/unattended").then((r) => json<{ unattended: Unattended; maxSilenceMinutes: number }>(r)),
+  saveUnattended: (u: Unattended) =>
+    guarded("PUT", "/api/settings/unattended", u).then((r) => json<{ unattended: Unattended }>(r)),
   /** Stop the running agent and hand the work to another, with a note that
    *  is its brief. It continues in the same worktree once the old run ends. */
   handOff: (taskId: string, agentId: string, note: string) =>

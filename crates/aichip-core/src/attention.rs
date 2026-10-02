@@ -106,6 +106,7 @@ impl Default for Attention {
                 Event::Question,
                 Event::Decision,
                 Event::Review,
+                Event::Stalled,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -156,6 +157,9 @@ pub enum Event {
     /// the reviewer ended without a verdict. On by default — nothing more
     /// happens to the card until someone looks.
     Review,
+    /// A run stopped showing signs of life and was stopped. On by default:
+    /// it stopped while nobody was watching.
+    Stalled,
 }
 
 impl Event {
@@ -172,6 +176,7 @@ impl Event {
             Event::Question => "question",
             Event::Decision => "decision",
             Event::Review => "review",
+            Event::Stalled => "stalled",
         }
     }
 
@@ -188,6 +193,7 @@ impl Event {
             "question" => Event::Question,
             "decision" => Event::Decision,
             "review" => Event::Review,
+            "stalled" => Event::Stalled,
             _ => return None,
         })
     }

@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(apply_to_agents),
         )
         .route("/settings/attention", get(get_attention).put(set_attention))
+        .route(
+            "/settings/unattended",
+            get(get_unattended).put(set_unattended),
+        )
 }
 
 async fn get_models(State(state): State<AppState>) -> Json<Value> {
@@ -331,6 +335,31 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
 /// The stored value is a shell command this server will execute, so anything
 /// that can reach this endpoint has remote code execution. It carries the same
 /// header gate every dashboard write carries — see `super::require_write`.
+
+/// What aichip does about runs that stop showing signs of life. See
+/// `aichip_core::reaper`.
+async fn get_unattended(State(state): State<AppState>) -> Json<Value> {
+    let u = aichip_core::reaper::load(&state.db).await;
+    Json(json!({ "unattended": u, "maxSilenceMinutes": aichip_core::reaper::MAX_SILENCE_MINUTES }))
+}
+
+pub(crate) async fn set_unattended(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<aichip_core::reaper::Unattended>,
+) -> Result<Json<Value>, ApiError> {
+    super::require_write(&headers, "this decides when aichip stops and restarts runs")?;
+    aichip_core::revisions::keep(
+        &state.db,
+        aichip_core::revisions::EntityKind::Unattended,
+        "unattended",
+    )
+    .await;
+    aichip_core::reaper::save(&state.db, body)
+        .await
+        .map_err(internal)?;
+    Ok(get_unattended(State(state)).await)
+}
 
 async fn get_attention(State(state): State<AppState>) -> Json<Value> {
     let a = aichip_core::attention::load(&state.db).await;
