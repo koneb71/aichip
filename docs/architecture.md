@@ -114,10 +114,15 @@ boot-time sweeps (previews, worktrees, per-run files, orphaned runs, interrupted
 spawns the long-running loops (queue, scheduler, attachments, preview idling).
 
 `serve` manages its own Postgres under `~/.eren/pgdata` unless `DATABASE_URL` is set, so a
-fresh checkout has nothing to install. It binds loopback unless `EREN_BIND` says otherwise,
-and refuses a non-loopback bind unless `EREN_TRUST_NETWORK` is set too
-(`eren_server::exposure`): there is no login, so the only thing keeping transcripts and
-files private is that the only caller is this machine. Migrations live in
+fresh checkout has nothing to install. It binds loopback unless `EREN_BIND` says otherwise.
+There is no login, so on loopback the only thing keeping transcripts and files private is that
+the only caller is this machine. A non-loopback bind turns on the access token
+(`eren_server::access`, `Exposure::Protected`): the outermost layer passes a caller whose TCP
+peer is loopback and asks every other one for the token — once, through an access link that
+becomes a cookie, or as a bearer header — while `EREN_ALLOWED_HOSTS` adds the names the Host
+and Origin checks accept. `EREN_ACCESS_TOKEN=off` goes back to no token, and then a wide bind
+is refused unless `EREN_TRUST_NETWORK` is set too (`eren_server::exposure`). `serve` is run
+with `into_make_service_with_connect_info`, which is where the peer address comes from. Migrations live in
 `crates/eren-core/migrations/` and are embedded by sqlx **at compile time** — adding a file
 does not always retrigger a rebuild, so if a new column comes back as `ColumnNotFound`,
 `touch crates/eren-core/src/db.rs` and rebuild.

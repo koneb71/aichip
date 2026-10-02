@@ -163,6 +163,10 @@ Mid-run permission prompts flow: engine → `--permission-prompt-tool mcp__eren_
 
 A card's run also gets Eren's own toolbox on `/mcp/run/{run_id}` ([crates/eren-server/src/mcp/run_tools.rs](crates/eren-server/src/mcp/run_tools.rs)): `comment`, `report_blocker`, `ask_person`, `propose_decision`, `search_kb`, `read_article`, `recall`, and — only on a review pass — `submit_review`. What a run is offered is read from its row (a planning, summary or review pass only reads), and every MCP endpoint refuses calls once its run has ended. These tools pass `approve` without asking a person, so **nothing added there may merge, start a run, resolve an inbox item, or write settings or check commands** — the test refuses tool names containing `merge`, `start`, `setting`, `check`, `run`, `resolve`, `approve` or `decide`.
 
+### Network access
+
+On loopback (the default) there is no login, and the only caller is this machine. A wide `EREN_BIND` turns on the access token (`eren_server::access`, the outermost layer): a caller whose **TCP peer** is loopback passes, every other caller presents the token — an access link (`/?access=…`) trades it for an `HttpOnly` cookie, scripts send a bearer header. `EREN_ALLOWED_HOSTS` adds the names the Host and Origin checks in `reject_non_local_callers` accept (names only, exact authority). Two rules: **"local" is decided by the peer address, never a header** (a header is whatever the caller says); and the token is one of `env_guard::OWN_SECRETS`, so no child sees it. `EREN_ACCESS_TOKEN=off` restores no-token behaviour, which a wide bind must then acknowledge with `EREN_TRUST_NETWORK` (`eren_server::exposure`).
+
 ### Apps
 
 An app is a **project** under `~/.eren/apps/<slug>` (`projects.kind='app'`, the folder from `brand::home()`; `EREN_APPS_DIR` overrides it),

@@ -2,6 +2,7 @@
 // object this crate builds — has outgrown the default 128.
 #![recursion_limit = "256"]
 
+pub mod access;
 pub mod app_bridge;
 pub mod audit_layer;
 pub mod mcp;
@@ -33,6 +34,9 @@ pub struct AppState {
     /// the clobber `baseHash` exists to prevent. Saves are human-paced, so one
     /// lock for all of them is free.
     pub file_writes: Arc<tokio::sync::Mutex<()>>,
+    /// Who may reach the server from another machine: the extra host names,
+    /// and the token they must present. Empty for a loopback-only server.
+    pub access: Arc<access::Access>,
 }
 
 pub fn app(state: AppState) -> Router {
@@ -77,7 +81,10 @@ pub fn app(state: AppState) -> Router {
     }
 
     router
-        .layer(middleware::from_fn(reject_non_local_callers))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            reject_non_local_callers,
+        ))
         // Inside the preview proxy and outside the loopback check, so every
         // dashboard response carries it — including the 403 above — and no
         // proxied response does. A preview must stay framable; the dashboard
@@ -90,6 +97,12 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             preview_proxy::route_previews,
+        ))
+        // Outermost: from another machine, nothing — not the API, the socket,
+        // a preview or an app's bridge — answers without the access token.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            access::require_token,
         ))
         .with_state(state)
 }
@@ -130,9 +143,6 @@ async fn refuse_to_be_framed(
     );
     res
 }
-
-/// Hosts this server will answer to, and origins whose pages may call it.
-const LOCAL_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
 
 /// The host part of a `Host` or `Origin` value, without the port.
 ///
@@ -179,11 +189,15 @@ fn authority(value: &str) -> String {
 /// `Host: localhost:5173` and `Origin: http://localhost:5173` — the same
 /// authority. Comparing against the `Host` rather than the port this process
 /// bound also survives Docker publishing 4820 on some other host port.
-fn origin_may_call(origin: &str, host: &str) -> bool {
+///
+/// A name in `EREN_ALLOWED_HOSTS` counts as this server's own, under the same
+/// same-authority rule: the page at `http://192.168.1.20:4820` may call the
+/// server it was served from, and nothing at any other port may.
+fn origin_may_call(origin: &str, host: &str, access: &access::Access) -> bool {
     // `Origin: null` is what a sandboxed iframe and some redirect chains send.
     // It is not a local page; it is the absence of one.
     origin != "null"
-        && LOCAL_HOSTS.contains(&bare_host(origin))
+        && access.allows_host(bare_host(origin))
         && authority(origin) == authority(host)
 }
 
@@ -192,7 +206,8 @@ fn origin_may_call(origin: &str, host: &str) -> bool {
 /// Two checks, against two different attacks.
 ///
 /// **Host** is the DNS-rebinding defence this has always had: the server binds
-/// 127.0.0.1, and it also declines to answer to a name it does not recognise.
+/// 127.0.0.1, and it also declines to answer to a name it does not recognise —
+/// loopback's, and whatever `EREN_ALLOWED_HOSTS` adds (see [`access`]).
 ///
 /// **Origin** is new, and closes a hole that was open. Eren has no
 /// authentication of any kind, so until now any page on the internet could open
@@ -208,6 +223,7 @@ fn origin_may_call(origin: &str, host: &str) -> bool {
 /// web page, and browsers attach `Origin` to exactly the cross-origin requests
 /// that matter.
 async fn reject_non_local_callers(
+    axum::extract::State(state): axum::extract::State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<axum::response::Response, StatusCode> {
@@ -222,8 +238,9 @@ async fn reject_non_local_callers(
         };
         let host = str_of(axum::http::header::HOST).unwrap_or_default();
         (
-            LOCAL_HOSTS.contains(&bare_host(host)),
-            str_of(axum::http::header::ORIGIN).is_none_or(|o| origin_may_call(o, host)),
+            state.access.allows_host(bare_host(host)),
+            str_of(axum::http::header::ORIGIN)
+                .is_none_or(|o| origin_may_call(o, host, &state.access)),
         )
     };
 
@@ -237,20 +254,25 @@ async fn reject_non_local_callers(
 /// What binding to an address exposes, and whether Eren should do it.
 ///
 /// The whole design rests on one assumption — that only this machine can reach
-/// the server — and that assumption is what pays for having no authentication
-/// at all. Binding anywhere but loopback spends it.
+/// the server — and that assumption is what pays for having no login. Binding
+/// anywhere but loopback spends it, unless the access token (see [`access`])
+/// stands in for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exposure {
     /// Loopback. Only this machine can connect; the kernel enforces it.
     Local,
-    /// Reachable from the network, and somebody said so on purpose.
+    /// Reachable from the network, and every other machine needs the token.
+    Protected,
+    /// Reachable from the network with no token, and somebody said so on purpose.
     Network,
-    /// Reachable from the network, and nobody said so.
+    /// Reachable from the network with no token, and nobody said so.
     Unacknowledged,
 }
 
-/// The variable that acknowledges what binding wide means.
+/// The variable that acknowledges what binding wide without a token means.
 pub const TRUST_NETWORK: &str = "EREN_TRUST_NETWORK";
+/// The variable that sets, or turns off, the access token.
+pub const ACCESS_TOKEN: &str = "EREN_ACCESS_TOKEN";
 
 /// Whether [`TRUST_NETWORK`] is set — under either spelling — to anything but
 /// empty or `0`.
@@ -282,11 +304,17 @@ pub fn network_trusted() -> bool {
 /// copies `EREN_BIND=0.0.0.0` to reach the dashboard from their phone and
 /// does not know there is no password. This makes that a decision rather than a
 /// side effect.
-pub fn exposure(bind: std::net::IpAddr, acknowledged: bool) -> Exposure {
+///
+/// The token changes the answer. With it, a wide bind no longer means "anyone
+/// who can reach the port", so it needs no acknowledgement; without it
+/// (`EREN_ACCESS_TOKEN=off`), it means exactly that, and still does.
+pub fn exposure(bind: std::net::IpAddr, acknowledged: bool, token: bool) -> Exposure {
     if bind.is_loopback() {
         // Includes 127.0.0.0/8 and ::1. `0.0.0.0` is *not* loopback: it is
         // every interface, loopback among them.
         Exposure::Local
+    } else if token {
+        Exposure::Protected
     } else if acknowledged {
         Exposure::Network
     } else {
@@ -298,12 +326,13 @@ pub fn exposure(bind: std::net::IpAddr, acknowledged: bool) -> Exposure {
 pub fn unacknowledged_message(bind: std::net::IpAddr) -> String {
     format!(
         "refusing to start: EREN_BIND is {bind}, which is reachable from your \
-         network, and Eren has no authentication of any kind — anyone who can \
-         reach this port can read every run's transcript, browse your files and \
-         start agents on your machine. The Host-header check does not stop this; \
-         it only stops a web page, and any other program sets that header \
-         itself.\n\n\
+         network, and {ACCESS_TOKEN}=off turns off the access token, so there is \
+         no authentication of any kind — anyone who can reach this port can read \
+         every run's transcript, browse your files and start agents on your \
+         machine. The Host-header check does not stop this; it only stops a web \
+         page, and any other program sets that header itself.\n\n\
          If that is what you want, set {TRUST_NETWORK}=1 as well. If it is not, \
+         leave {ACCESS_TOKEN} unset so other machines need the access link, or \
          leave EREN_BIND unset and reach the dashboard over an SSH tunnel."
     )
 }
@@ -311,6 +340,7 @@ pub fn unacknowledged_message(bind: std::net::IpAddr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use access::LOCAL_HOSTS;
 
     use std::net::IpAddr;
 
@@ -318,7 +348,9 @@ mod tests {
     fn only_loopback_needs_no_saying_so() {
         for local in ["127.0.0.1", "127.0.0.2", "::1"] {
             let ip: IpAddr = local.parse().unwrap();
-            assert_eq!(exposure(ip, false), Exposure::Local, "{local}");
+            assert_eq!(exposure(ip, false, false), Exposure::Local, "{local}");
+            // Nothing from another machine can arrive, so no token is needed.
+            assert_eq!(exposure(ip, false, true), Exposure::Local, "{local}");
         }
     }
 
@@ -328,8 +360,15 @@ mod tests {
         // every interface, loopback among them. The shipped Dockerfile sets it.
         for wide in ["0.0.0.0", "::", "192.168.1.5", "10.0.0.7"] {
             let ip: IpAddr = wide.parse().unwrap();
-            assert_eq!(exposure(ip, false), Exposure::Unacknowledged, "{wide}");
-            assert_eq!(exposure(ip, true), Exposure::Network, "{wide}");
+            assert_eq!(
+                exposure(ip, false, false),
+                Exposure::Unacknowledged,
+                "{wide}"
+            );
+            assert_eq!(exposure(ip, true, false), Exposure::Network, "{wide}");
+            // The token stands in for the acknowledgement.
+            assert_eq!(exposure(ip, false, true), Exposure::Protected, "{wide}");
+            assert_eq!(exposure(ip, true, true), Exposure::Protected, "{wide}");
         }
     }
 
@@ -349,6 +388,9 @@ mod tests {
         // The name in the message is the name that is read.
         assert_eq!(TRUST_NETWORK, eren_shared::brand::env_name("TRUST_NETWORK"));
         assert!(message.contains("SSH tunnel"), "{message}");
+        // And the safer way to be reachable at all.
+        assert!(message.contains(ACCESS_TOKEN), "{message}");
+        assert_eq!(ACCESS_TOKEN, eren_shared::brand::env_name("ACCESS_TOKEN"));
     }
 
     #[test]
@@ -375,36 +417,96 @@ mod tests {
 
     #[test]
     fn the_dashboard_and_the_dev_server_may_call_themselves() {
-        assert!(origin_may_call("http://localhost:4820", "localhost:4820"));
-        assert!(origin_may_call("http://127.0.0.1:4820", "127.0.0.1:4820"));
+        assert!(origin_may_call(
+            "http://localhost:4820",
+            "localhost:4820",
+            &access::Access::default()
+        ));
+        assert!(origin_may_call(
+            "http://127.0.0.1:4820",
+            "127.0.0.1:4820",
+            &access::Access::default()
+        ));
         // `vite dev` forwards the browser's own Host, so its page and the
         // request it proxies share an authority.
-        assert!(origin_may_call("http://localhost:5173", "localhost:5173"));
-        assert!(origin_may_call("http://[::1]:4820", "[::1]:4820"));
+        assert!(origin_may_call(
+            "http://localhost:5173",
+            "localhost:5173",
+            &access::Access::default()
+        ));
+        assert!(origin_may_call(
+            "http://[::1]:4820",
+            "[::1]:4820",
+            &access::Access::default()
+        ));
+    }
+
+    #[test]
+    fn an_allowed_host_may_call_itself_and_nothing_else_gains() {
+        let access = access::Access::new(vec!["192.168.1.20".into()], None);
+        assert!(origin_may_call(
+            "http://192.168.1.20:4820",
+            "192.168.1.20:4820",
+            &access
+        ));
+        // Same rule as loopback: another port on that address is not the dashboard.
+        assert!(!origin_may_call(
+            "http://192.168.1.20:5173",
+            "192.168.1.20:4820",
+            &access
+        ));
+        // And it is not allowed unless someone listed it.
+        assert!(!origin_may_call(
+            "http://192.168.1.20:4820",
+            "192.168.1.20:4820",
+            &access::Access::default()
+        ));
     }
 
     /// The hole this closes: a preview is agent-written code served from a
     /// loopback port, and a loopback origin used to be all it took.
     #[test]
     fn a_preview_on_another_loopback_port_may_not() {
-        assert!(!origin_may_call("http://127.0.0.1:53817", "127.0.0.1:4820"));
-        assert!(!origin_may_call("http://localhost:5173", "localhost:4820"));
-        assert!(!origin_may_call("http://localhost:4820", "127.0.0.1:4820"));
+        assert!(!origin_may_call(
+            "http://127.0.0.1:53817",
+            "127.0.0.1:4820",
+            &access::Access::default()
+        ));
+        assert!(!origin_may_call(
+            "http://localhost:5173",
+            "localhost:4820",
+            &access::Access::default()
+        ));
+        assert!(!origin_may_call(
+            "http://localhost:4820",
+            "127.0.0.1:4820",
+            &access::Access::default()
+        ));
     }
 
     #[test]
     fn everything_else_is_not() {
-        assert!(!origin_may_call("https://evil.example", "localhost:4820"));
-        assert!(!origin_may_call("null", "localhost:4820"));
+        assert!(!origin_may_call(
+            "https://evil.example",
+            "localhost:4820",
+            &access::Access::default()
+        ));
+        assert!(!origin_may_call(
+            "null",
+            "localhost:4820",
+            &access::Access::default()
+        ));
         // A suffix match would let a deployment's own page call the API.
         assert!(!origin_may_call(
             "http://my-preview.localhost:4820",
-            "my-preview.localhost:4820"
+            "my-preview.localhost:4820",
+            &access::Access::default()
         ));
         // And a lookalike registered on the public internet must not pass.
         assert!(!origin_may_call(
             "https://localhost.evil.example",
-            "localhost.evil.example"
+            "localhost.evil.example",
+            &access::Access::default()
         ));
     }
 }

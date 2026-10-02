@@ -62,8 +62,9 @@ ENV EREN_WEB_DIST=/srv/eren/web
 # host's, so nothing outside the namespace could reach it otherwise. What is
 # actually exposed is decided by the port mapping you declare in compose — and
 # `-p 4820:4820` publishes on every interface, so it is reachable from your
-# network. Eren has no authentication, so bind `127.0.0.1:4820:4820` unless
-# you mean to share it.
+# network — and since the access token is on unless EREN_ACCESS_TOKEN=off,
+# every caller then needs the access link `docker logs` shows. Compose turns
+# the token off and publishes on 127.0.0.1 only.
 ENV EREN_BIND=0.0.0.0
 # Acknowledged here because binding wide is the only way a container can work,
 # not because the exposure is smaller. See `eren_server::exposure`.

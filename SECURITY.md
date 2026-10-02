@@ -82,16 +82,44 @@ prefix and the old header are accepted under exactly the same gates
 
 Setting `EREN_BIND` to anything that is not loopback makes the server reachable from your
 network, where none of the above is a defence: `curl -H 'Host: localhost'` from across the room
-sets that header itself. Eren refuses to start in that configuration unless you also set
-`EREN_TRUST_NETWORK=1` (anything but empty or `0`), so that exposing it is a decision rather
-than a side effect. If you need the dashboard from another device, an SSH tunnel keeps the
-loopback assumption true.
+sets that header itself. So a wide bind turns on the **access token**
+(`crates/eren-server/src/access.rs`), and every caller that is not this machine must present it:
+
+- **"This machine" is the TCP peer address**, read from the connection, never a header. The
+  agent CLIs Eren spawns reach `/mcp` over loopback and are never asked; everything else —
+  the API, the WebSocket, the terminal, previews and app bridges — is refused with a 401 by a
+  layer outside every other one. A request with no peer address fails closed.
+- The token is 244 random bits, generated on first use into `~/.eren/access_token`, created
+  0600 in one step, or set with `EREN_ACCESS_TOKEN` (16+ URL-safe characters). It is one of
+  `env_guard::OWN_SECRETS`, so no child process inherits it. Comparisons do not stop at the
+  first differing byte.
+- A browser is given it once through an **access link** (`/?access=<token>`): the server sets
+  an `HttpOnly`, `SameSite=Lax` cookie and redirects (303, `Referrer-Policy: no-referrer`,
+  `no-store`) to the same address without the token. Lax rather than Strict because a link
+  opened from a message is a cross-site navigation, and a Strict cookie would not ride on the
+  redirect; what Lax admits — a top-level GET from another site — cannot be read by that
+  site, and every request that changes anything also passes the Origin check. Scripts send
+  `Authorization: Bearer <token>`.
+- **`EREN_ALLOWED_HOSTS`** adds names the Host and Origin checks accept — the names other
+  devices use. Names only: no ports, paths or wildcards, and an origin must still match the
+  exact authority it is calling, so another port on an allowed address is not the dashboard.
+- It is HTTP. On a network you share with people you do not trust, the token can be read off
+  the wire; use a private network (Tailscale, WireGuard) or an SSH tunnel there.
+- **A reverse proxy on this machine makes every caller look local.** Do not put one in front
+  of Eren without its own authentication.
+
+Deleting `~/.eren/access_token` and restarting signs every device out. `EREN_ACCESS_TOKEN=off`
+restores the old behaviour — no token — and then Eren refuses to start on a wide bind unless
+you also set `EREN_TRUST_NETWORK=1` (anything but empty or `0`), so that exposing an
+unauthenticated agent runner is a decision rather than a side effect.
 
 The container image sets `EREN_BIND=0.0.0.0` and `EREN_TRUST_NETWORK=1`, because inside a
-container the port is only reachable through an explicit mapping. `docker-compose.yml` therefore
-publishes every port — Eren's, Postgres's and MinIO's — on `127.0.0.1` only. Docker's default is
-every interface; if you remove the `127.0.0.1:` you are publishing an unauthenticated agent
-runner, and a database with a default password.
+container the port is only reachable through an explicit mapping, and the host's browser
+arrives through Docker's gateway rather than from loopback. `docker-compose.yml` therefore
+publishes every port — Eren's, Postgres's and MinIO's — on `127.0.0.1` only, and sets
+`EREN_ACCESS_TOKEN=off` for Eren. Docker's default is every interface; if you remove the
+`127.0.0.1:`, leave the token on, or you are publishing an unauthenticated agent runner — and
+either way a database with a default password.
 
 The databases deserve that sentence. The compose Postgres defaults to a well-known password
 (`POSTGRES_PASSWORD` in `.env.example`), and the compose MinIO to well-known root credentials
