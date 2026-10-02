@@ -37,6 +37,10 @@ pub enum FollowUp {
     /// read the card's diff and give a verdict. Read-only, as the reviewer's
     /// own agent, and on the reviewer's engine. See `crate::review`.
     Review { reviewer: Uuid, round: i32 },
+    /// A person stopped the card's agent and handed the work to another, with
+    /// a note. The new agent continues in the same worktree — without the old
+    /// agent's session, which is not its memory to carry. See `crate::handoff`.
+    Handoff { note: String },
 }
 
 impl FollowUp {
@@ -49,6 +53,7 @@ impl FollowUp {
             Self::Summarize { .. } => "summary",
             Self::Answer { .. } => "answer",
             Self::Review { .. } => "peer_review",
+            Self::Handoff { .. } => "handoff",
         }
     }
 
@@ -293,6 +298,21 @@ impl Orchestrator {
                 };
                 (review_prompt(&task_prompt, &diff), None)
             }
+            FollowUp::Handoff { note } => {
+                let files: Vec<String> = match worktree.as_deref() {
+                    Some(dir) => self
+                        .worktrees
+                        .diff_stat(
+                            std::path::Path::new(dir),
+                            &card.get::<String, _>("default_branch"),
+                        )
+                        .await
+                        .map(|stats| stats.into_iter().map(|f| f.path).collect())
+                        .unwrap_or_default(),
+                    None => vec![],
+                };
+                (handoff_prompt(&task_prompt, &files, note), None)
+            }
             FollowUp::Answer { question_id } => {
                 let q = sqlx::query(
                     "SELECT q.task_id, q.question, q.answer, r.session_id, r.session_engine
@@ -527,6 +547,38 @@ pub(crate) fn summary_prompt(task_prompt: &str, files: &[String], resumed: bool)
     prompt.push_str(&format!(
         "\nThe task was:\n{}\n",
         clip_chars(task_prompt, 800)
+    ));
+    prompt
+}
+
+/// Brief the agent a card was handed to.
+///
+/// It did not do the work so far and does not have the session that did, so
+/// what it is told is where things stand — the files already changed are in
+/// its working directory — and the person's note, which is the reason the
+/// work changed hands and so the most important line here.
+pub(crate) fn handoff_prompt(task_prompt: &str, files: &[String], note: &str) -> String {
+    let mut prompt = String::from(
+        "Another agent was working on this task and has been stopped; the person \
+         handed the work to you. Its changes so far are already in your working \
+         directory — read them before you change anything, and build on them rather \
+         than starting over unless the note below says to.\n",
+    );
+    prompt.push_str(&format!(
+        "\nThe person's note on handing it over:\n{}\n",
+        clip_chars(note, 2000)
+    ));
+    if !files.is_empty() {
+        let listed: Vec<String> = files.iter().take(40).map(|f| format!("- {f}")).collect();
+        prompt.push_str(&format!("\nFiles changed so far:\n{}\n", listed.join("\n")));
+        if files.len() > 40 {
+            prompt.push_str(&format!("…and {} more.\n", files.len() - 40));
+        }
+    }
+    prompt.push_str(&format!(
+        "\nThe task:\n{}\n\nCarry on from here, and finish with a short account of \
+         what you did and what is left.",
+        clip_chars(task_prompt, 2000)
     ));
     prompt
 }

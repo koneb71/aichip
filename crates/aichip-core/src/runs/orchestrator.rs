@@ -199,6 +199,26 @@ pub struct Orchestrator {
     pub(crate) mcp_base_url: Option<String>,
     /// Keyed by run, never by step — see `CancelState`.
     cancels: Mutex<HashMap<Uuid, CancelState>>,
+    /// Runs whose `execute` has not returned yet, with when each last showed
+    /// a sign of life. In memory on purpose: it answers "is this process
+    /// still working on it", which no row can — a row says `running` just as
+    /// confidently after the task holding it died. Entered and left only by
+    /// [`Alive`], so an `execute` that panics or errors still leaves it.
+    liveness: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+}
+
+/// A run's place in [`Orchestrator::liveness`] for as long as it is held.
+pub(crate) struct Alive {
+    map: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
+    run_id: Uuid,
+}
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.map.lock() {
+            map.remove(&self.run_id);
+        }
+    }
 }
 
 pub(crate) struct StreamOutcome {
@@ -414,7 +434,28 @@ impl Orchestrator {
             slots: Arc::new(crate::runs::slots::Slots::new(max_concurrent)),
             mcp_base_url,
             cancels: Mutex::new(HashMap::new()),
+            liveness: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn alive(&self, run_id: Uuid) -> Alive {
+        self.liveness
+            .lock()
+            .unwrap()
+            .insert(run_id, std::time::Instant::now());
+        Alive {
+            map: self.liveness.clone(),
+            run_id,
+        }
+    }
+
+    /// Is this process still inside the run's `execute` — including the
+    /// post-work after the engine exits (the report, checks, the review)?
+    /// A run's status turns terminal before that work is done, so "not live
+    /// in the database" alone does not mean "safe to start another run in
+    /// its worktree".
+    pub fn is_executing(&self, run_id: Uuid) -> bool {
+        self.liveness.lock().unwrap().contains_key(&run_id)
     }
 
     /// What to set `MCP_TOOL_TIMEOUT` to, in milliseconds.
@@ -1185,6 +1226,7 @@ impl Orchestrator {
                 Ok(Some(run_id)) => {
                     let this = self.clone();
                     tokio::spawn(async move {
+                        let _alive = this.alive(run_id);
                         if let Err(e) = this.execute(run_id).await {
                             tracing::error!(%run_id, error=%e, "run execution error");
                             let _ = this

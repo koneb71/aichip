@@ -2622,6 +2622,13 @@ export const api = {
       team_id: assignee?.kind === "team" ? assignee.id : null,
     }).then(json),
 
+  /** Stop the running agent and hand the work to another, with a note that
+   *  is its brief. It continues in the same worktree once the old run ends. */
+  handOff: (taskId: string, agentId: string, note: string) =>
+    patch(`/api/tasks/${taskId}`, { agent_id: agentId, team_id: null, handoff_note: note }).then((r) =>
+      json<{ handingOff: boolean }>(r),
+    ),
+
   // bake-off: one brief, several attempts, keep the best
   startBakeoff: (
     taskId: string,

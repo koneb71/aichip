@@ -86,7 +86,7 @@ pub async fn rounds(db: &Db, task_id: Uuid) -> anyhow::Result<i64> {
           WHERE d.task_id = $1
             AND d.created_at > COALESCE(
                 (SELECT max(created_at) FROM runs
-                  WHERE task_id = $1 AND trigger IN ('manual', 'resume', 'retry')),
+                  WHERE task_id = $1 AND trigger IN ('manual', 'resume', 'retry', 'handoff')),
                 '-infinity'::timestamptz)",
     )
     .bind(task_id)

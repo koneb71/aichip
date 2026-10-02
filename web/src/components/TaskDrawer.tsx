@@ -35,6 +35,7 @@ import { Menu } from "./ui/Overlay";
 import { Tabs, TabPanel } from "./ui/Tabs";
 import { Timeline } from "./task/Timeline";
 import { ReviewPanel } from "./task/ReviewPanel";
+import { HandOff } from "./task/HandOff";
 import { Textarea } from "./ui/Field";
 import { Building2, FileDiff, GitMerge, MoreHorizontal, Play, RotateCcw, Scale, Square, Trash2, X } from "lucide-react";
 
@@ -763,9 +764,12 @@ export function TaskDrawer({
           agents={agents}
           teams={teams}
           disabled={running}
-          disabledReason="Cancel the run to hand this card to someone else."
+          disabledReason="Cancel the run, or hand it off with a note below."
           onChange={reassign}
         />
+        {running && !task.teamId && (
+          <HandOff taskId={task.id} current={task.agentId ?? null} agents={agents} onDone={onChanged} />
+        )}
         {reassignError && (
           <div className="mt-1.5 rounded-md bg-danger-subtle px-2.5 py-1.5 text-[11px] text-danger-fg">
             {reassignError}

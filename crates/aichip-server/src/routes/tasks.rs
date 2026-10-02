@@ -892,6 +892,10 @@ pub(crate) struct MoveTask {
     /// Dropping it into In Progress after seeing the forecast.
     #[serde(default)]
     acknowledge_forecast: bool,
+    /// With a new agent on a card that is running: stop the running agent and
+    /// hand the work over, this note being the new agent's brief.
+    #[serde(default)]
+    handoff_note: Option<String>,
 }
 
 impl MoveTask {
@@ -1002,9 +1006,24 @@ pub(crate) async fn move_task(
 
     let reassigning = body.agent_id.is_some() || body.team_id.is_some();
     if reassigning && run_active {
+        // To an agent, with a note: a handoff — the running agent is stopped
+        // and the new one continues in the same worktree. Anything else still
+        // waits for the run to be cancelled.
+        if let (Some(note), Some(Some(to)), None | Some(None)) =
+            (&body.handoff_note, body.agent_id, body.team_id)
+        {
+            require_same_workspace(&state, id, "agents", to).await?;
+            aichip_core::handoff::request(&state.orchestrator, id, to, note)
+                .await
+                .map_err(super::answer_refused)?;
+            tokio::spawn(state.orchestrator.clone().settle_handoff_soon(id));
+            return Ok(Json(json!({ "id": id, "handingOff": true })));
+        }
         return Err((
             StatusCode::CONFLICT,
-            "this card is being worked on — cancel the run before reassigning it".into(),
+            "this card is being worked on — cancel the run before reassigning it, or hand it \
+             over with a note"
+                .into(),
         ));
     }
 

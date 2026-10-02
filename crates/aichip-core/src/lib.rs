@@ -13,6 +13,7 @@ pub mod decisions;
 pub mod estimate;
 pub mod fence;
 pub mod github;
+pub mod handoff;
 pub mod inbox;
 pub mod kb;
 pub mod landing;

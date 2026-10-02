@@ -131,6 +131,7 @@ impl Scheduler {
         if let Err(e) = self.orchestrator.settle_landings().await {
             tracing::warn!(error = %e, "could not settle card landings");
         }
+        self.orchestrator.settle_handoffs().await;
         self.prune_ledger().await;
         self.tick_workflows().await?;
         self.tick_routines().await
