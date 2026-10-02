@@ -105,6 +105,33 @@ pub async fn assert_steps_can_run(
     assert_can_run(db, &ids).await
 }
 
+/// The gate once more at dispatch, for a run that was queued while its agent
+/// could still run. A workflow is not asked here: each of its steps asks as
+/// it starts (`load_agent`), which is the same question at a finer grain.
+pub async fn assert_may_dispatch(db: &Db, run_id: Uuid) -> anyhow::Result<()> {
+    let row = sqlx::query(
+        "SELECT COALESCE(r.agent_id, t.agent_id) AS agent_id, r.team_id, r.workflow_id
+           FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+          WHERE r.id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    // No such run is the caller's to report, with its own words.
+    let Some(row) = row else { return Ok(()) };
+    match (
+        row.get::<Option<Uuid>, _>("team_id"),
+        row.get::<Option<Uuid>, _>("workflow_id"),
+    ) {
+        (Some(team), _) => assert_team_can_run(db, team).await,
+        (None, Some(_)) => Ok(()),
+        (None, None) => {
+            let agent: Option<Uuid> = row.get("agent_id");
+            assert_can_run(db, agent.as_slice()).await
+        }
+    }
+}
+
 /// Every agent a team definition names: the manager, then the members.
 /// Pure, so the definition's shape is tested without a database.
 pub fn team_agent_ids(definition: &serde_json::Value) -> Vec<Uuid> {
@@ -193,7 +220,8 @@ impl Orchestrator {
     }
 
     /// Let a paused agent take work again. What was refused while it was
-    /// paused stays refused — nothing queued itself up meanwhile.
+    /// paused stays refused — a run that came up for dispatch meanwhile ended
+    /// with the reason, and is started again by a person (Retry).
     pub async fn resume_agent(&self, agent_id: Uuid) -> anyhow::Result<()> {
         let changed = sqlx::query(
             "UPDATE agents SET status = 'active', pause_reason = NULL, paused_at = NULL
@@ -346,7 +374,13 @@ mod tests {
                     continue;
                 };
                 let body = &source[start..at];
-                if body.contains("agents::assert_") || NO_AGENT.iter().any(|(n, _)| *n == name) {
+                // A test writing a run row as a fixture starts no agent.
+                let before = source[..start].trim_end();
+                let is_test = before.ends_with("#[test]") || before.ends_with("#[tokio::test]");
+                if is_test
+                    || body.contains("agents::assert_")
+                    || NO_AGENT.iter().any(|(n, _)| *n == name)
+                {
                     continue;
                 }
                 ungated.push(format!("{}: {name}", path.display()));
@@ -410,6 +444,48 @@ mod db_tests {
 
         orchestrator.resume_agent(ada).await.unwrap();
         orchestrator.start_card(card).await.unwrap();
+
+        t.finish().await;
+    }
+
+    /// A run queued before the pause does not start after it: dispatch asks
+    /// again, and the run ends with the reason instead of running.
+    #[tokio::test]
+    async fn a_run_queued_before_a_pause_ends_with_the_reason_instead_of_running() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (ws, project) = t.project(dir.path(), true).await;
+        let ada = agent(&t, ws, "Ada").await;
+        let card = t.card(project, "work").await;
+        sqlx::query("UPDATE tasks SET agent_id = $2 WHERE id = $1")
+            .bind(card)
+            .bind(ada)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+
+        orchestrator.set_queue_paused(true).await.unwrap();
+        let run = orchestrator.start_card(card).await.unwrap();
+        orchestrator.pause_agent(ada, None, false).await.unwrap();
+        orchestrator.set_queue_paused(false).await.unwrap();
+
+        t.until(
+            "the queued run to end",
+            "SELECT status IN ('completed','failed','canceled') FROM runs WHERE id = $1",
+            run,
+        )
+        .await;
+        let (status, reason): (String, Option<String>) =
+            sqlx::query_as("SELECT status, error_reason FROM runs WHERE id = $1")
+                .bind(run)
+                .fetch_one(&t.db.pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "failed");
+        assert!(reason.unwrap_or_default().contains("Ada is paused"));
 
         t.finish().await;
     }

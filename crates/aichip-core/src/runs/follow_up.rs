@@ -68,6 +68,42 @@ pub enum FollowUpRefusal {
 }
 
 impl Orchestrator {
+    /// Anything a person does to a card outranks aichip asking a silent run
+    /// to explain itself. A summary pass is a live run like any other, and
+    /// left alone it made Merge, Update from main, a review fix or a
+    /// reassignment refuse with "an agent is still working on this card" —
+    /// for hours, when the queue was holding. So it gives way: the doors
+    /// that would refuse call this first, and the summary is dropped.
+    pub async fn supersede_summary(&self, task_id: Uuid) -> anyhow::Result<()> {
+        let live = || {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM runs WHERE task_id = $1 AND trigger = 'summary'
+                    AND status NOT IN ('completed', 'failed', 'canceled')",
+            )
+            .bind(task_id)
+            .fetch_all(&self.db.pool)
+        };
+        let pending = live().await?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for run_id in &pending {
+            if !self.cancel(*run_id) {
+                self.cancel_idle(*run_id).await?;
+            }
+        }
+        // One that was executing ends a moment later, through `finish`. Wait
+        // for it, so the caller's own "is anything running" check sees it
+        // gone rather than refusing on the run it just stopped.
+        for _ in 0..50 {
+            if live().await?.is_empty() {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok(())
+    }
+
     /// Queue a follow-up run in the card's own worktree.
     ///
     /// Serialised with `enqueue_task` on the card's row, and refused while any
@@ -78,6 +114,9 @@ impl Orchestrator {
         task_id: Uuid,
         follow_up: FollowUp,
     ) -> anyhow::Result<Uuid> {
+        if !matches!(follow_up, FollowUp::Summarize { .. }) {
+            self.supersede_summary(task_id).await?;
+        }
         let mut guard = self.db.pool.begin().await?;
         // The bound agent's engine wins over the card's, as it does for every
         // other start of the card — the old review fix used the card's alone,
@@ -521,5 +560,59 @@ mod tests {
         );
         assert!(prompt.chars().count() < 4000);
         assert!(prompt.contains("Fix it."));
+    }
+}
+
+/// Against a real database — see `crate::testdb`.
+#[cfg(test)]
+mod db_tests {
+    use super::FollowUp;
+    use crate::testdb;
+
+    /// A summary pass is aichip asking, and anything a person does to the
+    /// card outranks it: starting the card again drops the pending summary
+    /// rather than refusing with "already running".
+    #[tokio::test]
+    async fn a_pending_summary_gives_way_to_a_person() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "silent").await;
+        sqlx::query("UPDATE tasks SET board_column = 'review', worktree_path = $2 WHERE id = $1")
+            .bind(card)
+            .bind(dir.path().to_string_lossy().as_ref())
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let silent: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine) VALUES ($1, 'completed', 'manual', 'mock')
+             RETURNING id",
+        )
+        .bind(card)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+
+        orchestrator.set_queue_paused(true).await.unwrap();
+        let summary = orchestrator
+            .enqueue_follow_up(card, FollowUp::Summarize { run_id: silent })
+            .await
+            .unwrap();
+        // The person starts the card again while the summary is still queued.
+        orchestrator
+            .enqueue_task(card)
+            .await
+            .expect("the summary gives way");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(summary)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "canceled");
+
+        t.finish().await;
     }
 }

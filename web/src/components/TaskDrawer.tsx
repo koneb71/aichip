@@ -176,8 +176,10 @@ export function TaskDrawer({
   }, [task.id]);
 
   useEffect(() => {
+    // Every agent, retired ones included, so the card's own assignee is
+    // always nameable; the picker and the bake-off offer only working ones.
     api
-      .agents(workspaceId)
+      .allAgents(workspaceId)
       .then((r) => setAgents(r.agents))
       .catch(() => {});
     api
@@ -891,7 +893,7 @@ export function TaskDrawer({
         {bakeoff ? (
           <BakeoffView
             taskId={task.id}
-            agents={agents}
+            agents={agents.filter((a) => a.status !== "retired")}
             currentTier={shownTier}
             onKept={onChanged}
             onClose={() => setBakeoff(false)}

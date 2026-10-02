@@ -47,7 +47,8 @@ pub struct Unblocked {
 pub async fn land(db: &Db, task_id: Uuid) -> anyhow::Result<Option<(String, Vec<Unblocked>)>> {
     let mut tx = db.pool.begin().await?;
     let title: Option<String> = sqlx::query_scalar(
-        "UPDATE tasks SET landed_at = now()
+        // A landed card is not stuck, whatever its agent said on the way.
+        "UPDATE tasks SET landed_at = now(), blocked_note = NULL
           WHERE id = $1 AND board_column = 'done' AND landed_at IS NULL
           RETURNING title",
     )
@@ -72,6 +73,12 @@ pub async fn land(db: &Db, task_id: Uuid) -> anyhow::Result<Option<(String, Vec<
     .bind(task_id)
     .fetch_all(&mut *tx)
     .await?;
+    // What a dependent's agent said it was waiting for has arrived.
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.get("id")).collect();
+    sqlx::query("UPDATE tasks SET blocked_note = NULL WHERE id = ANY($1)")
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Some((
         title,
@@ -385,6 +392,76 @@ mod db_tests {
         );
 
         t.finish().await;
+    }
+
+    /// An agent that reported it is waiting on another card leaves its card
+    /// in the backlog, where that card's landing finds and wakes it.
+    #[tokio::test]
+    async fn a_card_whose_agent_reported_a_blocker_waits_and_is_woken() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), true).await;
+        let schema = t.card(project, "schema").await;
+        let api = t.card(project, "api").await;
+
+        // Queued, then — as `report_blocker` does mid-run — waiting on schema.
+        orchestrator.set_queue_paused(true).await.unwrap();
+        let run = orchestrator.start_card(api).await.unwrap();
+        add_blocker(&t.db, api, schema).await.unwrap();
+        sqlx::query("UPDATE tasks SET blocked_note = 'needs the schema' WHERE id = $1")
+            .bind(api)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        orchestrator.set_queue_paused(false).await.unwrap();
+        t.until(
+            "the run to finish",
+            "SELECT status = 'completed' FROM runs WHERE id = $1",
+            run,
+        )
+        .await;
+        t.until(
+            "the waiting card to settle",
+            "SELECT board_column = 'backlog' FROM tasks WHERE id = $1",
+            api,
+        )
+        .await;
+
+        sqlx::query("UPDATE tasks SET board_column = 'done' WHERE id = $1")
+            .bind(schema)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        orchestrator.landed(schema).await;
+        let (note, notes): (Option<String>, Vec<String>) = (
+            sqlx::query_scalar("SELECT blocked_note FROM tasks WHERE id = $1")
+                .bind(api)
+                .fetch_one(&t.db.pool)
+                .await
+                .unwrap(),
+            sqlx::query_scalar(
+                "SELECT content FROM task_comments WHERE task_id = $1 AND author = 'system' ORDER BY created_at",
+            )
+            .bind(api)
+            .fetch_all(&t.db.pool)
+            .await
+            .unwrap(),
+        );
+        assert_eq!(note, None, "what it waited for has arrived");
+        assert!(
+            notes[0].starts_with("Waiting for \u{201c}schema\u{201d}"),
+            "{notes:?}"
+        );
+        assert_eq!(notes.last().unwrap(), &note_text("schema"));
+
+        t.finish().await;
+    }
+
+    fn note_text(landed: &str) -> String {
+        note(landed, Ok(()), false)
     }
 
     #[tokio::test]

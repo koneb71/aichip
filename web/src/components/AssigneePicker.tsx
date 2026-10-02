@@ -40,6 +40,12 @@ export function AssigneePicker({
   onChange: (next: Assignee) => void;
 }) {
   const team = value?.kind === "team" ? teams.find((t) => t.id === value.id) : undefined;
+  // A retired agent is not offered — but a card still assigned to one says
+  // so, rather than showing "Nobody in particular" while Start refuses with
+  // the agent's name.
+  const offered = agents.filter(
+    (a) => a.status !== "retired" || (value?.kind === "agent" && value.id === a.id),
+  );
 
   return (
     <div>
@@ -50,11 +56,12 @@ export function AssigneePicker({
         className="w-full rounded-lg border border-line bg-panel px-2 py-2 text-sm disabled:opacity-50"
       >
         <option value="">Nobody in particular</option>
-        {agents.length > 0 && (
+        {offered.length > 0 && (
           <optgroup label="Agents">
-            {agents.map((a) => (
-              <option key={a.id} value={`agent:${a.id}`}>
+            {offered.map((a) => (
+              <option key={a.id} value={`agent:${a.id}`} disabled={a.status === "retired"}>
                 {a.name}
+                {a.status === "retired" ? " (retired)" : a.status === "paused" ? " (paused)" : ""}
               </option>
             ))}
           </optgroup>

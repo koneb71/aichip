@@ -35,7 +35,8 @@ export default function TeamsPage() {
   const refresh = useCallback(() => {
     if (!active) return;
     api.teams(active.id).then((r) => setTeams(r.teams)).catch(() => {});
-    api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
+    // All of them: a team that still names a retired agent shows who it was.
+    api.allAgents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
     api.projects(active.id).then((r) => setProjects(r.projects)).catch(() => {});
     api
       .orgRuns({ workspaceId: active.id })
@@ -210,7 +211,7 @@ export default function TeamsPage() {
           <TeamEditor
             workspaceId={active.id}
             team={editing === "new" ? null : editing}
-            agents={agents}
+            agents={agents.filter((a) => a.status !== "retired")}
             onClose={() => setEditing(null)}
             onChanged={() => {
               setEditing(null);

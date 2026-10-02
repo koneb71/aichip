@@ -521,6 +521,7 @@ impl Orchestrator {
         // references this task, and its foreign-key check takes `KEY SHARE`,
         // which this lock admits and `FOR UPDATE` would not — the team path
         // inserts on its own connection and would wait on us forever.
+        self.supersede_summary(task_id).await?;
         let mut guard = self.db.pool.begin().await?;
         sqlx::query("SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE")
             .bind(task_id)
@@ -1589,6 +1590,19 @@ impl Orchestrator {
             tracing::warn!(%run_id, "dropped a queued run that is no longer waiting");
             return Ok(());
         };
+        // Asked again here, not only when the run was queued: a run can wait
+        // a long time — behind the concurrency cap, a rate limit, a plan
+        // nobody had approved yet — and an agent paused meanwhile has said
+        // "start nothing". It ends with the reason, where a person will see
+        // it, rather than quietly running under a paused agent.
+        if let Err(e) = crate::agents::assert_may_dispatch(&self.db, run_id).await {
+            if e.is::<crate::agents::Unavailable>() {
+                return self
+                    .finish(run_id, RunStatus::Failed, Some(e.to_string()))
+                    .await;
+            }
+            return Err(e);
+        }
         match (
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
@@ -2001,9 +2015,13 @@ impl Orchestrator {
                 permission_mode
             },
             allowed_tools: if read_only {
+                // With no prompt tool to ask through, anything not listed is
+                // refused — including aichip's own look-ups, which the
+                // toolbox offers a read-only pass and nothing else.
                 task_plan::PLANNING_TOOLS
                     .iter()
                     .map(|t| t.to_string())
+                    .chain(std::iter::once("mcp__aichip".to_string()))
                     .collect()
             } else {
                 allowed_tools
@@ -2090,12 +2108,47 @@ impl Orchestrator {
                 // in-place run already wrote to the user's folder and produced
                 // no diff, so parking it in review would offer a review that
                 // cannot happen.
-                let column = if in_place { "done" } else { "review" };
+                //
+                // Unless the agent said it is waiting on another card
+                // (`report_blocker` with a card): then the work is not ready
+                // to review, it is waiting, and the backlog is where a card
+                // waits — which is also where a landing looks for the cards
+                // it unblocks, so this one is woken when its blocker lands.
+                let waiting_on: Vec<String> = sqlx::query_scalar(
+                    "SELECT b.title FROM tasks t
+                       JOIN task_deps d ON d.task_id = t.id
+                       JOIN tasks b ON b.id = d.blocked_by
+                      WHERE t.id = $1 AND t.blocked_note IS NOT NULL AND b.board_column <> 'done'
+                      ORDER BY b.title",
+                )
+                .bind(task_id)
+                .fetch_all(&self.db.pool)
+                .await?;
+                let column = match (waiting_on.is_empty(), in_place) {
+                    (false, _) => "backlog",
+                    (true, true) => "done",
+                    (true, false) => "review",
+                };
                 sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
                     .bind(task_id)
                     .bind(column)
                     .execute(&self.db.pool)
                     .await?;
+                if !waiting_on.is_empty() {
+                    let note = format!(
+                        "Waiting for {} to land — back in the backlog until then.",
+                        waiting_on
+                            .iter()
+                            .map(|t| format!("\u{201c}{t}\u{201d}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    if let Err(e) =
+                        report::post_system(&self.db, task_id, Some(run_id), &note).await
+                    {
+                        tracing::warn!(%run_id, error = %e, "could not note a waiting card");
+                    }
+                }
             }
 
             // What the run did goes on the card, where a person reading it
@@ -2118,8 +2171,13 @@ impl Orchestrator {
             // itself — one, because a summary pass never asks for another.
             // Not for a bake-off variant (the card's worktree is not the one
             // it worked in) or an in-place card (there is no worktree).
-            let summarize =
-                outcome.output.trim().is_empty() && !summarizing && !in_place && variant.is_none();
+            let summarize = outcome.output.trim().is_empty()
+                && !summarizing
+                && !in_place
+                && variant.is_none()
+                // An app's change lands by itself just below; a summary
+                // queued now would run on a card that is already done.
+                && run.get::<String, _>("project_kind") != "app";
 
             // A conflict the agent was asked to resolve is concluded here, so
             // the card's branch carries the merge before anything checks it.

@@ -537,6 +537,11 @@ async fn merge(
     // run still writing there — a follow-up, a resume, an epic's step — that
     // squash-merged half a change and pulled the directory out from under the
     // agent mid-edit.
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -786,6 +791,19 @@ pub(crate) async fn move_task(
     Path(id): Path<Uuid>,
     Json(body): Json<MoveTask>,
 ) -> Result<Json<Value>, ApiError> {
+    // Only the changes a live run would refuse; reordering a column is not
+    // a reason to drop anything.
+    if body.board_column.is_some()
+        || body.agent_id.is_some()
+        || body.team_id.is_some()
+        || body.prompt.is_some()
+    {
+        state
+            .orchestrator
+            .supersede_summary(id)
+            .await
+            .map_err(internal)?;
+    }
     let row = sqlx::query(
         "SELECT t.board_column, t.parent_id,
                 (SELECT status FROM runs WHERE task_id = t.id
@@ -1355,6 +1373,11 @@ async fn update_from_base(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1408,10 +1431,12 @@ async fn task_runs(
                 r.variant_label, r.review_comment_id, r.plan_approval,
                 COALESCE(r.worktree_path, t.worktree_path) AS worktree,
                 p.path AS project_path, p.vcs, a.name AS agent_name,
-                -- What the run said it did, as posted on this card.
+                -- What the run said it did, as posted on this card: the
+                -- newest of its comments, because the report is written when
+                -- the run ends — after any note it left along the way.
                 (SELECT left(c.content, 600) FROM task_comments c
                   WHERE c.run_id = r.id AND c.task_id = r.task_id AND c.author = 'agent'
-                  ORDER BY c.created_at LIMIT 1) AS report
+                  ORDER BY c.created_at DESC LIMIT 1) AS report
            FROM runs r
            JOIN tasks t ON t.id = r.task_id
            JOIN projects p ON p.id = t.project_id
@@ -1817,6 +1842,11 @@ async fn delete_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1877,6 +1907,11 @@ async fn retry(
     Path(id): Path<Uuid>,
     body: Option<Json<Retry>>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1981,6 +2016,11 @@ async fn resume_run(
     // Not `run_is_active`, which asks about the card: this asks whether
     // anything at all is still working on it, the same guard Retry uses,
     // because two engines in one worktree is the failure both prevent.
+    state
+        .orchestrator
+        .supersede_summary(task_id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, task_id).await? || step_is_live(&state, task_id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -2098,6 +2138,10 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    // A paused agent's plan can be approved later; it is not run now.
+    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+        .await
+        .map_err(super::run_refused)?;
     let updated = sqlx::query(
         "UPDATE runs SET plan_approved_at = now(), status = 'queued'
          WHERE id = $1 AND status = 'awaiting_approval'",
@@ -2133,6 +2177,10 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
+    // A paused agent's plan can be approved later; it is not run now.
+    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+        .await
+        .map_err(super::run_refused)?;
     if body.note.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
