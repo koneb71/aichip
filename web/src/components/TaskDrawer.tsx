@@ -33,6 +33,7 @@ import { Avatar } from "./ui/Avatar";
 import { Button, IconButton } from "./ui/Button";
 import { Menu } from "./ui/Overlay";
 import { Tabs, TabPanel } from "./ui/Tabs";
+import { Timeline } from "./task/Timeline";
 import { Building2, FileDiff, GitMerge, MoreHorizontal, Play, RotateCcw, Scale, Square, Trash2, X } from "lucide-react";
 
 type DrawerTab = "overview" | "activity" | "comments" | "checks" | "history" | "diff" | "bakeoff";
@@ -102,6 +103,7 @@ export function TaskDrawer({
   const [panel, setPanel] = useState<"overview" | "comments" | "activity" | "history" | "checks">(
     isActive(task.runStatus) ? "activity" : "overview",
   );
+  const [historyView, setHistoryView] = useState<"runs" | "timeline">("runs");
   const att = useAttachments(task.projectId);
   const [attachBusy, setAttachBusy] = useState(false);
   const [busy, setBusy] = useState<"retry" | "resume" | "delete" | null>(null);
@@ -905,6 +907,20 @@ export function TaskDrawer({
           </TabPanel>
         )}
         <TabPanel value="history" className="overflow-y-auto p-4">
+          <div className="mb-3">
+            <Tabs<"runs" | "timeline">
+              variant="pill"
+              value={historyView}
+              onValueChange={setHistoryView}
+              tabs={[
+                { value: "runs", label: "Runs" },
+                { value: "timeline", label: "Timeline" },
+              ]}
+            />
+          </div>
+          {historyView === "timeline" ? (
+            <Timeline taskId={task.id} refreshKey={`${task.runId}:${task.runStatus}`} />
+          ) : (
           <RunHistory
             taskId={task.id}
             latestRunId={task.runId}
@@ -915,6 +931,7 @@ export function TaskDrawer({
               setPanel("activity");
             }}
           />
+          )}
         </TabPanel>
         <TabPanel value="diff" className="overflow-y-auto p-4">
           {diff === null ? (

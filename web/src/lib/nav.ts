@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Plug,
+  ScrollText,
   Settings,
   Sparkles,
   Telescope,
@@ -55,6 +56,7 @@ export const NAV: NavItem[] = [
   { to: "/apps", label: "Apps", icon: LayoutGrid, group: "Knowledge" },
   { to: "/skills", label: "Skills", icon: Sparkles, group: "Knowledge" },
   { to: "/connections", label: "Connections", icon: Plug, group: "System", keywords: ["mcp", "github", "servers"] },
+  { to: "/audit", label: "Audit log", icon: ScrollText, group: "System", keywords: ["history", "ledger", "who", "what happened"] },
   { to: "/settings", label: "Settings", icon: Settings, group: "System", keywords: ["models", "permissions", "theme"] },
 ];
 

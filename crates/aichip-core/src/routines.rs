@@ -73,9 +73,26 @@ pub async fn fire(
     .bind(fired.and_then(|f| f.research_id))
     .bind(fired.and_then(|f| f.task_id))
     .bind(fired.and_then(|f| f.chat_id))
-    .bind(error)
+    .bind(&error)
     .execute(&db.pool)
     .await?;
+    // A person clicking "run now" is already in the ledger through the API;
+    // everything else that fires a routine is aichip acting on its own.
+    if trigger != "manual" {
+        crate::audit::record(
+            db,
+            crate::audit::Entry::new(
+                crate::audit::Actor::System,
+                format!("routine fired ({trigger})"),
+            )
+            .on("routines", routine_id)
+            .summary(match &error {
+                None => format!("fired by {trigger}"),
+                Some(e) => format!("fired by {trigger}, did not run: {e}"),
+            }),
+        )
+        .await;
+    }
     outcome.map(|_| ())
 }
 

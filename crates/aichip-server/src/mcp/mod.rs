@@ -83,6 +83,7 @@ async fn rpc(
                 Ok(ctx) => run_tools::call(&state, run_id, &ctx, name, args).await,
                 Err(e) => Err(e),
             };
+            log_tool(&state, run_id, name, &outcome);
             match outcome {
                 Ok(payload) => {
                     json!({ "content": [{ "type": "text", "text": payload.to_string() }] })
@@ -104,6 +105,7 @@ async fn rpc(
                 .unwrap_or("unknown")
                 .to_string();
             let input = args.get("input").cloned().unwrap_or(json!({}));
+            let tool_name_for_log = tool_name.clone();
 
             // aichip's own toolbox is asked about by name and let through:
             // each tool in it was built to be safe for any run to call, and a
@@ -117,6 +119,25 @@ async fn rpc(
                     .request(run_id, tool_name, input.clone())
                     .await
             };
+
+            if !run_tools::is_own(&tool_name_for_log) {
+                let e = aichip_core::audit::Entry::new(
+                    aichip_core::audit::Actor::Agent(run_id),
+                    format!("permission {tool_name_for_log}"),
+                )
+                .on("runs", run_id)
+                .summary(format!(
+                    "asked to use {tool_name_for_log} → {}",
+                    match &decision {
+                        Decision::Allowed => "allowed",
+                        Decision::Denied => "denied",
+                        Decision::Unanswered { .. } => "unanswered",
+                        Decision::RunGone => "run gone",
+                    }
+                ));
+                let db = state.db.clone();
+                tokio::spawn(async move { aichip_core::audit::record(&db, e).await });
+            }
 
             // The permission-prompt-tool contract: content[0].text is a
             // JSON-encoded {behavior, updatedInput|message}.
@@ -143,6 +164,31 @@ async fn rpc(
         StatusCode::OK,
         Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })),
     )
+}
+
+/// An agent's tool call, into the ledger: the tool's name and whether it was
+/// refused — never its input, which can carry anything the model wrote.
+pub(crate) fn log_tool(
+    state: &AppState,
+    run_id: Uuid,
+    tool: &str,
+    outcome: &Result<Value, String>,
+) {
+    let summary = match outcome {
+        Ok(_) => format!("{tool} → ok"),
+        Err(e) => format!(
+            "{tool} → refused: {}",
+            e.chars().take(120).collect::<String>()
+        ),
+    };
+    let e = aichip_core::audit::Entry::new(
+        aichip_core::audit::Actor::Agent(run_id),
+        format!("tool {tool}"),
+    )
+    .on("runs", run_id)
+    .summary(summary);
+    let db = state.db.clone();
+    tokio::spawn(async move { aichip_core::audit::record(&db, e).await });
 }
 
 /// Refuse a tool call from a run that is over, or that is not the one the

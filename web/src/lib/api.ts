@@ -1751,6 +1751,50 @@ export interface InboxItem {
   options: string[];
 }
 
+/** One line of the ledger. See `aichip_core::audit`. */
+export interface AuditEntry {
+  id: number;
+  at: string;
+  /** "api" is anything through the dashboard's API — aichip has no login,
+   *  so it does not claim "a person". */
+  actorKind: "api" | "agent" | "system";
+  actorRunId: string | null;
+  action: string;
+  entityKind: string | null;
+  entityId: string | null;
+  summary: string;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditQuery {
+  entityKind?: string;
+  entityId?: string;
+  actorKind?: string;
+  before?: number;
+  limit?: number;
+}
+
+export interface TimelineEvent {
+  at: string;
+  kind: "comment" | "run" | "checks" | "audit";
+  actor: string | null;
+  title: string;
+  detail?: string | null;
+  runId?: string;
+  costUsd?: number | null;
+  status?: string;
+}
+
+const auditParams = (q: AuditQuery) => {
+  const p = new URLSearchParams();
+  if (q.entityKind) p.set("entity_kind", q.entityKind);
+  if (q.entityId) p.set("entity_id", q.entityId);
+  if (q.actorKind) p.set("actor_kind", q.actorKind);
+  if (q.before != null) p.set("before", String(q.before));
+  if (q.limit != null) p.set("limit", String(q.limit));
+  return p.toString();
+};
+
 const postForm = (url: string, form: FormData) =>
   fetch(url, { method: "POST", body: form });
 
@@ -1812,6 +1856,11 @@ export const api = {
     fetch("/api/budgets").then((r) =>
       json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),
     ),
+  audit: (q: AuditQuery = {}) =>
+    fetch(`/api/audit?${auditParams(q)}`).then((r) => json<{ entries: AuditEntry[]; next: number | null }>(r)),
+  auditCsvUrl: (q: AuditQuery = {}) => `/api/audit.csv?${auditParams(q)}`,
+  timeline: (taskId: string) =>
+    fetch(`/api/tasks/${taskId}/timeline`).then((r) => json<{ events: TimelineEvent[] }>(r)),
   inbox: (workspaceId: string, all = false) =>
     fetch(`/api/inbox?workspace_id=${workspaceId}${all ? "&all=true" : ""}`).then((r) =>
       json<{ items: InboxItem[]; unread: number }>(r),

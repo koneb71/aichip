@@ -3,6 +3,7 @@ pub mod approvals;
 pub mod apps;
 pub mod asks;
 pub mod attention;
+pub mod audit;
 pub mod brain;
 pub mod budgets;
 pub mod bus;

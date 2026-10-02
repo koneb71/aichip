@@ -35,7 +35,9 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   ref,
 ) {
   return (
-    <span className={cn("relative inline-flex w-full", className)}>
+    // Full width unless the caller sizes it: `w-full` beside a caller's `w-44`
+    // is decided by stylesheet order, not by intent.
+    <span className={cn("relative inline-flex", className ?? "w-full")}>
       <select ref={ref} className={cn(CONTROL, "h-8 appearance-none pr-7")} {...rest}>
         {children}
       </select>

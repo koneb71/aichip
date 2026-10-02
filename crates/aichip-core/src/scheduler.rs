@@ -88,11 +88,33 @@ pub fn decide<Tz: TimeZone>(
 pub struct Scheduler {
     db: Db,
     orchestrator: Arc<Orchestrator>,
+    /// When the ledger was last pruned. Hourly is plenty for a 90-day window.
+    last_prune: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl Scheduler {
     pub fn new(db: Db, orchestrator: Arc<Orchestrator>) -> Self {
-        Self { db, orchestrator }
+        Self {
+            db,
+            orchestrator,
+            last_prune: std::sync::Mutex::new(None),
+        }
+    }
+
+    async fn prune_ledger(&self) {
+        let due = {
+            let mut last = self.last_prune.lock().unwrap();
+            let due = last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(3600));
+            if due {
+                *last = Some(std::time::Instant::now());
+            }
+            due
+        };
+        if due {
+            if let Err(e) = crate::audit::prune(&self.db).await {
+                tracing::warn!(error = %e, "could not prune the audit ledger");
+            }
+        }
     }
 
     pub async fn run_loop(self) {
@@ -109,6 +131,7 @@ impl Scheduler {
         if let Err(e) = self.orchestrator.settle_landings().await {
             tracing::warn!(error = %e, "could not settle card landings");
         }
+        self.prune_ledger().await;
         self.tick_workflows().await?;
         self.tick_routines().await
     }

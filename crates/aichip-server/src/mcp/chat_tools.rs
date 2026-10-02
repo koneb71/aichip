@@ -56,6 +56,7 @@ pub async fn rpc(
                 Ok(()) => call_tool(&state, chat_id, name, args).await,
                 Err(e) => Err(e),
             };
+            super::log_tool(&state, run_id, name, &outcome);
             match outcome {
                 Ok(payload) => json!({
                     "content": [{ "type": "text", "text": payload.to_string() }]
