@@ -2,6 +2,7 @@ pub mod agents;
 pub mod apps;
 pub mod attention;
 pub mod brain;
+pub mod budgets;
 pub mod bus;
 pub mod checks;
 pub mod db;

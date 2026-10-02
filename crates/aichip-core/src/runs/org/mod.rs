@@ -155,6 +155,18 @@ impl Orchestrator {
         plan_approval: bool,
     ) -> anyhow::Result<Uuid> {
         crate::agents::assert_team_can_run(&self.db, team_id).await?;
+        let workspace: Option<Uuid> =
+            sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
+        let scope = crate::budgets::Scope {
+            workspace,
+            project: Some(project_id),
+            team: Some(team_id),
+            ..Default::default()
+        };
+        crate::budgets::check(&self.db, &scope, true).await?;
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
              SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)
@@ -710,6 +722,12 @@ impl Orchestrator {
             // this the run would simply start the next assignment.
             if self.cancel_requested(ctx.run_id) {
                 aborted = Some("canceled".to_string());
+                break;
+            }
+            // The team finishes the assignments it is working on, but no new
+            // batch starts on a budget that is spent.
+            if let Err(over) = self.budget_allows_more(ctx.run_id).await {
+                aborted = Some(over.to_string());
                 break;
             }
 

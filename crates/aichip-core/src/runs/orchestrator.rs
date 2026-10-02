@@ -18,7 +18,6 @@ use futures::StreamExt;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -160,17 +159,14 @@ pub struct Variant {
 }
 
 /// Why the queue is, or isn't, dispatching.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum QueueGate {
     Open,
     /// Someone pressed pause. Cleared by pressing resume.
     Paused,
-    /// Today's spend reached the cap. Clears itself at midnight — there is no
-    /// resume for this one, which is why it can't just be a bool.
-    OverBudget {
-        spent_today: f64,
-        cap_usd: f64,
-    },
+    /// A machine-wide budget is spent. Clears itself when its window turns —
+    /// there is no resume for this one, which is why it can't just be a bool.
+    OverBudget(crate::budgets::OverBudget),
 }
 
 pub struct Orchestrator {
@@ -198,7 +194,6 @@ pub struct Orchestrator {
     /// Whether the over-budget hook has already fired for the current spell.
     /// The gate is read every 750ms, so this is what turns a state into an
     /// event.
-    announced_over_budget: std::sync::atomic::AtomicBool,
     /// Base URL of aichip's MCP endpoints, e.g. "http://127.0.0.1:4820".
     /// None disables MCP wiring (mock engine / tests).
     pub(crate) mcp_base_url: Option<String>,
@@ -417,7 +412,6 @@ impl Orchestrator {
             tier_efforts: Arc::new(std::sync::RwLock::new(EngineTierEffort::default())),
             worktrees,
             slots: Arc::new(crate::runs::slots::Slots::new(max_concurrent)),
-            announced_over_budget: std::sync::atomic::AtomicBool::new(false),
             mcp_base_url,
             cancels: Mutex::new(HashMap::new()),
         }
@@ -595,6 +589,14 @@ impl Orchestrator {
             let agent: Option<Uuid> = assigned.get("agent_id");
             crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
         }
+        // A spent budget refuses here, at the click, with the policy's name —
+        // not by queueing the card to sit until the window turns.
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_task(&self.db, task_id).await?,
+            true,
+        )
+        .await?;
         if let Some(team_id) = assigned_team {
             let run_id = self.enqueue_task_for_team(task_id, team_id).await?;
             guard.commit().await?;
@@ -653,6 +655,12 @@ impl Orchestrator {
         .await?;
         let runs_as: Option<Uuid> = prior.get("runs_as");
         crate::agents::assert_can_run(&self.db, runs_as.as_slice()).await?;
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_run(&self.db, prior_run_id).await?,
+            true,
+        )
+        .await?;
 
         let prompt = crate::runs::resume::continuation_prompt(
             &prior.get::<String, _>("prompt"),
@@ -856,6 +864,12 @@ impl Orchestrator {
             .filter_map(|v| v.agent_id.or(card_agent))
             .collect();
         crate::agents::assert_can_run(&self.db, &agents).await?;
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_task(&self.db, task_id).await?,
+            true,
+        )
+        .await?;
 
         let mut ids = vec![];
         for variant in variants {
@@ -965,7 +979,7 @@ impl Orchestrator {
         // truth for the window between queued and running, rather than
         // whatever literal happened to be in this INSERT.
         let found = sqlx::query(
-            "SELECT w.source_yaml, p.workspace_id FROM workflows w
+            "SELECT w.source_yaml, p.workspace_id, p.id AS project_id FROM workflows w
                JOIN projects p ON p.id = w.project_id WHERE w.id = $1",
         )
         .bind(workflow_id)
@@ -989,6 +1003,12 @@ impl Orchestrator {
                 .collect();
             crate::agents::assert_steps_can_run(&self.db, row.get("workspace_id"), &names).await?;
         }
+        let scope = crate::budgets::Scope {
+            workspace: found.as_ref().map(|r| r.get("workspace_id")),
+            project: found.as_ref().map(|r| r.get("project_id")),
+            ..Default::default()
+        };
+        crate::budgets::check(&self.db, &scope, true).await?;
 
         let row = sqlx::query(
             "INSERT INTO runs (workflow_id, status, trigger, engine)
@@ -1344,76 +1364,36 @@ impl Orchestrator {
     /// takes effect on the next claim instead of whenever a process happens
     /// to restart.
     pub async fn queue_paused(&self) -> bool {
-        matches!(self.queue_gate().await, QueueGate::Paused)
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM settings WHERE key = 'queue_paused'",
+        )
+        .fetch_optional(&self.db.pool)
+        .await
+        // Never fail closed on a read error — a database hiccup must not
+        // silently stop every run on the machine.
+        .unwrap_or_else(|e| {
+            tracing::error!(error=%e, "queue pause read failed; dispatching anyway");
+            None
+        })
+        .and_then(|v| serde_json::from_value::<bool>(v).ok())
+        .unwrap_or(false)
     }
 
     /// Why the queue is or isn't handing out work.
     ///
     /// One answer for both reasons it can stop, because the UI has to tell
     /// them apart: a pause you chose is resumed with a click, while a spent
-    /// budget clears on its own at midnight and a resume button would be a
-    /// lie.
+    /// budget clears on its own when its window turns and a resume button
+    /// would be a lie. Only machine-wide budgets stop the whole queue; a
+    /// narrower one holds just the runs it covers (`claim_next`).
     pub async fn queue_gate(&self) -> QueueGate {
-        // Scalar subqueries rather than aggregates: `value` is jsonb, and
-        // there is no max(jsonb) — an aggregate here fails at runtime, which
-        // the fallback below would quietly turn into "queue wide open".
-        let settings = sqlx::query(
-            "SELECT (SELECT value FROM settings WHERE key = 'queue_paused')     AS paused,
-                    (SELECT value FROM settings WHERE key = 'daily_budget_usd') AS budget",
-        )
-        .fetch_optional(&self.db.pool)
-        .await;
-
-        let row = match settings {
-            Ok(Some(row)) => row,
-            // Never fail closed on a read error — a database hiccup must not
-            // silently stop every run on the machine. But say so: failing
-            // open without a word is how a broken gate looks like no gate.
-            other => {
-                if let Err(e) = other {
-                    tracing::error!(error=%e, "queue gate read failed; dispatching anyway");
-                }
-                return QueueGate::Open;
-            }
-        };
-        if row
-            .get::<Option<serde_json::Value>, _>("paused")
-            .and_then(|v| serde_json::from_value::<bool>(v).ok())
-            .unwrap_or(false)
-        {
+        if self.queue_paused().await {
             return QueueGate::Paused;
         }
-
-        let Some(cap_usd) = row
-            .get::<Option<serde_json::Value>, _>("budget")
-            .and_then(|v| serde_json::from_value::<f64>(v).ok())
-            .filter(|c| *c > 0.0)
-        else {
-            return QueueGate::Open; // No cap set: the common case, one query.
-        };
-
-        let spent_today = self.spent_today().await;
-        if spent_today >= cap_usd {
-            QueueGate::OverBudget {
-                spent_today,
-                cap_usd,
-            }
-        } else {
-            QueueGate::Open
+        match crate::budgets::machine_gate(&self.db).await {
+            Some(over) => QueueGate::OverBudget(over),
+            None => QueueGate::Open,
         }
-    }
-
-    /// Spend since local midnight, matching the day buckets the activity view
-    /// charts so the two can never disagree about what "today" cost.
-    pub async fn spent_today(&self) -> f64 {
-        sqlx::query_scalar::<_, Option<f64>>(
-            "SELECT SUM(cost_usd) FROM runs WHERE created_at >= date_trunc('day', now())",
-        )
-        .fetch_one(&self.db.pool)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(0.0)
     }
 
     /// Stop or resume dispatching. Runs already executing are left alone —
@@ -1479,33 +1459,17 @@ impl Orchestrator {
             .await
     }
 
+    /// The machine's daily dollar cap — the one budget there used to be, now
+    /// the "Daily budget" policy. Kept for the cap control on the activity
+    /// page and anything else that still asks the old question.
     pub async fn daily_budget(&self) -> Option<f64> {
-        sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT value FROM settings WHERE key = 'daily_budget_usd'",
-        )
-        .fetch_optional(&self.db.pool)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_value::<f64>(v).ok())
-        .filter(|c| *c > 0.0)
+        crate::budgets::daily_cap(&self.db).await
     }
 
     /// `None` removes the cap. A zero or negative cap would mean "never run
     /// anything", which is what the pause is for, so it is stored as no cap.
     pub async fn set_daily_budget(&self, cap: Option<f64>) -> anyhow::Result<()> {
-        match cap.filter(|c| *c > 0.0) {
-            Some(cap) => {
-                self.put_setting("daily_budget_usd", serde_json::json!(cap))
-                    .await
-            }
-            None => {
-                sqlx::query("DELETE FROM settings WHERE key = 'daily_budget_usd'")
-                    .execute(&self.db.pool)
-                    .await?;
-                Ok(())
-            }
-        }
+        crate::budgets::set_daily_cap(&self.db, cap.filter(|c| *c > 0.0)).await
     }
 
     async fn put_setting(&self, key: &str, value: serde_json::Value) -> anyhow::Result<()> {
@@ -1521,35 +1485,82 @@ impl Orchestrator {
     }
 
     async fn claim_next(&self) -> anyhow::Result<Option<Uuid>> {
-        let gate = self.queue_gate().await;
-        // On the edge, never on the state: `claim_next` runs every 750ms, so
-        // firing on "is over budget" would be a notification every three
-        // quarters of a second until midnight.
-        let over = matches!(gate, QueueGate::OverBudget { .. });
-        if over != self.announced_over_budget.swap(over, Ordering::SeqCst) && over {
-            let spent = match &gate {
-                QueueGate::OverBudget {
-                    spent_today,
-                    cap_usd,
-                } => {
-                    format!("${spent_today:.2} of ${cap_usd:.2} spent — the queue is holding until midnight")
-                }
-                _ => String::new(),
-            };
-            crate::attention::fire(
-                &self.db,
-                crate::attention::Event::OverBudget,
-                crate::attention::Ctx {
-                    title: "aichip: daily budget reached".to_string(),
-                    body: spent,
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-        if !matches!(gate, QueueGate::Open) {
+        if self.queue_paused().await {
             return Ok(None);
         }
+        // No budgets: claiming is exactly what it was before they existed.
+        if !crate::budgets::any_enabled(&self.db).await {
+            return self.claim_head().await;
+        }
+        // A machine-wide budget holds everything, as the daily cap always
+        // did. `check` notifies once per window, not once per tick.
+        if crate::budgets::check(&self.db, &crate::budgets::Scope::default(), true)
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        // A narrower one holds only the runs it covers, until its window
+        // turns — and the next run in line is asked instead, so one spent
+        // project does not stop every other. Bounded, so a queue full of
+        // held runs costs a few reads per tick, not one per row.
+        for _ in 0..8 {
+            let mut tx = self.db.pool.begin().await?;
+            let Some(run_id) = sqlx::query_scalar::<_, Uuid>(
+                "SELECT run_id FROM queue
+                  WHERE not_before IS NULL OR not_before <= now()
+                  ORDER BY priority DESC, enqueued_at ASC
+                  FOR UPDATE SKIP LOCKED LIMIT 1",
+            )
+            .fetch_optional(&mut *tx)
+            .await?
+            else {
+                return Ok(None);
+            };
+            let scope = crate::budgets::scope_of_run(&self.db, run_id)
+                .await
+                .unwrap_or_default();
+            match crate::budgets::check(&self.db, &scope, false).await {
+                Ok(()) => {
+                    sqlx::query("DELETE FROM queue WHERE run_id = $1")
+                        .bind(run_id)
+                        .execute(&mut *tx)
+                        .await?;
+                    tx.commit().await?;
+                    return Ok(Some(run_id));
+                }
+                Err(over) => {
+                    sqlx::query(
+                        "UPDATE queue SET not_before = $2, hold_reason = $3, held_by = $4
+                          WHERE run_id = $1",
+                    )
+                    .bind(run_id)
+                    .bind(over.resets_at)
+                    .bind(over.to_string())
+                    .bind(over.policy_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    tracing::info!(%run_id, policy = %over.policy, "held by a budget");
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Between the steps of a run that is already going: may it start more?
+    pub(crate) async fn budget_allows_more(
+        &self,
+        run_id: Uuid,
+    ) -> Result<(), crate::budgets::OverBudget> {
+        let scope = crate::budgets::scope_of_run(&self.db, run_id)
+            .await
+            .unwrap_or_default();
+        crate::budgets::check(&self.db, &scope, true).await
+    }
+
+    /// The next run in line, with nothing to vet.
+    async fn claim_head(&self) -> anyhow::Result<Option<Uuid>> {
         let row = sqlx::query(
             "DELETE FROM queue WHERE run_id = (
                  SELECT run_id FROM queue
@@ -3532,6 +3543,12 @@ impl Orchestrator {
                     failure = Some("canceled".to_string());
                     break 'layers;
                 }
+                // A budget spent since the pipeline started stops it before
+                // the next step spends more.
+                if let Err(over) = self.budget_allows_more(run_id).await {
+                    failure = Some(over.to_string());
+                    break 'layers;
+                }
                 let step = workflow
                     .step(&step_id)
                     .ok_or_else(|| anyhow::anyhow!("missing step {step_id}"))?;
@@ -4195,6 +4212,11 @@ this workflow manually."
         // is neither double-counted nor left at zero when no final message
         // arrives; see `usage_tally` for why that is not just a sum.
         let mut tally = UsageTally::default();
+        // How far a `stop` budget lets this run go, in output tokens. Read
+        // once: it moves only as other runs finish, and a run cannot see
+        // those mid-stream anyway. Dollars have no equivalent — no engine
+        // says what a run cost until it ends.
+        let token_limit = crate::budgets::token_headroom(&self.db, run_id).await;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => {
@@ -4227,7 +4249,8 @@ this workflow manually."
                             // Costs accumulate: a workflow run has many steps.
                             sqlx::query(
                                 "UPDATE runs SET session_id=$1, session_engine=$4,
-                                 cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0)
+                                 cost_usd = CASE WHEN $2::float8 IS NULL THEN cost_usd
+                                                 ELSE COALESCE(cost_usd, 0) + $2::float8 END
                                  WHERE id=$3")
                                 .bind(sid)
                                 .bind(cost_usd)
@@ -4235,7 +4258,14 @@ this workflow manually."
                                 .bind(engine.id())
                                 .execute(&self.db.pool).await?;
                             if let Some(step_id) = step_id {
-                                sqlx::query("UPDATE steps SET cost_usd = COALESCE(cost_usd, 0) + COALESCE($2, 0) WHERE id=$1")
+                                sqlx::query(
+                                    // No price is no price: an engine that never
+                                    // reports one leaves the step unpriced rather
+                                    // than free, so a dollar budget is not told
+                                    // it cost nothing.
+                                    "UPDATE steps SET cost_usd = CASE WHEN $2::float8 IS NULL THEN cost_usd
+                                                                      ELSE COALESCE(cost_usd, 0) + $2::float8 END
+                                      WHERE id=$1")
                                     .bind(step_id)
                                     .bind(cost_usd)
                                     .execute(&self.db.pool).await?;
@@ -4247,6 +4277,18 @@ this workflow manually."
                             // but the only figures a cancelled run will ever
                             // have, which is why they are kept at all.
                             tally.observe(usage);
+                            if let Some((limit, policy)) = &token_limit {
+                                if tally.output_tokens() > *limit {
+                                    let _ = proc.interrupt().await;
+                                    outcome = Some((
+                                        RunStatus::Failed,
+                                        Some(format!(
+                                            "stopped by budget \u{201c}{policy}\u{201d}: it allows {limit} more output tokens and this run went past them"
+                                        )),
+                                    ));
+                                    break;
+                                }
+                            }
                         }
                         AichipEvent::RunFailed { reason } => {
                             outcome = Some((RunStatus::Failed, Some(reason.clone())));

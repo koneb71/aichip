@@ -149,6 +149,12 @@ impl Orchestrator {
         }
         let agent: Option<Uuid> = card.get("agent_id");
         crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
+        crate::budgets::check(
+            &self.db,
+            &crate::budgets::scope_of_task(&self.db, task_id).await?,
+            true,
+        )
+        .await?;
         let worktree: Option<String> = card.get("worktree_path");
         if !worktree
             .as_deref()

@@ -222,9 +222,14 @@ async fn activity(
             QueueGate::Open => json!({ "state": "open" }),
             QueueGate::Paused => json!({ "state": "paused" }),
             // Named separately from `paused` because there is no resume for
-            // it — it clears at midnight, and offering a button would lie.
-            QueueGate::OverBudget { spent_today, cap_usd } => json!({
-                "state": "over_budget", "spentToday": spent_today, "capUsd": cap_usd,
+            // it — it clears when its window turns, and a button would lie.
+            QueueGate::OverBudget(over) => json!({
+                "state": "over_budget",
+                "policy": over.policy,
+                "policyId": over.policy_id,
+                "detail": over.detail,
+                "resetsAt": over.resets_at,
+                "message": over.to_string(),
             }),
         },
         "budgetUsd": state.orchestrator.daily_budget().await,

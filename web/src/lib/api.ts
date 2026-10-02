@@ -20,7 +20,8 @@ export type AttentionEvent =
   | "over_budget"
   | "finished"
   | "routine"
-  | "unblocked";
+  | "unblocked"
+  | "budget_warning";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -971,7 +972,15 @@ export interface Blocker {
 export type QueueGate =
   | { state: "open" }
   | { state: "paused" }
-  | { state: "over_budget"; spentToday: number; capUsd: number };
+  /** A machine-wide budget is spent; `message` is the sentence to show. */
+  | {
+      state: "over_budget";
+      policy: string;
+      policyId: string;
+      detail: string;
+      resetsAt: string;
+      message: string;
+    };
 
 export interface TeamEstimate {
   runs: number;

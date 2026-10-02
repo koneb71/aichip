@@ -115,11 +115,11 @@ export default function ActivityPage() {
               ) : (
                 <>
                   <span className="font-semibold">
-                    Daily budget reached — ${data.gate.spentToday.toFixed(2)} of $
-                    {data.gate.capUsd.toFixed(2)}.
+                    Budget “{data.gate.policy}” is spent — {data.gate.detail}.
                   </span>{" "}
-                  Nothing new will start until midnight. Raise the cap below to
-                  carry on today.
+                  Nothing new will start until it resets{" "}
+                  {new Date(data.gate.resetsAt).toLocaleString()}. Raise it or override it below to
+                  carry on.
                 </>
               )}
             </div>

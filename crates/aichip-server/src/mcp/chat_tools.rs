@@ -721,8 +721,8 @@ async fn call_tool(
                 "queue": match &gate {
                     aichip_core::runs::orchestrator::QueueGate::Open => json!({ "state": "open" }),
                     aichip_core::runs::orchestrator::QueueGate::Paused => json!({ "state": "paused" }),
-                    aichip_core::runs::orchestrator::QueueGate::OverBudget { spent_today, cap_usd } =>
-                        json!({ "state": "over_budget", "spent_today_usd": spent_today, "cap_usd": cap_usd }),
+                    aichip_core::runs::orchestrator::QueueGate::OverBudget(over) =>
+                        json!({ "state": "over_budget", "budget": over.policy, "why": over.to_string() }),
                 },
             }))
         }

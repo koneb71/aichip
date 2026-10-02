@@ -101,10 +101,10 @@ function useNotifier(activity: Activity | null) {
       ...activity.live
         .filter((r) => r.status === "rate_limited")
         .map((r) => `limit:${r.id}`),
-      // Keyed by the cap, not just the state, so raising the cap and hitting
-      // the new one announces again rather than staying silent.
+      // Keyed by the policy and its window, not just the state, so the next
+      // window — or another policy — announces again rather than staying silent.
       ...(activity.gate.state === "over_budget"
-        ? [`budget:${activity.gate.capUsd}`]
+        ? [`budget:${activity.gate.policyId}:${activity.gate.resetsAt}`]
         : []),
     ]);
 
@@ -128,13 +128,9 @@ function useNotifier(activity: Activity | null) {
         notify("Rate limited", `${r.label} is waiting for the limit to reset`, `limit:${r.id}`);
       }
       if (activity.gate.state === "over_budget") {
-        const key = `budget:${activity.gate.capUsd}`;
+        const key = `budget:${activity.gate.policyId}:${activity.gate.resetsAt}`;
         if (!announced.current.has(key)) {
-          notify(
-            "Daily budget reached",
-            `$${activity.gate.spentToday.toFixed(2)} spent — the queue is holding until midnight`,
-            key,
-          );
+          notify(`Budget “${activity.gate.policy}” is spent`, activity.gate.message, key);
         }
       }
     }
