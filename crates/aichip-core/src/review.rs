@@ -416,6 +416,25 @@ impl Orchestrator {
                 .await?;
             return Ok(());
         }
+        // A person is handing the card to someone else — likely why this
+        // review was stopped. The fix is the new agent's, not a paid run for
+        // the one being handed away from, which would also hold the handoff
+        // back for a whole extra round.
+        let handing_off: bool =
+            sqlx::query_scalar("SELECT handoff_requested_at IS NOT NULL FROM tasks WHERE id = $1")
+                .bind(task_id)
+                .fetch_one(&self.db.pool)
+                .await?;
+        if handing_off {
+            crate::runs::report::post_system(
+                &self.db,
+                task_id,
+                Some(run_id),
+                "The reviewer asked for changes. This card is being handed to another agent, so the fix is left to them — the review is above.",
+            )
+            .await?;
+            return Ok(());
+        }
         // One fix run for the whole round, acting on the verdict as a note.
         if let Err(e) = self
             .enqueue_follow_up(task_id, FollowUp::ReviewNote { comment_id })
@@ -916,6 +935,60 @@ mod db_tests {
             .unwrap();
         assert_eq!(f.queued().await[0].2, Some(3));
         assert_eq!(f.inbox_reviews().await, 0, "something is happening again");
+        f.t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn changes_asked_for_during_a_handoff_are_left_to_the_new_agent() {
+        let Some(f) = fixture(2).await else { return };
+        let work = f.work("manual").await;
+        f.orch.settle_review(f.card, work, "manual").await;
+        let (review, trigger) = f.finish_queued().await;
+        submit(&f.t.db, review, "request_changes", "rename the flag", &[])
+            .await
+            .unwrap();
+        // The person reassigns the card while the review is still finishing.
+        sqlx::query("UPDATE tasks SET handoff_requested_at = now() WHERE id = $1")
+            .bind(f.card)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        f.orch.settle_review(f.card, review, &trigger).await;
+        assert!(f.queued().await.is_empty(), "no fix under the old agent");
+        let notes = f.system_notes().await;
+        assert!(
+            notes.last().unwrap().contains("handed to another agent"),
+            "{notes:?}"
+        );
+        // The verdict itself is still on the card for whoever takes it.
+        let verdicts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM task_comments WHERE task_id = $1 AND author = 'agent'",
+        )
+        .bind(f.card)
+        .fetch_one(&f.t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(verdicts, 1);
+
+        // And the new agent's brief carries it, to answer.
+        f.orch
+            .enqueue_follow_up(
+                f.card,
+                crate::runs::follow_up::FollowUp::Handoff {
+                    note: "over to you".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let brief: String = sqlx::query_scalar(
+            "SELECT prompt_override FROM runs WHERE task_id = $1 AND trigger = 'handoff'",
+        )
+        .bind(f.card)
+        .fetch_one(&f.t.db.pool)
+        .await
+        .unwrap();
+        assert!(brief.contains(crate::fence::VERDICT_BEGIN), "{brief}");
+        assert!(brief.contains("rename the flag"), "{brief}");
         f.t.finish().await;
     }
 

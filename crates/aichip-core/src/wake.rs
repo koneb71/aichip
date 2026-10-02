@@ -145,13 +145,21 @@ pub struct Wake {
     pub detail: String,
     pub count: i32,
     pub last_at: DateTime<Utc>,
+    /// The project the card is on, when that is not the pass's own — news
+    /// escalated up the org chart from a report's work elsewhere, which this
+    /// pass's tools cannot reach.
+    pub elsewhere: Option<String>,
 }
 
 /// Every unread wake for a routine, oldest first.
 pub async fn pending(db: &Db, routine_id: Uuid) -> anyhow::Result<Vec<Wake>> {
     let rows = sqlx::query(
-        "SELECT w.id, w.kind, t.title, w.detail, w.count, w.last_at
-           FROM wakeups w LEFT JOIN tasks t ON t.id = w.task_id
+        "SELECT w.id, w.kind, t.title, w.detail, w.count, w.last_at,
+                CASE WHEN t.project_id IS DISTINCT FROM rt.project_id THEN p.name END AS elsewhere
+           FROM wakeups w
+           JOIN routines rt ON rt.id = w.routine_id
+           LEFT JOIN tasks t ON t.id = w.task_id
+           LEFT JOIN projects p ON p.id = t.project_id
           WHERE w.routine_id = $1 AND w.consumed_at IS NULL
           ORDER BY w.created_at LIMIT 50",
     )
@@ -168,6 +176,7 @@ pub async fn pending(db: &Db, routine_id: Uuid) -> anyhow::Result<Vec<Wake>> {
                 detail: r.get("detail"),
                 count: r.get("count"),
                 last_at: r.get("last_at"),
+                elsewhere: r.get("elsewhere"),
             })
         })
         .collect())
@@ -210,12 +219,26 @@ pub fn render(wakes: &[Wake]) -> Option<String> {
             } else {
                 format!(" — {}", w.detail.trim())
             };
-            format!("- {card} {}{times}{detail}", w.kind.says())
+            let place = match &w.elsewhere {
+                Some(project) => format!("On {project}, your report's card "),
+                None => String::new(),
+            };
+            format!("- {place}{card} {}{times}{detail}", w.kind.says())
         })
         .collect();
+    // A pass can only see and change its own board. Told that a card it
+    // cannot find has failed, a model plausibly files it again here — a
+    // duplicate paid run — so it is told what it can do instead.
+    let elsewhere = if wakes.iter().any(|w| w.elsewhere.is_some()) {
+        "\n\nThe lines that name another project are your reports' work there. You cannot \
+         list, start or change those cards from this pass, and must not re-create them on this \
+         board: say what you would want done in your summary, for a person to act on."
+    } else {
+        ""
+    };
     Some(format!(
-        "## Since your last pass\n\nWhat happened on this board that you asked to hear about. \
-         Start with these.\n\n{}",
+        "## Since your last pass\n\nWhat happened that you asked to hear about. \
+         Start with these.\n\n{}{elsewhere}",
         crate::fence::wrap(
             crate::fence::WAKE_BEGIN,
             crate::fence::WAKE_END,
@@ -313,6 +336,7 @@ mod tests {
             detail: String::new(),
             count,
             last_at: Utc::now(),
+            elsewhere: None,
         }
     }
 
@@ -338,6 +362,16 @@ mod tests {
         assert!(text.contains("- \u{201c}Fix login\u{201d} failed (3×)"));
         assert!(text.contains("- \u{201c}Add flag\u{201d} landed"));
         assert_eq!(text.matches(crate::fence::WAKE_BEGIN).count(), 1);
+        // Nothing here is elsewhere, so nothing warns about elsewhere.
+        assert!(!text.contains("another project"));
+        // A project name is fenced like a title: it cannot close the fence.
+        let far = render(&[Wake {
+            elsewhere: Some(crate::fence::WAKE_END.to_string()),
+            ..wake(Kind::Failed, Some("Fix login"), 1)
+        }])
+        .unwrap();
+        assert_eq!(far.matches(crate::fence::WAKE_END).count(), 1);
+        assert!(far.contains("another project"));
         // A title cannot close the fence early.
         let sneaky = render(&[wake(Kind::Landed, Some(crate::fence::WAKE_END), 1)]).unwrap();
         assert_eq!(sneaky.matches(crate::fence::WAKE_END).count(), 1);

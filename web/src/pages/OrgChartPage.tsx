@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Background,
@@ -16,7 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { HeartPulse, Network } from "lucide-react";
 import { api } from "../lib/api";
-import { BOX, layoutTree, OrgNode, todayLine, wouldCycle } from "../lib/orgChart";
+import { BOX, layoutTree, OrgNode, todayLine, wouldCycle, freshChart } from "../lib/orgChart";
 import { useWorkspace } from "../lib/workspace";
 import { useTheme } from "../lib/theme";
 import { Page } from "../components/ui/Surface";
@@ -44,7 +44,7 @@ export default function OrgChartPage() {
     let stale = false;
     api
       .orgChart(active.id)
-      .then((r) => !stale && setNodes(r.nodes))
+      .then((r) => !stale && setNodes((shown) => freshChart(shown, r.nodes)))
       .catch(() => !stale && setNodes([]));
     return () => {
       stale = true;
@@ -101,9 +101,13 @@ function Chart({ nodes, onChanged }: { nodes: OrgNode[]; onChanged: () => void }
     [nodes, laid],
   );
   // Local copies, so a box follows the cursor while dragged; reset from the
-  // layout whenever the chart changes (or a drop is cancelled).
+  // layout whenever the chart changes (or a drop is cancelled) — but never
+  // under a box someone is holding, or one waiting on the confirm dialog.
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(flowNodes);
-  useEffect(() => setRfNodes(flowNodes), [flowNodes, setRfNodes]);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (!dragging.current && move === null) setRfNodes(flowNodes);
+  }, [flowNodes, setRfNodes, move]);
   const snapBack = useCallback(() => setRfNodes(flowNodes), [flowNodes, setRfNodes]);
   const flowEdges: Edge[] = useMemo(
     () =>
@@ -122,6 +126,7 @@ function Chart({ nodes, onChanged }: { nodes: OrgNode[]; onChanged: () => void }
   // nothing, and the layout puts the box back.
   const onNodeDragStop = useCallback(
     (_: unknown, dragged: Node<CardData>) => {
+      dragging.current = false;
       const agent = byId.get(dragged.id);
       if (!agent) return;
       const cx = dragged.position.x + BOX.w / 2;
@@ -172,6 +177,9 @@ function Chart({ nodes, onChanged }: { nodes: OrgNode[]; onChanged: () => void }
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.2}
         nodesConnectable={false}
+        onNodeDragStart={() => {
+          dragging.current = true;
+        }}
         onNodeDragStop={onNodeDragStop}
         onNodeClick={(_, n) => navigate(`/agents?agent=${n.id}`)}
         proOptions={{ hideAttribution: true }}

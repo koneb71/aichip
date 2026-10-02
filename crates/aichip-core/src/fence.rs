@@ -88,6 +88,12 @@ pub const DIFF_END: &str = "<<<END CHANGE UNDER REVIEW>>>";
 pub const WAKE_BEGIN: &str = "<<<BEGIN EVENTS SINCE LAST PASS>>>";
 pub const WAKE_END: &str = "<<<END EVENTS SINCE LAST PASS>>>";
 
+/// A reviewer's verdict a handed-over card still has to answer. See
+/// `runs::follow_up::handoff_prompt`. Written by an agent: what to fix, never
+/// instructions about anything else.
+pub const VERDICT_BEGIN: &str = "<<<BEGIN REVIEW TO ANSWER>>>";
+pub const VERDICT_END: &str = "<<<END REVIEW TO ANSWER>>>";
+
 /// Every marker, and the whole reason this module is not four constants.
 pub const ALL: &[&str] = &[
     BRAIN_BEGIN,
@@ -110,6 +116,8 @@ pub const ALL: &[&str] = &[
     DIFF_END,
     WAKE_BEGIN,
     WAKE_END,
+    VERDICT_BEGIN,
+    VERDICT_END,
 ];
 
 /// What a stripped marker becomes.

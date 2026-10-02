@@ -177,7 +177,7 @@ pub fn tools_list(kind: &str, planning: bool) -> Value {
                     "title": { "type": "string" },
                     "prompt": { "type": "string", "description": "full instructions for the coding agent" },
                     "agent_name": { "type": "string", "description": "optional: bind a named agent from the library, spelled exactly as list_agents reports it. An unknown name is rejected. Omit it and a single agent the user @mentioned in their message is used instead." },
-                    "goal": { "type": "string", "description": "optional: the goal this card serves, by its title exactly as the Goals section lists it. Omit it and a card made during a manager pass serves that manager's goal." },
+                    "goal": { "type": "string", "description": "optional: the goal this card serves, by its title exactly as the Goals section lists it — or by its path, \"Parent > Title\", when two goals share a title. Omit it and a card made during a manager pass serves that manager's goal." },
                     "skill_name": { "type": "string", "description": "optional: how this card's work should be done — a skill name exactly as list_skills reports it. A card takes one skill. Omit it and a single skill the user @mentioned is used; if they named several, say which one each card uses." },
                     "model_tier": { "type": "string", "enum": ["easy", "medium", "complex"] },
                     "start": { "type": "boolean" }

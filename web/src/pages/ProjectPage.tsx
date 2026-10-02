@@ -29,6 +29,7 @@ import { Tabs } from "../components/ui/Tabs";
 import { Button, IconButton } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { useCrumbs } from "../lib/crumbs";
+import { boardGoal } from "../lib/goals";
 import {
   Brain,
   FileCode2,
@@ -70,6 +71,8 @@ export default function ProjectPage() {
   // Narrow the board to the cards serving one goal. Offered only once a card
   // on this board serves one.
   const [goalFilter, setGoalFilter] = useState("");
+  const goal = boardGoal(tasks, goalFilter);
+  useEffect(() => setGoalFilter(""), [projectId]);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -265,9 +268,9 @@ export default function ProjectPage() {
                   {moveError}
                 </div>
               )}
-              <GoalFilter tasks={tasks} value={goalFilter} onChange={setGoalFilter} />
+              <GoalFilter tasks={tasks} value={goal} onChange={setGoalFilter} />
               <Board
-                tasks={goalFilter ? tasks.filter((t) => t.goalId === goalFilter) : tasks}
+                tasks={goal ? tasks.filter((t) => t.goalId === goal) : tasks}
                 onSelect={openTask}
                 onMove={move}
               />

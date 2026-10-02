@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOX, layoutTree, OrgNode, todayLine, wouldCycle } from "./orgChart";
+import { BOX, freshChart, layoutTree, OrgNode, todayLine, wouldCycle } from "./orgChart";
 
 const node = (id: string, reportsTo: string | null = null): OrgNode => ({
   id,
@@ -76,5 +76,15 @@ describe("todayLine", () => {
     expect(todayLine({ runsToday: 0, spendTodayUsd: 0 })).toBeNull();
     expect(todayLine({ runsToday: 1, spendTodayUsd: 0 })).toBe("1 run today");
     expect(todayLine({ runsToday: 3, spendTodayUsd: 0.4 })).toBe("3 runs · $0.40 today");
+  });
+});
+
+describe("freshChart", () => {
+  it("keeps what is shown when a poll brings no news, and takes news when it does", () => {
+    const shown = [node("a"), node("b", "a")];
+    expect(freshChart(shown, [node("a"), node("b", "a")])).toBe(shown);
+    const moved = [node("a"), node("b")];
+    expect(freshChart(shown, moved)).toBe(moved);
+    expect(freshChart(null, moved)).toBe(moved);
   });
 });

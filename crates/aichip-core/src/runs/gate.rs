@@ -172,6 +172,12 @@ impl RunGate for DbGate {
     }
 
     async fn unpark(&self, run_id: Uuid) {
+        // The silence clock first: the reaper only judges `running` rows, so
+        // once this row says `running` again it must already be measured from
+        // now — not from before a person spent ten minutes deciding.
+        if let Some(f) = &self.on_unpark {
+            f(run_id);
+        }
         // Clearing `error_reason` is half of a matched pair: `finish` coalesces
         // rather than overwrites, so without this a run that parked once would
         // report "waiting for you to allow Bash" after finishing cleanly.
@@ -182,9 +188,6 @@ impl RunGate for DbGate {
         .bind(run_id)
         .execute(&self.db.pool)
         .await;
-        if let Some(f) = &self.on_unpark {
-            f(run_id);
-        }
     }
 
     async fn abandon(&self, run_id: Uuid, reason: String) {

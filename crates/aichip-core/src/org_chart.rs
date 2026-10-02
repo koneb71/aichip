@@ -79,14 +79,32 @@ pub async fn set_manager(
     manager: Option<Uuid>,
 ) -> anyhow::Result<Result<(), Refused>> {
     let mut tx = db.pool.begin().await?;
+    if let Err(why) = set_manager_in(&mut tx, db, agent, manager).await? {
+        return Ok(Err(why));
+    }
+    tx.commit().await?;
+    Ok(Ok(()))
+}
+
+/// [`set_manager`] inside the caller's transaction, so a manager change and
+/// the rest of an edit land together or not at all. The lock is held until
+/// the caller commits.
+pub async fn set_manager_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    db: &Db,
+    agent: Uuid,
+    manager: Option<Uuid>,
+) -> anyhow::Result<Result<(), Refused>> {
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtext('aichip.org_chart:' || workspace_id::text))
            FROM agents WHERE id = $1",
     )
     .bind(agent)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     if let Some(manager) = manager {
+        // Read through the pool, which sees every committed move: any other
+        // move in this workspace is serialised behind the lock just taken.
         if let Err(why) = vet_manager(db, agent, manager).await? {
             return Ok(Err(why));
         }
@@ -94,20 +112,20 @@ pub async fn set_manager(
     sqlx::query("UPDATE agents SET reports_to = $2 WHERE id = $1")
         .bind(agent)
         .bind(manager)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(Ok(()))
 }
 
-/// An agent and everyone under it, the agent first.
+/// An agent and everyone under it, the agent first. A retired agent is no
+/// longer anyone's report, whatever its row still says.
 pub async fn subtree(db: &Db, root: Uuid) -> anyhow::Result<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
         "WITH RECURSIVE down AS (
              SELECT id, 0 AS depth FROM agents WHERE id = $1
              UNION ALL
              SELECT a.id, down.depth + 1 FROM agents a JOIN down ON a.reports_to = down.id
-              WHERE down.depth < 16)
+              WHERE down.depth < 16 AND a.status <> 'retired')
          SELECT id FROM down ORDER BY depth",
     )
     .bind(root)
@@ -131,14 +149,14 @@ async fn depth_of(db: &Db, id: Uuid) -> anyhow::Result<i32> {
     .unwrap_or(0))
 }
 
-/// Levels below an agent: 0 for one with no reports.
+/// Levels below an agent: 0 for one with no reports still working.
 async fn height_of(db: &Db, id: Uuid) -> anyhow::Result<i32> {
     Ok(sqlx::query_scalar::<_, Option<i32>>(
         "WITH RECURSIVE down AS (
              SELECT id, 0 AS depth FROM agents WHERE id = $1
              UNION ALL
              SELECT a.id, down.depth + 1 FROM agents a JOIN down ON a.reports_to = down.id
-              WHERE down.depth < 16)
+              WHERE down.depth < 16 AND a.status <> 'retired')
          SELECT max(depth) FROM down",
     )
     .bind(id)
@@ -407,6 +425,34 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn a_manager_set_inside_an_edit_that_fails_is_not_set() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, _) = t.project(dir.path(), false).await;
+        let lead = agent(&t, ws, "Lead").await;
+        let dev = agent(&t, ws, "Dev").await;
+        let mut tx = t.db.pool.begin().await.unwrap();
+        set_manager_in(&mut tx, &t.db, dev, Some(lead))
+            .await
+            .unwrap()
+            .unwrap();
+        // The rest of the edit fails — a duplicate name, say — and rolls back.
+        drop(tx);
+        assert_eq!(manager_of(&t, dev).await, None);
+        // And a refusal inside one writes nothing either.
+        let mut tx = t.db.pool.begin().await.unwrap();
+        assert_eq!(
+            set_manager_in(&mut tx, &t.db, dev, Some(dev))
+                .await
+                .unwrap(),
+            Err(Refused::Itself)
+        );
+        t.finish().await;
+    }
+
+    #[tokio::test]
     async fn retiring_a_manager_lifts_its_reports_and_it_manages_no_one_after() {
         let Some(t) = testdb::fresh().await else {
             return;
@@ -426,6 +472,10 @@ mod db_tests {
             Some(ceo),
             "lifted to the manager's manager"
         );
+        // And it has left the chart itself: its old manager's tree is just
+        // the people still in it.
+        assert_eq!(manager_of(&t, lead).await, None);
+        assert_eq!(subtree(&t.db, ceo).await.unwrap(), vec![ceo, dev]);
         assert_eq!(
             set_manager(&t.db, dev, Some(lead)).await.unwrap(),
             Err(Refused::Retired("Lead".into()))
@@ -476,6 +526,17 @@ mod db_tests {
         assert!(
             refused.contains("Dev") && refused.contains("Lead") && !refused.contains("Outsider")
         );
+
+        // Once its only report has retired, a manager has no reports and is
+        // not restricted — even if the retiree's row still names it, as one
+        // retired before retiring cleared the link would.
+        sqlx::query("UPDATE agents SET status = 'retired' WHERE id = $1")
+            .bind(dev)
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        assert!(may_delegate(&t.db, pass, outsider).await.unwrap().is_ok());
+        assert_eq!(height_of(&t.db, lead).await.unwrap(), 0);
         t.finish().await;
     }
 
@@ -527,6 +588,19 @@ mod db_tests {
             ["failed"],
             "trouble goes up; good news stays on its board"
         );
+
+        // And the lead's pass is told where it happened, and that it cannot
+        // act on it from there.
+        let news = crate::wake::pending(&t.db, routine).await.unwrap();
+        let project_name: String = sqlx::query_scalar("SELECT name FROM projects WHERE id = $1")
+            .bind(project)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(news[0].elsewhere.as_deref(), Some(project_name.as_str()));
+        let said = crate::wake::render(&news).unwrap();
+        assert!(said.contains(&format!("On {project_name}, your report's card")));
+        assert!(said.contains("must not re-create them"));
         t.finish().await;
     }
 }

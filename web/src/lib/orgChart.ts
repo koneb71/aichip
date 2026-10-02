@@ -133,3 +133,12 @@ export function todayLine(n: Pick<OrgNode, "runsToday" | "spendTodayUsd">): stri
   const runs = `${n.runsToday} run${n.runsToday === 1 ? "" : "s"}`;
   return n.spendTodayUsd > 0 ? `${runs} · $${n.spendTodayUsd.toFixed(2)} today` : `${runs} today`;
 }
+
+/**
+ * The chart the server just sent, or the one already shown when nothing in it
+ * changed — so a poll that brings no news rebuilds nothing, and a box a
+ * person is holding is not snapped back to its slot under the cursor.
+ */
+export function freshChart(shown: OrgNode[] | null, fetched: OrgNode[]): OrgNode[] {
+  return shown && JSON.stringify(shown) === JSON.stringify(fetched) ? shown : fetched;
+}

@@ -328,8 +328,23 @@ pub async fn update(db: &Db, id: Uuid, p: GoalPatch) -> anyhow::Result<Result<()
 /// served it serve its parent — nothing below it is left hanging.
 pub async fn delete(db: &Db, id: Uuid) -> anyhow::Result<bool> {
     let mut tx = db.pool.begin().await?;
+    let workspace: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM goals WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(workspace) = workspace else {
+        return Ok(false);
+    };
+    // Serialised with create and move, which take the same lock. And the row
+    // itself is locked before anything moves: a card or goal pointed at it
+    // by a writer that does not take the lock holds a key-share lock on it,
+    // so this waits for that writer and then moves what it wrote — or makes
+    // it wait and fail on the foreign key — instead of letting the delete's
+    // `ON DELETE SET NULL` quietly orphan it.
+    lock(&mut tx, workspace).await?;
     let parent: Option<Option<Uuid>> =
-        sqlx::query_scalar("SELECT parent_id FROM goals WHERE id = $1")
+        sqlx::query_scalar("SELECT parent_id FROM goals WHERE id = $1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -357,20 +372,52 @@ pub async fn delete(db: &Db, id: Uuid) -> anyhow::Result<bool> {
 
 /// A goal by title, for an agent that names one. Case-insensitive, within the
 /// workspace; an unknown title is refused with the real ones.
+///
+/// Titles are not unique — "Polish" under two different goals is ordinary —
+/// so a title that matches more than one is refused too, listing each by its
+/// path, and the path is accepted: `Growth > Polish`. Picking one would file
+/// the card under the wrong goal and roll its progress up the wrong tree,
+/// without anyone being told.
 pub async fn by_title(
     db: &Db,
     workspace: Uuid,
     title: &str,
 ) -> anyhow::Result<Result<Uuid, String>> {
-    let hit: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM goals WHERE workspace_id = $1 AND lower(title) = lower($2) AND status = 'active'",
+    let wanted: Vec<String> = title
+        .split('>')
+        .map(|p| p.trim().to_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let Some(last) = wanted.last() else {
+        return Ok(Err("name a goal by its title".to_string()));
+    };
+    let hits: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM goals WHERE workspace_id = $1 AND lower(title) = $2 AND status = 'active'
+          ORDER BY created_at",
     )
     .bind(workspace)
-    .bind(title.trim())
-    .fetch_optional(&db.pool)
+    .bind(last)
+    .fetch_all(&db.pool)
     .await?;
-    if let Some(id) = hit {
-        return Ok(Ok(id));
+    let mut matching: Vec<(Uuid, String)> = vec![];
+    for id in hits {
+        let path: Vec<String> = chain(db, id).await?.into_iter().map(|(t, _)| t).collect();
+        let lower: Vec<String> = path.iter().map(|t| t.to_lowercase()).collect();
+        if lower.ends_with(&wanted) {
+            matching.push((id, path.join(" > ")));
+        }
+    }
+    match matching.as_slice() {
+        [(id, _)] => return Ok(Ok(*id)),
+        [] => {}
+        several => {
+            let paths: Vec<&str> = several.iter().map(|(_, p)| p.as_str()).collect();
+            return Ok(Err(format!(
+                "more than one active goal is called \"{}\": {}. Name it by its path, as written here.",
+                title.trim(),
+                paths.join("; ")
+            )));
+        }
     }
     let known: Vec<String> = sqlx::query_scalar(
         "SELECT title FROM goals WHERE workspace_id = $1 AND status = 'active' ORDER BY title",
@@ -382,7 +429,8 @@ pub async fn by_title(
         "this workspace has no active goals".to_string()
     } else {
         format!(
-            "no active goal called \"{title}\". The goals are: {}",
+            "no active goal called \"{}\". The goals are: {}",
+            title.trim(),
             known.join(", ")
         )
     }))
@@ -699,6 +747,69 @@ mod db_tests {
             .unwrap()
             .unwrap_err()
             .contains("Retention"));
+        t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn two_goals_with_one_title_are_told_apart_by_their_path() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, _) = t.project(dir.path(), false).await;
+        let growth = new(&t, ws, "Growth", None).await;
+        let infra = new(&t, ws, "Infra", None).await;
+        let a = new(&t, ws, "Polish", Some(growth)).await;
+        let b = new(&t, ws, "Polish", Some(infra)).await;
+
+        let refused = by_title(&t.db, ws, "polish").await.unwrap().unwrap_err();
+        assert!(
+            refused.contains("Growth > Polish") && refused.contains("Infra > Polish"),
+            "{refused}"
+        );
+        assert_eq!(by_title(&t.db, ws, "Growth > Polish").await.unwrap(), Ok(a));
+        assert_eq!(by_title(&t.db, ws, "infra>polish").await.unwrap(), Ok(b));
+        assert!(by_title(&t.db, ws, "Ops > Polish").await.unwrap().is_err());
+        // One of a kind is still found by its title alone.
+        assert_eq!(by_title(&t.db, ws, "growth").await.unwrap(), Ok(growth));
+        t.finish().await;
+    }
+
+    /// A card pointed at a goal by a writer that does not take the goals
+    /// lock — the card's own PATCH — while the goal is being deleted moves
+    /// up with the rest, rather than being left serving nothing.
+    #[tokio::test]
+    async fn a_card_pointed_at_a_goal_as_it_is_deleted_moves_up_with_the_rest() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, project) = t.project(dir.path(), false).await;
+        let top = new(&t, ws, "Top", None).await;
+        let doomed = new(&t, ws, "Doomed", Some(top)).await;
+        let card = t.card(project, "late").await;
+
+        // The card's write is in flight, uncommitted, when the delete starts.
+        let mut writer = t.db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE tasks SET goal_id = $2 WHERE id = $1")
+            .bind(card)
+            .bind(doomed)
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let db = t.db.clone();
+        let deleting = tokio::spawn(async move { delete(&db, doomed).await.unwrap() });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!deleting.is_finished(), "the delete waits for the writer");
+        writer.commit().await.unwrap();
+        assert!(deleting.await.unwrap());
+
+        let goal: Option<Uuid> = sqlx::query_scalar("SELECT goal_id FROM tasks WHERE id = $1")
+            .bind(card)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(goal, Some(top));
         t.finish().await;
     }
 }

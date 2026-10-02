@@ -464,6 +464,32 @@ mod db_tests {
         f.t.finish().await;
     }
 
+    /// The reaper judges only `running` rows, so the clock has to be reset
+    /// before the row says `running` again — the other way round leaves a
+    /// window where an Allow that took a person a while reads as silence.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_allowed_run_has_its_clock_reset_before_it_says_running() {
+        let Some(f) = fixture().await else { return };
+        let waiting = f.run("waiting_permission", 30).await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let (db, out) = (f.t.db.clone(), seen.clone());
+        let gate = crate::runs::gate::DbGate::new(f.t.db.clone(), |_| {}).on_unpark(move |run| {
+            let status: String = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+                        .bind(run)
+                        .fetch_one(&db.pool),
+                )
+            })
+            .unwrap();
+            *out.lock().unwrap() = Some(status);
+        });
+        crate::runs::gate::RunGate::unpark(&gate, waiting).await;
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("waiting_permission"));
+        assert_eq!(f.state(waiting).await.0, "running");
+        f.t.finish().await;
+    }
+
     #[tokio::test]
     async fn auto_resume_picks_a_stopped_run_up_once_and_not_forever() {
         let Some(f) = fixture().await else { return };

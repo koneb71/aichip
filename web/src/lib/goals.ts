@@ -80,3 +80,13 @@ export function dueLine(targetDate: string | null, today = new Date()): string |
   if (days > 0) return `due in ${days} day${days === 1 ? "" : "s"}`;
   return `${-days} day${days === -1 ? "" : "s"} overdue`;
 }
+
+/**
+ * The goal a board is narrowed to, or "" — only while some card on it still
+ * serves that goal. Otherwise the filter would outlive its control (which
+ * hides itself once no card serves a goal) and leave an empty board with no
+ * way to clear it.
+ */
+export function boardGoal(tasks: { goalId?: string | null }[], chosen: string): string {
+  return chosen && tasks.some((t) => t.goalId === chosen) ? chosen : "";
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dueLine, flatten, Goal, parentChoices, progress } from "./goals";
+import { boardGoal, dueLine, flatten, Goal, parentChoices, progress } from "./goals";
 
 const g = (id: string, parentId: string | null = null, position = 0): Goal => ({
   id,
@@ -44,5 +44,16 @@ describe("progress and due dates", () => {
     expect(dueLine("2026-10-02", today)).toBe("due today");
     expect(dueLine("2026-10-14", today)).toBe("due in 12 days");
     expect(dueLine("2026-09-29", today)).toBe("3 days overdue");
+  });
+});
+
+describe("boardGoal", () => {
+  it("keeps a filter only while a card still serves the goal", () => {
+    const tasks = [{ goalId: "g1" }, { goalId: null }];
+    expect(boardGoal(tasks, "g1")).toBe("g1");
+    expect(boardGoal(tasks, "")).toBe("");
+    // The last card serving g2 moved on: the board is not left empty.
+    expect(boardGoal(tasks, "g2")).toBe("");
+    expect(boardGoal([], "g1")).toBe("");
   });
 });

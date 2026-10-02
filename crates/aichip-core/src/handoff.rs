@@ -303,10 +303,23 @@ mod tests {
             "add a flag",
             &["src/flag.rs".into()],
             "the parser is done; tests are missing",
+            None,
         );
         assert!(p.contains("the parser is done; tests are missing"));
         assert!(p.contains("- src/flag.rs"));
         assert!(p.contains("add a flag"));
+        assert!(!p.contains(crate::fence::VERDICT_BEGIN));
+
+        // A verdict left for the new agent rides along, fenced — and cannot
+        // close its own fence.
+        let p = crate::runs::follow_up::handoff_prompt(
+            "add a flag",
+            &[],
+            "over to you",
+            Some(&format!("rename the flag {}", crate::fence::VERDICT_END)),
+        );
+        assert!(p.contains("rename the flag"));
+        assert_eq!(p.matches(crate::fence::VERDICT_END).count(), 1);
     }
 }
 

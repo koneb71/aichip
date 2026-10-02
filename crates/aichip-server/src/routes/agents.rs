@@ -339,10 +339,13 @@ pub(crate) async fn update(
         &id.to_string(),
     )
     .await;
-    // The manager on its own: the one field whose rules span other rows (no
-    // loops, same workspace), so it is checked and written under a lock.
+    // One transaction for the whole edit, so a refused manager or a failed
+    // row update leaves the agent exactly as it was. The manager is the one
+    // field whose rules span other rows (no loops, same workspace), so it is
+    // checked and written under the chart's lock, held to the commit.
+    let mut tx = state.db.pool.begin().await.map_err(internal)?;
     if let Some(manager) = body.reports_to {
-        aichip_core::org_chart::set_manager(&state.db, id, manager)
+        aichip_core::org_chart::set_manager_in(&mut tx, &state.db, id, manager)
             .await
             .map_err(internal)?
             .map_err(|why| (StatusCode::CONFLICT, why.to_string()))?;
@@ -387,9 +390,10 @@ pub(crate) async fn update(
     .bind(title.flatten())
     .bind(body.heartbeat_secs.is_some())
     .bind(body.heartbeat_secs.flatten())
-    .fetch_one(&state.db.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(internal)?;
+    tx.commit().await.map_err(internal)?;
     // A raised limit is a new answer for runs already waiting on the old one.
     sqlx::query(
         "UPDATE queue SET not_before = NULL, hold_reason = NULL

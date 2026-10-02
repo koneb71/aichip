@@ -311,7 +311,25 @@ impl Orchestrator {
                         .unwrap_or_default(),
                     None => vec![],
                 };
-                (handoff_prompt(&task_prompt, &files, note), None)
+                // A verdict that asked for changes and that no work has
+                // answered since: the fix was left to whoever takes over.
+                let open_review: Option<String> = sqlx::query_scalar(
+                    "SELECT c.content FROM review_decisions d
+                       JOIN task_comments c ON c.run_id = d.run_id AND c.author = 'agent'
+                      WHERE d.task_id = $1 AND d.verdict = 'request_changes'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM runs w WHERE w.task_id = d.task_id
+                               AND w.trigger NOT IN ('summary', 'peer_review')
+                               AND w.status = 'completed' AND w.finished_at > d.created_at)
+                      ORDER BY d.created_at DESC LIMIT 1",
+                )
+                .bind(task_id)
+                .fetch_optional(&self.db.pool)
+                .await?;
+                (
+                    handoff_prompt(&task_prompt, &files, note, open_review.as_deref()),
+                    None,
+                )
             }
             FollowUp::Answer { question_id } => {
                 let q = sqlx::query(
@@ -557,7 +575,12 @@ pub(crate) fn summary_prompt(task_prompt: &str, files: &[String], resumed: bool)
 /// what it is told is where things stand — the files already changed are in
 /// its working directory — and the person's note, which is the reason the
 /// work changed hands and so the most important line here.
-pub(crate) fn handoff_prompt(task_prompt: &str, files: &[String], note: &str) -> String {
+pub(crate) fn handoff_prompt(
+    task_prompt: &str,
+    files: &[String],
+    note: &str,
+    open_review: Option<&str>,
+) -> String {
     let mut prompt = String::from(
         "Another agent was working on this task and has been stopped; the person \
          handed the work to you. Its changes so far are already in your working \
@@ -568,6 +591,16 @@ pub(crate) fn handoff_prompt(task_prompt: &str, files: &[String], note: &str) ->
         "\nThe person's note on handing it over:\n{}\n",
         clip_chars(note, 2000)
     ));
+    if let Some(review) = open_review {
+        prompt.push_str(&format!(
+            "\nA reviewer asked for changes to this work, and they are yours to make now:\n{}\n",
+            crate::fence::wrap(
+                crate::fence::VERDICT_BEGIN,
+                crate::fence::VERDICT_END,
+                &clip_chars(review, 4000)
+            )
+        ));
+    }
     if !files.is_empty() {
         let listed: Vec<String> = files.iter().take(40).map(|f| format!("- {f}")).collect();
         prompt.push_str(&format!("\nFiles changed so far:\n{}\n", listed.join("\n")));

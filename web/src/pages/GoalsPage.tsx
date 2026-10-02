@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ChevronRight, Flag, Plus, Trash2 } from "lucide-react";
 import { api, Goal } from "../lib/api";
@@ -226,6 +226,11 @@ function GoalDetail({
   const [d, setD] = useState<Detail | null>(null);
   const [draft, setDraft] = useState<{ title: string; description: string; targetDate: string; parentId: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // The list reloads after every change made here — a status, a child goal —
+  // and an edit not yet saved must survive that. So the draft is reseeded
+  // from the server only for another goal, or when there is nothing unsaved.
+  const seededFor = useRef<string | null>(null);
+  const unsaved = useRef(false);
 
   useEffect(() => {
     let stale = false;
@@ -234,7 +239,10 @@ function GoalDetail({
       .then((r) => {
         if (stale) return;
         setD(r);
-        setDraft({ title: r.goal.title, description: r.goal.description, targetDate: r.goal.targetDate ?? "", parentId: r.goal.parentId ?? "" });
+        if (seededFor.current !== id || !unsaved.current) {
+          setDraft({ title: r.goal.title, description: r.goal.description, targetDate: r.goal.targetDate ?? "", parentId: r.goal.parentId ?? "" });
+          seededFor.current = id;
+        }
       })
       .catch(() => !stale && setD(null));
     return () => {
@@ -246,6 +254,7 @@ function GoalDetail({
   const g = d.goal;
   const dirty =
     draft.title !== g.title || draft.description !== g.description || draft.targetDate !== (g.targetDate ?? "") || draft.parentId !== (g.parentId ?? "");
+  unsaved.current = dirty;
 
   const save = async (patch: Parameters<typeof api.updateGoal>[1]) => {
     try {
@@ -362,8 +371,14 @@ function GoalDetail({
           <Button
             variant="danger"
             onClick={async () => {
-              await api.deleteGoal(id).catch(() => {});
               setConfirmDelete(false);
+              try {
+                await api.deleteGoal(id);
+              } catch (e) {
+                // Said, and the goal stays selected: it is still there.
+                toast("Not deleted", { tone: "danger", body: String(e).replace(/^Error:\s*/, "") });
+                return;
+              }
               onDeleted();
             }}
           >

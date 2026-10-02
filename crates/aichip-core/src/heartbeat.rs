@@ -52,9 +52,10 @@ pub enum Outcome {
     Idle,
     /// Already working.
     Busy,
-    /// Had work, but something said not now (budget, limits, a vet).
-    Held(String),
-    /// Paused or retired.
+    /// Had work, but something said not now (budget, limits, a vet) — with
+    /// the card it was about, when there was one.
+    Held { why: String, task_id: Option<Uuid> },
+    /// Paused, retired, or its heartbeat was turned off.
     Paused,
 }
 
@@ -65,7 +66,7 @@ impl Outcome {
             Outcome::Fired => "fired",
             Outcome::Idle => "idle",
             Outcome::Busy => "busy",
-            Outcome::Held(_) => "held",
+            Outcome::Held { .. } => "held",
             Outcome::Paused => "paused",
         }
     }
@@ -76,11 +77,14 @@ impl Outcome {
 pub async fn beat(orch: &Orchestrator, agent: Uuid, reason: Reason) -> Outcome {
     let outcome = match try_beat(orch, agent).await {
         Ok(o) => o,
-        Err(e) => Outcome::Held(e.to_string()),
+        Err(e) => Outcome::Held {
+            why: e.to_string(),
+            task_id: None,
+        },
     };
     let (task, run, detail) = match &outcome {
         Outcome::Started { task_id, run_id } => (Some(*task_id), Some(*run_id), String::new()),
-        Outcome::Held(why) => (None, None, why.chars().take(300).collect()),
+        Outcome::Held { why, task_id } => (*task_id, None, why.chars().take(300).collect()),
         _ => (None, None, String::new()),
     };
     let recorded = sqlx::query(
@@ -110,23 +114,40 @@ pub async fn beat(orch: &Orchestrator, agent: Uuid, reason: Reason) -> Outcome {
 }
 
 async fn try_beat(orch: &Orchestrator, agent: Uuid) -> anyhow::Result<Outcome> {
-    let Some(row) = sqlx::query("SELECT status, max_concurrent FROM agents WHERE id = $1")
-        .bind(agent)
-        .fetch_optional(&orch.db.pool)
-        .await?
+    let Some(row) = sqlx::query(
+        "SELECT name, workspace_id, status, max_concurrent, heartbeat_secs FROM agents WHERE id = $1",
+    )
+    .bind(agent)
+    .fetch_optional(&orch.db.pool)
+    .await?
     else {
         return Ok(Outcome::Paused);
     };
-    if row.get::<String, _>("status") != "active" {
+    // A wake raised before a person turned the heartbeat off is not a reason
+    // to start work for them: every beat asks, whatever raised it.
+    if row.get::<String, _>("status") != "active"
+        || row.get::<Option<i32>, _>("heartbeat_secs").is_none()
+    {
         return Ok(Outcome::Paused);
     }
-    // One card at a time unless a person allowed more.
+    // One card at a time unless a person allowed more — counting a step it
+    // is doing for a team, which names it rather than pointing at it.
     let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
-          WHERE COALESCE(r.agent_id, t.agent_id) = $1
-            AND r.status IN ('queued', 'starting', 'running', 'waiting_permission', 'rate_limited')",
+        "SELECT
+            (SELECT count(*) FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
+              WHERE COALESCE(r.agent_id, t.agent_id) = $1
+                AND r.team_id IS NULL AND r.workflow_id IS NULL
+                AND r.status IN ('queued', 'starting', 'running', 'waiting_permission', 'rate_limited'))
+          + (SELECT count(*) FROM steps s JOIN runs r ON r.id = s.run_id
+               LEFT JOIN projects p ON p.id = r.project_id
+              WHERE s.assignee = $2
+                AND s.status IN ('queued', 'starting', 'running', 'waiting_permission', 'rate_limited')
+                AND r.status NOT IN ('completed', 'failed', 'canceled')
+                AND (p.workspace_id IS NULL OR p.workspace_id = $3))",
     )
     .bind(agent)
+    .bind(row.get::<String, _>("name"))
+    .bind(row.get::<Option<Uuid>, _>("workspace_id"))
     .fetch_one(&orch.db.pool)
     .await?;
     let allowed = row
@@ -137,42 +158,74 @@ async fn try_beat(orch: &Orchestrator, agent: Uuid) -> anyhow::Result<Outcome> {
         return Ok(Outcome::Busy);
     }
 
-    // A manager agent's job is its pass.
-    let routine: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM routines WHERE agent_id = $1 AND kind = 'manage' AND enabled LIMIT 1",
+    // A manager agent's job is its pass — each of them, in turn: the one
+    // fired longest ago first, so an agent managing two projects does not
+    // spend every beat on the same one.
+    let routines: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT rt.id FROM routines rt
+          WHERE rt.agent_id = $1 AND rt.kind = 'manage' AND rt.enabled
+          ORDER BY (SELECT max(rr.fired_at) FROM routine_runs rr WHERE rr.routine_id = rt.id)
+                   NULLS FIRST, rt.id",
     )
     .bind(agent)
-    .fetch_optional(&orch.db.pool)
+    .fetch_all(&orch.db.pool)
     .await?;
-    if let Some(routine) = routine {
-        if !orch.may_wake_manager(routine).await? {
-            return Ok(Outcome::Busy);
+    if !routines.is_empty() {
+        for routine in routines {
+            if orch.may_wake_manager(routine).await? {
+                crate::routines::fire(&orch.db, orch, routine, "heartbeat").await?;
+                return Ok(Outcome::Fired);
+            }
         }
-        crate::routines::fire(&orch.db, orch, routine, "heartbeat").await?;
-        return Ok(Outcome::Fired);
+        return Ok(Outcome::Busy);
     }
 
-    // Otherwise its next card: assigned to it, in the backlog, and with
-    // nothing it waits on still unlanded.
-    let next: Option<Uuid> = sqlx::query_scalar(
+    // Otherwise its next card: assigned to it, in the backlog, with nothing
+    // it waits on still unlanded, and not a sub-task a team run still holds.
+    let candidates: Vec<Uuid> = sqlx::query_scalar(
         "SELECT t.id FROM tasks t
           WHERE t.agent_id = $1 AND t.team_id IS NULL AND t.board_column = 'backlog'
             AND NOT EXISTS (SELECT 1 FROM task_deps d JOIN tasks b ON b.id = d.blocked_by
                              WHERE d.task_id = t.id AND b.board_column <> 'done')
             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id
                                AND r.status NOT IN ('completed', 'failed', 'canceled'))
-          ORDER BY t.position, t.created_at LIMIT 1",
+            AND NOT EXISTS (SELECT 1 FROM steps s JOIN runs r ON r.id = s.run_id
+                             WHERE s.task_id = t.id
+                               AND s.status IN ('queued', 'starting', 'running',
+                                                'waiting_permission', 'rate_limited')
+                               AND r.status NOT IN ('completed', 'failed', 'canceled'))
+          ORDER BY t.position, t.created_at LIMIT 20",
     )
     .bind(agent)
-    .fetch_optional(&orch.db.pool)
+    .fetch_all(&orch.db.pool)
     .await?;
-    let Some(task_id) = next else {
-        return Ok(Outcome::Idle);
-    };
-    match orch.start_card(task_id).await {
-        Ok(run_id) => Ok(Outcome::Started { task_id, run_id }),
-        Err(e) => Ok(Outcome::Held(e.to_string())),
+    // A card that can never start as it stands — Reviewed on an engine that
+    // cannot ask — is passed over, not waited on: it would pin every card
+    // behind it, beat after beat, and log it as a hold that would pass.
+    let mut stuck: Option<(Uuid, String)> = None;
+    for task_id in candidates {
+        if let Some(why) = orch.vet_card(task_id).await? {
+            stuck.get_or_insert((task_id, why));
+            continue;
+        }
+        // Anything start_card refuses now — a budget, the agent's limits —
+        // would refuse every card of this agent alike, so it is the beat's
+        // answer.
+        return Ok(match orch.start_card(task_id).await {
+            Ok(run_id) => Outcome::Started { task_id, run_id },
+            Err(e) => Outcome::Held {
+                why: e.to_string(),
+                task_id: Some(task_id),
+            },
+        });
     }
+    Ok(match stuck {
+        Some((task_id, why)) => Outcome::Held {
+            why,
+            task_id: Some(task_id),
+        },
+        None => Outcome::Idle,
+    })
 }
 
 /// Raise a wake for an agent's heartbeat — only for an agent that has one.
@@ -487,9 +540,228 @@ mod db_tests {
             .await
             .unwrap();
         match beat(&f.orch, f.agent, Reason::Timer).await {
-            Outcome::Held(why) => assert!(why.contains("one a day"), "{why}"),
+            Outcome::Held { why, .. } => assert!(why.contains("one a day"), "{why}"),
             other => panic!("expected the budget to hold it, got {other:?}"),
         }
+        f.t.finish().await;
+    }
+
+    /// A live team run for the fixture's project; returns its id.
+    async fn team_run(f: &Fixture) -> Uuid {
+        let ws: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+            .bind(f.project)
+            .fetch_one(&f.t.db.pool)
+            .await
+            .unwrap();
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO teams (workspace_id, name, pattern, definition) VALUES ($1, 'T', 'org', '{}') RETURNING id",
+        )
+        .bind(ws)
+        .fetch_one(&f.t.db.pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO runs (team_id, project_id, goal, status, trigger, engine)
+             VALUES ($1, $2, 'ship', 'running', 'org', 'mock') RETURNING id",
+        )
+        .bind(team)
+        .bind(f.project)
+        .fetch_one(&f.t.db.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_step_it_is_doing_for_a_team_keeps_it_busy() {
+        let Some(f) = fixture().await else { return };
+        f.card("its own", 0.0).await;
+        let run = team_run(&f).await;
+        // The step names Ada; neither the run nor the team card points at her.
+        sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, assignee) VALUES ($1, 'build', 'running', 'Ada')",
+        )
+        .bind(run)
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(beat(&f.orch, f.agent, Reason::Timer).await, Outcome::Busy);
+        f.t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_card_that_cannot_start_is_passed_over_not_waited_on() {
+        let Some(f) = fixture().await else { return };
+        // An orchestrator that also has an engine unable to ask mid-run.
+        let mut orch = Orchestrator::new(
+            f.t.db.clone(),
+            crate::bus::EventBus::new(),
+            std::sync::Arc::new(crate::worktrees::manager::WorktreeManager::new(
+                f._dir.path().join("wt"),
+            )),
+            4,
+            None,
+        );
+        orch.register_engine(std::sync::Arc::new(aichip_engines::mock::MockEngine::demo()));
+        orch.register_engine(std::sync::Arc::new(
+            aichip_engines::gemini::GeminiEngine::default(),
+        ));
+
+        // The card's own engine decides, so Ada pins none.
+        sqlx::query("UPDATE agents SET engine = NULL WHERE id = $1")
+            .bind(f.agent)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        // First in line: Reviewed on Gemini, which no beat will ever start.
+        let never = f.card("reviewed on gemini", 0.0).await;
+        sqlx::query(
+            "UPDATE tasks SET engine = 'gemini', permission_mode = 'reviewed' WHERE id = $1",
+        )
+        .bind(never)
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        // Second: a sub-task a live team run still holds a step for.
+        let held = f.card("a teammate's", 1.0).await;
+        let run = team_run(&f).await;
+        sqlx::query(
+            "INSERT INTO steps (run_id, step_key, status, assignee, task_id) VALUES ($1, 's', 'queued', 'Bo', $2)",
+        )
+        .bind(run)
+        .bind(held)
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        // Third: an ordinary card, which is what the beat starts.
+        let next = f.card("ordinary", 2.0).await;
+        sqlx::query(
+            "UPDATE tasks SET engine = 'mock', permission_mode = 'auto_edit' WHERE id = $1",
+        )
+        .bind(next)
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        match beat(&orch, f.agent, Reason::Timer).await {
+            Outcome::Started { task_id, .. } => assert_eq!(task_id, next),
+            other => panic!("expected the ordinary card to start, got {other:?}"),
+        }
+
+        // With nothing else left, the beat says which card is stuck and why.
+        sqlx::query("UPDATE runs SET status = 'completed' WHERE task_id = $1")
+            .bind(next)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE tasks SET board_column = 'done' WHERE id = $1")
+            .bind(next)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        match beat(&orch, f.agent, Reason::Timer).await {
+            Outcome::Held { why, task_id } => {
+                assert_eq!(task_id, Some(never));
+                assert!(why.contains("Reviewed"), "{why}");
+            }
+            other => panic!("expected a hold naming the stuck card, got {other:?}"),
+        }
+        let logged: Option<Uuid> = sqlx::query_scalar(
+            "SELECT task_id FROM heartbeats WHERE agent_id = $1 ORDER BY id DESC LIMIT 1",
+        )
+        .bind(f.agent)
+        .fetch_one(&f.t.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(logged, Some(never));
+        f.t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_wake_after_the_heartbeat_was_turned_off_starts_nothing() {
+        let Some(f) = fixture().await else { return };
+        let card = f.card("handed over", 0.0).await;
+        // Woken while the heartbeat was on; turned off before the tick.
+        wake(&f.t.db, f.agent, "assigned", Some(card)).await;
+        sqlx::query("UPDATE agents SET heartbeat_secs = NULL WHERE id = $1")
+            .bind(f.agent)
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        f.orch.heartbeats().await;
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+            .fetch_one(&f.t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0);
+        assert_eq!(f.outcomes().await, ["paused"]);
+        f.t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn an_agent_managing_two_projects_takes_their_passes_in_turn() {
+        let Some(f) = fixture().await else { return };
+        // One manager per project, so a second project for the second pass.
+        let (_, other) = f.t.project(&f._dir.path().join("other"), false).await;
+        let mut routines = vec![];
+        for (name, project) in [("first", f.project), ("second", other)] {
+            let ws: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+                .bind(project)
+                .fetch_one(&f.t.db.pool)
+                .await
+                .unwrap();
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO routines (workspace_id, name, kind, project_id, prompt, cron_expr, agent_id, cooldown_secs)
+                 VALUES ($1, $2, 'manage', $3, '', '0 9 * * *', $4, 3600) RETURNING id",
+            )
+            .bind(ws)
+            .bind(name)
+            .bind(project)
+            .bind(f.agent)
+            .fetch_one(&f.t.db.pool)
+            .await
+            .unwrap();
+            routines.push(id);
+        }
+        let passes = |routine: Uuid| {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM routine_runs WHERE routine_id = $1")
+                .bind(routine)
+                .fetch_one(&f.t.db.pool)
+        };
+        // The first had a pass two hours ago — past its cooldown, so either
+        // may go — and the second has never had one: the beat goes there.
+        sqlx::query(
+            "INSERT INTO routine_runs (routine_id, trigger, fired_at)
+             VALUES ($1, 'heartbeat', now() - interval '2 hours')",
+        )
+        .bind(routines[0])
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        beat(&f.orch, f.agent, Reason::Timer).await;
+        assert_eq!(
+            passes(routines[1]).await.unwrap(),
+            1,
+            "the one waiting longest"
+        );
+        assert_eq!(passes(routines[0]).await.unwrap(), 1);
+
+        // Now the second is in its cooldown and the first is not.
+        sqlx::query(
+            "UPDATE routine_runs SET fired_at = now() - interval '3 hours' WHERE routine_id = $1",
+        )
+        .bind(routines[0])
+        .execute(&f.t.db.pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE runs SET status = 'completed'")
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE routines SET cooldown_secs = 3600")
+            .execute(&f.t.db.pool)
+            .await
+            .unwrap();
+        beat(&f.orch, f.agent, Reason::Timer).await;
+        assert_eq!(passes(routines[0]).await.unwrap(), 2, "then the other");
         f.t.finish().await;
     }
 }
