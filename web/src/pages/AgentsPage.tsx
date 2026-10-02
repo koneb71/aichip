@@ -19,10 +19,13 @@ export default function AgentsPage() {
 
   const refresh = useCallback(() => {
     if (!active) return;
-    api.agents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
+    api.allAgents(active.id).then((r) => setAgents(r.agents)).catch(() => {});
   }, [active]);
 
   useEffect(refresh, [refresh]);
+
+  const working = agents.filter((a) => a.status !== "retired");
+  const retired = agents.filter((a) => a.status === "retired");
 
   return (
     <Page>
@@ -52,7 +55,7 @@ export default function AgentsPage() {
       />
 
       <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {agents.map((a) => (
+        {working.map((a) => (
           <Item key={a.id}>
             <Card onClick={() => setEditing(a)} className="h-full p-4">
               <div className="flex items-center gap-3">
@@ -66,7 +69,17 @@ export default function AgentsPage() {
                   {a.name.slice(0, 1).toUpperCase()}
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{a.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-semibold">{a.name}</span>
+                    {a.status === "paused" && (
+                      <span
+                        className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                        title={a.pauseReason ?? "Starts nothing until resumed"}
+                      >
+                        paused
+                      </span>
+                    )}
+                  </div>
                   <span
                     className="mt-0.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
                     style={{ background: tierSoft[a.modelTier], color: tierColor[a.modelTier] }}
@@ -81,7 +94,7 @@ export default function AgentsPage() {
             </Card>
           </Item>
         ))}
-        {agents.length === 0 && (
+        {working.length === 0 && (
           <div className="col-span-full">
             <Empty
               icon={<Icon name="agents" size={28} />}
@@ -91,6 +104,29 @@ export default function AgentsPage() {
           </div>
         )}
       </Stagger>
+
+      {retired.length > 0 && (
+        <details className="mt-8">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-ink-dim">
+            Retired · {retired.length}
+          </summary>
+          <p className="mt-1 text-[11px] text-ink-dim">
+            No new work and gone from pickers; their runs and comments still name them.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {retired.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => setEditing(a)}
+                className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-dim hover:bg-panel-2"
+              >
+                <span className="size-2 rounded-full opacity-50" style={{ background: a.color }} />
+                {a.name}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
 
       <AnimatePresence>
         {editing && active && (

@@ -11,8 +11,7 @@
 use super::{internal, ApiError};
 use crate::AppState;
 use aichip_core::checks::{self, Check};
-use aichip_core::runs::follow_up::{FollowUp, FollowUpRefusal};
-use aichip_core::runs::orchestrator::AlreadyRunning;
+use aichip_core::runs::follow_up::FollowUp;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
@@ -235,13 +234,7 @@ async fn fix(
         .orchestrator
         .enqueue_follow_up(task_id, FollowUp::FailingChecks { check_run_id })
         .await
-        .map_err(|e| {
-            if e.is::<AlreadyRunning>() || e.is::<FollowUpRefusal>() {
-                (StatusCode::CONFLICT, e.to_string())
-            } else {
-                internal(e)
-            }
-        })?;
+        .map_err(super::run_refused)?;
     Ok(Json(json!({ "runId": run_id })))
 }
 

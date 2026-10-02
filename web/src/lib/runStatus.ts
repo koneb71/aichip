@@ -118,3 +118,16 @@ export function stopReason(
 export function unresolvedBlockers(t: { blockedBy: { title: string; boardColumn: string }[] }) {
   return (t.blockedBy ?? []).filter((b) => b.boardColumn !== "done");
 }
+
+/**
+ * Every card this one waited for has landed and it has not started: the news
+ * a person away from the board was waiting on. A card with no blockers was
+ * never waiting, so it is not "unblocked".
+ */
+export function unblocked(t: {
+  boardColumn: string;
+  blockedBy: { boardColumn: string }[];
+}): boolean {
+  const blockers = t.blockedBy ?? [];
+  return t.boardColumn === "backlog" && blockers.length > 0 && blockers.every((b) => b.boardColumn === "done");
+}

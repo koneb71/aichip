@@ -140,6 +140,78 @@ pub async fn record_for_message(
     Ok(())
 }
 
+/// One line of a knowledge-base search, for an agent to choose what to read.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Hit {
+    pub id: Uuid,
+    pub title: String,
+    pub summary: String,
+    /// A person has vouched for it; otherwise it is an unreviewed draft.
+    pub published: bool,
+}
+
+/// Pages in this workspace that mention every word of the query, title
+/// matches first. Plain matching on purpose: the knowledge base is pages a
+/// person wrote and named, and an agent looking for "rollback" wants the page
+/// called Rollback before one that mentions it in passing.
+pub async fn search(
+    db: &Db,
+    workspace_id: Uuid,
+    query: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<Hit>> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .take(8)
+        .map(|w| {
+            format!(
+                "%{}%",
+                w.replace('\\', "").replace('%', "\\%").replace('_', "\\_")
+            )
+        })
+        .collect();
+    if words.is_empty() {
+        return Ok(vec![]);
+    }
+    let rows = sqlx::query(
+        "SELECT id, title, summary, status FROM kb_articles a
+          WHERE workspace_id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM unnest($2::text[]) w
+                 WHERE NOT (a.title ILIKE w OR a.summary ILIKE w OR a.content_text ILIKE w))
+          ORDER BY (SELECT count(*) FROM unnest($2::text[]) w WHERE a.title ILIKE w) DESC,
+                   a.updated_at DESC
+          LIMIT $3",
+    )
+    .bind(workspace_id)
+    .bind(&words)
+    .bind(limit)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| Hit {
+            id: r.get("id"),
+            title: r.get("title"),
+            summary: r.get("summary"),
+            published: r.get::<String, _>("status") == "published",
+        })
+        .collect())
+}
+
+/// One page by id, only if it is in this workspace.
+pub async fn read(db: &Db, workspace_id: Uuid, id: Uuid) -> anyhow::Result<Option<ArticleRef>> {
+    let rows = sqlx::query(
+        "SELECT id, title, content_text, status FROM kb_articles
+          WHERE id = $1 AND workspace_id = $2",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(hydrate(db, &rows).await?.pop())
+}
+
 /// Rows → `ArticleRef`, breadcrumbs and all.
 async fn hydrate(db: &Db, rows: &[sqlx::postgres::PgRow]) -> anyhow::Result<Vec<ArticleRef>> {
     let mut out = Vec::with_capacity(rows.len());

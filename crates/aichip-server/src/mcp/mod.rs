@@ -6,6 +6,7 @@
 
 pub mod chat_tools;
 pub mod org_tools;
+pub mod run_tools;
 
 use crate::AppState;
 use aichip_core::runs::permissions::Decision;
@@ -19,7 +20,7 @@ use uuid::Uuid;
 pub fn mcp_router() -> Router<AppState> {
     Router::new()
         .route("/run/{run_id}", post(rpc))
-        .route("/chat/{chat_id}", post(chat_tools::rpc))
+        .route("/chat/{chat_id}/{run_id}", post(chat_tools::rpc))
         .route("/org/{run_id}/{step_id}", post(org_tools::rpc))
 }
 
@@ -43,8 +44,8 @@ async fn rpc(
             "serverInfo": { "name": "aichip", "version": env!("CARGO_PKG_VERSION") }
         }),
         "ping" => json!({}),
-        "tools/list" => json!({
-            "tools": [{
+        "tools/list" => {
+            let mut tools = vec![json!({
                 "name": "approve",
                 "description": "Ask the aichip dashboard user to approve a tool call.",
                 "inputSchema": {
@@ -56,8 +57,42 @@ async fn rpc(
                     },
                     "required": ["tool_name", "input"]
                 }
-            }]
-        }),
+            })];
+            // A lookup failure leaves the permission prompt alone: the run
+            // can still ask, it just has nothing else from us.
+            if let Ok(ctx) = run_tools::context(&state, run_id).await {
+                tools.extend(run_tools::tools(&ctx));
+            }
+            json!({ "tools": tools })
+        }
+        "tools/call"
+            if !matches!(
+                req.pointer("/params/name").and_then(Value::as_str),
+                None | Some("approve")
+            ) =>
+        {
+            let name = req
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let args = req
+                .pointer("/params/arguments")
+                .cloned()
+                .unwrap_or(json!({}));
+            let outcome = match run_tools::context(&state, run_id).await {
+                Ok(ctx) => run_tools::call(&state, run_id, &ctx, name, args).await,
+                Err(e) => Err(e),
+            };
+            match outcome {
+                Ok(payload) => {
+                    json!({ "content": [{ "type": "text", "text": payload.to_string() }] })
+                }
+                Err(message) => json!({
+                    "content": [{ "type": "text", "text": json!({ "error": message }).to_string() }],
+                    "isError": true
+                }),
+            }
+        }
         "tools/call" => {
             let args = req
                 .pointer("/params/arguments")
@@ -70,10 +105,18 @@ async fn rpc(
                 .to_string();
             let input = args.get("input").cloned().unwrap_or(json!({}));
 
-            let decision = state
-                .permissions
-                .request(run_id, tool_name, input.clone())
-                .await;
+            // aichip's own toolbox is asked about by name and let through:
+            // each tool in it was built to be safe for any run to call, and a
+            // person asked to approve "comment" every time would learn to
+            // click Allow without reading.
+            let decision = if run_tools::is_own(&tool_name) {
+                Decision::Allowed
+            } else {
+                state
+                    .permissions
+                    .request(run_id, tool_name, input.clone())
+                    .await
+            };
 
             // The permission-prompt-tool contract: content[0].text is a
             // JSON-encoded {behavior, updatedInput|message}.
@@ -100,6 +143,33 @@ async fn rpc(
         StatusCode::OK,
         Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })),
     )
+}
+
+/// Refuse a tool call from a run that is over, or that is not the one the
+/// URL pairs it with. A CLI can outlive its run — stopped, orphaned by a
+/// restart — and nothing it asks for afterwards should happen.
+pub(crate) async fn still_running(
+    state: &AppState,
+    run_id: Uuid,
+    belongs: &str,
+    owner: Uuid,
+) -> Result<(), String> {
+    // `belongs` is a literal from the call sites, never request text.
+    let status: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT status FROM runs WHERE id = $1 AND {belongs} = $2"
+    ))
+    .bind(run_id)
+    .bind(owner)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    match status.as_deref() {
+        None => Err("this run is not part of that conversation".into()),
+        Some("completed" | "failed" | "canceled") => {
+            Err("this run has ended — its tools are closed".into())
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 /// What to say when the answer is not "allow".

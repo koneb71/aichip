@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, TaskRun } from "../lib/api";
 import { statusColor, statusLabel, stopReason } from "../lib/runStatus";
-import { dollars, duration, tokensLine, triggerLabel } from "../lib/runHistory";
+import { dollars, duration, reportExcerpt, tokensLine, triggerLabel } from "../lib/runHistory";
 import { RunError } from "./ui/RunError";
 
 /**
@@ -71,6 +71,7 @@ export function RunHistory({
           const stopped = stopReason(run.status, run.error);
           const shown = viewing ? viewing === run.runId : i === 0;
           const tokens = tokensLine(run);
+          const excerpt = reportExcerpt(run.report);
           return (
             <li
               key={run.runId}
@@ -96,6 +97,7 @@ export function RunHistory({
                 {run.agentName && <> · {run.agentName}</>}
               </div>
               {tokens && <div className="mt-0.5 text-[11px] tabular-nums text-ink-dim">{tokens}</div>}
+              {excerpt && <p className="mt-1.5 text-xs text-ink">{excerpt}</p>}
               {(run.resumedFrom || run.rateLimitAttempts > 0) && (
                 <div className="mt-0.5 text-[11px] text-ink-dim">
                   {run.resumedFrom && "Continued an earlier run's session"}

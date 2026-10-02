@@ -95,6 +95,24 @@ pub(crate) async fn note_revision(
     Ok(())
 }
 
+/// Put a teammate's finished assignment on its card, the way a card's own
+/// run reports — so a card worked by a team reads the same as any other.
+pub(crate) async fn note_result(db: &Db, step_id: Uuid, output: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO task_comments (task_id, author, content, run_id)
+         SELECT s.task_id, 'agent',
+                '**Work report from ' || COALESCE(s.assignee, 'the team') || E'**\n\n' || $2,
+                s.run_id
+           FROM steps s
+          WHERE s.id = $1 AND s.task_id IS NOT NULL",
+    )
+    .bind(step_id)
+    .bind(crate::runs::report::body(output))
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
 /// Where a card sits, given the state of its assignment.
 ///
 /// Four columns cannot express nine step states, and adding a fifth would mean

@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod apps;
 pub mod attention;
 pub mod brain;
@@ -7,6 +8,7 @@ pub mod db;
 pub mod fence;
 pub mod github;
 pub mod kb;
+pub mod landing;
 pub mod leftovers;
 pub mod local_models;
 pub mod manager;
@@ -22,6 +24,8 @@ pub mod skills;
 pub mod spend;
 pub mod storage;
 pub mod tasks;
+#[cfg(test)]
+pub(crate) mod testdb;
 pub mod usage;
 pub mod worktrees;
 

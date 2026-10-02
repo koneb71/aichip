@@ -19,7 +19,8 @@ export type AttentionEvent =
   | "rate_limited"
   | "over_budget"
   | "finished"
-  | "routine";
+  | "routine"
+  | "unblocked";
 
 export interface AttentionSettingsValue {
   enabled: boolean;
@@ -208,6 +209,12 @@ export interface Task {
   /** Cards this one waits for. Unresolved until the blocker is done —
    *  landed — because a dependent run branches from main. */
   blockedBy: { id: string; title: string; boardColumn: Task["boardColumn"] }[];
+  /** Start by itself once every blocker has landed. */
+  startWhenUnblocked: boolean;
+  /** The assignee's status: a paused one keeps the card but starts nothing. */
+  agentStatus: Agent["status"] | null;
+  /** What the agent reported stopped it, until the card next starts. */
+  blockedNote: string | null;
   /** What was picked. `auto` means the tier is decided per run. */
   modelTier: TierChoice;
   /** True when `modelTier` is `auto` and no tier is settled until a run. */
@@ -645,6 +652,10 @@ export interface Agent {
   /** null = inherit whatever the card says. */
   engine: string | null;
   builtin: boolean;
+  /** Paused keeps its cards and starts nothing; retired takes no new work. */
+  status: "active" | "paused" | "retired" | "pending_approval";
+  pauseReason: string | null;
+  pausedAt: string | null;
 }
 
 export interface AgentDraft {
@@ -770,7 +781,8 @@ export const MAX_ATTACHMENTS = 10;
 
 export interface TaskComment {
   id: string;
-  author: "user" | "agent";
+  /** `system` is aichip itself — how a card's checks went, say. */
+  author: "user" | "agent" | "system";
   agentId: string | null;
   agentName: string | null;
   agentColor: string | null;
@@ -1019,7 +1031,7 @@ export interface SpendTotals {
 }
 
 /** Which ways the spend can be sliced. Mirrors the server's dimension list. */
-export type SpendDimension = "project" | "engine" | "model" | "tier" | "pattern";
+export type SpendDimension = "project" | "engine" | "model" | "tier" | "pattern" | "agent" | "routine";
 
 export interface Spend {
   days: number;
@@ -1147,6 +1159,8 @@ export interface TaskRun {
   /** `cd … && …` to continue this session in your own terminal. Null when the
    *  engine offers none, the directory is gone, or the card is busy. */
   resumeCommand: string | null;
+  /** The start of what the run posted on the card when it finished. */
+  report: string | null;
 }
 
 export interface BakeoffVariant {
@@ -1976,6 +1990,8 @@ export const api = {
       skill_id?: string | null;
       /** The card's brief. Omit to leave it; empty is refused server-side. */
       prompt?: string;
+      /** Start by itself once every blocker has landed. */
+      start_when_unblocked?: boolean;
     },
   ) =>
     patch(`/api/tasks/${taskId}`, body).then((r) =>
@@ -2394,10 +2410,23 @@ export const api = {
   },
 
   // agents
+  /** The agents you can hand work to — every picker's list. A retired agent
+   *  is left out: it takes no new work, and its history names it already. */
   agents: (workspaceId: string) =>
+    fetch(`/api/agents?workspace_id=${workspaceId}`)
+      .then((r) => json<{ agents: Agent[] }>(r))
+      .then((r) => ({ agents: r.agents.filter((a) => a.status !== "retired") })),
+  /** Every agent, retired ones included — for the Agents page. */
+  allAgents: (workspaceId: string) =>
     fetch(`/api/agents?workspace_id=${workspaceId}`).then((r) =>
       json<{ agents: Agent[] }>(r),
     ),
+  pauseAgent: (id: string, body: { reason?: string; stop_now?: boolean }) =>
+    post(`/api/agents/${id}/pause`, body).then((r) => json<{ paused: boolean; stopped: number }>(r)),
+  resumeAgent: (id: string) =>
+    post(`/api/agents/${id}/resume`).then((r) => json<{ resumed: boolean }>(r)),
+  retireAgent: (id: string) =>
+    post(`/api/agents/${id}/retire`).then((r) => json<{ retired: boolean; stopped: number }>(r)),
   createAgent: (body: Record<string, unknown>) =>
     post("/api/agents", body).then((r) => json<Agent>(r)),
   updateAgent: (id: string, body: Record<string, unknown>) =>

@@ -27,6 +27,9 @@ pub enum FollowUp {
     FailingChecks { check_run_id: Uuid },
     /// The base branch, brought into the card's branch, conflicted here.
     MergeConflict { files: Vec<String>, base: String },
+    /// A completed run that said nothing. One read-only pass, continuing its
+    /// session where the engine can, writes the card's report.
+    Summarize { run_id: Uuid },
 }
 
 impl FollowUp {
@@ -36,6 +39,7 @@ impl FollowUp {
             Self::ReviewNote { .. } => "review",
             Self::FailingChecks { .. } => "checks",
             Self::MergeConflict { .. } => "conflict",
+            Self::Summarize { .. } => "summary",
         }
     }
 
@@ -59,9 +63,47 @@ pub enum FollowUpRefusal {
     ForeignChecks,
     #[error("those checks did not fail, so there is nothing to fix")]
     NothingFailed,
+    #[error("that run does not belong to this card")]
+    ForeignRun,
 }
 
 impl Orchestrator {
+    /// Anything a person does to a card outranks aichip asking a silent run
+    /// to explain itself. A summary pass is a live run like any other, and
+    /// left alone it made Merge, Update from main, a review fix or a
+    /// reassignment refuse with "an agent is still working on this card" —
+    /// for hours, when the queue was holding. So it gives way: the doors
+    /// that would refuse call this first, and the summary is dropped.
+    pub async fn supersede_summary(&self, task_id: Uuid) -> anyhow::Result<()> {
+        let live = || {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM runs WHERE task_id = $1 AND trigger = 'summary'
+                    AND status NOT IN ('completed', 'failed', 'canceled')",
+            )
+            .bind(task_id)
+            .fetch_all(&self.db.pool)
+        };
+        let pending = live().await?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for run_id in &pending {
+            if !self.cancel(*run_id) {
+                self.cancel_idle(*run_id).await?;
+            }
+        }
+        // One that was executing ends a moment later, through `finish`. Wait
+        // for it, so the caller's own "is anything running" check sees it
+        // gone rather than refusing on the run it just stopped.
+        for _ in 0..50 {
+            if live().await?.is_empty() {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok(())
+    }
+
     /// Queue a follow-up run in the card's own worktree.
     ///
     /// Serialised with `enqueue_task` on the card's row, and refused while any
@@ -72,14 +114,19 @@ impl Orchestrator {
         task_id: Uuid,
         follow_up: FollowUp,
     ) -> anyhow::Result<Uuid> {
+        if !matches!(follow_up, FollowUp::Summarize { .. }) {
+            self.supersede_summary(task_id).await?;
+        }
         let mut guard = self.db.pool.begin().await?;
         // The bound agent's engine wins over the card's, as it does for every
         // other start of the card — the old review fix used the card's alone,
         // so a card bound to an OpenCode agent was fixed by Claude Code.
         let card = sqlx::query(
-            "SELECT t.prompt, t.board_column, t.worktree_path,
-                    COALESCE(a.engine, t.engine) AS engine
-               FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
+            "SELECT t.prompt, t.board_column, t.worktree_path, p.default_branch,
+                    t.agent_id, COALESCE(a.engine, t.engine) AS engine
+               FROM tasks t
+               JOIN projects p ON p.id = t.project_id
+               LEFT JOIN agents a ON a.id = t.agent_id
               WHERE t.id = $1
                 FOR NO KEY UPDATE OF t",
         )
@@ -100,12 +147,19 @@ impl Orchestrator {
         if card.get::<String, _>("board_column") == "done" {
             return Err(FollowUpRefusal::Done.into());
         }
+        let agent: Option<Uuid> = card.get("agent_id");
+        crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
         let worktree: Option<String> = card.get("worktree_path");
-        if !worktree.is_some_and(|w| std::path::Path::new(&w).is_dir()) {
+        if !worktree
+            .as_deref()
+            .is_some_and(|w| std::path::Path::new(w).is_dir())
+        {
             return Err(FollowUpRefusal::NoWorktree.into());
         }
 
         let task_prompt: String = card.get("prompt");
+        let engine_id: String = card.get("engine");
+        let mut session: Option<(String, String)> = None;
         let (prompt, review_comment_id) = match &follow_up {
             FollowUp::ReviewNote { comment_id } => {
                 let note = sqlx::query(
@@ -147,17 +201,64 @@ impl Orchestrator {
             FollowUp::MergeConflict { files, base } => {
                 (conflict_prompt(&task_prompt, files, base), None)
             }
+            FollowUp::Summarize { run_id } => {
+                let prior = sqlx::query(
+                    "SELECT task_id, session_id, session_engine FROM runs WHERE id = $1",
+                )
+                .bind(run_id)
+                .fetch_one(&mut *guard)
+                .await?;
+                if prior.get::<Option<Uuid>, _>("task_id") != Some(task_id) {
+                    return Err(FollowUpRefusal::ForeignRun.into());
+                }
+                // Continuing the run's own session is what makes the summary
+                // worth having — it remembers what it did. Only for an engine
+                // that can resume, and only a session that engine minted.
+                let can_resume = self
+                    .engine(&engine_id)
+                    .is_some_and(|e| e.capabilities().resume_sessions);
+                if let (true, Some(sid), Some(minted_by)) = (
+                    can_resume,
+                    prior.get::<Option<String>, _>("session_id"),
+                    prior.get::<Option<String>, _>("session_engine"),
+                ) {
+                    if minted_by == engine_id {
+                        session = Some((sid, minted_by));
+                    }
+                }
+                // Without the session, the changed files are the evidence.
+                let files: Vec<String> = match worktree.as_deref() {
+                    Some(dir) => self
+                        .worktrees
+                        .diff_stat(
+                            std::path::Path::new(dir),
+                            &card.get::<String, _>("default_branch"),
+                        )
+                        .await
+                        .map(|stats| stats.into_iter().map(|f| f.path).collect())
+                        .unwrap_or_default(),
+                    None => vec![],
+                };
+                (
+                    summary_prompt(&task_prompt, &files, session.is_some()),
+                    None,
+                )
+            }
         };
 
+        let (session_id, session_engine) = session.unzip();
         let run_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO runs (task_id, review_comment_id, prompt_override, status, trigger, engine)
-             VALUES ($1, $2, $3, 'queued', $4, $5) RETURNING id",
+            "INSERT INTO runs (task_id, review_comment_id, prompt_override, status, trigger, engine,
+                               session_id, session_engine)
+             VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7) RETURNING id",
         )
         .bind(task_id)
         .bind(review_comment_id)
         .bind(&prompt)
         .bind(follow_up.trigger())
-        .bind(card.get::<String, _>("engine"))
+        .bind(&engine_id)
+        .bind(session_id)
+        .bind(session_engine)
         .fetch_one(&mut *guard)
         .await?;
         sqlx::query("INSERT INTO queue (run_id, priority) VALUES ($1, $2)")
@@ -305,6 +406,39 @@ pub(crate) fn conflict_prompt(task_prompt: &str, files: &[String], base: &str) -
     prompt
 }
 
+/// Ask a run that finished without a word to say what it did.
+///
+/// Read-only by construction — the run is dispatched with the planning pass's
+/// denied tools — and worded so the answer is the report itself, written for
+/// the person about to review the diff.
+pub(crate) fn summary_prompt(task_prompt: &str, files: &[String], resumed: bool) -> String {
+    let mut prompt = String::from(if resumed {
+        "You just finished working on this task but did not say what you did. "
+    } else {
+        "Work was just finished on this task, but no account of it was left. "
+    });
+    prompt.push_str(
+        "Write the report a person reviewing the change needs: what changed and why, \
+         anything left unfinished or uncertain, and what to check first. Do not edit \
+         anything; answer in a few short paragraphs or a list.\n",
+    );
+    if !files.is_empty() {
+        let listed: Vec<String> = files.iter().take(40).map(|f| format!("- {f}")).collect();
+        prompt.push_str(&format!(
+            "\nFiles the change touches:\n{}\n",
+            listed.join("\n")
+        ));
+        if files.len() > 40 {
+            prompt.push_str(&format!("…and {} more.\n", files.len() - 40));
+        }
+    }
+    prompt.push_str(&format!(
+        "\nThe task was:\n{}\n",
+        clip_chars(task_prompt, 800)
+    ));
+    prompt
+}
+
 /// The last `max` characters, marking that the start was dropped.
 fn clip_tail(s: &str, max: usize) -> String {
     let count = s.chars().count();
@@ -368,6 +502,17 @@ mod tests {
     }
 
     #[test]
+    fn a_summary_brief_is_read_only_and_names_the_files() {
+        let prompt = summary_prompt("Add CSV export", &["src/export.rs".into()], true);
+        assert!(prompt.contains("You just finished"));
+        assert!(prompt.contains("Do not edit anything"));
+        assert!(prompt.contains("- src/export.rs"));
+        let fresh = summary_prompt("Add CSV export", &[], false);
+        assert!(fresh.contains("no account of it was left"));
+        assert!(!fresh.contains("Files the change touches"));
+    }
+
+    #[test]
     fn a_huge_log_keeps_its_end() {
         let log = format!("{}\nFINAL: 1 failed", "noise\n".repeat(10_000));
         let prompt = checks_fix_prompt("t", &[result("tests", Some(1), false, &log)]);
@@ -415,5 +560,59 @@ mod tests {
         );
         assert!(prompt.chars().count() < 4000);
         assert!(prompt.contains("Fix it."));
+    }
+}
+
+/// Against a real database — see `crate::testdb`.
+#[cfg(test)]
+mod db_tests {
+    use super::FollowUp;
+    use crate::testdb;
+
+    /// A summary pass is aichip asking, and anything a person does to the
+    /// card outranks it: starting the card again drops the pending summary
+    /// rather than refusing with "already running".
+    #[tokio::test]
+    async fn a_pending_summary_gives_way_to_a_person() {
+        let Some(t) = testdb::fresh().await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let orchestrator = t.orchestrator(dir.path());
+        let (_, project) = t.project(dir.path(), false).await;
+        let card = t.card(project, "silent").await;
+        sqlx::query("UPDATE tasks SET board_column = 'review', worktree_path = $2 WHERE id = $1")
+            .bind(card)
+            .bind(dir.path().to_string_lossy().as_ref())
+            .execute(&t.db.pool)
+            .await
+            .unwrap();
+        let silent: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO runs (task_id, status, trigger, engine) VALUES ($1, 'completed', 'manual', 'mock')
+             RETURNING id",
+        )
+        .bind(card)
+        .fetch_one(&t.db.pool)
+        .await
+        .unwrap();
+
+        orchestrator.set_queue_paused(true).await.unwrap();
+        let summary = orchestrator
+            .enqueue_follow_up(card, FollowUp::Summarize { run_id: silent })
+            .await
+            .unwrap();
+        // The person starts the card again while the summary is still queued.
+        orchestrator
+            .enqueue_task(card)
+            .await
+            .expect("the summary gives way");
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(summary)
+            .fetch_one(&t.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "canceled");
+
+        t.finish().await;
     }
 }

@@ -101,6 +101,7 @@ impl Default for Attention {
                 Event::RateLimited,
                 Event::OverBudget,
                 Event::Routine,
+                Event::Unblocked,
             ],
             hook_timeout_secs: 10,
             // Survives a night. Shorter re-creates the original bug in
@@ -135,6 +136,9 @@ pub enum Event {
     /// "it ran, here's where the result is" is the half of the feature that
     /// happens off-screen.
     Routine,
+    /// A card landed and a card it was blocking can start. On by default: the
+    /// card you were waiting on is often the one you left running overnight.
+    Unblocked,
 }
 
 impl Event {
@@ -146,6 +150,7 @@ impl Event {
             Event::OverBudget => "over_budget",
             Event::Finished => "finished",
             Event::Routine => "routine",
+            Event::Unblocked => "unblocked",
         }
     }
 
@@ -157,6 +162,7 @@ impl Event {
             "over_budget" => Event::OverBudget,
             "finished" => Event::Finished,
             "routine" => Event::Routine,
+            "unblocked" => Event::Unblocked,
             _ => return None,
         })
     }
@@ -659,6 +665,7 @@ mod tests {
             Event::OverBudget,
             Event::Finished,
             Event::Routine,
+            Event::Unblocked,
         ] {
             assert_eq!(Event::parse(e.as_str()), Some(e));
         }

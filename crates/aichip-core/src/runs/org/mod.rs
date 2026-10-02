@@ -154,6 +154,7 @@ impl Orchestrator {
         goal: &str,
         plan_approval: bool,
     ) -> anyhow::Result<Uuid> {
+        crate::agents::assert_team_can_run(&self.db, team_id).await?;
         let row = sqlx::query(
             "INSERT INTO runs (team_id, project_id, goal, plan_approval, status, trigger, engine)
              SELECT $1, $2, $3, $4, 'queued', 'org', COALESCE(engine, $5)
@@ -203,6 +204,7 @@ impl Orchestrator {
         task_id: Uuid,
         team_id: Uuid,
     ) -> anyhow::Result<Uuid> {
+        crate::agents::assert_team_can_run(&self.db, team_id).await?;
         let row = sqlx::query(
             "SELECT t.prompt, t.title, t.project_id, t.engine AS task_engine,
                     tm.name AS team_name, tm.pattern, tm.definition, tm.engine AS team_engine
@@ -1292,6 +1294,27 @@ impl Orchestrator {
         permission_mode: PermissionMode,
         effort: Option<ReasoningEffort>,
     ) -> anyhow::Result<StreamOutcome> {
+        // Paused or retired since the team started: this assignment fails with
+        // the reason, and the manager hears it as it hears any failed one — it
+        // can hand the work to someone else.
+        if let Err(e) = crate::agents::assert_can_run(&self.db, &[member.agent_id]).await {
+            let reason = e.to_string();
+            sqlx::query(
+                "UPDATE steps SET status = 'failed', output_text = $2, finished_at = now()
+                  WHERE id = $1",
+            )
+            .bind(step_id)
+            .bind(&reason)
+            .execute(&self.db.pool)
+            .await?;
+            log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
+            return Ok(StreamOutcome {
+                status: RunStatus::Failed,
+                reason: Some(reason.clone()),
+                output: reason,
+                session_id: None,
+            });
+        }
         // A specialist brings the same connected servers into a team run that
         // it would have on a board task — an agent's capabilities shouldn't
         // depend on which surface launched it.
@@ -1386,6 +1409,11 @@ impl Orchestrator {
         .execute(&self.db.pool)
         .await?;
         log_mirror(epic::mirror_step(&self.db, step_id).await, step_id);
+        if outcome.status == RunStatus::Completed {
+            if let Err(e) = epic::note_result(&self.db, step_id, &outcome.output).await {
+                tracing::warn!(%step_id, error = %e, "could not post the assignment's report");
+            }
+        }
 
         Ok(outcome)
     }

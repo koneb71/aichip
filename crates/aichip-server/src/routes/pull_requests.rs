@@ -325,6 +325,7 @@ async fn store(state: &AppState, id: Uuid, pull: &pr::PullRequest) -> Result<(),
             .execute(&state.db.pool)
             .await
             .map_err(internal)?;
+        state.orchestrator.landed(id).await;
     }
     Ok(())
 }

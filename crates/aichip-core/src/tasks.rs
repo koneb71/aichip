@@ -139,7 +139,7 @@ pub async fn resolve_agent_by_name(
     let row = sqlx::query(
         "SELECT a.id FROM agents a
            JOIN projects p ON p.workspace_id = a.workspace_id
-          WHERE p.id = $1 AND lower(a.name) = lower($2)
+          WHERE p.id = $1 AND lower(a.name) = lower($2) AND a.status <> 'retired'
           LIMIT 1",
     )
     .bind(project_id)

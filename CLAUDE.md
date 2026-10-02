@@ -68,11 +68,17 @@ The orchestrator persists **every** event envelope to the `events` table *before
 
 Engine differences are declared in `Capabilities` (interactive permissions, structured rate limit, session resume, append-system-prompt, fixed model catalog). There is deliberately no `Default` impl — a new adapter must answer for itself. Gate behavior on the capability, never on the engine id. OpenCode's `interactive_permissions: false` is why starting a Reviewed card on it is refused with a `409` **at the click**, rather than silently downgraded to Auto-edit — a silent downgrade would be privilege escalation.
 
+### Agent status
+
+An agent is `active`, `paused`, `retired` or `pending_approval` (`aichip_core::agents`). Every function that inserts a run asks `agents::assert_can_run` (or its team / workflow-step form) **before** the insert; a source-scanning test fails the build for one that does not, unless it is on the short list of runs with no agent. A team run and a workflow ask again at each assignment, so a pause stops the agent's *next* piece of work wherever it was coming from. A paused agent can still be assigned cards; a retired one cannot, and is hidden from every picker. Deleting an agent that anything references retires it instead.
+
 ### Permissions
 
 `RunSpec.allowed_tools` is an *auto-approval* list, not a restriction — Claude Code will still reach for `Bash` even if only `Read` was "allowed". Anything that must not happen goes in `denied_tools`, which adapters apply last. This is why chat runs (which execute in the user's **real checkout**, not a worktree) carry both `CHAT_ALLOWED_TOOLS` and `CHAT_DENIED_TOOLS` in [crates/aichip-core/src/runs/orchestrator.rs](crates/aichip-core/src/runs/orchestrator.rs) — never add Bash/Edit/Write there. Plan-first passes deny the mutating tools for the same reason.
 
 Mid-run permission prompts flow: engine → `--permission-prompt-tool mcp__aichip__approve` → `crates/aichip-server/src/mcp/` → `PermissionBroker` parks the call and emits an event → dashboard Allow/Deny resolves the oneshot (15 min timeout → deny).
+
+A card's run also gets aichip's own toolbox on `/mcp/run/{run_id}` ([crates/aichip-server/src/mcp/run_tools.rs](crates/aichip-server/src/mcp/run_tools.rs)): `comment`, `report_blocker`, `search_kb`, `read_article`, `recall`. What a run is offered is read from its row (a planning or summary pass only reads), and every MCP endpoint refuses calls once its run has ended. These tools pass `approve` without asking a person, so **nothing added there may merge, start a run, or write settings or check commands**.
 
 ### Apps
 
@@ -140,8 +146,12 @@ A **follow-up** (`runs/follow_up.rs`) is a run that goes back into a card's exis
 
 **Merge conflicts** are met on the card's branch, never the person's checkout: "Update from main" runs `update_from_base`, which merges the base into the card's `aichip/…` branch inside its worktree and, on conflict, leaves the merge in progress for a `conflict` follow-up. `commit_worktree` refuses while conflict markers remain (and concludes the merge unconditionally once they're gone), and `squash_merge` refuses any diff that adds them — so markers can never land. A card's diff is measured from `merge-base`, not the base's tip.
 
+**Landing** (`aichip_core::landing`): a card blocked by another waits for it to reach *done*. Six things write `done` and share no code path, so the seam is `tasks.landed_at`, set once by whichever notices first. A writer of done calls `orchestrator.landed(task_id)` (a no-op if the card is not done or already landed); `settle_landings` sweeps every scheduler tick for the ones that do not. A dependent with `start_when_unblocked` starts through `start_card` — the Start button's vet and door — and every other dependent gets a note and an `unblocked` attention event.
+
 Attachments live under `~/.aichip/attachments/` and are granted via `--add-dir`, deliberately never copied into a worktree (an agent running `git add -A` would commit them).
 
 ## Testing
 
 The mock engine ([crates/aichip-engines/src/mock/](crates/aichip-engines/src/mock/)) replays recorded stream-json `.ndjson`/`.jsonl` fixtures with configurable pacing and is the backbone of all testing — zero model usage. Rust tests are inline `#[cfg(test)] mod tests` next to the code, not a `tests/` directory.
+
+Tests of SQL live in an inline `mod db_tests` and start with `let Some(t) = testdb::fresh().await else { return };` ([crates/aichip-core/src/testdb.rs](crates/aichip-core/src/testdb.rs)): each gets its own migrated database on the server `DATABASE_URL` names, an orchestrator with the mock engine if it asks, and skips when `DATABASE_URL` is unset. CI runs them against a Postgres service. `DATABASE_URL=postgres://aichip:aichip@localhost:5433/aichip cargo test` runs them against `docker compose up -d`.

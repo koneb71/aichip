@@ -32,6 +32,7 @@ use crate::runs::memory;
 use crate::runs::mentions;
 use crate::runs::task_plan;
 use crate::runs::usage_tally::{UsageDelta, UsageTally};
+use crate::runs::{follow_up, report};
 use crate::worktrees::manager::WorktreeManager;
 
 /// Tools a chat run may use: read-only inspection of the checkout plus
@@ -520,6 +521,7 @@ impl Orchestrator {
         // references this task, and its foreign-key check takes `KEY SHARE`,
         // which this lock admits and `FOR UPDATE` would not — the team path
         // inserts on its own connection and would wait on us forever.
+        self.supersede_summary(task_id).await?;
         let mut guard = self.db.pool.begin().await?;
         sqlx::query("SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE")
             .bind(task_id)
@@ -582,11 +584,17 @@ impl Orchestrator {
             );
         }
 
-        let assigned_team: Option<Uuid> = sqlx::query("SELECT team_id FROM tasks WHERE id = $1")
+        let assigned = sqlx::query("SELECT agent_id, team_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
-            .await?
-            .get("team_id");
+            .await?;
+        let assigned_team: Option<Uuid> = assigned.get("team_id");
+        // A paused or retired assignee starts nothing, on any door. A team's
+        // own check is in `enqueue_task_for_team`.
+        if assigned_team.is_none() {
+            let agent: Option<Uuid> = assigned.get("agent_id");
+            crate::agents::assert_can_run(&self.db, agent.as_slice()).await?;
+        }
         if let Some(team_id) = assigned_team {
             let run_id = self.enqueue_task_for_team(task_id, team_id).await?;
             guard.commit().await?;
@@ -597,6 +605,13 @@ impl Orchestrator {
         // one has been deliberately configured for it, while a card's is the
         // machine default nobody chose.
         //
+        // A new attempt is a new answer to whatever stopped the last one.
+        sqlx::query(
+            "UPDATE tasks SET blocked_note = NULL WHERE id = $1 AND blocked_note IS NOT NULL",
+        )
+        .bind(task_id)
+        .execute(&mut *guard)
+        .await?;
         // The run and its queue row commit together. Apart, a crash between
         // them left a run reading `queued` that nothing would ever dispatch.
         let row = sqlx::query(
@@ -628,13 +643,16 @@ impl Orchestrator {
         let prior = sqlx::query(
             "SELECT r.task_id, r.engine, r.agent_id, r.tier_override, r.variant_label,
                     r.worktree_path, r.error_reason,
-                    COALESCE(r.prompt_override, t.prompt) AS prompt
+                    COALESCE(r.prompt_override, t.prompt) AS prompt,
+                    COALESCE(r.agent_id, t.agent_id) AS runs_as
              FROM runs r JOIN tasks t ON t.id = r.task_id
              WHERE r.id = $1",
         )
         .bind(prior_run_id)
         .fetch_one(&self.db.pool)
         .await?;
+        let runs_as: Option<Uuid> = prior.get("runs_as");
+        crate::agents::assert_can_run(&self.db, runs_as.as_slice()).await?;
 
         let prompt = crate::runs::resume::continuation_prompt(
             &prior.get::<String, _>("prompt"),
@@ -761,6 +779,8 @@ impl Orchestrator {
             .bind(task_id)
             .execute(&self.db.pool)
             .await?;
+            // A no-op unless that was 'done'.
+            self.landed(task_id).await;
         }
         Ok(())
     }
@@ -793,6 +813,7 @@ impl Orchestrator {
         agent_id: Uuid,
         engine: &str,
     ) -> anyhow::Result<Uuid> {
+        crate::agents::assert_can_run(&self.db, &[agent_id]).await?;
         let row = sqlx::query(
             "INSERT INTO runs (comment_id, agent_id, status, trigger, engine)
              VALUES ($1, $2, 'queued', 'comment', $3) RETURNING id",
@@ -823,11 +844,18 @@ impl Orchestrator {
         if variants.len() < 2 {
             anyhow::bail!("a bake-off needs at least two variants to compare");
         }
-        let engine: String = sqlx::query("SELECT engine FROM tasks WHERE id = $1")
+        let card = sqlx::query("SELECT engine, agent_id FROM tasks WHERE id = $1")
             .bind(task_id)
             .fetch_one(&self.db.pool)
-            .await?
-            .get("engine");
+            .await?;
+        let engine: String = card.get("engine");
+        // A variant without its own agent runs as the card's.
+        let card_agent: Option<Uuid> = card.get("agent_id");
+        let agents: Vec<Uuid> = variants
+            .iter()
+            .filter_map(|v| v.agent_id.or(card_agent))
+            .collect();
+        crate::agents::assert_can_run(&self.db, &agents).await?;
 
         let mut ids = vec![];
         for variant in variants {
@@ -936,14 +964,31 @@ impl Orchestrator {
         // reads it too. Recording it here means the activity list shows the
         // truth for the window between queued and running, rather than
         // whatever literal happened to be in this INSERT.
-        let engine =
-            sqlx::query_scalar::<_, String>("SELECT source_yaml FROM workflows WHERE id = $1")
-                .bind(workflow_id)
-                .fetch_optional(&self.db.pool)
-                .await?
-                .and_then(|yaml| Workflow::from_yaml(&yaml).ok())
-                .map(|w| w.defaults.engine)
-                .unwrap_or_else(|| self.default_engine());
+        let found = sqlx::query(
+            "SELECT w.source_yaml, p.workspace_id FROM workflows w
+               JOIN projects p ON p.id = w.project_id WHERE w.id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+        let workflow = found
+            .as_ref()
+            .and_then(|r| Workflow::from_yaml(&r.get::<String, _>("source_yaml")).ok());
+        let engine = workflow
+            .as_ref()
+            .map(|w| w.defaults.engine.clone())
+            .unwrap_or_else(|| self.default_engine());
+        // Every step's agent, asked now rather than at its step: a pipeline
+        // that would stop at stage three is better refused at the click. Each
+        // step asks again when it starts (`load_agent`), for a pause between.
+        if let (Some(row), Some(workflow)) = (&found, &workflow) {
+            let names: Vec<String> = workflow
+                .steps
+                .iter()
+                .filter_map(|s| s.agent.clone())
+                .collect();
+            crate::agents::assert_steps_can_run(&self.db, row.get("workspace_id"), &names).await?;
+        }
 
         let row = sqlx::query(
             "INSERT INTO runs (workflow_id, status, trigger, engine)
@@ -1106,6 +1151,40 @@ impl Orchestrator {
                 }
             }
         }
+    }
+
+    /// Would this card's engine refuse the mode the card would run in? The
+    /// card's own answer to [`Self::vet_engine`]: the bound agent's engine and
+    /// preset win over the card's, and a card with no mode takes the
+    /// machine's default — exactly what the run would get.
+    pub async fn vet_card(&self, task_id: Uuid) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT COALESCE(a.engine, t.engine) AS engine,
+                    COALESCE(a.permission_preset, t.permission_mode) AS mode
+             FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_one(&self.db.pool)
+        .await?;
+        let mode = match row.get::<Option<String>, _>("mode") {
+            Some(m) => serde_json::from_value(serde_json::Value::String(m)).unwrap_or_default(),
+            None => self.default_permission_mode().await,
+        };
+        Ok(self.vet_engine(&row.get::<String, _>("engine"), mode))
+    }
+
+    /// Start a card the way the Start button does — vetted, queued, moved to
+    /// In Progress — for a start nobody clicked.
+    pub async fn start_card(&self, task_id: Uuid) -> anyhow::Result<Uuid> {
+        if let Some(reason) = self.vet_card(task_id).await? {
+            anyhow::bail!(reason);
+        }
+        let run_id = self.enqueue_task(task_id).await?;
+        sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
+            .bind(task_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(run_id)
     }
 
     /// Would this engine refuse this mode? Checked before a run is queued so
@@ -1511,6 +1590,19 @@ impl Orchestrator {
             tracing::warn!(%run_id, "dropped a queued run that is no longer waiting");
             return Ok(());
         };
+        // Asked again here, not only when the run was queued: a run can wait
+        // a long time — behind the concurrency cap, a rate limit, a plan
+        // nobody had approved yet — and an agent paused meanwhile has said
+        // "start nothing". It ends with the reason, where a person will see
+        // it, rather than quietly running under a paused agent.
+        if let Err(e) = crate::agents::assert_may_dispatch(&self.db, run_id).await {
+            if e.is::<crate::agents::Unavailable>() {
+                return self
+                    .finish(run_id, RunStatus::Failed, Some(e.to_string()))
+                    .await;
+            }
+            return Err(e);
+        }
         match (
             row.get::<Option<Uuid>, _>("chat_id"),
             row.get::<Option<Uuid>, _>("workflow_id"),
@@ -1790,6 +1882,8 @@ impl Orchestrator {
         let mut allowed_tools = agent_tools.unwrap_or_default();
         if !allowed_tools.is_empty() {
             allowed_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+            // aichip's own run toolbox — comment, report_blocker, look-ups.
+            allowed_tools.push("mcp__aichip".to_string());
         }
 
         let model_id = self.model_for(&engine_id, tier);
@@ -1901,6 +1995,9 @@ impl Orchestrator {
         let tool_timeout_ms = self.mcp_tool_timeout_ms().await;
         // Kept for the checks that may run in it once the work is done.
         let work_dir = cwd.clone();
+        // A summary pass explains work already done; it may read the
+        // worktree but not change it, exactly like a planning pass.
+        let read_only = planning || run.get::<String, _>("trigger") == "summary";
         let spec = RunSpec {
             cwd,
             prompt,
@@ -1911,21 +2008,25 @@ impl Orchestrator {
             // Planning is read-only whatever the card says. A plan you are
             // going to be asked to approve is worthless if the work already
             // happened while it was being written — and with nothing to
-            // approve, nothing can prompt either.
-            permission_mode: if planning {
+            // approve, nothing can prompt either. A summary pass is the same.
+            permission_mode: if read_only {
                 PermissionMode::AutoEdit
             } else {
                 permission_mode
             },
-            allowed_tools: if planning {
+            allowed_tools: if read_only {
+                // With no prompt tool to ask through, anything not listed is
+                // refused — including aichip's own look-ups, which the
+                // toolbox offers a read-only pass and nothing else.
                 task_plan::PLANNING_TOOLS
                     .iter()
                     .map(|t| t.to_string())
+                    .chain(std::iter::once("mcp__aichip".to_string()))
                     .collect()
             } else {
                 allowed_tools
             },
-            denied_tools: if planning {
+            denied_tools: if read_only {
                 task_plan::PLANNING_DENIED
                     .iter()
                     .map(|t| t.to_string())
@@ -1944,7 +2045,7 @@ impl Orchestrator {
             run_key: run_id.to_string(),
             extra_read_dirs,
             // Nothing to approve during planning, so nothing to ask about.
-            permission_prompt_tool: !planning,
+            permission_prompt_tool: !read_only,
             extra_env: HashMap::from([
                 ("AICHIP_RUN_ID".to_string(), run_id.to_string()),
                 // Permission prompts block the MCP tools/call until the user
@@ -1997,26 +2098,92 @@ impl Orchestrator {
         // every ending goes through — including the ones that never reach this
         // function at all.
         if outcome.status == RunStatus::Completed {
-            // Review exists to gate a diff onto the base branch. An in-place
-            // run already wrote to the user's folder and produced no diff, so
-            // parking it in review would offer a review that cannot happen.
-            let column = if in_place { "done" } else { "review" };
-            sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
+            let trigger: String = run.get("trigger");
+            // A summary pass only explains work that was already announced
+            // and changed nothing, so the card stays where it is and nothing
+            // is checked or announced again.
+            let summarizing = trigger == "summary";
+            if !summarizing {
+                // Review exists to gate a diff onto the base branch. An
+                // in-place run already wrote to the user's folder and produced
+                // no diff, so parking it in review would offer a review that
+                // cannot happen.
+                //
+                // Unless the agent said it is waiting on another card
+                // (`report_blocker` with a card): then the work is not ready
+                // to review, it is waiting, and the backlog is where a card
+                // waits — which is also where a landing looks for the cards
+                // it unblocks, so this one is woken when its blocker lands.
+                let waiting_on: Vec<String> = sqlx::query_scalar(
+                    "SELECT b.title FROM tasks t
+                       JOIN task_deps d ON d.task_id = t.id
+                       JOIN tasks b ON b.id = d.blocked_by
+                      WHERE t.id = $1 AND t.blocked_note IS NOT NULL AND b.board_column <> 'done'
+                      ORDER BY b.title",
+                )
                 .bind(task_id)
-                .bind(column)
-                .execute(&self.db.pool)
+                .fetch_all(&self.db.pool)
                 .await?;
+                let column = match (waiting_on.is_empty(), in_place) {
+                    (false, _) => "backlog",
+                    (true, true) => "done",
+                    (true, false) => "review",
+                };
+                sqlx::query("UPDATE tasks SET board_column=$2 WHERE id=$1")
+                    .bind(task_id)
+                    .bind(column)
+                    .execute(&self.db.pool)
+                    .await?;
+                if !waiting_on.is_empty() {
+                    let note = format!(
+                        "Waiting for {} to land — back in the backlog until then.",
+                        waiting_on
+                            .iter()
+                            .map(|t| format!("\u{201c}{t}\u{201d}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    if let Err(e) =
+                        report::post_system(&self.db, task_id, Some(run_id), &note).await
+                    {
+                        tracing::warn!(%run_id, error = %e, "could not note a waiting card");
+                    }
+                }
+            }
 
-            // The project's checks run before anyone is told the card is
-            // ready, so the news can say whether the work passes. Unasked only
-            // after a Full Auto run — see `checks` for why — and never for an
-            // in-place project (no worktree), an app (it lands by itself) or a
-            // bake-off variant (its own worktree, compared by a person).
+            // What the run did goes on the card, where a person reading it
+            // looks — not only into the agent's memory. Best-effort: a report
+            // that failed to write must not fail a completed run.
+            if let Err(e) = report::post(
+                &self.db,
+                task_id,
+                run_id,
+                bound_agent,
+                &trigger,
+                variant.as_deref(),
+                &outcome.output,
+            )
+            .await
+            {
+                tracing::warn!(%run_id, error = %e, "could not post the run's report");
+            }
+            // A run that said nothing gets one read-only pass to explain
+            // itself — one, because a summary pass never asks for another.
+            // Not for a bake-off variant (the card's worktree is not the one
+            // it worked in) or an in-place card (there is no worktree).
+            let summarize = outcome.output.trim().is_empty()
+                && !summarizing
+                && !in_place
+                && variant.is_none()
+                // An app's change lands by itself just below; a summary
+                // queued now would run on a card that is already done.
+                && run.get::<String, _>("project_kind") != "app";
+
             // A conflict the agent was asked to resolve is concluded here, so
             // the card's branch carries the merge before anything checks it.
             // Markers left behind keep it open — and Merge refuses — which is
             // the point: the resolution is not done.
-            if run.get::<String, _>("trigger") == "conflict" {
+            if trigger == "conflict" {
                 if let Some(branch) = run.get::<Option<String>, _>("branch") {
                     let wt = crate::worktrees::manager::Worktree {
                         path: work_dir.clone(),
@@ -2032,9 +2199,15 @@ impl Orchestrator {
                 }
             }
 
+            // The project's checks run before anyone is told the card is
+            // ready, so the news can say whether the work passes. Unasked only
+            // after a Full Auto run — see `checks` for why — and never for an
+            // in-place project (no worktree), an app (it lands by itself) or a
+            // bake-off variant (its own worktree, compared by a person).
             let title: String = run.get("title");
             let chat_id: Option<Uuid> = run.get("task_chat_id");
-            let auto_checks = if !in_place
+            let auto_checks = if !summarizing
+                && !in_place
                 && run.get::<Option<String>, _>("variant_label").is_none()
                 && run.get::<String, _>("project_kind") == "repo"
                 && permission_mode == PermissionMode::FullAuto
@@ -2062,13 +2235,18 @@ impl Orchestrator {
                             config,
                             title,
                             chat_id,
+                            summarize,
                         )
                         .await
                     });
                 }
+                None if summarizing => {}
                 None => {
                     self.announce_ready(run_id, &title, chat_id, in_place, None)
-                        .await
+                        .await;
+                    if summarize {
+                        self.ask_for_summary(task_id, run_id).await;
+                    }
                 }
             }
 
@@ -2114,6 +2292,10 @@ impl Orchestrator {
         {
             tracing::warn!(%run_id, error = %e, "an app's change did not land");
         }
+        // Either of the two above may just have landed the card: an in-place
+        // run settles straight to done, and an app build squash-merges. A
+        // no-op for every other card.
+        self.landed(task_id).await;
 
         // A task spawned from chat reports back into that chat.
         if let Some(chat_id) = run.get::<Option<Uuid>, _>("task_chat_id") {
@@ -2140,6 +2322,18 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// Queue the one read-only pass that asks a silent run what it did.
+    /// Best-effort: the card already says "(no summary)", and a refusal —
+    /// a person started another run first, say — leaves it at that.
+    pub(crate) async fn ask_for_summary(&self, task_id: Uuid, run_id: Uuid) {
+        if let Err(e) = self
+            .enqueue_follow_up(task_id, follow_up::FollowUp::Summarize { run_id })
+            .await
+        {
+            tracing::info!(%run_id, error = %e, "no summary pass for a silent run");
+        }
     }
 
     /// Tell whoever is listening that a card's work is ready: the attention
@@ -2815,7 +3009,9 @@ impl Orchestrator {
                 aichip_url: self
                     .mcp_base_url
                     .as_ref()
-                    .map(|b| format!("{b}/mcp/chat/{chat_id}")),
+                    // The run in the URL, so a CLI that outlives its turn
+                    // cannot keep calling the board tools on the chat's behalf.
+                    .map(|b| format!("{b}/mcp/chat/{chat_id}/{run_id}")),
                 servers: vec![],
             },
             None => McpWiring::default(),
@@ -3120,6 +3316,7 @@ impl Orchestrator {
             for (author, name, content) in thread.iter().rev() {
                 let who = match author.as_str() {
                     "agent" => name.clone().unwrap_or_else(|| "agent".into()),
+                    "system" => "aichip".into(),
                     _ => "user".into(),
                 };
                 prompt.push_str(&format!("[{who}] {content}\n"));
@@ -3464,6 +3661,7 @@ this workflow manually."
                     .unwrap_or_default();
                 if !step_tools.is_empty() {
                     step_tools.extend(user_servers.iter().map(|s| s.tool_prefix()));
+                    step_tools.push("mcp__aichip".to_string());
                 }
 
                 let attempts = step.parallelism();
@@ -3896,6 +4094,11 @@ this workflow manually."
         .bind(name)
         .fetch_optional(&self.db.pool)
         .await?;
+        // A workflow outlives the click that started it; an agent paused
+        // since then does not take its next step.
+        if let Some(r) = &row {
+            crate::agents::assert_can_run(&self.db, &[r.get("id")]).await?;
+        }
         Ok(row.map(|r| BoundAgent {
             id: r.get("id"),
             system_prompt: r.get("system_prompt"),

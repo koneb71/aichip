@@ -176,8 +176,10 @@ export function TaskDrawer({
   }, [task.id]);
 
   useEffect(() => {
+    // Every agent, retired ones included, so the card's own assignee is
+    // always nameable; the picker and the bake-off offer only working ones.
     api
-      .agents(workspaceId)
+      .allAgents(workspaceId)
       .then((r) => setAgents(r.agents))
       .catch(() => {});
     api
@@ -891,7 +893,7 @@ export function TaskDrawer({
         {bakeoff ? (
           <BakeoffView
             taskId={task.id}
-            agents={agents}
+            agents={agents.filter((a) => a.status !== "retired")}
             currentTier={shownTier}
             onKept={onChanged}
             onClose={() => setBakeoff(false)}
@@ -1513,7 +1515,17 @@ function Blockers({
     }
   };
 
-  if (blockers.length === 0 && candidates.length === 0) return null;
+  const setAutoStart = async (on: boolean) => {
+    setError(null);
+    try {
+      await api.moveTask(task.id, { start_when_unblocked: on });
+      onChanged();
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ""));
+    }
+  };
+
+  if (blockers.length === 0 && candidates.length === 0 && !task.blockedNote) return null;
 
   return (
     <div className="border-b border-line px-5 py-3">
@@ -1531,7 +1543,13 @@ function Blockers({
         )}
       </div>
 
-      {blockers.length === 0 && !adding && (
+      {task.blockedNote && (
+        <div className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+          <span className="font-medium">The agent reported it is stuck:</span> {task.blockedNote}
+        </div>
+      )}
+
+      {blockers.length === 0 && !adding && !task.blockedNote && (
         <div className="text-[11px] text-ink-dim/70">
           Nothing — this card can start any time.
         </div>
@@ -1576,6 +1594,20 @@ function Blockers({
           })}
         </AnimatePresence>
       </div>
+
+      {/* Only while something still blocks it: once they have all landed,
+          starting is a click away and there is nothing left to wait for. */}
+      {blockers.some((b) => b.boardColumn !== "done") && task.boardColumn === "backlog" && (
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
+          <input
+            type="checkbox"
+            checked={task.startWhenUnblocked}
+            onChange={(e) => setAutoStart(e.target.checked)}
+            className="accent-accent"
+          />
+          Start by itself when {blockers.length === 1 ? "it lands" : "they have all landed"}
+        </label>
+      )}
 
       {adding && (
         <select

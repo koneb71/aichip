@@ -14,6 +14,8 @@ export function triggerLabel(trigger: string, planFirst = false): string {
       return "Fix failing checks";
     case "conflict":
       return "Resolve conflicts";
+    case "summary":
+      return "Summary";
     case "bakeoff":
       return "Bake-off variant";
     case "task":
@@ -59,4 +61,19 @@ export function tokensLine(
 export function dollars(cost: number | null | undefined): string {
   if (cost == null) return "—";
   return cost < 0.01 && cost > 0 ? "<$0.01" : `$${cost.toFixed(2)}`;
+}
+
+/**
+ * The first lines of what a run said it did, for its row in the history: the
+ * report's own header is dropped (the row already says why the run happened),
+ * and the rest is cut at a word near 200 characters.
+ */
+export function reportExcerpt(report: string | null | undefined, max = 200): string | null {
+  if (!report) return null;
+  const body = report.replace(/^\*\*[^*\n]+\*\*\s*/, "").replace(/\s+/g, " ").trim();
+  if (!body || body === "(no summary)") return null;
+  if (body.length <= max) return body;
+  const cut = body.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

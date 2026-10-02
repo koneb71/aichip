@@ -52,6 +52,8 @@ async fn overview(
         ("model", Dimension::Model),
         ("tier", Dimension::Tier),
         ("pattern", Dimension::Pattern),
+        ("agent", Dimension::Agent),
+        ("routine", Dimension::Routine),
     ] {
         let slices = spend::by(db, ws, days, dim).await.map_err(internal)?;
         breakdowns.insert(name.to_string(), serde_json::to_value(slices).unwrap());

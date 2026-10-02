@@ -1,6 +1,6 @@
 use super::{attachments, internal, ApiError};
 use crate::AppState;
-use aichip_core::runs::follow_up::{FollowUp, FollowUpRefusal};
+use aichip_core::runs::follow_up::FollowUp;
 use aichip_core::runs::mentions;
 use aichip_core::runs::orchestrator::Variant;
 use aichip_shared::{PermissionMode, ReasoningEffort, TierChoice};
@@ -87,7 +87,8 @@ async fn list(
                   WHERE d.task_id = t.id) AS blocked_by,
                 t.pr_number, t.pr_url, t.pr_state, t.pr_checks, t.pr_review,
                 t.project_id, t.agent_id, COALESCE(a.engine, t.engine) AS engine, t.plan_first,
-                a.name AS agent_name, a.color AS agent_color,
+                t.start_when_unblocked, t.blocked_note,
+                a.name AS agent_name, a.color AS agent_color, a.status AS agent_status,
                 t.skill_id, sk.name AS skill_name,
                 t.team_id, tm.name AS team_name, tm.pattern AS team_pattern,
                 t.parent_id, parent.title AS parent_title,
@@ -285,6 +286,10 @@ async fn list(
                 "tierReason": r.get::<Option<String>, _>("tier_reason"),
                 "engine": r.get::<String, _>("engine"),
                 "planFirst": r.get::<bool, _>("plan_first"),
+                "startWhenUnblocked": r.get::<bool, _>("start_when_unblocked"),
+                "agentStatus": r.get::<Option<String>, _>("agent_status"),
+                // What the agent said stopped it, until the card next starts.
+                "blockedNote": r.get::<Option<String>, _>("blocked_note"),
             })
         })
         .collect();
@@ -335,12 +340,18 @@ struct CreateTask {
     /// create. Defaulted so existing clients keep working.
     #[serde(default)]
     attachment_ids: Vec<Uuid>,
+    /// Start by itself once every card blocking it has landed.
+    #[serde(default)]
+    start_when_unblocked: bool,
 }
 
 async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(agent_id) = body.agent_id {
+        assignable(&state, agent_id).await?;
+    }
     let tier = body.model_tier.as_str();
     // Store NULL when the caller didn't choose, so the card inherits whatever
     // the default is *when it runs* rather than freezing today's value.
@@ -352,8 +363,8 @@ async fn create(
             .to_string()
     });
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11) RETURNING id",
+        "INSERT INTO tasks (project_id, title, prompt, model_tier, permission_mode, engine, agent_id, skill_id, team_id, board_column, plan_first, effort, start_when_unblocked)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backlog',$10,$11,$12) RETURNING id",
     )
     .bind(body.project_id)
     .bind(&body.title)
@@ -366,6 +377,7 @@ async fn create(
     .bind(body.team_id)
     .bind(body.plan_first)
     .bind(body.effort.map(|e| e.as_str().to_string()))
+    .bind(body.start_when_unblocked)
     .fetch_one(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -459,27 +471,13 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
             ),
         ));
     }
-    let row = sqlx::query(
-        "SELECT COALESCE(a.engine, t.engine) AS engine,
-                COALESCE(a.permission_preset, t.permission_mode) AS mode
-         FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id WHERE t.id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(internal)?
-    .ok_or((StatusCode::NOT_FOUND, "no such task".to_string()))?;
-
-    let mode = match row.get::<Option<String>, _>("mode") {
-        Some(m) => serde_json::from_value(Value::String(m)).unwrap_or_default(),
-        None => state.orchestrator.default_permission_mode().await,
-    };
-    match state
-        .orchestrator
-        .vet_engine(&row.get::<String, _>("engine"), mode)
-    {
-        Some(reason) => Err((StatusCode::CONFLICT, reason)),
-        None => Ok(()),
+    match state.orchestrator.vet_card(task_id).await {
+        Ok(Some(reason)) => Err((StatusCode::CONFLICT, reason)),
+        Ok(None) => Ok(()),
+        Err(e) if matches!(e.downcast_ref(), Some(sqlx::Error::RowNotFound)) => {
+            Err((StatusCode::NOT_FOUND, "no such task".to_string()))
+        }
+        Err(e) => Err(internal(e)),
     }
 }
 
@@ -539,6 +537,11 @@ async fn merge(
     // run still writing there — a follow-up, a resume, an epic's step — that
     // squash-merged half a change and pulled the directory out from under the
     // agent mid-edit.
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -573,6 +576,9 @@ async fn merge(
     aichip_core::checks::cancel_for_task(&state.db, id)
         .await
         .map_err(internal)?;
+    // The work is on the base branch now, so a card waiting on it can branch
+    // from there and find it.
+    state.orchestrator.landed(id).await;
 
     // The card has landed, so the checkout it was built in is finished with.
     //
@@ -747,6 +753,10 @@ pub(crate) struct MoveTask {
     /// rather than stored — a card with nothing to ask for cannot run.
     #[serde(default)]
     prompt: Option<String>,
+    /// Start by itself once every card blocking it has landed. Absent leaves
+    /// it alone.
+    #[serde(default)]
+    start_when_unblocked: Option<bool>,
 }
 
 impl MoveTask {
@@ -781,6 +791,19 @@ pub(crate) async fn move_task(
     Path(id): Path<Uuid>,
     Json(body): Json<MoveTask>,
 ) -> Result<Json<Value>, ApiError> {
+    // Only the changes a live run would refuse; reordering a column is not
+    // a reason to drop anything.
+    if body.board_column.is_some()
+        || body.agent_id.is_some()
+        || body.team_id.is_some()
+        || body.prompt.is_some()
+    {
+        state
+            .orchestrator
+            .supersede_summary(id)
+            .await
+            .map_err(internal)?;
+    }
     let row = sqlx::query(
         "SELECT t.board_column, t.parent_id,
                 (SELECT status FROM runs WHERE task_id = t.id
@@ -865,6 +888,7 @@ pub(crate) async fn move_task(
 
     if let Some(Some(agent_id)) = agent_id {
         require_same_workspace(&state, id, "agents", agent_id).await?;
+        assignable(&state, agent_id).await?;
     }
     if let Some(Some(team_id)) = team_id {
         require_same_workspace(&state, id, "teams", team_id).await?;
@@ -893,7 +917,8 @@ pub(crate) async fn move_task(
                           model_tier = coalesce($10, model_tier),
                           effort = CASE WHEN $11 THEN $12 ELSE effort END,
                           skill_id = CASE WHEN $13 THEN $14 ELSE skill_id END,
-                          prompt = coalesce($15, prompt)
+                          prompt = coalesce($15, prompt),
+                          start_when_unblocked = coalesce($16, start_when_unblocked)
          WHERE id = $1",
     )
     .bind(id)
@@ -911,9 +936,14 @@ pub(crate) async fn move_task(
     .bind(body.skill_id.is_some())
     .bind(body.skill_id.flatten())
     .bind(body.prompt.as_deref().map(str::trim))
+    .bind(body.start_when_unblocked)
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
+    // Filing a card in done is how a person says its work landed by hand.
+    if body.board_column.as_deref() == Some("done") {
+        state.orchestrator.landed(id).await;
+    }
 
     // Dropping into "running" from backlog means "go": start a run unless one
     // is already active or the task already did its work. The vet already
@@ -929,6 +959,14 @@ pub(crate) async fn move_task(
         );
     }
     Ok(Json(json!({ "moved": true, "runId": run_id })))
+}
+
+/// Refuse a retired agent as an assignee. A paused one is fine — handing it
+/// work for when it is resumed is half of what pausing is for.
+async fn assignable(state: &AppState, agent_id: Uuid) -> Result<(), ApiError> {
+    aichip_core::agents::assert_assignable(&state.db, agent_id)
+        .await
+        .map_err(start_refused)
 }
 
 /// Refuse an assignee from another workspace.
@@ -1066,7 +1104,7 @@ async fn post_comment(
         "SELECT a.id, a.name FROM agents a
          JOIN projects p ON p.workspace_id = a.workspace_id
          JOIN tasks t ON t.project_id = p.id
-         WHERE t.id = $1",
+         WHERE t.id = $1 AND a.status <> 'retired'",
     )
     .bind(task_id)
     .fetch_all(&state.db.pool)
@@ -1136,13 +1174,21 @@ async fn post_comment(
     let engine = body.engine.as_deref().unwrap_or(&default_engine);
     let mut run_ids: Vec<Uuid> = vec![];
     for agent_id in mentioned_agents(content, &agents).into_iter().take(3) {
-        run_ids.push(
-            state
-                .orchestrator
-                .enqueue_comment_reply(comment_id, agent_id, engine)
-                .await
-                .map_err(internal)?,
-        );
+        match state
+            .orchestrator
+            .enqueue_comment_reply(comment_id, agent_id, engine)
+            .await
+        {
+            Ok(run_id) => run_ids.push(run_id),
+            // The comment is posted and the other agents still answer; the
+            // thread says why this one does not.
+            Err(e) if e.is::<aichip_core::agents::Unavailable>() => {
+                aichip_core::runs::report::post_system(&state.db, task_id, None, &e.to_string())
+                    .await
+                    .map_err(internal)?;
+            }
+            Err(e) => return Err(start_refused(e)),
+        }
     }
     Ok(Json(json!({ "id": comment_id, "runIds": run_ids })))
 }
@@ -1183,7 +1229,10 @@ async fn start_bakeoff(
         .orchestrator
         .enqueue_bakeoff(task_id, &variants)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|e| match e.is::<aichip_core::agents::Unavailable>() {
+            true => (StatusCode::CONFLICT, e.to_string()),
+            false => (StatusCode::BAD_REQUEST, e.to_string()),
+        })?;
     Ok(Json(json!({ "runIds": run_ids })))
 }
 
@@ -1324,6 +1373,11 @@ async fn update_from_base(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if any_run_is_live(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1376,7 +1430,13 @@ async fn task_runs(
                 r.session_engine, r.resumed_from, r.rate_limit_attempts,
                 r.variant_label, r.review_comment_id, r.plan_approval,
                 COALESCE(r.worktree_path, t.worktree_path) AS worktree,
-                p.path AS project_path, p.vcs, a.name AS agent_name
+                p.path AS project_path, p.vcs, a.name AS agent_name,
+                -- What the run said it did, as posted on this card: the
+                -- newest of its comments, because the report is written when
+                -- the run ends — after any note it left along the way.
+                (SELECT left(c.content, 600) FROM task_comments c
+                  WHERE c.run_id = r.id AND c.task_id = r.task_id AND c.author = 'agent'
+                  ORDER BY c.created_at DESC LIMIT 1) AS report
            FROM runs r
            JOIN tasks t ON t.id = r.task_id
            JOIN projects p ON p.id = t.project_id
@@ -1429,6 +1489,7 @@ async fn task_runs(
                 "rateLimitAttempts": r.get::<i32, _>("rate_limit_attempts"),
                 "reviewCommentId": r.get::<Option<Uuid>, _>("review_comment_id"),
                 "resumeCommand": resume_command,
+                "report": r.get::<Option<String>, _>("report"),
             })
         })
         .collect();
@@ -1512,65 +1573,22 @@ struct AddBlocker {
     blocked_by: Uuid,
 }
 
-/// Declare that this card cannot start until another card lands.
-///
-/// Everything that can be wrong is wrong now, not at start time: the two
-/// cards must share a board, a card cannot block itself, and the edge must
-/// not close a cycle — two cards each waiting for the other would simply
-/// never run, with nothing anywhere saying why.
+/// Declare that this card cannot start until another card lands. The rules
+/// are `landing::add_blocker`'s, shared with an agent's `report_blocker`.
 async fn add_blocker(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<AddBlocker>,
 ) -> Result<Json<Value>, ApiError> {
-    if body.blocked_by == id {
-        return Err((StatusCode::BAD_REQUEST, "a card can't block itself".into()));
+    use aichip_core::landing::{add_blocker, BlockerRefusal};
+    match add_blocker(&state.db, id, body.blocked_by).await {
+        Ok(()) => Ok(Json(json!({ "ok": true }))),
+        Err(e) => match e.downcast_ref::<BlockerRefusal>() {
+            Some(BlockerRefusal::Cycle) => Err((StatusCode::CONFLICT, e.to_string())),
+            Some(_) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+            None => Err(internal(e)),
+        },
     }
-    let same_project: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM tasks a JOIN tasks b ON a.project_id = b.project_id
-          WHERE a.id = $1 AND b.id = $2)",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if !same_project {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "both cards must be on the same board".into(),
-        ));
-    }
-    // Would this edge close a loop? Walk the new blocker's own blockers all
-    // the way up; finding this card there means A→B→…→A.
-    let cycles: bool = sqlx::query_scalar(
-        "WITH RECURSIVE up AS (
-             SELECT blocked_by FROM task_deps WHERE task_id = $2
-             UNION
-             SELECT d.blocked_by FROM task_deps d JOIN up ON d.task_id = up.blocked_by
-         )
-         SELECT EXISTS (SELECT 1 FROM up WHERE blocked_by = $1)",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    if cycles {
-        return Err((
-            StatusCode::CONFLICT,
-            "that would make these cards wait for each other — neither could ever start".into(),
-        ));
-    }
-    sqlx::query(
-        "INSERT INTO task_deps (task_id, blocked_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(body.blocked_by)
-    .execute(&state.db.pool)
-    .await
-    .map_err(internal)?;
-    Ok(Json(json!({ "ok": true })))
 }
 
 async fn remove_blocker(
@@ -1717,11 +1735,7 @@ async fn step_is_live(state: &AppState, task_id: Uuid) -> Result<bool, ApiError>
 /// already running, or a follow-up with nothing to follow up on, is a conflict
 /// the person can act on, not a server error.
 fn start_refused(e: anyhow::Error) -> ApiError {
-    if e.is::<aichip_core::runs::orchestrator::AlreadyRunning>() || e.is::<FollowUpRefusal>() {
-        (StatusCode::CONFLICT, e.to_string())
-    } else {
-        internal(e)
-    }
+    super::run_refused(e)
 }
 
 /// Is *any* run of this card still live — not just the newest one?
@@ -1828,6 +1842,11 @@ async fn delete_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1888,6 +1907,11 @@ async fn retry(
     Path(id): Path<Uuid>,
     body: Option<Json<Retry>>,
 ) -> Result<Json<Value>, ApiError> {
+    state
+        .orchestrator
+        .supersede_summary(id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, id).await? || step_is_live(&state, id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -1992,6 +2016,11 @@ async fn resume_run(
     // Not `run_is_active`, which asks about the card: this asks whether
     // anything at all is still working on it, the same guard Retry uses,
     // because two engines in one worktree is the failure both prevent.
+    state
+        .orchestrator
+        .supersede_summary(task_id)
+        .await
+        .map_err(internal)?;
     if run_is_active(&state, task_id).await? || step_is_live(&state, task_id).await? {
         return Err((
             StatusCode::CONFLICT,
@@ -2003,7 +2032,7 @@ async fn resume_run(
         .orchestrator
         .resume_run(run_id, &session)
         .await
-        .map_err(internal)?;
+        .map_err(start_refused)?;
     sqlx::query("UPDATE tasks SET board_column='running' WHERE id=$1")
         .bind(task_id)
         .execute(&state.db.pool)
@@ -2109,6 +2138,10 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    // A paused agent's plan can be approved later; it is not run now.
+    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+        .await
+        .map_err(super::run_refused)?;
     let updated = sqlx::query(
         "UPDATE runs SET plan_approved_at = now(), status = 'queued'
          WHERE id = $1 AND status = 'awaiting_approval'",
@@ -2144,6 +2177,10 @@ async fn revise_plan(
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
+    // A paused agent's plan can be approved later; it is not run now.
+    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+        .await
+        .map_err(super::run_refused)?;
     if body.note.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,

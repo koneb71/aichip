@@ -104,6 +104,7 @@ async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
+    super::still_running(state, run_id, "id", run_id).await?;
     let speaker = speaker_of(state, run_id, step_id).await?;
 
     match name {

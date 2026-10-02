@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dollars, duration, tokensLine, triggerLabel } from "./runHistory";
+import { dollars, duration, reportExcerpt, tokensLine, triggerLabel } from "./runHistory";
 
 const tokens = {
   inputTokens: 0,
@@ -56,5 +56,21 @@ describe("dollars", () => {
     expect(dollars(0.004)).toBe("<$0.01");
     expect(dollars(1.844)).toBe("$1.84");
     expect(dollars(null)).toBe("—");
+  });
+});
+
+describe("reportExcerpt", () => {
+  it("drops the header the row already says", () => {
+    expect(reportExcerpt("**Work report**\n\nAdded CSV export.")).toBe("Added CSV export.");
+  });
+  it("says nothing for a run that said nothing", () => {
+    expect(reportExcerpt("**Work report**\n\n(no summary)")).toBeNull();
+    expect(reportExcerpt(null)).toBeNull();
+  });
+  it("cuts a long report at a word", () => {
+    const long = "word ".repeat(100);
+    const excerpt = reportExcerpt(`**Summary**\n\n${long}`)!;
+    expect(excerpt.length).toBeLessThanOrEqual(201);
+    expect(excerpt.endsWith("word…")).toBe(true);
   });
 });

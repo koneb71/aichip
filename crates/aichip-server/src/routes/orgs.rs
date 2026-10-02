@@ -72,7 +72,7 @@ async fn run_org(
         .orchestrator
         .enqueue_org_run(team_id, body.project_id, body.goal.trim(), body.review_plan)
         .await
-        .map_err(internal)?;
+        .map_err(super::run_refused)?;
     Ok(Json(json!({ "runId": run_id })))
 }
 
@@ -305,6 +305,10 @@ async fn approve_plan(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    // A paused agent's plan can be approved later; it is not run now.
+    aichip_core::agents::assert_may_dispatch(&state.db, run_id)
+        .await
+        .map_err(super::run_refused)?;
     let updated = sqlx::query(
         "UPDATE runs SET plan_approved_at = now(), status = 'queued'
          WHERE id = $1 AND status = 'awaiting_approval'",

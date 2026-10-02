@@ -256,7 +256,7 @@ export default function ActivityPage() {
               By agent
             </div>
             <p className="mt-1 text-[11px] text-ink-dim/80">
-              A run's cost is split evenly across its assignments — close, not exact.
+              A run an agent did alone is theirs; a team run is charged step by step.
             </p>
             <div className="mt-3 flex flex-col gap-2">
               {data!.spend.byAgent.map((a) => {

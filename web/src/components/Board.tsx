@@ -7,7 +7,7 @@ import { useRunStream } from "../lib/ws";
 import { prOnCard, prSummary, prTone } from "../lib/pullRequest";
 import { checksChip } from "../lib/checks";
 import { springy } from "../lib/motion";
-import { isWorking, needsYou, statusLabel, stopReason, unresolvedBlockers } from "../lib/runStatus";
+import { isWorking, needsYou, statusLabel, stopReason, unblocked, unresolvedBlockers } from "../lib/runStatus";
 import { RunError } from "./ui/RunError";
 
 const COLUMNS: {
@@ -245,12 +245,32 @@ function TaskCard({
         <StepOutcome status={task.stepStatus} />
         {(() => {
           const waiting = unresolvedBlockers(task);
-          return waiting.length > 0 ? (
+          if (task.blockedNote && waiting.length === 0) {
+            return (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700" title={task.blockedNote}>
+                ⚠ agent is stuck
+              </span>
+            );
+          }
+          if (waiting.length > 0) {
+            return (
+              <span
+                className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
+                title={`Waiting for: ${waiting.map((b) => b.title).join(", ")}${
+                  task.startWhenUnblocked ? " — starts by itself when they land" : ""
+                }`}
+              >
+                ⛓ blocked{waiting.length > 1 ? ` · ${waiting.length}` : ""}
+                {task.startWhenUnblocked && " · auto"}
+              </span>
+            );
+          }
+          return unblocked(task) ? (
             <span
-              className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700"
-              title={`Waiting for: ${waiting.map((b) => b.title).join(", ")}`}
+              className="rounded-full bg-tier-easy/10 px-2 py-0.5 text-tier-easy"
+              title="Everything it was waiting for has landed — it can start"
             >
-              ⛓ blocked{waiting.length > 1 ? ` · ${waiting.length}` : ""}
+              ✓ unblocked
             </span>
           ) : null;
         })()}
@@ -268,10 +288,12 @@ function TaskCard({
         )}
         {task.agentName && (
           <span
-            className="rounded-full px-2 py-0.5 text-white"
+            className={`rounded-full px-2 py-0.5 text-white ${task.agentStatus === "paused" ? "opacity-60" : ""}`}
             style={{ background: task.agentColor ?? "#9ca3af" }}
+            title={task.agentStatus === "paused" ? `${task.agentName} is paused — this card will not start` : undefined}
           >
             {task.agentName}
+            {task.agentStatus === "paused" && " · paused"}
           </span>
         )}
         {task.teamName && (

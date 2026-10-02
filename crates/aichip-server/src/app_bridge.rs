@@ -338,7 +338,7 @@ async fn serve(
                 // No `system_prompt`: an agent's instructions are not an app's
                 // business, and they are the most sensitive column on the table.
                 "SELECT id, name, icon, color, engine FROM agents
-              WHERE workspace_id = $1 ORDER BY name",
+              WHERE workspace_id = $1 AND status <> 'retired' ORDER BY name",
                 app.workspace_id,
                 &["id", "name", "icon", "color", "engine"],
             )

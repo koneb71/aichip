@@ -4,6 +4,7 @@ import { Agent, AgentMemory, api, Effort, McpServer, Tier, tierColor } from "../
 import { useTierModel } from "../../lib/models";
 import { EnginePicker, permissionBlocker, useEngine, useEngines } from "../../lib/engines";
 import { TIERS } from "../TierPicker";
+import { AgentAvailability } from "./AgentAvailability";
 
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const COLORS = ["#4f46e5", "#059669", "#c026d3", "#ea580c", "#0284c7", "#dc2626"];
@@ -103,6 +104,7 @@ export function AgentEditorDrawer({
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        {agent && !agent.builtin && <AgentAvailability agent={agent} onChanged={onChanged} />}
         <Field label="Name">
           <input
             value={name}
@@ -256,7 +258,11 @@ export function AgentEditorDrawer({
 
       <div className="flex items-center justify-between border-t border-line p-4">
         {agent && !agent.builtin ? (
-          <button onClick={remove} className="text-sm text-danger hover:underline">
+          <button
+            onClick={remove}
+            title="An agent that has run anything is retired instead, so its history keeps its name"
+            className="text-sm text-danger hover:underline"
+          >
             Delete
           </button>
         ) : (
