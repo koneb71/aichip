@@ -307,7 +307,9 @@ export default function SettingsPage() {
       <p className="mt-1 max-w-2xl text-sm text-fg-muted">
         A tier means a different model on each engine — "medium" can't name one
         model globally, since OpenCode has never heard of{" "}
-        <code className="text-[11px]">claude-opus-5</code>.
+        <code className="text-[11px]">opus</code>. Claude Code&apos;s &ldquo;latest&rdquo;
+        choices are aliases the installed CLI resolves to its newest model of that family,
+        so new models arrive when the CLI is updated.
       </p>
       <div className="mt-3 max-w-2xl space-y-5">
         {settings?.engines.map((engine) => (

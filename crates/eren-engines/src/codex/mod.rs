@@ -125,8 +125,8 @@ pub fn codex_args(spec: &RunSpec) -> anyhow::Result<Vec<String>> {
 ///
 /// A model id that plainly belongs to another engine is dropped rather than
 /// passed on. It happens for one boring reason: `TierMapping::model_for` falls
-/// back to `claude-opus-5` for a tier it has no entry for, so an install whose
-/// Codex mapping was never derived would hand this `claude-opus-5`. Codex does
+/// back to Claude Code's `opus` for a tier it has no entry for, so an install whose
+/// Codex mapping was never derived would hand this a Claude model. Codex does
 /// not reject that — it warns that the model metadata is unknown and carries
 /// on with fallback metadata, which is a quietly degraded run. Saying nothing
 /// and letting Codex use the model it is configured for is strictly better
@@ -134,8 +134,9 @@ pub fn codex_args(spec: &RunSpec) -> anyhow::Result<Vec<String>> {
 fn model_arg(model_id: &str) -> Option<String> {
     let id = model_id.trim();
     // `provider/model` is OpenCode's and the local runtimes' shape; `claude-*`
-    // is Claude Code's. Neither is ever a Codex model id.
-    if id.is_empty() || id.contains('/') || id.starts_with("claude-") {
+    // and Claude Code's aliases (`opus`, `sonnet`, …) are Claude Code's.
+    // None is ever a Codex model id.
+    if crate::foreign_model(id) || id.contains('/') || id.starts_with("claude-") {
         return None;
     }
     Some(id.to_string())
@@ -456,11 +457,12 @@ mod tests {
 
     #[test]
     fn a_model_belonging_to_another_engine_is_dropped_rather_than_passed_on() {
-        // `TierMapping::model_for` falls back to `claude-opus-5` for a tier it
-        // has no entry for. Codex does not reject that — it warns that the
+        // `TierMapping::model_for` falls back to Claude Code's `opus` for a
+        // tier it has no entry for. Codex does not reject that — it warns that the
         // metadata is unknown and runs degraded, which is worse than silence.
         assert_eq!(model_arg("gpt-5.5"), Some("gpt-5.5".to_string()));
         assert_eq!(model_arg("claude-opus-5"), None);
+        assert_eq!(model_arg("opus"), None);
         assert_eq!(model_arg("anthropic/claude-sonnet-4-5"), None);
         assert_eq!(model_arg("ollama/deepseek-r1:latest"), None);
         assert_eq!(model_arg("  "), None);

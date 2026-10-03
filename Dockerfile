@@ -44,13 +44,19 @@ RUN cargo build --release --locked -p eren-cli
 
 # ── 3. Runtime ─────────────────────────────────────────────────────────────
 FROM debian:trixie-slim
+# Which Claude Code the image carries. Pinned, so a rebuild is reproducible —
+# and it matters more than a version usually does: the model picker's
+# "latest" choices are aliases this CLI resolves, so a newer model reaches
+# the container only through a newer CLI. Raise it here, or per build with
+# `--build-arg CLAUDE_CODE_VERSION=…` (docker-publish.sh passes it through).
+ARG CLAUDE_CODE_VERSION=2.1.259
 # git: worktrees are the whole isolation model. node: the CLI ships as an npm
 # package. ca-certificates: the CLI talks to Anthropic over TLS.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates curl gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code@2.1.220 \
+    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 

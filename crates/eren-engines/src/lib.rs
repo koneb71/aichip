@@ -252,12 +252,13 @@ pub(crate) fn positional(prompt: String) -> String {
 
 /// A model id from Claude Code's own catalog, or no id at all.
 ///
-/// `TierMapping::model_for` falls back to `claude-opus-5` for a tier it has
+/// `TierMapping::model_for` falls back to Claude Code's `opus` for a tier it has
 /// no entry for, so an engine whose mapping was never filled in is handed a
 /// Claude Code id. Passing that on names a model the CLI has never heard of;
 /// saying nothing lets it use the one it is configured for. Only the exact
 /// catalog ids are dropped — an engine that fronts Anthropic's API under its
-/// own naming keeps every id it actually uses.
+/// own naming keeps every id it actually uses. Claude Code's aliases are
+/// in the catalog too, so `opus` is dropped as surely as `claude-opus-5-5`.
 pub(crate) fn foreign_model(id: &str) -> bool {
     let id = id.trim();
     id.is_empty() || eren_shared::is_known_model(id)

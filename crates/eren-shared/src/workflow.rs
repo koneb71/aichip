@@ -643,9 +643,8 @@ steps:
     fn the_default_routing_never_reaches_for_the_priciest_model() {
         let tiers = crate::TierMapping::default();
         for tier in [ModelTier::Easy, ModelTier::Medium, ModelTier::Complex] {
-            assert_ne!(
-                tiers.model_for(tier),
-                "claude-fable-5",
+            assert!(
+                !tiers.model_for(tier).contains("fable"),
                 "{tier:?} must not default to Fable"
             );
             assert!(
@@ -658,6 +657,7 @@ steps:
     /// …but it is still selectable, or the setting would be a lie.
     #[test]
     fn fable_is_offered_as_a_choice() {
-        assert!(crate::is_known_model("claude-fable-5"));
+        assert!(crate::is_known_model("fable"));
+        assert!(crate::is_known_model("claude-fable-5-1"));
     }
 }

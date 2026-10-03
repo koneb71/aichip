@@ -1098,7 +1098,7 @@ behaviour is gated on the capability, never on the engine's name.
 
 | Engine | id | Binary | Install | Notes |
 |---|---|---|---|---|
-| Claude Code | `claude-code` | `claude` | https://code.claude.com | The fullest: asks permission mid-run, structured rate-limit signal with a reset time, resumes sessions, appends to the system prompt, reports dollars, enforces denied tools, carries Eren's tools. Fixed model catalog (`claude-opus-5`, …). |
+| Claude Code | `claude-code` | `claude` | https://code.claude.com | The fullest: asks permission mid-run, structured rate-limit signal with a reset time, resumes sessions, appends to the system prompt, reports dollars, enforces denied tools, carries Eren's tools. Fixed model catalog: the CLI's aliases (`opus`, `sonnet`, … — the newest the installed CLI knows, and the defaults) or a pinned id (`claude-opus-5-5`, …). |
 | OpenCode | `opencode` | `opencode` | https://opencode.ai | **Cannot ask mid-run**, so Reviewed is refused. Auto-edit works from a generated allow-list. `provider/model` ids from `opencode models`; reports dollars; carries Eren's tools via `OPENCODE_CONFIG`; rate limits by text match only. |
 | Codex | `codex` | `codex` (`EREN_CODEX_BIN`) | `npm i -g @openai/codex` — https://developers.openai.com/codex/cli | **Cannot ask mid-run.** Driven by `codex exec --json` with `-c key=value` overrides; reports **tokens only**; carries Eren's tools; free-text model ids, tier defaults derived from the install. |
 | Gemini CLI | `gemini` | `gemini` (`EREN_GEMINI_BIN`) | `npm i -g @google/gemini-cli` — https://github.com/google-gemini/gemini-cli | **Not yet run against the real binary.** Cannot ask; persona folded into the prompt; **no Eren tools**; tokens only. Model aliases `flash-lite` / `flash` / `pro`. |

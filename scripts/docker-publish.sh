@@ -17,6 +17,9 @@
 #   --no-push        build into the local Docker instead (one platform only).
 #   --uid / --gid    the user the image runs as (default 1000:1000), for a server
 #                    where your user has another id and the mounted code is yours.
+#   --claude-code V  the Claude Code version to install (default: the Dockerfile's
+#                    pin). "latest" takes npm's newest; the models the dashboard
+#                    calls "latest" are whatever this CLI knows.
 #
 # The image name can also come from EREN_IMAGE (in the environment or .env),
 # and defaults to neiellcare71/eren. A name with no namespace (plain `eren`) is
@@ -29,7 +32,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 fail() {
@@ -51,6 +54,7 @@ LATEST=1
 PUSH=1
 UID_ARG=1000
 GID_ARG=1000
+CLAUDE_CODE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -60,6 +64,7 @@ while [ $# -gt 0 ]; do
         --no-push) PUSH=0; shift ;;
         --uid) UID_ARG="${2:?--uid needs a value}"; shift 2 ;;
         --gid) GID_ARG="${2:?--gid needs a value}"; shift 2 ;;
+        --claude-code) CLAUDE_CODE="${2:?--claude-code needs a version}"; shift 2 ;;
         -h | --help) usage; exit 0 ;;
         -*) fail "unknown option: $1 (try --help)" ;;
         *) IMAGE="$1"; shift ;;
@@ -99,6 +104,9 @@ fi
 TAGS=("$SHORT" ${TAGS[@]+"${TAGS[@]}"})
 [ "$LATEST" = 1 ] && TAGS+=("latest")
 
+BUILD_ARGS=(--build-arg "UID=$UID_ARG" --build-arg "GID=$GID_ARG")
+[ -n "$CLAUDE_CODE" ] && BUILD_ARGS+=(--build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE")
+
 TAG_ARGS=()
 for t in "${TAGS[@]}"; do
     TAG_ARGS+=(--tag "$IMAGE:$t")
@@ -123,8 +131,7 @@ echo "→ building $IMAGE (${TAGS[*]}) for $PLATFORM"
 docker buildx build \
     --builder "$BUILDER" \
     --platform "$PLATFORM" \
-    --build-arg "UID=$UID_ARG" \
-    --build-arg "GID=$GID_ARG" \
+    "${BUILD_ARGS[@]}" \
     --label "org.opencontainers.image.revision=$REVISION" \
     --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "${TAG_ARGS[@]}" \

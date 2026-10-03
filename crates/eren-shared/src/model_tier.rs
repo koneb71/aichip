@@ -89,10 +89,14 @@ impl Default for TierMapping {
         // right default for anyone: it is the one most likely to be outside a
         // given plan, and the one that turns an ordinary task into a bill you
         // didn't ask for. Fable is offered in settings for people who want it.
+        //
+        // Aliases, not ids: the installed CLI resolves `opus` to the newest
+        // Opus it knows, so the defaults follow Anthropic's releases with no
+        // edit here — only an update of the CLI.
         Self(BTreeMap::from([
-            (ModelTier::Easy, "claude-sonnet-5".to_string()),
-            (ModelTier::Medium, "claude-opus-5".to_string()),
-            (ModelTier::Complex, "claude-opus-5".to_string()),
+            (ModelTier::Easy, "sonnet".to_string()),
+            (ModelTier::Medium, "opus".to_string()),
+            (ModelTier::Complex, "opus".to_string()),
         ]))
     }
 }
@@ -110,40 +114,71 @@ pub struct ModelChoice {
 ///
 /// A fixed list rather than a free-text field: a typo'd model id fails at
 /// the point a run starts, minutes later and far from where it was entered.
+///
+/// The aliases come first and are what the defaults use: Claude Code's
+/// `--model` takes `haiku`, `sonnet`, `opus` and `fable` and resolves each to
+/// the newest model of that family the installed CLI knows. Nothing asks
+/// Anthropic for a list — that would mean an API call with a credential,
+/// which Eren never makes — so "latest" is whatever the CLI on this machine
+/// says it is, and updating the CLI is how new models arrive. The ids below
+/// them pin one release, for whoever wants a run to stay put.
 pub const MODEL_CHOICES: &[ModelChoice] = &[
     ModelChoice {
-        id: "claude-haiku-4-5-20251001",
-        label: "Haiku 4.5",
+        id: "haiku",
+        label: "Haiku (latest)",
         blurb: "Fastest and cheapest. Good for mechanical edits.",
     },
     ModelChoice {
-        id: "claude-sonnet-5",
-        label: "Sonnet 5",
+        id: "sonnet",
+        label: "Sonnet (latest)",
         blurb: "Balanced. The usual choice for well-specified work.",
     },
     ModelChoice {
-        id: "claude-opus-5",
-        label: "Opus 5",
+        id: "opus",
+        label: "Opus (latest)",
         blurb: "Strong general coding. The default for real feature work.",
     },
     ModelChoice {
-        id: "claude-fable-5",
-        label: "Fable 5",
+        id: "fable",
+        label: "Fable (latest)",
         blurb: "Most capable, and the most expensive. Opt in deliberately.",
+    },
+    ModelChoice {
+        id: "claude-haiku-4-5-20251001",
+        label: "Haiku 4.5",
+        blurb: "Pinned: stays on this release.",
+    },
+    ModelChoice {
+        id: "claude-sonnet-5-5",
+        label: "Sonnet 5.5",
+        blurb: "Pinned: stays on this release.",
+    },
+    ModelChoice {
+        id: "claude-opus-5-5",
+        label: "Opus 5.5",
+        blurb: "Pinned: stays on this release.",
+    },
+    ModelChoice {
+        id: "claude-fable-5-1",
+        label: "Fable 5.1",
+        blurb: "Pinned: stays on this release. The most expensive.",
     },
 ];
 
-/// Is this a model we offer? Guards the settings endpoint.
+/// Ids the picker no longer offers but a saved setting, an agent or a run's
+/// history may still name. Still accepted — refusing them would fail a save
+/// that only re-sends what was already there — and still Claude's, so the
+/// other engines keep recognising them as foreign.
+pub const RETIRED_MODELS: &[&str] = &["claude-sonnet-5", "claude-opus-5", "claude-fable-5"];
+
+/// Is this a Claude Code model we accept? Guards the settings endpoint.
 pub fn is_known_model(id: &str) -> bool {
-    MODEL_CHOICES.iter().any(|m| m.id == id)
+    MODEL_CHOICES.iter().any(|m| m.id == id) || RETIRED_MODELS.contains(&id)
 }
 
 impl TierMapping {
     pub fn model_for(&self, tier: ModelTier) -> &str {
-        self.0
-            .get(&tier)
-            .map(String::as_str)
-            .unwrap_or("claude-opus-5")
+        self.0.get(&tier).map(String::as_str).unwrap_or("opus")
     }
 }
 
@@ -499,10 +534,7 @@ mod per_engine_tests {
     #[test]
     fn each_engine_gets_ids_it_can_actually_use() {
         let m = EngineTierMapping::default();
-        assert_eq!(
-            m.model_for("claude-code", ModelTier::Medium),
-            "claude-opus-5"
-        );
+        assert_eq!(m.model_for("claude-code", ModelTier::Medium), "opus");
         // Not a Claude id — OpenCode would reject that outright.
         assert!(m.model_for("opencode", ModelTier::Medium).contains('/'));
     }
@@ -575,8 +607,27 @@ mod per_engine_tests {
 
     #[test]
     fn claude_still_validates_against_its_catalog() {
-        assert!(is_known_model_for("claude-code", "claude-opus-5"));
+        assert!(is_known_model_for("claude-code", "claude-opus-5-5"));
+        assert!(is_known_model_for("claude-code", "opus"));
         assert!(!is_known_model_for("claude-code", "gpt-5"));
+        assert!(!is_known_model_for("claude-code", "Opus"));
+    }
+
+    #[test]
+    fn a_retired_id_a_setting_may_still_hold_is_accepted_but_not_offered() {
+        for id in RETIRED_MODELS {
+            assert!(is_known_model_for("claude-code", id), "{id}");
+            assert!(!MODEL_CHOICES.iter().any(|m| m.id == *id), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_defaults_follow_the_cli_rather_than_a_release() {
+        // An alias, so a new Opus arrives with the CLI, not with an edit here.
+        for tier in [ModelTier::Easy, ModelTier::Medium, ModelTier::Complex] {
+            let id = TierMapping::default().model_for(tier).to_string();
+            assert!(!id.starts_with("claude-"), "{tier:?} is pinned to {id}");
+        }
     }
 
     #[test]
