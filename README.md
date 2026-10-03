@@ -1402,7 +1402,7 @@ docker compose --profile app up -d --build
 ```
 
 That builds the image from the `Dockerfile` — the dashboard with Node 22 and pnpm, the
-server with Rust on Debian bookworm, and a runtime with git, Node and the `claude` CLI — and
+server with Rust on Debian trixie, and a runtime with git, Node and the `claude` CLI — and
 runs everything, dashboard, orchestrator and agents, in containers, reachable at
 `http://localhost:4820` (`EREN_PORT` to change it). The image runs `eren serve --headless`
 as a normal user. Only Claude Code is installed in it; other engines would need adding to
@@ -1439,6 +1439,39 @@ explained under [upgrading](#upgrading-from-aichip-to-eren).
 exists to leak, every engine you have installed is available, and your paths are simply
 real. Containerize the whole thing when you want it on a Linux box, running unattended, or
 away from your laptop — not because it's tidier.
+
+### From a published image
+
+To build once and run the image elsewhere — a Linux box, a server — without the source or a
+toolchain there, push it to Docker Hub (or any registry) and deploy from it:
+
+```bash
+docker login
+./scripts/docker-publish.sh you/eren
+```
+
+```bash
+./scripts/docker-deploy.sh
+```
+
+`docker-publish.sh` builds the same `Dockerfile` with buildx and pushes it tagged with the
+commit's short hash and `latest` (`--tag` adds more, `--no-latest` leaves `latest` alone,
+`--no-push` loads it into the local Docker instead). It builds for the Docker daemon's own
+architecture unless told otherwise, so name the server's when it differs —
+`--platform linux/amd64` from an Apple silicon Mac, or `linux/amd64,linux/arm64` for both;
+a foreign architecture is compiled under emulation and takes much longer. The image runs as
+uid/gid 1000; `--uid`/`--gid` change it for a server where your user is someone else. It never
+logs in for you, and `.env` never reaches the build.
+
+`docker-deploy.sh` needs only `docker-compose.yml`, `.env` and itself, laid out as in the
+repository. It reads `EREN_IMAGE` (and `EREN_TAG`, default `latest`) from `.env`, pulls,
+and starts Postgres and Eren with `--no-build`, so it never falls back to building from
+source; it warns when `CLAUDE_CODE_OAUTH_TOKEN` or `EREN_PROJECTS_DIR` is missing.
+`--tag <hash>` deploys (or rolls back to) one build, `--with-storage` adds object storage,
+`--down` stops everything and keeps the volumes. To deploy to another machine from this one,
+`DOCKER_HOST=ssh://you@server ./scripts/docker-deploy.sh` — `.env` is then read locally and
+`EREN_PROJECTS_DIR` names a path on the server. Everything above about the token, ports and
+mounts applies unchanged: it is the same compose service, pulled instead of built.
 
 ## Development
 

@@ -27,17 +27,23 @@ RUN pnpm build
 # ── 2. Server ──────────────────────────────────────────────────────────────
 # Pinned to the same Debian release as the runtime stage below. A newer
 # builder links against a newer glibc and the binary won't start.
-FROM rust:1-slim-bookworm AS server
+#
+# Trixie, not bookworm: the onnxruntime that `ort` downloads (fastembed's, for
+# the knowledge base) is a static library built with GCC 14, and bookworm's
+# GCC 12 libstdc++ lacks symbols it needs, so the link fails there.
+FROM rust:1-slim-trixie AS server
 WORKDIR /src
+# g++: the tree-sitter grammars and onnxruntime are C++, and the slim image
+# has a C compiler but not libstdc++ to link them against.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 RUN cargo build --release --locked -p eren-cli
 
 # ── 3. Runtime ─────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 # git: worktrees are the whole isolation model. node: the CLI ships as an npm
 # package. ca-certificates: the CLI talks to Anthropic over TLS.
 RUN apt-get update \

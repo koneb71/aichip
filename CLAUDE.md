@@ -65,6 +65,9 @@ cd web && pnpm test                  # vitest (canvas ↔ YAML round-trip, diff,
 cd web && pnpm test src/lib/workflowGraph.test.ts   # single file
 cd web && pnpm exec tsc -b           # types, as CI runs them
 cd web && pnpm build                 # tsc -b && vite build → web/dist (what the server serves)
+
+./scripts/docker-publish.sh you/eren # build the image with buildx and push it (--platform, --tag, --no-push)
+./scripts/docker-deploy.sh           # pull EREN_IMAGE and run it with Postgres via compose (--tag, --down)
 ```
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `cargo fmt --all -- --check`, clippy (advisory, not blocking yet), `cargo test --workspace` against a Postgres service, and `pnpm exec tsc -b`, `pnpm test`, `pnpm build`.
