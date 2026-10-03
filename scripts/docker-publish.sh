@@ -3,6 +3,7 @@
 # Build Eren's image from this checkout and push it to a registry (Docker Hub
 # unless the name says otherwise).
 #
+#   ./scripts/docker-publish.sh                       # neiellcare71/eren
 #   ./scripts/docker-publish.sh you/eren
 #   ./scripts/docker-publish.sh you/eren --platform linux/amd64,linux/arm64
 #   ./scripts/docker-publish.sh you/eren --tag v0.1.0 --no-latest
@@ -17,7 +18,9 @@
 #   --uid / --gid    the user the image runs as (default 1000:1000), for a server
 #                    where your user has another id and the mounted code is yours.
 #
-# The image name can also come from EREN_IMAGE (in the environment or .env).
+# The image name can also come from EREN_IMAGE (in the environment or .env),
+# and defaults to neiellcare71/eren. A name with no namespace (plain `eren`) is
+# one no registry would take, so it is built into the local Docker instead.
 # It never logs in: run `docker login` yourself first. Nothing secret goes into
 # the image — .dockerignore keeps .env out of the build context.
 
@@ -26,7 +29,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-    sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 fail() {
@@ -63,7 +66,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$IMAGE" ] || fail "which image? e.g. ./scripts/docker-publish.sh yourname/eren (or set EREN_IMAGE)"
+IMAGE="${IMAGE:-neiellcare71/eren}"
+# A name with no namespace (no `/`) cannot be pushed: Docker Hub would read it
+# as an official image. Such an image is for this machine only.
+if [ "$PUSH" = 1 ] && [[ "$IMAGE" != */* ]]; then
+    echo "→ $IMAGE has no registry namespace (you/eren), so it is built into the local Docker, not pushed"
+    PUSH=0
+fi
 # Only the last path segment can carry a tag; a colon before it is a
 # registry's port (registry.local:5000/eren).
 case "${IMAGE##*/}" in
@@ -130,4 +139,5 @@ if [ "$PUSH" = 1 ]; then
     echo "  deploy it with: EREN_IMAGE=$IMAGE EREN_TAG=${TAGS[0]} ./scripts/docker-deploy.sh"
 else
     echo "✓ built $IMAGE:${TAGS[0]} into the local Docker"
+    echo "  run it with: EREN_IMAGE=$IMAGE EREN_TAG=${TAGS[0]} ./scripts/docker-deploy.sh"
 fi

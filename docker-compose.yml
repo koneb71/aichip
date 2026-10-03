@@ -12,9 +12,10 @@
 #     a container has no keychain and no browser to log in with. Read the
 #     "Running in Docker" section of README.md first.
 #
-#   ./scripts/docker-publish.sh you/eren   then, anywhere,   ./scripts/docker-deploy.sh
-#     The same, from an image on Docker Hub: build and push once, then run it
-#     on a machine that has only this file, .env and the deploy script.
+#   ./scripts/docker-publish.sh   then, anywhere,   ./scripts/docker-deploy.sh
+#     The same, from an image on Docker Hub (neiellcare71/eren unless
+#     EREN_IMAGE says otherwise): build and push once, then run it on a
+#     machine that has only this file, .env and the deploy script.
 #
 #   docker compose --profile storage up -d
 #     Adds object storage for knowledge-base attachments. Optional, and in a
@@ -107,7 +108,7 @@ services:
     # Built here by `--build`, or pulled by scripts/docker-deploy.sh from the
     # registry scripts/docker-publish.sh pushed to (EREN_IMAGE, EREN_TAG).
     # Pulling needs neither the source nor the build context.
-    image: ${EREN_IMAGE:-eren}:${EREN_TAG:-latest}
+    image: ${EREN_IMAGE:-neiellcare71/eren}:${EREN_TAG:-latest}
     build:
       context: .
       args:

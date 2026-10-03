@@ -1447,12 +1447,17 @@ toolchain there, push it to Docker Hub (or any registry) and deploy from it:
 
 ```bash
 docker login
-./scripts/docker-publish.sh you/eren
+./scripts/docker-publish.sh
 ```
 
 ```bash
 ./scripts/docker-deploy.sh
 ```
+
+Both use `neiellcare71/eren` unless told otherwise — a name as the publish script's argument,
+or `EREN_IMAGE` in `.env` for both. A name with no namespace, like plain `eren`, never leaves
+this machine: publish builds it into the local Docker, and deploy runs that local build
+without pulling it.
 
 `docker-publish.sh` builds the same `Dockerfile` with buildx and pushes it tagged with the
 commit's short hash and `latest` (`--tag` adds more, `--no-latest` leaves `latest` alone,
@@ -1464,7 +1469,7 @@ uid/gid 1000; `--uid`/`--gid` change it for a server where your user is someone 
 logs in for you, and `.env` never reaches the build.
 
 `docker-deploy.sh` needs only `docker-compose.yml`, `.env` and itself, laid out as in the
-repository. It reads `EREN_IMAGE` (and `EREN_TAG`, default `latest`) from `.env`, pulls,
+repository. It reads `EREN_IMAGE` and `EREN_TAG` (default `latest`) from `.env`, pulls,
 and starts Postgres and Eren with `--no-build`, so it never falls back to building from
 source; it warns when `CLAUDE_CODE_OAUTH_TOKEN` or `EREN_PROJECTS_DIR` is missing.
 `--tag <hash>` deploys (or rolls back to) one build, `--with-storage` adds object storage,

@@ -3,7 +3,7 @@
 # Run Eren and its Postgres with Docker Compose from a published image — the
 # one scripts/docker-publish.sh pushed — instead of building from source.
 #
-#   ./scripts/docker-deploy.sh                  # pull EREN_IMAGE:latest and (re)start
+#   ./scripts/docker-deploy.sh                  # pull neiellcare71/eren:latest and (re)start
 #   ./scripts/docker-deploy.sh --tag 1a2b3c4    # a specific build (roll back the same way)
 #   ./scripts/docker-deploy.sh --with-storage   # also object storage for KB attachments
 #   ./scripts/docker-deploy.sh --down           # stop it (volumes, and your data, are kept)
@@ -11,9 +11,13 @@
 # It needs only docker-compose.yml, .env and this script, laid out as in the
 # repository — a server needs no source and no toolchain. In .env:
 #
-#   EREN_IMAGE=you/eren                # what docker-publish.sh pushed
+#   EREN_IMAGE=you/eren                # what docker-publish.sh pushed; default neiellcare71/eren
 #   CLAUDE_CODE_OAUTH_TOKEN=…          # from `claude setup-token`
 #   EREN_PROJECTS_DIR=/home/you/code   # the code agents work on
+#
+# A name with a namespace (you/eren) is pulled from its registry. A plain one
+# (EREN_IMAGE=eren) is one no registry holds: it has to be in this Docker
+# already — `./scripts/docker-publish.sh eren` puts it there.
 #
 # To deploy to another machine from this one, point Docker at it first:
 #   DOCKER_HOST=ssh://you@server ./scripts/docker-deploy.sh
@@ -24,7 +28,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-    sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 fail() {
@@ -68,8 +72,7 @@ if [ "$DOWN" = 1 ]; then
 fi
 
 IMAGE="$(setting EREN_IMAGE)"
-[ -n "$IMAGE" ] || fail "set EREN_IMAGE (in .env or the environment) to the image docker-publish.sh pushed, e.g. you/eren"
-export EREN_IMAGE="$IMAGE"
+export EREN_IMAGE="${IMAGE:-neiellcare71/eren}"
 export EREN_TAG="${TAG:-$(setting EREN_TAG)}"
 EREN_TAG="${EREN_TAG:-latest}"
 
@@ -79,8 +82,20 @@ EREN_TAG="${EREN_TAG:-latest}"
 [ -n "$(setting EREN_PROJECTS_DIR)" ] ||
     echo "! EREN_PROJECTS_DIR is not set: agents can only see /workspace inside the container."
 
-echo "→ pulling $EREN_IMAGE:$EREN_TAG"
-docker compose "${PROFILES[@]}" pull
+if [[ "$EREN_IMAGE" == */* ]]; then
+    echo "→ pulling $EREN_IMAGE:$EREN_TAG"
+    docker compose "${PROFILES[@]}" pull
+else
+    # No registry has it; pull everything else and use the local build.
+    docker image inspect "$EREN_IMAGE:$EREN_TAG" >/dev/null 2>&1 ||
+        fail "there is no $EREN_IMAGE:$EREN_TAG image in this Docker — build it with ./scripts/docker-publish.sh $EREN_IMAGE, or set EREN_IMAGE to one you pushed (you/eren)"
+    echo "→ using the local $EREN_IMAGE:$EREN_TAG; pulling the rest"
+    SERVICES=()
+    while IFS= read -r service; do
+        [ "$service" = eren ] || SERVICES+=("$service")
+    done < <(docker compose "${PROFILES[@]}" config --services)
+    docker compose "${PROFILES[@]}" pull ${SERVICES[@]+"${SERVICES[@]}"}
+fi
 
 echo "→ starting"
 # --no-build: use what was pulled, never fall back to building from source.
