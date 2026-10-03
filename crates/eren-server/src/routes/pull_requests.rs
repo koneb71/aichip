@@ -456,7 +456,7 @@ struct ImportIssues {
 /// and it would turn "a stranger opened an issue" into "an agent is editing
 /// your repository" with nobody in between. The one place a person has to
 /// stand is exactly there.
-pub async fn import_issues(
+async fn import_issues(
     State(state): State<AppState>,
     caller: Caller,
     Path(project_id): Path<Uuid>,
