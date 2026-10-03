@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Agent, api } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -8,12 +8,13 @@ import { GenerateWizard } from "../components/agents/GenerateWizard";
 import { Card, Empty, Item, Page, PageHead, Stagger } from "../components/ui/Surface";
 import { Icon } from "../components/ui/Icon";
 import { Button } from "../components/ui/Button";
-import { Plus, Sparkles } from "lucide-react";
+import { MessageSquare, Plus, Sparkles } from "lucide-react";
 import { tierColor, tierSoft } from "../lib/api";
 import { useTierModel } from "../lib/models";
 
 export default function AgentsPage() {
   const tierModel = useTierModel();
+  const navigate = useNavigate();
   const { active } = useWorkspace();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
@@ -72,7 +73,8 @@ export default function AgentsPage() {
       <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {working.map((a) => (
           <Item key={a.id}>
-            <Card onClick={() => setEditing(a)} className="h-full p-4">
+            <div className="relative h-full">
+            <Card onClick={() => setEditing(a)} className="h-full p-4 pb-11">
               <div className="flex items-center gap-3">
                 <span
                   className="grid size-10 shrink-0 place-items-center rounded-xl text-sm font-bold text-on-accent transition-transform duration-300 group-hover:scale-105"
@@ -107,6 +109,19 @@ export default function AgentsPage() {
                 {a.description || "No description yet."}
               </p>
             </Card>
+            {/* Beside the card rather than in it: the card is itself a
+                button (it opens the editor), and a button cannot hold one. */}
+            <div className="absolute bottom-3 right-3">
+              <Button
+                size="xs"
+                variant="ghost"
+                icon={<MessageSquare className="size-3.5" />}
+                onClick={() => navigate(`/chat?agent=${a.id}`)}
+              >
+                Chat
+              </Button>
+            </div>
+            </div>
           </Item>
         ))}
         {working.length === 0 && (

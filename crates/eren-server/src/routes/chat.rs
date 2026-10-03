@@ -16,6 +16,53 @@ use uuid::Uuid;
 /// Title given to a chat until its first user message names it.
 const UNTITLED: &str = "Chat";
 
+/// What a new chat may say about itself. Optional as a whole: a bare POST is
+/// a chat with the assistant, as it always was.
+#[derive(Deserialize, Default)]
+struct NewChat {
+    /// Talk to this agent rather than the assistant.
+    agent_id: Option<Uuid>,
+}
+
+fn new_chat_body(bytes: &[u8]) -> Result<NewChat, ApiError> {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(NewChat::default());
+    }
+    serde_json::from_slice(bytes).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad body: {e}")))
+}
+
+/// An agent a chat in `workspace` may be with: the caller's, in that same
+/// workspace — the persona, memories and budget all belong to it — and not
+/// retired. A paused agent may be chosen; its turns are refused until it is
+/// resumed, as its cards are.
+async fn chat_agent(
+    state: &AppState,
+    caller: &Caller,
+    agent: Option<Uuid>,
+    workspace: Uuid,
+) -> Result<Option<Uuid>, ApiError> {
+    let Some(agent) = agent else { return Ok(None) };
+    caller.require(state, Owned::Agent(agent)).await?;
+    let row: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT workspace_id, status FROM agents WHERE id = $1")
+            .bind(agent)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    match row {
+        None => Err((StatusCode::NOT_FOUND, "no such agent".into())),
+        Some((ws, _)) if ws != workspace => Err((
+            StatusCode::BAD_REQUEST,
+            "that agent belongs to another workspace".into(),
+        )),
+        Some((_, status)) if status == "retired" => Err((
+            StatusCode::CONFLICT,
+            "that agent is retired; restore it to talk to it".into(),
+        )),
+        Some(_) => Ok(Some(agent)),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects/{id}/chats", get(list_chats).post(open_chat))
@@ -45,8 +92,10 @@ async fn list_chats(
     caller.require(&state, Owned::Project(project_id)).await?;
     let rows = sqlx::query(
         "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
+                c.agent_id, a.name AS agent_name,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
-         FROM chats c WHERE c.project_id=$1 ORDER BY c.updated_at DESC",
+         FROM chats c LEFT JOIN agents a ON a.id = c.agent_id
+         WHERE c.project_id=$1 ORDER BY c.updated_at DESC",
     )
     .bind(project_id)
     .fetch_all(&state.db.pool)
@@ -62,6 +111,8 @@ async fn list_chats(
                 "modelId": r.get::<Option<String>, _>("model_id"),
                 "effort": r.get::<Option<String>, _>("effort"),
                 "planMode": r.get::<bool, _>("plan_mode"),
+                "agentId": r.get::<Option<Uuid>, _>("agent_id"),
+                "agentName": r.get::<Option<String>, _>("agent_name"),
                 "messageCount": r.get::<i64, _>("message_count"),
                 "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
             })
@@ -77,10 +128,19 @@ async fn new_chat(
     State(state): State<AppState>,
     caller: Caller,
     Path(project_id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
     caller.require(&state, Owned::Project(project_id)).await?;
-    let row = sqlx::query("INSERT INTO chats (project_id) VALUES ($1) RETURNING id")
+    let body = new_chat_body(&body)?;
+    let workspace: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
         .bind(project_id)
+        .fetch_one(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    let agent = chat_agent(&state, &caller, body.agent_id, workspace).await?;
+    let row = sqlx::query("INSERT INTO chats (project_id, agent_id) VALUES ($1, $2) RETURNING id")
+        .bind(project_id)
+        .bind(agent)
         .fetch_one(&state.db.pool)
         .await
         .map_err(internal)?;
@@ -104,8 +164,10 @@ async fn list_general(
         .await?;
     let rows = sqlx::query(
         "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
+                c.agent_id, a.name AS agent_name,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
-         FROM chats c WHERE c.workspace_id=$1 AND c.project_id IS NULL
+         FROM chats c LEFT JOIN agents a ON a.id = c.agent_id
+         WHERE c.workspace_id=$1 AND c.project_id IS NULL
          ORDER BY c.updated_at DESC",
     )
     .bind(workspace_id)
@@ -122,6 +184,8 @@ async fn list_general(
                 "modelId": r.get::<Option<String>, _>("model_id"),
                 "effort": r.get::<Option<String>, _>("effort"),
                 "planMode": r.get::<bool, _>("plan_mode"),
+                "agentId": r.get::<Option<Uuid>, _>("agent_id"),
+                "agentName": r.get::<Option<String>, _>("agent_name"),
                 "messageCount": r.get::<i64, _>("message_count"),
                 "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
             })
@@ -161,15 +225,20 @@ async fn new_general(
     State(state): State<AppState>,
     caller: Caller,
     Path(workspace_id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
     caller
         .require(&state, Owned::Workspace(workspace_id))
         .await?;
-    let row = sqlx::query("INSERT INTO chats (workspace_id) VALUES ($1) RETURNING id")
-        .bind(workspace_id)
-        .fetch_one(&state.db.pool)
-        .await
-        .map_err(internal)?;
+    let body = new_chat_body(&body)?;
+    let agent = chat_agent(&state, &caller, body.agent_id, workspace_id).await?;
+    let row =
+        sqlx::query("INSERT INTO chats (workspace_id, agent_id) VALUES ($1, $2) RETURNING id")
+            .bind(workspace_id)
+            .bind(agent)
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(internal)?;
     Ok(Json(json!({ "id": row.get::<Uuid, _>("id") })))
 }
 
@@ -460,6 +529,23 @@ async fn send(
     for id in &body.article_ids {
         caller.require(&state, Owned::KbArticle(*id)).await?;
     }
+    // Unnamed, the turn carries on where the conversation was — or, for the
+    // first turn with an agent, starts on the agent's engine. Vetted before
+    // the message is written, so a paused agent or a spent budget refuses
+    // the send rather than leaving a question nobody will answer.
+    let engine = match body.engine.clone() {
+        Some(engine) => engine,
+        None => state
+            .orchestrator
+            .chat_engine(chat_id)
+            .await
+            .map_err(internal)?,
+    };
+    state
+        .orchestrator
+        .vet_chat_turn(chat_id, &engine)
+        .await
+        .map_err(super::run_refused)?;
     // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
     // client that only sends `content` does not silently reset the choice.
     if body.model_tier.is_some()
@@ -517,13 +603,6 @@ async fn send(
     // Attachments are project machinery: the files live under the project and
     // the claim binds them there. Refused rather than dropped, so the person
     // who dragged a screenshot in learns why it did not arrive.
-    if project_id.is_none() && !body.attachment_ids.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "attachments need a project — this is a general chat".into(),
-        ));
-    }
-
     let row = sqlx::query(
         "INSERT INTO chat_messages (chat_id, role, content) VALUES ($1, 'user', $2) RETURNING id",
     )
@@ -553,15 +632,19 @@ async fn send(
         .await
         .map_err(internal)?;
 
-    if let Some(project_id) = project_id {
-        attachments::claim(
-            &state.db,
-            &body.attachment_ids,
-            project_id,
-            attachments::Owner::Message(message_id),
-        )
-        .await?;
-    }
+    // A project chat's uploads belong to its project; a general chat's to
+    // its workspace, and the claim refuses one from anywhere else.
+    let home = match project_id {
+        Some(project_id) => attachments::Home::Project(project_id),
+        None => attachments::Home::Workspace(workspace_id),
+    };
+    attachments::claim(
+        &state.db,
+        &body.attachment_ids,
+        home,
+        attachments::Owner::Message(message_id),
+    )
+    .await?;
 
     // Name the chat after its opening line, and float it to the top of the
     // list. Only untitled chats are renamed, so a user's own title sticks.
@@ -579,12 +662,7 @@ async fn send(
 
     let run_id = state
         .orchestrator
-        .enqueue_chat_turn(
-            chat_id,
-            body.engine
-                .as_deref()
-                .unwrap_or(&state.orchestrator.default_engine()),
-        )
+        .enqueue_chat_turn(chat_id, &engine)
         .await
         .map_err(super::run_refused)?;
 

@@ -435,7 +435,7 @@ async fn create(
     attachments::claim(
         &state.db,
         &body.attachment_ids,
-        body.project_id,
+        attachments::Home::Project(body.project_id),
         attachments::Owner::Task(task_id),
     )
     .await?;
@@ -1866,7 +1866,7 @@ async fn attach_to_task(
     attachments::claim(
         &state.db,
         &body.attachment_ids,
-        row.get("project_id"),
+        attachments::Home::Project(row.get("project_id")),
         attachments::Owner::Task(task_id),
     )
     .await?;

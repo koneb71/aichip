@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, ChatSummary, Project } from "../lib/api";
+import { Agent, api, ChatSummary, Project } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 import { NARROW, useMediaQuery } from "../lib/useMediaQuery";
 import { ChatThread } from "../components/chat/ChatThread";
 import { SpaceDocs } from "../components/chat/SpaceDocs";
 import { Button, IconButton } from "../components/ui/Button";
-import { Pencil, X } from "lucide-react";
+import { Menu } from "../components/ui/Overlay";
+import { Bot, ChevronDown, Pencil, X } from "lucide-react";
 
 /**
  * Chat as a page: the conversation list on the left, one thread full-width.
@@ -36,6 +37,8 @@ export default function ChatPage() {
   const [railOpen, setRailOpen] = useState(false);
   // The inline "new space" form: null = closed, string = the name being typed.
   const [spaceDraft, setSpaceDraft] = useState<string | null>(null);
+  // Who a new conversation can be with besides the assistant.
+  const [agents, setAgents] = useState<Agent[]>([]);
 
   // Which project: the URL wins (a shared link means *this* project), then
   // the last choice, then the most recent project. The URL is kept in sync so
@@ -61,6 +64,14 @@ export default function ChatPage() {
     // params deliberately not a dependency: the URL is an input once, then an
     // output — reacting to our own setParams would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    api
+      .agents(workspaceId)
+      .then((r) => setAgents(r.agents))
+      .catch(() => setAgents([]));
   }, [workspaceId]);
 
   const pickProject = (id: string) => {
@@ -111,8 +122,23 @@ export default function ChatPage() {
     setChatId(null);
     // A deep link (`?chat=`, e.g. from a routine's history) names the exact
     // thread; consumed once so later scope switches behave normally.
+    // `?agent=` (an agent's Chat button) starts a new conversation with it.
     const wanted = params.get("chat");
-    if (wanted) {
+    const withAgent = params.get("agent");
+    if (withAgent) {
+      setParams({ project: projectId }, { replace: true });
+      const start =
+        projectId === GENERAL
+          ? api.newGeneralChat(workspaceId, withAgent)
+          : api.newChat(projectId, withAgent);
+      start
+        .then((r) => {
+          if (stale) return;
+          setChatId(r.id);
+          refreshChats();
+        })
+        .catch((e) => setError(String(e)));
+    } else if (wanted) {
       setParams({ project: projectId }, { replace: true });
       setChatId(wanted);
     } else {
@@ -130,12 +156,12 @@ export default function ChatPage() {
     };
   }, [projectId, workspaceId, refreshChats]);
 
-  const startNewChat = async () => {
+  const startNewChat = async (agentId?: string) => {
     if (!projectId) return;
     try {
       const r = general
-        ? await api.newGeneralChat(workspaceId!)
-        : await api.newChat(projectId);
+        ? await api.newGeneralChat(workspaceId!, agentId)
+        : await api.newChat(projectId, agentId);
       setChatId(r.id);
       refreshChats();
     } catch (e) {
@@ -232,9 +258,28 @@ export default function ChatPage() {
           className="rounded-lg border border-accent bg-panel px-2 py-1.5 text-sm outline-none"
         />
       )}
-      <Button variant="secondary" size="md" onClick={startNewChat}>
-        + New conversation
-      </Button>
+      <div className="flex gap-1.5">
+        <Button variant="secondary" size="md" onClick={() => startNewChat()} className="flex-1">
+          + New conversation
+        </Button>
+        {agents.length > 0 && (
+          <Menu
+            align="end"
+            label="Talk to an agent"
+            trigger={
+              <Button variant="secondary" size="md" aria-label="New conversation with an agent" title="Talk to one of your agents">
+                <Bot className="size-3.5" aria-hidden />
+                <ChevronDown className="size-3" aria-hidden />
+              </Button>
+            }
+            items={agents.map((a) => ({
+              label: a.status === "paused" ? `${a.name} (paused)` : a.name,
+              icon: <span className="size-2.5 rounded-full" style={{ background: a.color }} />,
+              onSelect: () => void startNewChat(a.id),
+            }))}
+          />
+        )}
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && (
           <div className="px-2 py-2 text-xs text-fg-muted">No conversations yet.</div>
@@ -273,6 +318,9 @@ export default function ChatPage() {
               >
                 {c.title}
                 <span className="ml-1.5 text-[10px] text-fg-muted">{c.messageCount}</span>
+                {c.agentName && (
+                  <span className="block truncate text-[11px] font-normal text-fg-muted">with {c.agentName}</span>
+                )}
               </button>
             )}
             <IconButton

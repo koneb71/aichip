@@ -41,9 +41,11 @@ function preCheck(file: File): string | null {
  * Composer attachment state, shared by the chat panel and the new-task modal.
  *
  * Uploads happen immediately and per-file, so one rejection never poisons the
- * batch and the ids are ready by the time the user submits.
+ * batch and the ids are ready by the time the user submits. They belong to the
+ * project, or — for a general chat, which has none — to `workspaceId`; the
+ * server refuses to let either be claimed anywhere else.
  */
-export function useAttachments(projectId: string) {
+export function useAttachments(projectId: string, workspaceId?: string) {
   const [items, setItems] = useState<PendingAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
   // Read by the unmount cleanup, which must not re-run when items change.
@@ -70,8 +72,10 @@ export function useAttachments(projectId: string) {
             : undefined;
 
           if (!problem) {
-            api
-              .uploadAttachments(projectId, [file])
+            (projectId
+              ? api.uploadAttachments(projectId, [file])
+              : api.uploadWorkspaceAttachments(workspaceId ?? "", [file])
+            )
               .then((r) =>
                 setItems((cur) =>
                   cur.map((i) =>
@@ -104,7 +108,7 @@ export function useAttachments(projectId: string) {
         return [...prev, ...next];
       });
     },
-    [projectId],
+    [projectId, workspaceId],
   );
 
   const remove = useCallback((localId: string) => {

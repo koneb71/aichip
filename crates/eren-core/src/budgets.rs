@@ -305,7 +305,7 @@ pub async fn scope_of_task(db: &Db, task_id: Uuid) -> anyhow::Result<Scope> {
 pub async fn scope_of_chat(db: &Db, chat_id: Uuid) -> anyhow::Result<Scope> {
     let row = sqlx::query(
         "SELECT COALESCE(p.workspace_id, c.workspace_id) AS workspace, p.id AS project,
-                NULL::uuid AS agent, NULL::uuid AS team, NULL::uuid AS routine
+                c.agent_id AS agent, NULL::uuid AS team, NULL::uuid AS routine
            FROM chats c LEFT JOIN projects p ON p.id = c.project_id
           WHERE c.id = $1",
     )

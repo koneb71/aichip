@@ -106,8 +106,8 @@ impl Owned {
             }
             Owned::McpServer(_) => "SELECT workspace_id FROM mcp_servers WHERE id = $1",
             Owned::Attachment(_) => {
-                "SELECT p.workspace_id FROM attachments a JOIN projects p ON p.id = a.project_id
-                  WHERE a.id = $1"
+                "SELECT COALESCE(a.workspace_id, p.workspace_id) FROM attachments a
+                   LEFT JOIN projects p ON p.id = a.project_id WHERE a.id = $1"
             }
             Owned::Comment(_) => {
                 "SELECT p.workspace_id FROM task_comments c
@@ -265,6 +265,19 @@ mod db_tests {
             agent,
         )
         .await;
+        // A general chat's upload belongs to the workspace, not a project.
+        let general_upload = one(
+            "INSERT INTO attachments (workspace_id, filename, mime, kind, size_bytes, disk_path)
+             VALUES ($1, 'a.png', 'image/png', 'image', 1, '') RETURNING id",
+            ws,
+        )
+        .await;
+        let project_upload = one(
+            "INSERT INTO attachments (project_id, filename, mime, kind, size_bytes, disk_path)
+             VALUES ($1, 'b.png', 'image/png', 'image', 1, '') RETURNING id",
+            project,
+        )
+        .await;
         let budget = one(
             "INSERT INTO budget_policies (name, scope_kind, scope_id, cap_runs)
              VALUES ('b', 'project', $1, 1) RETURNING id",
@@ -284,6 +297,8 @@ mod db_tests {
             Owned::Run(chat_run),
             Owned::Run(agent_run),
             Owned::Budget(budget),
+            Owned::Attachment(general_upload),
+            Owned::Attachment(project_upload),
         ] {
             assert_eq!(workspace_of(db, what).await.unwrap(), Some(ws), "{what:?}");
         }

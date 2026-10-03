@@ -46,8 +46,9 @@ export function ChatThread({
   onSent,
   centered,
 }: {
-  /** Null for a *general* chat — no project, no repo, no board. Attachments
-   *  and the `@` file picker are project machinery and disappear with it. */
+  /** Null for a *general* chat — no project, no repo, no board. The `@` file
+   *  picker is project machinery and disappears with it; attachments go to
+   *  the workspace instead. */
   projectId: string | null;
   /**
    * The workspace this *project* belongs to — not whichever one the sidebar is
@@ -111,9 +112,10 @@ export function ChatThread({
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamEvents = useRunStream(activeRunId);
   const general = projectId === null;
-  // Hooks cannot be conditional; the empty id keeps this one inert and the
-  // `general` gates below keep its UI out of the tree.
-  const att = useAttachments(projectId ?? "");
+  // A general chat's uploads belong to its workspace; without one to name
+  // there is nowhere for them to go, and the attach button stays hidden.
+  const att = useAttachments(projectId ?? "", workspaceId);
+  const canAttach = !general || !!workspaceId;
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // Caret is tracked separately: it moves on click and arrow keys, not just
   // on change, and the mention token depends on where it is.
@@ -428,7 +430,7 @@ export function ChatThread({
         </div>
       )}
 
-      <div className="relative border-t border-border p-3" {...(general ? {} : att.dropProps)}>
+      <div className="relative border-t border-border p-3" {...(canAttach ? att.dropProps : {})}>
         {wrap(
           "relative",
           <>
@@ -441,8 +443,7 @@ export function ChatThread({
             {/* Above the textarea, not beside it: what the assistant will be
                 given to read is part of the question, and a control tucked
                 into the icon row reads as a setting. Workspace-scoped, so it
-                is offered in a general chat too — unlike file attachments,
-                which are project machinery. */}
+                is offered in a general chat too, as file attachments are. */}
             {workspaceId && (
               <ArticlePicker
                 workspaceId={workspaceId}
@@ -454,7 +455,7 @@ export function ChatThread({
                 compact
               />
             )}
-            {!general && (att.items.length > 0 || att.dragging) && (
+            {canAttach && (att.items.length > 0 || att.dragging) && (
               <AttachmentBar
                 items={att.items}
                 onAdd={att.add}
@@ -464,7 +465,7 @@ export function ChatThread({
               />
             )}
             <div className="flex items-end gap-2">
-              {!general && att.items.length === 0 && !att.dragging && (
+              {canAttach && att.items.length === 0 && !att.dragging && (
                 <AttachmentBar
                   items={[]}
                   onAdd={att.add}
@@ -481,7 +482,7 @@ export function ChatThread({
                   setCaret(e.target.selectionStart ?? 0);
                 }}
                 onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                onPaste={att.onPaste}
+                onPaste={canAttach ? att.onPaste : undefined}
                 onKeyDown={(e) => {
                   // The picker gets first refusal: otherwise Enter sends the
                   // message instead of choosing the highlighted file.
@@ -496,7 +497,13 @@ export function ChatThread({
                 }}
                 rows={Math.min(4, Math.max(1, draft.split("\n").length))}
                 placeholder={
-                  activeRunId ? "Assistant is working…" : "What should we work on?"
+                  chat?.agentName
+                    ? activeRunId
+                      ? `${chat.agentName} is working…`
+                      : `Message ${chat.agentName}…`
+                    : activeRunId
+                      ? "Assistant is working…"
+                      : "What should we work on?"
                 }
                 disabled={!!activeRunId}
                 className="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none disabled:opacity-60"

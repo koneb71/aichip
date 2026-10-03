@@ -990,15 +990,18 @@ impl Orchestrator {
         // Only a chat on a project is handed Eren's tools (`execute_chat_run`
         // wires them by project); a general chat or a watch routine reads the
         // web and nothing else, and any engine can do that.
-        let project: Option<Uuid> =
-            sqlx::query_scalar("SELECT project_id FROM chats WHERE id = $1")
+        let row: Option<(Option<Uuid>, Option<Uuid>)> =
+            sqlx::query_as("SELECT project_id, agent_id FROM chats WHERE id = $1")
                 .bind(chat_id)
                 .fetch_optional(&self.db.pool)
-                .await?
-                .flatten();
+                .await?;
+        let (project, agent) = row.unwrap_or_default();
         if project.is_some() {
             self.needs_tools(engine, "the assistant")?;
         }
+        // A chat with an agent is that agent at work: paused or retired, it
+        // does not answer.
+        crate::agents::assert_can_run(&self.db, &agent.into_iter().collect::<Vec<_>>()).await?;
         // The assistant spends like anything else: a spent workspace or
         // project says so on the message, not by leaving the turn queued.
         crate::budgets::check(
@@ -1012,29 +1015,49 @@ impl Orchestrator {
 
     /// The engine a chat's next turn runs on when nobody picked one: the one
     /// its last turn ran on, so an answer or an approval carries on where the
-    /// conversation was — a manager thread on Qwen stays on Qwen.
+    /// conversation was — a manager thread on Qwen stays on Qwen. A chat with
+    /// an agent starts on the agent's engine.
     pub async fn chat_engine(&self, chat_id: Uuid) -> anyhow::Result<String> {
-        let last: Option<String> = sqlx::query_scalar(
-            "SELECT engine FROM runs WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 1",
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT (SELECT engine FROM runs WHERE chat_id = c.id ORDER BY created_at DESC LIMIT 1),
+                    a.engine
+               FROM chats c LEFT JOIN agents a ON a.id = c.agent_id
+              WHERE c.id = $1",
         )
         .bind(chat_id)
         .fetch_optional(&self.db.pool)
         .await?;
+        let (last, agent) = row.unwrap_or_default();
         Ok(last
-            .filter(|e| self.engine(e).is_some())
+            .into_iter()
+            .chain(agent)
+            .find(|e| self.engine(e).is_some())
             .unwrap_or_else(|| self.default_engine()))
     }
 
     /// Create a run for a chat turn. Chat runs outrank task runs in the
     /// queue (priority 20 vs 10) so the assistant feels responsive.
+    ///
+    /// A chat with an agent runs *as* that agent: the gate is asked here, and
+    /// the run carries `agent_id`, so its limits, budgets and dispatch check
+    /// apply as they do to its cards. The assistant (no agent) needs no gate;
+    /// work it hands an agent starts through `enqueue_task`, and a manager
+    /// pass checks its agent in `routines::dispatch`.
     pub async fn enqueue_chat_turn(&self, chat_id: Uuid, engine: &str) -> anyhow::Result<Uuid> {
         self.vet_chat_turn(chat_id, engine).await?;
+        let agent: Option<Uuid> = sqlx::query_scalar("SELECT agent_id FROM chats WHERE id = $1")
+            .bind(chat_id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .flatten();
+        crate::agents::assert_can_run(&self.db, &agent.into_iter().collect::<Vec<_>>()).await?;
         let row = sqlx::query(
-            "INSERT INTO runs (chat_id, status, trigger, engine)
-             VALUES ($1, 'queued', 'chat', $2) RETURNING id",
+            "INSERT INTO runs (chat_id, status, trigger, engine, agent_id)
+             VALUES ($1, 'queued', 'chat', $2, $3) RETURNING id",
         )
         .bind(chat_id)
         .bind(engine)
+        .bind(agent)
         .fetch_one(&self.db.pool)
         .await?;
         let run_id: Uuid = row.get("id");
@@ -3282,9 +3305,14 @@ project, or run this card on an engine with a narrower mode.",
                     -- separately: this runs on every chat turn in the
                     -- application, and a manager thread is a handful of them.
                     -- NULL for all the rest, which is the common case.
-                    mg.system_prompt AS manager_persona
+                    mg.system_prompt AS manager_persona,
+                    -- The agent this conversation is with, if any.
+                    ca.id AS agent_id, ca.name AS agent_name,
+                    ca.system_prompt AS agent_prompt, ca.model_tier AS agent_tier,
+                    ca.effort AS agent_effort
              FROM runs r JOIN chats c ON c.id = r.chat_id
              LEFT JOIN projects p ON p.id = c.project_id
+             LEFT JOIN agents ca ON ca.id = c.agent_id
              LEFT JOIN (
                  routines rt JOIN agents mg ON mg.id = rt.agent_id
              ) ON rt.kind = 'manage' AND rt.chat_id = c.id
@@ -3471,8 +3499,14 @@ project, or run this card on an engine with a narrower mode.",
         // here rather than left to `unwrap_or_default`, because that is the
         // shape of accident this whole feature is guarding against: an
         // unrecognised tier quietly becoming the dearest ordinary model.
+        //
+        // With an agent, its own tier and effort answer when the chat has not
+        // been given one — what was set on the chat still wins, as it would
+        // for the assistant.
+        let agent_id: Option<Uuid> = row.get("agent_id");
         let tier: ModelTier = row
             .get::<Option<String>, _>("chat_tier")
+            .or_else(|| row.get::<Option<String>, _>("agent_tier"))
             .and_then(|t| TierChoice::parse(&t))
             .and_then(TierChoice::fixed)
             .unwrap_or(ModelTier::Medium);
@@ -3480,6 +3514,7 @@ project, or run this card on an engine with a narrower mode.",
             .resolve_effort(
                 None,
                 row.get::<Option<String>, _>("chat_effort")
+                    .or_else(|| row.get::<Option<String>, _>("agent_effort"))
                     .and_then(|e| ReasoningEffort::parse(&e)),
                 &engine_id,
                 tier,
@@ -3539,6 +3574,35 @@ project, or run this card on an engine with a narrower mode.",
                 )
             }
         };
+        // Who is answering. A chat with an agent is that agent, with what it
+        // remembers (global memories in a general chat, the project's too in
+        // a project chat); a manager thread is its manager; anything else is
+        // the assistant alone.
+        let persona = match agent_id {
+            Some(agent) => {
+                let name: String = row.get("agent_name");
+                let prompt: String = row
+                    .get::<Option<String>, _>("agent_prompt")
+                    .unwrap_or_default();
+                let mut persona = format!(
+                    "You are {name}, one of the agents in this workspace, and the \
+                     person is talking to you directly. Answer as {name}."
+                );
+                if !prompt.trim().is_empty() {
+                    persona.push_str(&format!("\n\n{prompt}"));
+                }
+                let memories = memory::recall(&self.db, agent, project_id)
+                    .await
+                    .unwrap_or_default();
+                if let Some(block) = memory::render(&memories) {
+                    persona.push_str(&block);
+                }
+                Some(persona)
+            }
+            None => row
+                .get::<Option<String>, _>("manager_persona")
+                .filter(|p| !p.trim().is_empty()),
+        };
         let spec = RunSpec {
             cwd,
             prompt: user_message,
@@ -3556,19 +3620,15 @@ project, or run this card on an engine with a narrower mode.",
             } else {
                 allowed
             },
-            // The manager's persona, after the assistant's brief and never
-            // instead of it. An agent assigned to manage a project says how it
-            // wants the job done; it does not get to redefine what the tools
-            // are or that the mutating ones are denied.
-            append_system_prompt: Some(
-                match row
-                    .get::<Option<String>, _>("manager_persona")
-                    .filter(|p| !p.trim().is_empty())
-                {
-                    Some(persona) => format!("{system_prompt}\n\n{persona}"),
-                    None => system_prompt.to_string(),
-                },
-            ),
+            // The agent's (or the manager's) persona, after the assistant's
+            // brief and never instead of it. An agent says who it is and how
+            // it wants the job done; it does not get to redefine what the
+            // tools are or that the mutating ones are denied — a chat stands
+            // in the real checkout whoever is talking.
+            append_system_prompt: Some(match persona {
+                Some(persona) => format!("{system_prompt}\n\n{persona}"),
+                None => system_prompt.to_string(),
+            }),
             mcp,
             denied_tools: {
                 let base: Vec<String> = CHAT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();

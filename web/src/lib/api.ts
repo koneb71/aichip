@@ -839,6 +839,9 @@ export interface ChatSummary {
   updatedAt: string;
   /** One conversation on one model. null resolves from the tier. */
   modelId?: string | null;
+  /** The agent this conversation is with; null is the assistant. */
+  agentId?: string | null;
+  agentName?: string | null;
 }
 
 export interface FileEntry {
@@ -3016,6 +3019,14 @@ export const api = {
       json<{ attachments: Attachment[] }>(r),
     );
   },
+  /** A general chat's uploads: it has no project, so they belong to the workspace. */
+  uploadWorkspaceAttachments: (workspaceId: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    return postForm(`/api/workspaces/${workspaceId}/attachments`, form).then((r) =>
+      json<{ attachments: Attachment[] }>(r),
+    );
+  },
   /** Only works while unclaimed — 409 once a task or message owns it. */
   deleteAttachment: (id: string) =>
     fetch(`/api/attachments/${id}`, { method: "DELETE" }).then((r) =>
@@ -3173,14 +3184,19 @@ export const api = {
     fetch(`/api/workspaces/${workspaceId}/chats`).then((r) =>
       json<{ chats: ChatSummary[] }>(r),
     ),
-  newGeneralChat: (workspaceId: string) =>
-    post(`/api/workspaces/${workspaceId}/chats/new`).then((r) => json<{ id: string }>(r)),
+  /** A new conversation — with the assistant, or with `agentId`. */
+  newGeneralChat: (workspaceId: string, agentId?: string) =>
+    post(`/api/workspaces/${workspaceId}/chats/new`, agentId ? { agent_id: agentId } : undefined).then((r) =>
+      json<{ id: string }>(r),
+    ),
   chats: (projectId: string) =>
     fetch(`/api/projects/${projectId}/chats`).then((r) =>
       json<{ chats: ChatSummary[] }>(r),
     ),
-  newChat: (projectId: string) =>
-    post(`/api/projects/${projectId}/chats/new`).then((r) => json<{ id: string }>(r)),
+  newChat: (projectId: string, agentId?: string) =>
+    post(`/api/projects/${projectId}/chats/new`, agentId ? { agent_id: agentId } : undefined).then((r) =>
+      json<{ id: string }>(r),
+    ),
   renameChat: (chatId: string, title: string) =>
     patch(`/api/chats/${chatId}`, { title }).then(json),
   // Throws on 409 when a turn is still running, so the UI can surface why.

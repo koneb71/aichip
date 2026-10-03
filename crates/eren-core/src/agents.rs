@@ -564,11 +564,6 @@ mod tests {
     /// run must ask the gate first.
     const NO_AGENT: &[(&str, &str)] = &[
         (
-            "enqueue_chat_turn",
-            "the assistant is not an agent; work it hands an agent starts through \
-             enqueue_task, and a manager pass checks its agent in routines::dispatch",
-        ),
-        (
             "enqueue_kb_article",
             "generating an article runs as no agent",
         ),

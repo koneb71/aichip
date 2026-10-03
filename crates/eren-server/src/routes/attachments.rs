@@ -55,6 +55,11 @@ pub fn router() -> Router<AppState> {
             "/projects/{id}/attachments",
             post(upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
+        // A general chat has no project; its uploads belong to the workspace.
+        .route(
+            "/workspaces/{id}/attachments",
+            post(upload_general).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route("/attachments/{id}", get(serve).delete(remove))
         .route("/tasks/{id}/attachments", get(list_for_task))
 }
@@ -126,11 +131,34 @@ fn content_matches(mime: &str, kind: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// Where an upload belongs, and so where it may be claimed: a project (a
+/// card, a project chat) or a workspace (a general chat).
+#[derive(Clone, Copy)]
+pub(crate) enum Home {
+    Project(Uuid),
+    Workspace(Uuid),
+}
+
+impl Home {
+    fn project(self) -> Option<Uuid> {
+        match self {
+            Home::Project(id) => Some(id),
+            Home::Workspace(_) => None,
+        }
+    }
+    fn workspace(self) -> Option<Uuid> {
+        match self {
+            Home::Workspace(id) => Some(id),
+            Home::Project(_) => None,
+        }
+    }
+}
+
 async fn upload(
     State(state): State<AppState>,
     caller: Caller,
     UrlPath(project_id): UrlPath<Uuid>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
     caller.require(&state, Owned::Project(project_id)).await?;
     // Check the project up front so a bogus id is a 404 rather than an FK 500.
@@ -142,7 +170,35 @@ async fn upload(
     if exists.is_none() {
         return Err((StatusCode::NOT_FOUND, "no such project".into()));
     }
+    store(&state, Home::Project(project_id), multipart).await
+}
 
+async fn upload_general(
+    State(state): State<AppState>,
+    caller: Caller,
+    UrlPath(workspace_id): UrlPath<Uuid>,
+    multipart: Multipart,
+) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
+    let exists = sqlx::query("SELECT 1 AS ok FROM workspaces WHERE id=$1")
+        .bind(workspace_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?;
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "no such workspace".into()));
+    }
+    store(&state, Home::Workspace(workspace_id), multipart).await
+}
+
+/// Validate and write every file in the upload, each to its own directory.
+async fn store(
+    state: &AppState,
+    home: Home,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, ApiError> {
     let root = core::default_root();
     let mut saved: Vec<Value> = vec![];
 
@@ -201,10 +257,11 @@ async fn upload(
 
         // Insert first so the row's id names the directory.
         let id: Uuid = sqlx::query(
-            "INSERT INTO attachments (project_id, filename, mime, kind, size_bytes, disk_path)
-             VALUES ($1,$2,$3,$4,$5,'') RETURNING id",
+            "INSERT INTO attachments (project_id, workspace_id, filename, mime, kind, size_bytes, disk_path)
+             VALUES ($1,$2,$3,$4,$5,$6,'') RETURNING id",
         )
-        .bind(project_id)
+        .bind(home.project())
+        .bind(home.workspace())
         .bind(&filename)
         .bind(mime)
         .bind(kind)
@@ -368,12 +425,12 @@ pub(crate) enum Owner {
 ///
 /// The `WHERE` clause is simultaneously the ownership check, the
 /// cross-project check, and the double-claim check: an id that belongs to
-/// another project or has already been used simply doesn't match, and the
-/// affected-row count catches it.
+/// another project or workspace, or has already been used, simply doesn't
+/// match, and the affected-row count catches it.
 pub(crate) async fn claim(
     db: &eren_core::db::Db,
     ids: &[Uuid],
-    project_id: Uuid,
+    home: Home,
     owner: Owner,
 ) -> Result<(), ApiError> {
     if ids.is_empty() {
@@ -383,13 +440,15 @@ pub(crate) async fn claim(
     let (sql, owner_id) = match owner {
         Owner::Task(id) => (
             "UPDATE attachments SET task_id = $1
-             WHERE id = ANY($2) AND project_id = $3
+             WHERE id = ANY($2) AND project_id IS NOT DISTINCT FROM $3
+               AND workspace_id IS NOT DISTINCT FROM $4
                AND task_id IS NULL AND message_id IS NULL",
             id,
         ),
         Owner::Message(id) => (
             "UPDATE attachments SET message_id = $1
-             WHERE id = ANY($2) AND project_id = $3
+             WHERE id = ANY($2) AND project_id IS NOT DISTINCT FROM $3
+               AND workspace_id IS NOT DISTINCT FROM $4
                AND task_id IS NULL AND message_id IS NULL",
             id,
         ),
@@ -397,7 +456,8 @@ pub(crate) async fn claim(
     let affected = sqlx::query(sql)
         .bind(owner_id)
         .bind(ids)
-        .bind(project_id)
+        .bind(home.project())
+        .bind(home.workspace())
         .execute(&db.pool)
         .await
         .map_err(internal)?
