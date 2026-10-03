@@ -5,6 +5,7 @@
 pub mod access;
 pub mod app_bridge;
 pub mod audit_layer;
+pub mod auth;
 pub mod mcp;
 pub mod preview_proxy;
 pub mod routes;
@@ -37,6 +38,9 @@ pub struct AppState {
     /// Who may reach the server from another machine: the extra host names,
     /// and the token they must present. Empty for a loopback-only server.
     pub access: Arc<access::Access>,
+    /// Whether accounts are on (an admin exists), and the sign-in throttle.
+    /// See [`auth`].
+    pub accounts: Arc<auth::Accounts>,
 }
 
 pub fn app(state: AppState) -> Router {
@@ -98,8 +102,16 @@ pub fn app(state: AppState) -> Router {
             state.clone(),
             preview_proxy::route_previews,
         ))
+        // Who is calling. With accounts off, everyone is the one local
+        // person and the token below decides who reaches this; with accounts
+        // on, this is the gate and the token steps aside.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ))
         // Outermost: from another machine, nothing — not the API, the socket,
-        // a preview or an app's bridge — answers without the access token.
+        // a preview or an app's bridge — answers without the access token,
+        // while accounts are off.
         .layer(middleware::from_fn_with_state(
             state.clone(),
             access::require_token,

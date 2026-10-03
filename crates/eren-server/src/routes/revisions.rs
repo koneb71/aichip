@@ -7,12 +7,14 @@
 //! revision of what it replaced — undoing an undo is one more click.
 
 use super::{internal, require_write, ApiError};
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::revisions::{self, EntityKind};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -35,9 +37,11 @@ fn kind_of(s: &str) -> Result<EntityKind, ApiError> {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(q): Query<ListQ>,
 ) -> Result<Json<Value>, ApiError> {
     let kind = kind_of(&q.kind)?;
+    require_entity(&state, &caller, kind, &q.id, false).await?;
     let revs = revisions::list(&state.db, kind, &q.id)
         .await
         .map_err(internal)?;
@@ -46,6 +50,47 @@ async fn list(
 
 fn uuid(id: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(id).map_err(|_| (StatusCode::BAD_REQUEST, "not an id".to_string()))
+}
+
+/// Refuse unless the entity a history belongs to is the caller's: the
+/// machine's settings are the admin's, anything else resolves to the
+/// workspace it lives in. Before any revision is read — a snapshot is the
+/// whole row, as private as the thing itself.
+async fn require_entity(
+    state: &AppState,
+    caller: &Caller,
+    kind: EntityKind,
+    id: &str,
+    write: bool,
+) -> Result<(), ApiError> {
+    // Accounts off: everything is the one person's, and an id that is not a
+    // uuid answers as it always did (an empty history, a 404 on restore).
+    if matches!(caller, Caller::Local) {
+        return Ok(());
+    }
+    let what = match kind {
+        EntityKind::Attention | EntityKind::Unattended => {
+            return if caller.is_admin() {
+                Ok(())
+            } else {
+                Err((
+                    StatusCode::FORBIDDEN,
+                    "Only the admin can see or change this; it belongs to the whole machine."
+                        .into(),
+                ))
+            };
+        }
+        EntityKind::BudgetPolicy => {
+            return super::budgets::require_policy(state, caller, uuid(id)?, write).await;
+        }
+        EntityKind::Agent => Owned::Agent(uuid(id)?),
+        EntityKind::Team => Owned::Team(uuid(id)?),
+        EntityKind::Routine => Owned::Routine(uuid(id)?),
+        EntityKind::Skill => Owned::Skill(uuid(id)?),
+        // Both are keyed by their project.
+        EntityKind::ProjectChecks | EntityKind::ReviewPolicy => Owned::Project(uuid(id)?),
+    };
+    caller.require(state, what).await
 }
 
 fn body<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ApiError> {
@@ -59,6 +104,7 @@ fn body<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ApiError> {
 
 async fn restore(
     State(state): State<AppState>,
+    caller: Caller,
     Path(rev): Path<i64>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
@@ -67,6 +113,12 @@ async fn restore(
         .await
         .map_err(internal)?
         .ok_or((StatusCode::NOT_FOUND, "no such revision".to_string()))?;
+    // Checked here, before the entity is read. A handler that takes a
+    // caller is handed this one and checks again, along with whatever the
+    // snapshot names (a manager's project, a budget's scope); an agent's and
+    // a team's `update` are their routes' caller-free core, so this check is
+    // theirs — and a snapshot only names what that row once held.
+    require_entity(&state, &caller, kind, &id, true).await?;
     if revisions::current(&state.db, kind, &id)
         .await
         .map_err(internal)?
@@ -105,8 +157,13 @@ async fn restore(
                 "maxPassesPerDay": snap["max_passes_per_day"],
                 "goalId": snap["goal_id"],
             });
-            let Json(_) =
-                super::manager::upsert(s, Path(uuid(project)?), Json(body(mapped)?)).await?;
+            let Json(_) = super::manager::upsert(
+                s,
+                caller.clone(),
+                Path(uuid(project)?),
+                Json(body(mapped)?),
+            )
+            .await?;
         }
         EntityKind::Routine => {
             let mapped = json!({
@@ -120,25 +177,53 @@ async fn restore(
                 "modelTier": snap["model_tier"],
                 "effort": snap["effort"],
             });
-            let Json(_) = super::routines::update(s, Path(uuid(&id)?), Json(body(mapped)?)).await?;
+            let Json(_) =
+                super::routines::update(s, caller.clone(), Path(uuid(&id)?), Json(body(mapped)?))
+                    .await?;
         }
         EntityKind::Skill => {
-            let Json(_) = super::skills::update(s, Path(uuid(&id)?), Json(body(snap)?)).await?;
+            let Json(_) =
+                super::skills::update(s, caller.clone(), Path(uuid(&id)?), Json(body(snap)?))
+                    .await?;
         }
         EntityKind::ProjectChecks => {
             // Through `routes/checks.rs`, the one writer of check commands.
-            let Json(_) =
-                super::checks::put_config(s, Path(uuid(&id)?), headers, Json(body(snap)?)).await?;
+            let Json(_) = super::checks::put_config(
+                s,
+                caller.clone(),
+                Path(uuid(&id)?),
+                headers,
+                Json(body(snap)?),
+            )
+            .await?;
         }
         EntityKind::BudgetPolicy => {
-            let Json(_) =
-                super::budgets::update(s, Path(uuid(&id)?), headers, Json(body(snap)?)).await?;
+            let Json(_) = super::budgets::update(
+                s,
+                caller.clone(),
+                Path(uuid(&id)?),
+                headers,
+                Json(body(snap)?),
+            )
+            .await?;
         }
         EntityKind::Attention => {
-            let Json(_) = super::settings::set_attention(s, headers, Json(body(snap)?)).await?;
+            let Json(_) = super::settings::set_attention(
+                s,
+                Admin(caller.clone()),
+                headers,
+                Json(body(snap)?),
+            )
+            .await?;
         }
         EntityKind::Unattended => {
-            let Json(_) = super::settings::set_unattended(s, headers, Json(body(snap)?)).await?;
+            let Json(_) = super::settings::set_unattended(
+                s,
+                Admin(caller.clone()),
+                headers,
+                Json(body(snap)?),
+            )
+            .await?;
         }
         EntityKind::ReviewPolicy => {
             // Through `routes/reviews.rs`, the one writer of review policies.
@@ -150,9 +235,14 @@ async fn restore(
                 "requirePrGreen": snap["require_pr_green"],
                 "runChecksAfterEveryRun": snap["run_checks_after_every_run"],
             });
-            let Json(_) =
-                super::reviews::put_policy(s, Path(uuid(&id)?), headers, Json(body(mapped)?))
-                    .await?;
+            let Json(_) = super::reviews::put_policy(
+                s,
+                caller.clone(),
+                Path(uuid(&id)?),
+                headers,
+                Json(body(mapped)?),
+            )
+            .await?;
         }
     }
     Ok(Json(

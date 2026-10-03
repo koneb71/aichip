@@ -22,12 +22,15 @@
 //! Wire protocol: binary frames are bytes (both directions); text frames are
 //! control JSON, currently only `{"resize":{"cols":N,"rows":N}}`.
 
+use super::ApiError;
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
+use eren_core::scope::Owned;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
 use sqlx::Row;
@@ -51,9 +54,13 @@ struct Size {
 
 async fn open(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
+    // Before the upgrade, while the refusal can still be a status code
+    // rather than a socket that opens and says nothing.
+    caller.require(&state, Owned::Project(project_id)).await?;
     let path: Option<String> = sqlx::query("SELECT path FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&state.db.pool)
@@ -61,7 +68,7 @@ async fn open(
         .ok()
         .flatten()
         .map(|r| r.get("path"));
-    ws.on_upgrade(move |socket| session(socket, path))
+    Ok(ws.on_upgrade(move |socket| session(socket, path)))
 }
 
 /// The user's shell, the way their terminal would start it.

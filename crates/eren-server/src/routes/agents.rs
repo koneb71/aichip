@@ -1,10 +1,12 @@
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use eren_core::runs::utility::{extract_json, utility_run};
+use eren_core::scope::Owned;
 use eren_shared::{ModelTier, ReasoningEffort};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -16,7 +18,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/agents", get(list).post(create))
         .route("/agents/generate", post(generate))
-        .route("/agents/{id}", patch(update).delete(remove))
+        .route("/agents/{id}", patch(patch_agent).delete(remove))
         .route("/agents/{id}/pause", post(pause))
         .route("/agents/{id}/resume", post(resume))
         .route("/agents/{id}/retire", post(retire))
@@ -30,8 +32,10 @@ pub fn router() -> Router<AppState> {
 /// An agent's recent heartbeats: what each one did.
 async fn heartbeats(
     State(state): State<AppState>,
+    caller: Caller,
     Path(agent): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(agent)).await?;
     let beats = eren_core::heartbeat::recent(&state.db, agent, 50)
         .await
         .map_err(internal)?;
@@ -41,8 +45,10 @@ async fn heartbeats(
 /// Beats across the workspace that started or fired something.
 async fn workspace_heartbeats(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workspace(workspace)).await?;
     let beats = eren_core::heartbeat::recent_in(&state.db, workspace, 20)
         .await
         .map_err(internal)?;
@@ -54,8 +60,10 @@ async fn workspace_heartbeats(
 /// The workspace's agents as a reporting tree, with what each is doing.
 async fn org_chart(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workspace(workspace)).await?;
     let nodes = eren_core::org_chart::chart(&state.db, workspace)
         .await
         .map_err(internal)?;
@@ -68,8 +76,10 @@ async fn org_chart(
 /// user can see (and prune) what will be fed into its next runs.
 async fn memories(
     State(state): State<AppState>,
+    caller: Caller,
     Path(agent_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(agent_id)).await?;
     let rows = sqlx::query(
         "SELECT m.id, m.kind, m.content, m.created_at, p.name AS project_name
          FROM agent_memories m LEFT JOIN projects p ON p.id = m.project_id
@@ -93,8 +103,10 @@ async fn memories(
 /// Forget one memory. The user owns the agent's memory, not the agent.
 async fn forget(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::AgentMemory(id)).await?;
     sqlx::query("DELETE FROM agent_memories WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -140,12 +152,15 @@ struct WsFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<WsFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let rows = sqlx::query(
-        "SELECT * FROM agents WHERE $1::uuid IS NULL OR workspace_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM agents WHERE $1::uuid[] IS NULL OR workspace_id = ANY($1)
+          ORDER BY created_at ASC",
     )
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -213,8 +228,12 @@ fn default_color() -> String {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<AgentBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
     }
@@ -302,6 +321,23 @@ where
     T: serde::Deserialize<'de>,
 {
     serde::Deserialize::deserialize(de).map(Some)
+}
+
+/// The route's door to [`update`], which a revision restore also calls once it
+/// has checked the agent itself. The manager is checked here as well as by the
+/// chart: the chart asks "same workspace?", this asks "yours?" — and answers
+/// someone else's agent with the same 404 as one that does not exist.
+async fn patch_agent(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AgentPatch>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(id)).await?;
+    if let Some(Some(manager)) = body.reports_to {
+        caller.require(&state, Owned::Agent(manager)).await?;
+    }
+    update(State(state), Path(id), Json(body)).await
 }
 
 pub(crate) async fn update(
@@ -418,8 +454,10 @@ pub(crate) async fn update(
 /// so a table added later cannot bring the 500 back.
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(id)).await?;
     eren_core::revisions::keep(
         &state.db,
         eren_core::revisions::EntityKind::Agent,
@@ -462,9 +500,11 @@ struct PauseBody {
 
 async fn pause(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: Option<Json<PauseBody>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(id)).await?;
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let stopped = state
         .orchestrator
@@ -476,8 +516,10 @@ async fn pause(
 
 async fn resume(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(id)).await?;
     state
         .orchestrator
         .resume_agent(id)
@@ -488,8 +530,10 @@ async fn resume(
 
 async fn retire(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(id)).await?;
     let stopped = state
         .orchestrator
         .retire_agent(id)
@@ -526,8 +570,11 @@ Tier guide: easy=mechanical work (Sonnet), medium=typical coding (Opus), complex
 
 User's need: "##;
 
+/// Touches no workspace: it only drafts definitions for a person to save
+/// through `create`, which checks the workspace then.
 async fn generate(
     State(state): State<AppState>,
+    _caller: Caller,
     Json(body): Json<GenerateBody>,
 ) -> Result<Json<Value>, ApiError> {
     if body.description.trim().is_empty() {

@@ -11,11 +11,13 @@
 //! awaited — the button exists to answer "did it work".
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -34,8 +36,14 @@ pub fn router() -> Router<AppState> {
 ///
 /// A space already has its own document index on the same tables; running the
 /// code enumerator over it would fight that. Returning the project's path is
-/// how every caller here proves the project exists at the same time.
-async fn repo_project(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
+/// how every caller here proves the project exists at the same time — and,
+/// first, that it is the caller's: someone else's answers as a missing one.
+async fn repo_project(
+    state: &AppState,
+    caller: &Caller,
+    project_id: Uuid,
+) -> Result<String, ApiError> {
+    caller.require(state, Owned::Project(project_id)).await?;
     let row = sqlx::query("SELECT path, kind FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&state.db.pool)
@@ -58,9 +66,10 @@ async fn repo_project(state: &AppState, project_id: Uuid) -> Result<String, ApiE
 /// for a space. Spawned, so opening the page never waits on a reconcile.
 async fn status(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    repo_project(&state, project_id).await?;
+    repo_project(&state, &caller, project_id).await?;
 
     let row = sqlx::query(
         "SELECT phase, head_sha, structure_version, files_total, files_parsed,
@@ -129,9 +138,10 @@ async fn status(
 /// and not a quietly truncated one.
 async fn graph(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    repo_project(&state, project_id).await?;
+    repo_project(&state, &caller, project_id).await?;
 
     // Degrees come from the edge table rather than from counting client-side:
     // the number a node is sized by has to be the same number the inspector
@@ -213,10 +223,11 @@ struct FileQuery {
 /// 890 symbols are worth ~50KB that nobody looks at until they click.
 async fn file(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     axum::extract::Query(q): axum::extract::Query<FileQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    repo_project(&state, project_id).await?;
+    repo_project(&state, &caller, project_id).await?;
     let doc: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM project_documents WHERE project_id = $1 AND rel_path = $2",
     )
@@ -305,10 +316,11 @@ struct SearchBody {
 /// in a URL ends up in access logs and in shell history.
 async fn search(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     Json(body): Json<SearchBody>,
 ) -> Result<Json<Value>, ApiError> {
-    repo_project(&state, project_id).await?;
+    repo_project(&state, &caller, project_id).await?;
     // Never gated on `embed::status()`. It reports what this process has asked
     // the embedder for, and the embedder only loads when something asks — so a
     // pre-check refuses every search after a restart, on an index that is
@@ -339,9 +351,10 @@ async fn search(
 /// Read it all again, now, and say what happened.
 async fn reindex(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    repo_project(&state, project_id).await?;
+    repo_project(&state, &caller, project_id).await?;
     let report = eren_core::repo::index::reconcile(&state.db, project_id)
         .await
         .map_err(internal)?;

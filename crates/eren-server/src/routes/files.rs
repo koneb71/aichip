@@ -11,8 +11,9 @@
 //!
 //! ## The four gates on a write
 //!
-//! This server binds loopback and has no authentication of any kind, so every
-//! one of these is load bearing:
+//! Before any of them, the project or card must be the caller's
+//! (`Caller::require`). With accounts off that passes for everyone and the
+//! server binds loopback with no login, so every one of these is load bearing:
 //!
 //! 1. **No path may contain a `.git` component.** `SKIP_DIRS` hides `.git` from
 //!    *listing* only; a crafted `path=.git/hooks/pre-commit` would otherwise go
@@ -35,12 +36,14 @@
 //!    `Origin` check in `lib.rs`.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -169,36 +172,44 @@ struct PathQuery {
 
 async fn list_project(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let tree = project_tree(&state, id).await?;
     list_in(&tree.path, q).await
 }
 
 async fn list_task(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let tree = task_tree(&state, id).await?;
     list_in(&tree.path, q).await
 }
 
 async fn read_project(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let tree = project_tree(&state, id).await?;
     read_in(&tree, q).await
 }
 
 async fn read_task(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let tree = task_tree(&state, id).await?;
     read_in(&tree, q).await
 }
@@ -329,20 +340,24 @@ struct WriteBody {
 
 async fn write_project(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     headers: HeaderMap,
     Json(body): Json<WriteBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let tree = project_tree(&state, id).await?;
     write_in(&state, &tree, headers, body).await
 }
 
 async fn write_task(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
     headers: HeaderMap,
     Json(body): Json<WriteBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let tree = task_tree(&state, id).await?;
     write_in(&state, &tree, headers, body).await
 }
@@ -624,9 +639,11 @@ fn is_subsequence(haystack: &str, needle: &str) -> bool {
 
 async fn search(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(project_id): UrlPath<Uuid>,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let root = project_root(&state, project_id).await?;
     let needle = q.q.trim().to_ascii_lowercase();
     if needle.is_empty() {

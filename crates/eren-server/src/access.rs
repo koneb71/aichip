@@ -278,6 +278,10 @@ pub async fn require_token(
     req: Request,
     next: Next,
 ) -> Response {
+    // With accounts on, every caller signs in instead (see `crate::auth`).
+    if state.accounts.is_on(&state.db).await {
+        return next.run(req).await;
+    }
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()

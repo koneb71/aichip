@@ -6,11 +6,13 @@
 //! usable again after someone deletes the article in the knowledge base.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -42,11 +44,18 @@ const LATEST_RUN: &str = "LEFT JOIN LATERAL (
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<ListFilter>,
 ) -> Result<Json<Value>, ApiError> {
     let (where_clause, key) = match (filter.project_id, filter.workspace_id) {
-        (Some(p), _) => ("rs.project_id = $1", p),
-        (None, Some(w)) => ("rs.workspace_id = $1 AND rs.project_id IS NULL", w),
+        (Some(p), _) => {
+            caller.require(&state, Owned::Project(p)).await?;
+            ("rs.project_id = $1", p)
+        }
+        (None, Some(w)) => {
+            caller.require(&state, Owned::Workspace(w)).await?;
+            ("rs.workspace_id = $1 AND rs.project_id IS NULL", w)
+        }
         (None, None) => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -101,8 +110,15 @@ struct Create {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<Create>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require_opt(&state, body.project_id, Owned::Project)
+        .await?;
+    caller
+        .require_opt(&state, body.workspace_id, Owned::Workspace)
+        .await?;
     if body.question.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "say what to research".into()));
     }
@@ -124,7 +140,12 @@ async fn create(
 /// Everything the detail view needs in one response: the question, the
 /// report if there is one, and where the latest run stands — so the page can
 /// decide live-view vs report-view without a second request.
-async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+async fn one(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Research(id)).await?;
     let row = sqlx::query(&format!(
         "SELECT rs.id, rs.project_id, rs.question, rs.title, rs.report_md,
                 rs.kb_article_id, rs.created_at, rs.updated_at,
@@ -170,9 +191,11 @@ struct Rerun {
 /// completion — a research has one current answer, not a history of them.
 async fn rerun(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: Option<Json<Rerun>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Research(id)).await?;
     let live: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM runs WHERE research_id = $1
                          AND status NOT IN ('completed','failed','canceled'))",
@@ -212,8 +235,10 @@ async fn rerun(
 /// the task drawer's cancel uses.
 async fn cancel(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Research(id)).await?;
     let run_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM runs WHERE research_id = $1
           AND status NOT IN ('completed','failed','canceled')
@@ -233,8 +258,10 @@ async fn cancel(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Research(id)).await?;
     // A live run first: its engine process would otherwise keep streaming
     // into runs rows the CASCADE is about to delete.
     let live: Option<Uuid> = sqlx::query_scalar(
@@ -268,8 +295,10 @@ async fn remove(
 /// then `revisions::save_edit` — never a bare UPDATE.
 async fn save_to_kb(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Research(id)).await?;
     let row = sqlx::query(
         "SELECT rs.question, rs.title, rs.report_md, rs.kb_article_id, rs.project_id,
                 COALESCE(p.workspace_id, rs.workspace_id) AS workspace_id

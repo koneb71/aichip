@@ -1,10 +1,12 @@
 use super::{attachments, internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use eren_core::runs::mentions;
+use eren_core::scope::Owned;
 use eren_shared::{ModelTier, ReasoningEffort};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,8 +39,10 @@ pub fn router() -> Router<AppState> {
 
 async fn list_chats(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let rows = sqlx::query(
         "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
@@ -71,8 +75,10 @@ async fn list_chats(
 /// assistant starts without the previous thread's context.
 async fn new_chat(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let row = sqlx::query("INSERT INTO chats (project_id) VALUES ($1) RETURNING id")
         .bind(project_id)
         .fetch_one(&state.db.pool)
@@ -90,8 +96,12 @@ async fn new_chat(
 
 async fn list_general(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     let rows = sqlx::query(
         "SELECT c.id, c.title, c.updated_at, c.model_tier, c.effort, c.plan_mode, c.model_id,
                 (SELECT count(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
@@ -122,8 +132,12 @@ async fn list_general(
 
 async fn open_general(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     if let Some(row) = sqlx::query(
         "SELECT id FROM chats WHERE workspace_id=$1 AND project_id IS NULL
          ORDER BY updated_at DESC LIMIT 1",
@@ -145,8 +159,12 @@ async fn open_general(
 
 async fn new_general(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     let row = sqlx::query("INSERT INTO chats (workspace_id) VALUES ($1) RETURNING id")
         .bind(workspace_id)
         .fetch_one(&state.db.pool)
@@ -162,9 +180,11 @@ struct RenameBody {
 
 async fn rename_chat(
     State(state): State<AppState>,
+    caller: Caller,
     Path(chat_id): Path<Uuid>,
     Json(body): Json<RenameBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Chat(chat_id)).await?;
     let title = body.title.trim();
     if title.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "title is empty".into()));
@@ -180,8 +200,10 @@ async fn rename_chat(
 
 async fn delete_chat(
     State(state): State<AppState>,
+    caller: Caller,
     Path(chat_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Chat(chat_id)).await?;
     // A chat mid-turn owns a running CLI process; deleting the row would
     // orphan it and the run would write back to a chat that no longer exists.
     if active_run(&state, chat_id).await?.is_some() {
@@ -202,8 +224,10 @@ async fn delete_chat(
 /// the project has none (one primary chat per project for now).
 async fn open_chat(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     if let Some(row) =
         sqlx::query("SELECT id FROM chats WHERE project_id=$1 ORDER BY updated_at DESC LIMIT 1")
             .bind(project_id)
@@ -223,8 +247,10 @@ async fn open_chat(
 
 async fn messages(
     State(state): State<AppState>,
+    caller: Caller,
     Path(chat_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Chat(chat_id)).await?;
     let rows = sqlx::query(
         // One aggregate rather than a query per message: the panel polls this
         // every 2.5s, so an N+1 here would be felt.
@@ -310,9 +336,13 @@ struct AnswerQuestion {
 /// Answer a clarifying question, and start the turn that reads the answer.
 async fn answer_question(
     State(state): State<AppState>,
+    caller: Caller,
     Path((chat_id, question_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<AnswerQuestion>,
 ) -> Result<Json<Value>, ApiError> {
+    // The question is matched with `chat_id` where it is answered, so the
+    // chat is the check.
+    caller.require(&state, Owned::Chat(chat_id)).await?;
     let turn = eren_core::approvals::answer_chat_question(
         &state.orchestrator,
         chat_id,
@@ -340,9 +370,14 @@ struct ApprovePlan {
 /// `eren_core::approvals::approve_chat_plan`.
 async fn approve_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path((chat_id, message_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<ApprovePlan>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Chat(chat_id)).await?;
+    caller
+        .require(&state, Owned::ChatMessage(message_id))
+        .await?;
     let turn = eren_core::approvals::approve_chat_plan(
         &state.orchestrator,
         chat_id,
@@ -403,9 +438,11 @@ struct SendBody {
 
 async fn send(
     State(state): State<AppState>,
+    caller: Caller,
     Path(chat_id): Path<Uuid>,
     Json(body): Json<SendBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Chat(chat_id)).await?;
     // "Look at this screenshot" with no words is a legitimate turn, so only
     // reject a message that is empty *and* carries nothing.
     if body.content.trim().is_empty()
@@ -413,6 +450,15 @@ async fn send(
         && body.article_ids.is_empty()
     {
         return Err((StatusCode::BAD_REQUEST, "message is empty".into()));
+    }
+    // Before anything is written. The claim and `record_for_message` below
+    // also scope these to the chat's project and workspace; this answers
+    // someone else's file or page with the same 404 as a missing one.
+    for id in &body.attachment_ids {
+        caller.require(&state, Owned::Attachment(*id)).await?;
+    }
+    for id in &body.article_ids {
+        caller.require(&state, Owned::KbArticle(*id)).await?;
     }
     // Remembered on the chat, not the turn — see SendBody. `coalesce` so a
     // client that only sends `content` does not silently reset the choice.

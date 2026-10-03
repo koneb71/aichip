@@ -6,12 +6,14 @@
 //! place the feedback is cheap.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use eren_core::mcp_servers::{check_env, slug_name};
+use eren_core::scope::Owned;
 use eren_shared::env_guard;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -74,8 +76,12 @@ const COLUMNS: &str = "id, name, transport, command, args, env, url, headers, en
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(q.workspace_id))
+        .await?;
     let rows = sqlx::query(&format!(
         "SELECT {COLUMNS} FROM mcp_servers WHERE workspace_id = $1 ORDER BY name"
     ))
@@ -118,11 +124,15 @@ fn validate(body: &ServerBody) -> Result<(String, String), ApiError> {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<ServerBody>,
 ) -> Result<Json<Value>, ApiError> {
     let workspace_id = body
         .workspace_id
         .ok_or_else(|| bad("workspace_id is required"))?;
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     let (name, transport) = validate(&body)?;
 
     let row = sqlx::query(&format!(
@@ -154,9 +164,11 @@ async fn create(
 
 async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<ServerBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::McpServer(id)).await?;
     if let Some(env) = &body.env {
         check_env(env).map_err(|e| bad(e.to_string()))?;
     }
@@ -204,8 +216,10 @@ async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::McpServer(id)).await?;
     sqlx::query("DELETE FROM mcp_servers WHERE id = $1")
         .bind(id)
         .execute(&state.db.pool)
@@ -221,8 +235,10 @@ async fn remove(
 /// failed agent run is far harder to read.
 async fn test(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::McpServer(id)).await?;
     let row = sqlx::query(&format!("SELECT {COLUMNS} FROM mcp_servers WHERE id = $1"))
         .bind(id)
         .fetch_optional(&state.db.pool)
@@ -390,8 +406,10 @@ fn tools_from_reply(line: &str) -> Option<Vec<String>> {
 
 async fn for_agent(
     State(state): State<AppState>,
+    caller: Caller,
     Path(agent_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(agent_id)).await?;
     let ids: Vec<Uuid> =
         sqlx::query_scalar("SELECT server_id FROM agent_mcp_servers WHERE agent_id = $1")
             .bind(agent_id)
@@ -410,9 +428,16 @@ struct AgentServers {
 /// checkboxes, and a diffing API would only invite the two to disagree.
 async fn set_for_agent(
     State(state): State<AppState>,
+    caller: Caller,
     Path(agent_id): Path<Uuid>,
     Json(body): Json<AgentServers>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Agent(agent_id)).await?;
+    // Each server too: handing an agent someone else's server would run
+    // their command, with their headers, inside this agent's runs.
+    for id in &body.server_ids {
+        caller.require(&state, Owned::McpServer(*id)).await?;
+    }
     let mut tx = state.db.pool.begin().await.map_err(internal)?;
     sqlx::query("DELETE FROM agent_mcp_servers WHERE agent_id = $1")
         .bind(agent_id)

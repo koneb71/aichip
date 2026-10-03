@@ -2,6 +2,7 @@
 //! machine; browsing is still sandboxed to one root and directory names only.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::Query;
 use axum::http::StatusCode;
@@ -43,7 +44,7 @@ struct ListQuery {
     path: Option<String>,
 }
 
-async fn list(Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+async fn list(_caller: Caller, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
     let home = browse_root();
     let requested = q.path.map(PathBuf::from).unwrap_or_else(|| home.clone());
     let Some(path) = sandboxed(&home, &requested) else {
@@ -105,7 +106,7 @@ struct MkdirBody {
 /// Browsing could only ever *find* a folder, so starting something new meant
 /// leaving the app for a terminal. The new directory is created inside the
 /// sandbox and returned, ready to be loaded as a project.
-async fn mkdir(Json(body): Json<MkdirBody>) -> Result<Json<Value>, ApiError> {
+async fn mkdir(_caller: Caller, Json(body): Json<MkdirBody>) -> Result<Json<Value>, ApiError> {
     let home = browse_root();
     let Some(parent) = sandboxed(&home, Path::new(&body.parent)) else {
         return Err((
@@ -158,7 +159,7 @@ struct GitInitBody {
     path: String,
 }
 
-async fn git_init(Json(body): Json<GitInitBody>) -> Result<Json<Value>, ApiError> {
+async fn git_init(_caller: Caller, Json(body): Json<GitInitBody>) -> Result<Json<Value>, ApiError> {
     let home = browse_root();
     let Some(path) = sandboxed(&home, Path::new(&body.path)) else {
         return Err((

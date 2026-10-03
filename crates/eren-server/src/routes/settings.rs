@@ -6,6 +6,7 @@
 //! depends on the user's plan and appetite, and used to be hard-coded.
 
 use super::{internal, ApiError};
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -38,7 +39,7 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn get_models(State(state): State<AppState>) -> Json<Value> {
+async fn get_models(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let mapping = state.orchestrator.tier_mapping();
     let efforts = state.orchestrator.tier_efforts();
     // One column per engine that is actually installed. An engine the user
@@ -152,6 +153,7 @@ struct TierRow {
 
 async fn set_models(
     State(state): State<AppState>,
+    _admin: Admin,
     Json(body): Json<ModelsBody>,
 ) -> Result<Json<Value>, ApiError> {
     let mut mapping = BTreeMap::new();
@@ -233,18 +235,26 @@ async fn set_models(
 }
 
 /// How much freedom new work gets by default.
-async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
+async fn get_permissions(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> Result<Json<Value>, ApiError> {
     // How many agents pin their own mode. A bound agent's preset overrides
     // the default, so this number is exactly "how many agents will ignore
     // the setting above" — worth showing rather than leaving to be discovered
-    // when a run stops to ask anyway.
-    let overriding: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agents WHERE permission_preset IS NOT NULL")
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0);
+    // when a run stops to ask anyway. Counted among the caller's own agents:
+    // someone else's are neither theirs to see nor to clear.
+    let mine = caller.workspaces(&state).await?;
+    let overriding: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agents WHERE permission_preset IS NOT NULL
+            AND ($1::uuid[] IS NULL OR workspace_id = ANY($1))",
+    )
+    .bind(mine)
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
 
-    Json(json!({
+    Ok(Json(json!({
         "agentsOverriding": overriding,
         "defaultMode": state.orchestrator.default_permission_mode().await,
         "modes": [
@@ -255,7 +265,7 @@ async fn get_permissions(State(state): State<AppState>) -> Json<Value> {
             { "id": "full_auto", "label": "Don't ask",
               "blurb": "Work straight through. Needs a git project that opted in, because the run is isolated in a worktree you review before merging." },
         ],
-    }))
+    })))
 }
 
 #[derive(Deserialize)]
@@ -270,16 +280,24 @@ struct EffortBody {
     default_effort: Option<ReasoningEffort>,
 }
 
-async fn get_effort(State(state): State<AppState>) -> Json<Value> {
+async fn get_effort(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> Result<Json<Value>, ApiError> {
     // Agents carrying their own budget outrank this, exactly as they do for
     // permissions — worth counting here rather than leaving it to be discovered
-    // when a card thinks harder or less hard than the setting says.
-    let overriding: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agents WHERE effort IS NOT NULL")
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0);
-    Json(json!({
+    // when a card thinks harder or less hard than the setting says. Among the
+    // caller's own agents, as for permissions.
+    let mine = caller.workspaces(&state).await?;
+    let overriding: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agents WHERE effort IS NOT NULL
+            AND ($1::uuid[] IS NULL OR workspace_id = ANY($1))",
+    )
+    .bind(mine)
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
+    Ok(Json(json!({
         "agentsOverriding": overriding,
         "defaultEffort": state.orchestrator.default_effort().await,
         "levels": [
@@ -289,11 +307,12 @@ async fn get_effort(State(state): State<AppState>) -> Json<Value> {
             { "id": "xhigh",  "label": "Extra high", "blurb": "Slower and dearer; for genuinely hard problems." },
             { "id": "max",    "label": "Maximum", "blurb": "As much as the CLI will give. Expect long waits." }
         ]
-    }))
+    })))
 }
 
 async fn set_effort(
     State(state): State<AppState>,
+    _admin: Admin,
     Json(body): Json<EffortBody>,
 ) -> Result<Json<Value>, ApiError> {
     state
@@ -306,6 +325,7 @@ async fn set_effort(
 
 async fn set_permissions(
     State(state): State<AppState>,
+    _admin: Admin,
     Json(body): Json<PermissionsBody>,
 ) -> Result<Json<Value>, ApiError> {
     state
@@ -326,7 +346,10 @@ async fn set_permissions(
 /// agents when the default changes — which would quietly widen what a
 /// carefully-configured agent may do — this is an explicit action the user
 /// takes once.
-async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn apply_to_agents(
+    State(state): State<AppState>,
+    _admin: Admin,
+) -> Result<Json<Value>, ApiError> {
     let cleared = sqlx::query(
         "UPDATE agents SET permission_preset = NULL WHERE permission_preset IS NOT NULL",
     )
@@ -339,13 +362,14 @@ async fn apply_to_agents(State(state): State<AppState>) -> Result<Json<Value>, A
 
 /// What Eren does about runs that stop showing signs of life. See
 /// `eren_core::reaper`.
-async fn get_unattended(State(state): State<AppState>) -> Json<Value> {
+async fn get_unattended(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let u = eren_core::reaper::load(&state.db).await;
     Json(json!({ "unattended": u, "maxSilenceMinutes": eren_core::reaper::MAX_SILENCE_MINUTES }))
 }
 
 pub(crate) async fn set_unattended(
     State(state): State<AppState>,
+    Admin(caller): Admin,
     headers: HeaderMap,
     Json(body): Json<eren_core::reaper::Unattended>,
 ) -> Result<Json<Value>, ApiError> {
@@ -359,7 +383,7 @@ pub(crate) async fn set_unattended(
     eren_core::reaper::save(&state.db, body)
         .await
         .map_err(internal)?;
-    Ok(get_unattended(State(state)).await)
+    Ok(get_unattended(State(state), caller).await)
 }
 
 /// The most dangerous write in the app.
@@ -367,7 +391,7 @@ pub(crate) async fn set_unattended(
 /// The stored value is a shell command this server will execute, so anything
 /// that can reach this endpoint has remote code execution. It carries the same
 /// header gate every dashboard write carries — see `super::require_write`.
-async fn get_attention(State(state): State<AppState>) -> Json<Value> {
+async fn get_attention(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let a = eren_core::attention::load(&state.db).await;
     Json(attention_json(&a, None))
 }
@@ -383,6 +407,7 @@ pub(crate) struct AttentionBody {
 
 pub(crate) async fn set_attention(
     State(state): State<AppState>,
+    _admin: Admin,
     headers: HeaderMap,
     Json(body): Json<AttentionBody>,
 ) -> Result<Json<Value>, ApiError> {

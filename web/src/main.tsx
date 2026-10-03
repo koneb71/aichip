@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceProvider } from "./lib/workspace";
+import { AuthProvider } from "./lib/auth";
 import { ActivityProvider } from "./lib/activity";
 import { ModelsProvider } from "./lib/models";
 import { EnginesProvider } from "./lib/engines";
@@ -25,6 +26,7 @@ import InboxPage from "./pages/InboxPage";
 import AuditPage from "./pages/AuditPage";
 import OrgChartPage from "./pages/OrgChartPage";
 import GoalsPage from "./pages/GoalsPage";
+import UsersPage from "./pages/UsersPage";
 import { InboxProvider } from "./lib/inbox";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -46,6 +48,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>
     <TooltipProvider>
+    <AuthProvider>
     <WorkspaceProvider>
       <EnginesProvider>
       <ModelsProvider>
@@ -87,6 +90,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="connections" element={<ConnectionsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="audit" element={<AuditPage />} />
+              <Route path="users" element={<UsersPage />} />
               <Route path="org" element={<OrgChartPage />} />
               <Route path="goals" element={<GoalsPage />} />
               <Route path="teams" element={<TeamsPage />} />
@@ -99,6 +103,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       </ModelsProvider>
       </EnginesProvider>
     </WorkspaceProvider>
+    </AuthProvider>
     </TooltipProvider>
     </ThemeProvider>
   </React.StrictMode>,

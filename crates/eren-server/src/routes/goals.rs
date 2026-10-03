@@ -1,6 +1,7 @@
 //! Goals: the tree, one goal's page, and pointing cards at them.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -8,6 +9,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use eren_core::goals::{self, GoalPatch, NewGoal, Refused};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -29,8 +31,10 @@ fn refused(r: Refused) -> ApiError {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workspace(workspace)).await?;
     let goals = goals::list(&state.db, workspace).await.map_err(internal)?;
     Ok(Json(
         json!({ "goals": goals, "maxDepth": goals::MAX_DEPTH }),
@@ -51,9 +55,14 @@ struct CreateBody {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace): Path<Uuid>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workspace(workspace)).await?;
+    caller
+        .require_opt(&state, body.parent_id, Owned::Goal)
+        .await?;
     let id = goals::create(
         &state.db,
         workspace,
@@ -96,9 +105,14 @@ struct PatchBody {
 
 async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Goal(id)).await?;
+    caller
+        .require_opt(&state, body.parent_id.flatten(), Owned::Goal)
+        .await?;
     goals::update(
         &state.db,
         id,
@@ -119,8 +133,10 @@ async fn update(
 /// Delete a goal; its children and cards move up to its parent.
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Goal(id)).await?;
     if !goals::delete(&state.db, id).await.map_err(internal)? {
         return Err((StatusCode::NOT_FOUND, "no such goal".into()));
     }
@@ -131,8 +147,10 @@ async fn remove(
 /// the projects they are in, and what it has cost.
 async fn detail(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Goal(id)).await?;
     let (_, goal) = goals::get(&state.db, id)
         .await
         .map_err(internal)?

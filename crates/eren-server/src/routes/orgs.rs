@@ -1,9 +1,11 @@
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -33,9 +35,14 @@ struct RunOrg {
 
 async fn run_org(
     State(state): State<AppState>,
+    caller: Caller,
     Path(team_id): Path<Uuid>,
     Json(body): Json<RunOrg>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Team(team_id)).await?;
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
     if body.goal.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a goal is required".into()));
     }
@@ -84,8 +91,13 @@ struct ProjectFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<ProjectFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require_opt(&state, filter.project_id, Owned::Project)
+        .await?;
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let rows = sqlx::query(
         "SELECT r.id, r.status, r.goal, r.cost_usd, r.created_at, r.error_reason,
                 t.name AS team_name, t.id AS team_id
@@ -93,11 +105,11 @@ async fn list(
          JOIN projects p ON p.id = r.project_id
          WHERE r.team_id IS NOT NULL
            AND ($1::uuid IS NULL OR r.project_id = $1)
-           AND ($2::uuid IS NULL OR p.workspace_id = $2)
+           AND ($2::uuid[] IS NULL OR p.workspace_id = ANY($2))
          ORDER BY r.created_at DESC LIMIT 30",
     )
     .bind(filter.project_id)
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -132,8 +144,10 @@ fn step_kind(key: &str) -> &'static str {
 /// team, what they were assigned, and what they've said.
 async fn detail(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     Ok(Json(build_detail(&state, run_id).await?))
 }
 
@@ -303,8 +317,10 @@ async fn assert_parked(state: &AppState, run_id: Uuid) -> Result<(), ApiError> {
 
 async fn approve_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     eren_core::approvals::approve_org_plan(&state.orchestrator, run_id)
         .await
         .map_err(super::answer_refused)?;
@@ -321,9 +337,11 @@ struct Reject {
 
 async fn reject_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
     Json(body): Json<Reject>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     eren_core::approvals::reject_org_plan(&state.orchestrator, run_id, body.reason.as_deref())
         .await
         .map_err(super::answer_refused)?;
@@ -341,9 +359,12 @@ struct AssignmentPatch {
 
 async fn update_assignment(
     State(state): State<AppState>,
+    caller: Caller,
     Path((run_id, step_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<AssignmentPatch>,
 ) -> Result<Json<Value>, ApiError> {
+    // The step is matched with `run_id` in the write, so the run is the check.
+    caller.require(&state, Owned::Run(run_id)).await?;
     assert_parked(&state, run_id).await?;
 
     // Reassigning to someone who isn't on this team would strand the work.
@@ -402,8 +423,10 @@ async fn update_assignment(
 /// key, and the audit trail survives.
 async fn drop_assignment(
     State(state): State<AppState>,
+    caller: Caller,
     Path((run_id, step_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     assert_parked(&state, run_id).await?;
     sqlx::query(
         "UPDATE steps SET status='skipped', finished_at=now()

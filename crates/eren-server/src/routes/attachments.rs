@@ -9,6 +9,7 @@
 //! tree. See the 0009 migration for why that matters.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State};
@@ -17,6 +18,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::runs::attachments as core;
+use eren_core::scope::Owned;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -126,9 +128,11 @@ fn content_matches(mime: &str, kind: &str, bytes: &[u8]) -> bool {
 
 async fn upload(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(project_id): UrlPath<Uuid>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     // Check the project up front so a bogus id is a 404 rather than an FK 500.
     let exists = sqlx::query("SELECT 1 AS ok FROM projects WHERE id=$1")
         .bind(project_id)
@@ -247,8 +251,10 @@ async fn upload(
 
 async fn serve(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
 ) -> Result<Response, ApiError> {
+    caller.require(&state, Owned::Attachment(id)).await?;
     let row = sqlx::query("SELECT filename, mime, kind, disk_path FROM attachments WHERE id=$1")
         .bind(id)
         .fetch_optional(&state.db.pool)
@@ -301,8 +307,10 @@ async fn serve(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(id): UrlPath<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Attachment(id)).await?;
     // Only unclaimed attachments can be removed — this is the ✕ on a chip
     // before submitting. Once claimed, the owning task/message controls it.
     let row = sqlx::query(
@@ -327,8 +335,10 @@ async fn remove(
 
 async fn list_for_task(
     State(state): State<AppState>,
+    caller: Caller,
     UrlPath(task_id): UrlPath<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let rows = sqlx::query(
         "SELECT id, filename, mime, kind, size_bytes FROM attachments
          WHERE task_id=$1 ORDER BY created_at",

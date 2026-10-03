@@ -35,6 +35,8 @@ pub mod revisions;
 pub mod routines;
 pub mod runs;
 pub mod scheduler;
+pub mod scope;
+pub mod sessions;
 pub mod skills;
 pub mod spend;
 pub mod storage;
@@ -42,6 +44,7 @@ pub mod tasks;
 #[cfg(test)]
 pub(crate) mod testdb;
 pub mod usage;
+pub mod users;
 pub mod wake;
 pub mod worktrees;
 

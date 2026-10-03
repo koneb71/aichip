@@ -15,8 +15,10 @@
 //! - **Eren itself**: a routine fired, a run reaped, a handoff, an
 //!   automatic check.
 //!
-//! "api" is not "a person": Eren has no login, and a local process can call
-//! the API as well as a browser can. The ledger says what it knows.
+//! With accounts on, a request is made by somebody, and the ledger names them
+//! (`user`). With accounts off, "api" is not "a person": there is no login,
+//! and a local process can call the API as well as a browser can. The ledger
+//! says what it knows.
 
 use crate::db::Db;
 use chrono::{DateTime, Utc};
@@ -27,6 +29,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Actor {
     Api,
+    /// A signed-in account (accounts on — see `crate::users`).
+    User(Uuid),
     Agent(Uuid),
     System,
 }
@@ -35,6 +39,7 @@ impl Actor {
     fn kind(self) -> &'static str {
         match self {
             Actor::Api => "api",
+            Actor::User(_) => "user",
             Actor::Agent(_) => "agent",
             Actor::System => "system",
         }
@@ -42,6 +47,12 @@ impl Actor {
     fn run(self) -> Option<Uuid> {
         match self {
             Actor::Agent(run) => Some(run),
+            _ => None,
+        }
+    }
+    fn user(self) -> Option<Uuid> {
+        match self {
+            Actor::User(user) => Some(user),
             _ => None,
         }
     }
@@ -105,11 +116,12 @@ fn clip(s: &str) -> String {
 /// Write one entry. Best-effort: a failure is logged, never returned.
 pub async fn record(db: &Db, e: Entry) {
     let result = sqlx::query(
-        "INSERT INTO audit_log (actor_kind, actor_run_id, action, entity_kind, entity_id, summary, detail)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO audit_log (actor_kind, actor_run_id, actor_user_id, action, entity_kind, entity_id, summary, detail)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(e.actor.kind())
     .bind(e.actor.run())
+    .bind(e.actor.user())
     .bind(&e.action)
     .bind(&e.entity_kind)
     .bind(&e.entity_id)
@@ -123,14 +135,15 @@ pub async fn record(db: &Db, e: Entry) {
 }
 
 /// How long agent and system rows are kept. What a person did through the
-/// API is kept for good; the high-volume rows are not.
+/// API (`api`, or a signed-in `user`) is kept for good; the high-volume rows
+/// are not.
 pub const RETENTION_DAYS: i64 = 90;
 
 /// Drop agent and system rows past retention. The only delete this table
 /// ever sees.
 pub async fn prune(db: &Db) -> anyhow::Result<u64> {
     Ok(sqlx::query(
-        "DELETE FROM audit_log WHERE actor_kind <> 'api' AND at < now() - make_interval(days => $1)",
+        "DELETE FROM audit_log WHERE actor_kind NOT IN ('api','user') AND at < now() - make_interval(days => $1)",
     )
     .bind(RETENTION_DAYS as i32)
     .execute(&db.pool)
@@ -145,6 +158,9 @@ pub struct AuditRow {
     pub at: DateTime<Utc>,
     pub actor_kind: String,
     pub actor_run_id: Option<Uuid>,
+    /// The account's name when the actor is a signed-in person — read at
+    /// list time, so a ledger row outlives the account it names.
+    pub actor_username: Option<String>,
     pub action: String,
     pub entity_kind: Option<String>,
     pub entity_id: Option<String>,
@@ -164,13 +180,15 @@ pub struct Filter {
 
 pub async fn list(db: &Db, f: &Filter) -> anyhow::Result<Vec<AuditRow>> {
     let rows = sqlx::query(
-        "SELECT id, at, actor_kind, actor_run_id, action, entity_kind, entity_id, summary, detail
-           FROM audit_log
-          WHERE ($1::text IS NULL OR entity_kind = $1)
-            AND ($2::text IS NULL OR entity_id = $2)
-            AND ($3::text IS NULL OR actor_kind = $3)
-            AND ($4::bigint IS NULL OR id < $4)
-          ORDER BY id DESC LIMIT $5",
+        "SELECT a.id, a.at, a.actor_kind, a.actor_run_id, u.username AS actor_username,
+                a.action, a.entity_kind, a.entity_id, a.summary, a.detail
+           FROM audit_log a
+           LEFT JOIN users u ON u.id = a.actor_user_id
+          WHERE ($1::text IS NULL OR a.entity_kind = $1)
+            AND ($2::text IS NULL OR a.entity_id = $2)
+            AND ($3::text IS NULL OR a.actor_kind = $3)
+            AND ($4::bigint IS NULL OR a.id < $4)
+          ORDER BY a.id DESC LIMIT $5",
     )
     .bind(&f.entity_kind)
     .bind(&f.entity_id)
@@ -186,6 +204,7 @@ pub async fn list(db: &Db, f: &Filter) -> anyhow::Result<Vec<AuditRow>> {
             at: r.get("at"),
             actor_kind: r.get("actor_kind"),
             actor_run_id: r.get("actor_run_id"),
+            actor_username: r.get("actor_username"),
             action: r.get("action"),
             entity_kind: r.get("entity_kind"),
             entity_id: r.get("entity_id"),
@@ -211,14 +230,16 @@ pub fn csv_field(s: &str) -> String {
 }
 
 pub fn csv(rows: &[AuditRow]) -> String {
-    let mut out =
-        String::from("id,at,actor_kind,actor_run_id,action,entity_kind,entity_id,summary\n");
+    let mut out = String::from(
+        "id,at,actor_kind,actor_run_id,actor_username,action,entity_kind,entity_id,summary\n",
+    );
     for r in rows {
         let fields = [
             r.id.to_string(),
             r.at.to_rfc3339(),
             r.actor_kind.clone(),
             r.actor_run_id.map(|u| u.to_string()).unwrap_or_default(),
+            r.actor_username.clone().unwrap_or_default(),
             r.action.clone(),
             r.entity_kind.clone().unwrap_or_default(),
             r.entity_id.clone().unwrap_or_default(),

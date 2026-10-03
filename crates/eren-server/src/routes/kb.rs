@@ -11,6 +11,7 @@
 //! signature that expires.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -18,6 +19,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::kb::{diff, render, revisions, tree};
+use eren_core::scope::Owned;
 use eren_core::storage::{object_key, MAX_OBJECT_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -85,8 +87,10 @@ struct ListFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<ListFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let query = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     // Prefix matching and ranking, both of which the plain query lacked: an
     // autocompleter that cannot match "roll" to "Rollback" is not an
@@ -96,14 +100,14 @@ async fn list(
         "SELECT *, CASE WHEN $2::text IS NULL THEN 0
                         ELSE ts_rank(search, websearch_to_tsquery('english', $2)) END AS rank
          FROM kb_articles
-         WHERE ($1::uuid IS NULL OR workspace_id = $1)
+         WHERE ($1::uuid[] IS NULL OR workspace_id = ANY($1))
            AND ($2::text IS NULL
                 OR search @@ websearch_to_tsquery('english', $2)
                 OR title ILIKE '%' || $2 || '%')
          ORDER BY rank DESC, updated_at DESC
          LIMIT 200",
     )
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .bind(query)
     .fetch_all(&state.db.pool)
     .await
@@ -118,7 +122,15 @@ async fn list(
 /// In one response rather than five: a page view that fires a request per
 /// panel shows its breadcrumb, its children and its backlinks arriving at
 /// different moments, and the layout jumps under the reader each time.
-async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+async fn one(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
+    // A link is recorded to whatever page id a body names, in any workspace,
+    // so what links *here* is narrowed to what the reader may see.
+    let mine = caller.workspaces(&state).await?;
     let row = reload(&state, id).await?;
     let mut page = article_row(&row, true);
 
@@ -151,9 +163,11 @@ async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json
     let backlinks = sqlx::query(
         "SELECT a.id, a.title, a.icon FROM kb_links l
            JOIN kb_articles a ON a.id = l.from_id
-          WHERE l.to_id = $1 ORDER BY a.title",
+          WHERE l.to_id = $1 AND ($2::uuid[] IS NULL OR a.workspace_id = ANY($2))
+          ORDER BY a.title",
     )
     .bind(id)
+    .bind(&mine)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -166,7 +180,7 @@ async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json
         }))
         .collect::<Vec<_>>());
 
-    page["usedBy"] = used_by(&state, id).await?;
+    page["usedBy"] = used_by(&state, id, mine.as_deref()).await?;
 
     page["pendingRevision"] = match revisions::pending(&state.db, id).await.map_err(internal)? {
         Some(rev) => revision_json(&rev),
@@ -209,7 +223,9 @@ const USED_BY_LIMIT: i64 = 30;
 /// are kept distinguishable, because they are not the same fact to an agent: an
 /// attachment is injected into every run on that card, while a mention reached
 /// exactly one reply.
-async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
+///
+/// `mine` narrows both lists to the reader's workspaces (`None`: every one).
+async fn used_by(state: &AppState, id: Uuid, mine: Option<&[Uuid]>) -> Result<Value, ApiError> {
     let rows = sqlx::query(
         "WITH refs AS (
              SELECT task_id, true AS attached FROM task_articles WHERE article_id = $1
@@ -230,6 +246,7 @@ async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
            FROM rolled r
            JOIN tasks t ON t.id = r.task_id
            JOIN projects p ON p.id = t.project_id
+          WHERE $3::uuid[] IS NULL OR p.workspace_id = ANY($3)
           -- Attached first: those are the cards where this page is part of the
           -- brief, not something somebody once linked in a reply.
           ORDER BY r.attached DESC, t.created_at DESC
@@ -237,6 +254,7 @@ async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
     )
     .bind(id)
     .bind(USED_BY_LIMIT)
+    .bind(mine)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -252,13 +270,16 @@ async fn used_by(state: &AppState, id: Uuid) -> Result<Value, ApiError> {
            FROM chat_message_articles ma
            JOIN chat_messages m ON m.id = ma.message_id
            JOIN chats c ON c.id = m.chat_id
+           LEFT JOIN projects p ON p.id = c.project_id
           WHERE ma.article_id = $1
+            AND ($3::uuid[] IS NULL OR COALESCE(c.workspace_id, p.workspace_id) = ANY($3))
           GROUP BY c.id, c.title
           ORDER BY max(m.created_at) DESC
           LIMIT $2",
     )
     .bind(id)
     .bind(USED_BY_LIMIT)
+    .bind(mine)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -304,8 +325,19 @@ struct NewArticle {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<NewArticle>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
+    caller
+        .require_opt(&state, body.parent_id, Owned::KbArticle)
+        .await?;
+    caller
+        .require_opt(&state, body.project_id, Owned::Project)
+        .await?;
+    require_assets(&state, &caller, &body.asset_ids).await?;
     if body.title.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a title is required".into()));
     }
@@ -391,9 +423,15 @@ where
 
 async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<ArticlePatch>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
+    caller
+        .require_opt(&state, body.project_id.flatten(), Owned::Project)
+        .await?;
+    require_assets(&state, &caller, &body.asset_ids).await?;
     // The body goes first, because it is the write that can be refused. Doing
     // metadata first meant a rejected save still renamed the page — the change
     // the user was told did not happen.
@@ -501,8 +539,10 @@ async fn reload(state: &AppState, id: Uuid) -> Result<sqlx::postgres::PgRow, Api
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     // Children are lifted to where their parent was, and the object keys are
     // collected first — the foreign key is RESTRICT precisely so a delete can
     // never take a subtree, and its assets, down with it silently.
@@ -518,6 +558,15 @@ async fn remove(
         }
     }
     Ok(Json(json!({ "deleted": true })))
+}
+
+/// Every upload a save names is the caller's: claiming one binds it to the
+/// article, and an id from someone else's workspace would otherwise be taken.
+async fn require_assets(state: &AppState, caller: &Caller, ids: &[Uuid]) -> Result<(), ApiError> {
+    for id in ids {
+        caller.require(state, Owned::KbAsset(*id)).await?;
+    }
+    Ok(())
 }
 
 /// Bind uploads to the article that now contains them.
@@ -550,8 +599,12 @@ struct TreeFilter {
 /// instead of a walk.
 async fn page_tree(
     State(state): State<AppState>,
+    caller: Caller,
     Query(f): Query<TreeFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(f.workspace_id))
+        .await?;
     let nodes = tree::of_space(&state.db, f.workspace_id, f.project_id)
         .await
         .map_err(internal)?;
@@ -579,8 +632,12 @@ async fn page_tree(
 /// this way is also what stops repo B's card being handed repo A's runbook.
 async fn spaces(
     State(state): State<AppState>,
+    caller: Caller,
     Query(f): Query<WsFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(f.workspace_id))
+        .await?;
     let rows = sqlx::query(
         "SELECT p.id, p.name,
                 (SELECT count(*) FROM kb_articles a WHERE a.project_id = p.id) AS pages
@@ -628,9 +685,17 @@ struct Move {
 
 async fn move_page(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<Move>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
+    caller
+        .require_opt(&state, body.parent_id, Owned::KbArticle)
+        .await?;
+    caller
+        .require_opt(&state, body.after_id, Owned::KbArticle)
+        .await?;
     tree::move_page(&state.db, id, body.parent_id, body.after_id)
         .await
         // Cycles and depth are the two ways a move goes wrong, and both are
@@ -659,8 +724,10 @@ fn revision_json(r: &revisions::Revision) -> Value {
 
 async fn revision_list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     let revs = revisions::list(&state.db, id).await.map_err(internal)?;
     Ok(Json(json!({
         "revisions": revs.iter().map(revision_json).collect::<Vec<_>>()
@@ -678,9 +745,11 @@ struct DiffRange {
 /// existing diff renderer already parses.
 async fn revision_diff(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Query(range): Query<DiffRange>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     let to = revisions::text_of(&state.db, id, range.to)
         .await
         .map_err(internal)?
@@ -720,8 +789,10 @@ async fn revision_diff(
 
 async fn accept_revision(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, seq)): Path<(Uuid, i32)>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     let live = revisions::accept(&state.db, id, seq)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -736,9 +807,11 @@ struct Discard {
 
 async fn discard_revision(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, seq)): Path<(Uuid, i32)>,
     Json(body): Json<Discard>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     revisions::discard(&state.db, id, seq, body.note.trim())
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -752,9 +825,11 @@ struct Restore {
 
 async fn restore_revision(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<Restore>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
     let seq = revisions::restore(&state.db, id, body.seq)
         .await
         .map_err(internal)?;
@@ -770,9 +845,13 @@ struct AssetUpload {
 
 async fn upload(
     State(state): State<AppState>,
+    caller: Caller,
     Query(q): Query<AssetUpload>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(q.workspace_id))
+        .await?;
     let Some(storage) = state.storage.clone() else {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -902,8 +981,10 @@ fn looks_like_text(bytes: &[u8]) -> bool {
 
 async fn serve_asset(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    caller.require(&state, Owned::KbAsset(id)).await?;
     let row = sqlx::query("SELECT object_key, content_type, filename FROM kb_assets WHERE id=$1")
         .bind(id)
         .fetch_optional(&state.db.pool)
@@ -968,8 +1049,18 @@ struct Generate {
 
 async fn generate(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<Generate>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
+    caller
+        .require_opt(&state, body.parent_id, Owned::KbArticle)
+        .await?;
     if body.brief.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1010,9 +1101,14 @@ struct Rewrite {
 /// Ask an agent to revise an article that already exists.
 async fn regenerate(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<Rewrite>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::KbArticle(id)).await?;
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
     let workspace_id: Uuid = sqlx::query_scalar("SELECT workspace_id FROM kb_articles WHERE id=$1")
         .bind(id)
         .fetch_optional(&state.db.pool)

@@ -23,6 +23,7 @@ that every migration's number appears in this file.
 - [Review policy and the merge gate](#review-policy-and-the-merge-gate)
 - [Hand-off](#hand-off)
 - [The inbox and approvals](#the-inbox-and-approvals)
+- [Accounts](#accounts)
 - [The audit log](#the-audit-log)
 - [Config revisions](#config-revisions)
 - [Wakes](#wakes)
@@ -121,7 +122,11 @@ the only caller is this machine. A non-loopback bind turns on the access token
 peer is loopback and asks every other one for the token — once, through an access link that
 becomes a cookie, or as a bearer header — while `EREN_ALLOWED_HOSTS` adds the names the Host
 and Origin checks accept. `EREN_ACCESS_TOKEN=off` goes back to no token, and then a wide bind
-is refused unless `EREN_TRUST_NETWORK` is set too (`eren_server::exposure`). `serve` is run
+is refused unless `EREN_TRUST_NETWORK` is set too (`eren_server::exposure`). Once an admin
+exists (`eren admin create`), accounts replace all of that: `auth::require_session`, just inside
+the token layer, asks every caller for a session cookie, puts the `Caller` in the request, and
+every handler checks each id it is handed against `eren_core::scope` — see **Accounts** below.
+`serve` is run
 with `into_make_service_with_connect_info`, which is where the peer address comes from. Migrations live in
 `crates/eren-core/migrations/` and are embedded by sqlx **at compile time** — adding a file
 does not always retrigger a rebuild, so if a new column comes back as `ColumnNotFound`,
@@ -718,6 +723,42 @@ item.**
 The dashboard polls `/api/inbox` once (`lib/inbox.tsx`), shared by the sidebar count, the
 top bar's bell and the inbox page.
 
+## Accounts
+
+Off until an admin exists. With no row in `users` (migration 0089) Eren is the single-person
+server the rest of this document describes: `auth::require_session` marks every request
+`Caller::Local` — who owns every workspace and may change every setting — and the access token
+decides who reaches it. `eren admin create` (in `crates/eren-cli/src/main.rs`, reaching the
+database through `DATABASE_URL`, the port a running server leaves in `~/.eren/pg_port`, or a
+managed Postgres it starts itself) makes the one admin — a partial unique index holds "one" —
+and, in the same transaction, gives it every workspace that has no `owner_id`.
+
+`auth::Accounts` notices within five seconds (it asks again while off, never once on) and from
+then on:
+
+- **`require_session`** reads the `eren_session` cookie (`eren_core::sessions`: 32 random bytes,
+  stored as SHA-256, sliding 30 days), puts `Caller::User` in the request, and refuses anything
+  without one but the sign-in page's own requests (`auth::open_path`) and `/mcp` from a
+  loopback peer. The token layer outside it steps aside. An account the admin reset reaches
+  only `/api/auth/…` until it picks a new password.
+- **Every handler takes `Caller` or `Admin`** — `routes::tests::every_handler_takes_a_caller`
+  fails the build otherwise — and calls `caller.require(&state, Owned::…)` on each id it is
+  handed before reading or writing. `eren_core::scope::Owned` is a closed enum with one fixed
+  query per kind from the row to its workspace; a run's is the first of its nine possible
+  parents that answers. Someone else's id is a 404. Lists take
+  `caller.workspace_filter(workspace_id)`: the one asked for, checked, or all the caller's own
+  — never "every workspace" because a parameter was left off.
+- **`Admin`** gates what belongs to the machine: settings writes, the queue, machine-scope
+  budgets, the audit log, the account list. With accounts off everybody is the admin.
+- **`/ws`** requires a `run_id` it can check; the firehose of every run's events is gone.
+
+Sign-up (`users::sign_up`) is open until the admin closes it (`settings` key `signup`), and makes
+a workspace for the new account. The admin's reset sets a temporary password with
+`must_change_password` and deletes the account's sessions. Agents, routines and the queue do not
+know about accounts: they act within the workspace of what they run for, and the people who
+can see that workspace are the ones who own it. What accounts do not separate — one OS user,
+one filesystem — is set out in SECURITY.md.
+
 ## The audit log
 
 Module: `eren_core::audit`; `crates/eren-server/src/audit_layer.rs`. Migration **0079**
@@ -739,8 +780,8 @@ Three things feed it, as `audit::Actor`:
 - `Agent(run)` — the three MCP dispatches, by tool name and outcome — **never the input**.
 - `System` — Eren's own actions: routine fires, sweeps, a reaped run, a hand-off.
 
-It records `api`, not "a person": there is no login, and any local process can call the
-API. `GET /audit` lists with a filter, `GET /audit.csv` exports, and a card's merged story —
+With accounts on it records `User(id)`; with accounts off, `api`, not "a person": there is
+no login then, and any local process can call the API. `GET /audit` lists with a filter, `GET /audit.csv` exports, and a card's merged story —
 comments, runs, checks and what was done to it — is `GET /tasks/{id}/timeline`.
 
 ## Config revisions
@@ -1253,3 +1294,4 @@ One row per file in `crates/eren-core/migrations/`. The number is the filename's
 | `0086` | Goals: `goals`, `project_goals`, `goal_id` on tasks and routines, the inherit trigger. |
 | `0087` | `heartbeats`: what an agent did on each beat. |
 | `0088` | Rename: `mcp__eren__` tool names rewritten in every agent's allow-list. |
+| `0089` | Accounts: `users` (one admin), `sessions`, `workspaces.owner_id`, the `user` audit actor. |

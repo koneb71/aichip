@@ -6,10 +6,12 @@
 //! jump-to-thing palette rather than a report.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -42,8 +44,12 @@ struct SearchQuery {
 
 async fn search(
     State(state): State<AppState>,
+    caller: Caller,
     Query(sq): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(sq.workspace_id))
+        .await?;
     let q = sq.q.trim();
     // One character matches most of the workspace; make the client's
     // debounce cheap by refusing to do the work at all.

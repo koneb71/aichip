@@ -1,4 +1,5 @@
 use super::{attachments, internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -7,6 +8,7 @@ use axum::{Json, Router};
 use eren_core::runs::follow_up::FollowUp;
 use eren_core::runs::mentions;
 use eren_core::runs::orchestrator::Variant;
+use eren_core::scope::Owned;
 use eren_shared::{PermissionMode, ReasoningEffort, TierChoice};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,7 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks", get(list).post(create))
         .route(
             "/tasks/{id}",
-            axum::routing::patch(move_task).delete(delete_task),
+            axum::routing::patch(move_task_route).delete(delete_task),
         )
         .route("/tasks/{id}/blockers", post(add_blocker))
         .route(
@@ -42,7 +44,7 @@ pub fn router() -> Router<AppState> {
         .route("/tasks/{id}/merge", post(merge))
         .route("/runs/{id}/events", get(run_events))
         .route("/runs/{id}/pending-permissions", get(pending_permissions))
-        .route("/runs/{id}/cancel", post(cancel_run))
+        .route("/runs/{id}/cancel", post(cancel_run_route))
         .route("/runs/{id}/resume", post(resume_run))
         .route("/runs/{id}/plan", get(plan).patch(edit_plan))
         .route("/runs/{id}/plan/approve", post(approve_plan))
@@ -68,8 +70,13 @@ fn parse_effort(stored: Option<String>) -> Option<ReasoningEffort> {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<TaskFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
+    caller
+        .require_opt(&state, filter.project_id, Owned::Project)
+        .await?;
     let rows = sqlx::query(
         // The epic columns ride along on the one query the board already makes.
         // Counting children per card from the client would be an N+1 over a list
@@ -184,11 +191,11 @@ async fn list(
                FROM check_runs c WHERE c.task_id = t.id
               ORDER BY c.created_at DESC LIMIT 1
          ) ck ON TRUE
-         WHERE ($1::uuid IS NULL OR p.workspace_id = $1)
+         WHERE ($1::uuid[] IS NULL OR p.workspace_id = ANY($1))
            AND ($2::uuid IS NULL OR t.project_id = $2)
          ORDER BY t.position, t.created_at",
     )
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .bind(filter.project_id)
     .fetch_all(&state.db.pool)
     .await
@@ -356,8 +363,27 @@ struct CreateTask {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, ApiError> {
+    // The card's project, and everything the card is bound to. The articles
+    // and attachments need nothing here: `link_articles` holds each to the
+    // card's workspace and `attachments::claim` to its project.
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
+    caller
+        .require_opt(&state, body.agent_id, Owned::Agent)
+        .await?;
+    caller
+        .require_opt(&state, body.skill_id, Owned::Skill)
+        .await?;
+    caller
+        .require_opt(&state, body.team_id, Owned::Team)
+        .await?;
+    caller
+        .require_opt(&state, body.goal_id, Owned::Goal)
+        .await?;
     if let Some(agent_id) = body.agent_id {
         assignable(&state, agent_id).await?;
     }
@@ -454,9 +480,11 @@ pub(crate) struct StartBody {
 
 pub(crate) async fn start(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: Option<Json<StartBody>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     vet_task(&state, id).await?;
     ask_about_cost(
         &state,
@@ -547,8 +575,10 @@ pub(crate) async fn vet_task(state: &AppState, task_id: Uuid) -> Result<(), ApiE
 
 async fn diff(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let row = sqlx::query(
         "SELECT t.worktree_path, p.default_branch FROM tasks t
          JOIN projects p ON p.id = t.project_id WHERE t.id=$1",
@@ -595,9 +625,11 @@ fn merge_body(raw: &[u8]) -> Result<MergeBody, ApiError> {
 
 async fn merge(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let body = merge_body(&body)?;
     let row = sqlx::query(
         "SELECT t.title, t.worktree_path, t.branch, t.project_id, p.path AS project_path,
@@ -748,8 +780,10 @@ async fn merge(
 
 async fn run_events(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(id)).await?;
     let rows = sqlx::query(
         "SELECT seq, type, payload, ts, step_id FROM events WHERE run_id=$1 ORDER BY seq ASC",
     )
@@ -775,7 +809,12 @@ async fn run_events(
 
 /// Permission requests live in memory while the engine's MCP call blocks on
 /// them, so a dashboard refresh needs to re-fetch anything still pending.
-async fn pending_permissions(State(state): State<AppState>, Path(id): Path<Uuid>) -> Json<Value> {
+async fn pending_permissions(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(id)).await?;
     let pending: Vec<Value> = state
         .permissions
         .pending_for_run(id)
@@ -784,7 +823,18 @@ async fn pending_permissions(State(state): State<AppState>, Path(id): Path<Uuid>
             json!({ "requestId": request_id, "toolName": tool_name, "input": input })
         })
         .collect();
-    Json(json!({ "pending": pending }))
+    Ok(Json(json!({ "pending": pending })))
+}
+
+/// The route: the caller's run, then the stop. `cancel_run` itself is also
+/// called by research and the assistant's tools, which check on their own.
+async fn cancel_run_route(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(id)).await?;
+    cancel_run(State(state), Path(id)).await
 }
 
 /// Stop a run, whatever state it is in.
@@ -843,9 +893,25 @@ struct Resolve {
 
 async fn resolve_permission(
     State(state): State<AppState>,
+    caller: Caller,
     Path(request_id): Path<String>,
     Json(body): Json<Resolve>,
 ) -> Result<Json<Value>, ApiError> {
+    // The broker holds requests by id alone; whose run one belongs to is on
+    // its row, written (`RunGate::record`) before anyone is told it exists.
+    let run: Option<Uuid> =
+        sqlx::query_scalar("SELECT run_id FROM permission_requests WHERE id = $1")
+            .bind(&request_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    match run {
+        Some(run) => caller.require(&state, Owned::Run(run)).await?,
+        None if !matches!(caller, Caller::Local) => {
+            return Err((StatusCode::NOT_FOUND, "no such pending permission".into()))
+        }
+        None => {}
+    }
     if state.permissions.resolve(&request_id, body.allowed) {
         Ok(Json(json!({ "resolved": true })))
     } else {
@@ -944,6 +1010,20 @@ where
     T: serde::Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// The route, and any caller acting for a person: the caller's card, then
+/// the move. The agent, team, skill and goal it may name are held to the
+/// card's own workspace inside `move_task`, which stays caller-free for the
+/// assistant's tools — an MCP call carries no session, only its run.
+pub(crate) async fn move_task_route(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MoveTask>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
+    move_task(State(state), Path(id), Json(body)).await
 }
 
 /// Drag a card. Dropping a backlog card into "running" is the drag-native way
@@ -1220,8 +1300,10 @@ fn mentioned_agents(content: &str, agents: &[(Uuid, String)]) -> Vec<Uuid> {
 
 async fn comments(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let rows = sqlx::query(
         "SELECT c.id, c.author, c.agent_id, c.content, c.run_id, c.created_at,
                 c.file_path, c.line, c.hunk,
@@ -1290,9 +1372,15 @@ struct PostComment {
 
 async fn post_comment(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
     Json(body): Json<PostComment>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
+    // An article's text goes into the reply's prompt, so naming one is a read.
+    for article in &body.article_ids {
+        caller.require(&state, Owned::KbArticle(*article)).await?;
+    }
     let content = body.content.trim();
     if content.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "comment is empty".into()));
@@ -1412,9 +1500,14 @@ struct VariantBody {
 /// Run the same brief several ways at once.
 async fn start_bakeoff(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
     Json(body): Json<BakeoffBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
+    for v in &body.variants {
+        caller.require_opt(&state, v.agent_id, Owned::Agent).await?;
+    }
     let variants: Vec<Variant> = body
         .variants
         .into_iter()
@@ -1443,8 +1536,10 @@ async fn start_bakeoff(
 /// winner on a number. Each is fetched from that variant's own worktree.
 async fn bakeoff(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let rows = sqlx::query(
         "SELECT r.id, r.variant_label, r.status, r.cost_usd, r.model, r.worktree_path, r.engine,
                 r.started_at, r.finished_at, r.error_reason,
@@ -1555,8 +1650,10 @@ async fn card_worktree(
 /// whether a merge of the base is waiting to be resolved in it.
 async fn base_status(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let Ok((wt, base, _)) = card_worktree(&state, id).await else {
         return Ok(Json(json!({ "behind": null, "merging": null })));
     };
@@ -1572,8 +1669,10 @@ async fn base_status(
 /// it in the worktree. The way out of a merge that was refused as a conflict.
 async fn update_from_base(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     state
         .orchestrator
         .supersede_summary(id)
@@ -1621,8 +1720,10 @@ async fn update_from_base(
 /// screen. Earlier attempts, and the reasons they failed, were invisible.
 async fn task_runs(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let rows = sqlx::query(
         "SELECT r.id, r.trigger, r.status, r.engine, r.model, r.tier_resolved,
                 r.cost_usd, r.input_tokens, r.output_tokens, r.cache_read_tokens,
@@ -1730,8 +1831,10 @@ fn shell_line(dir: &str, argv: &[String]) -> String {
 /// Adopt a variant's work as the task's and discard the rest.
 async fn keep_variant(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     state
         .orchestrator
         .keep_variant(run_id)
@@ -1749,9 +1852,11 @@ struct AttachToTask {
 /// button. The next run of the task will see them.
 async fn attach_to_task(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
     Json(body): Json<AttachToTask>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let row = sqlx::query("SELECT project_id FROM tasks WHERE id=$1")
         .bind(task_id)
         .fetch_optional(&state.db.pool)
@@ -1778,10 +1883,14 @@ struct AddBlocker {
 /// are `landing::add_blocker`'s, shared with an agent's `report_blocker`.
 async fn add_blocker(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<AddBlocker>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     use eren_core::landing::{add_blocker, BlockerRefusal};
+    // The blocker needs no check of its own: `add_blocker` refuses one from
+    // another board.
     match add_blocker(&state.db, id, body.blocked_by).await {
         Ok(()) => Ok(Json(json!({ "ok": true }))),
         Err(e) => match e.downcast_ref::<BlockerRefusal>() {
@@ -1794,8 +1903,11 @@ async fn add_blocker(
 
 async fn remove_blocker(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, blocker_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
+    // The blocker needs no check: the delete is of this card's own rows.
+    caller.require(&state, Owned::Task(id)).await?;
     sqlx::query("DELETE FROM task_deps WHERE task_id = $1 AND blocked_by = $2")
         .bind(id)
         .bind(blocker_id)
@@ -2053,8 +2165,10 @@ async fn drop_worktree(state: &AppState, task_id: Uuid) -> Result<(), ApiError> 
 /// shouldn't vanish when a card is tidied away.
 async fn delete_task(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     state
         .orchestrator
         .supersede_summary(id)
@@ -2117,9 +2231,11 @@ fn yes() -> bool {
 /// sitting in review.
 async fn retry(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: Option<Json<Retry>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     state
         .orchestrator
         .supersede_summary(id)
@@ -2161,8 +2277,10 @@ async fn retry(
 /// says why it can't.
 pub(crate) async fn resume_run(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     let (new_run, _) = eren_core::runs::resume::resume_dead_run(&state.orchestrator, run_id)
         .await
         .map_err(super::answer_refused)?;
@@ -2198,8 +2316,10 @@ async fn assert_parked(state: &AppState, run_id: Uuid) -> Result<(), ApiError> {
 
 async fn plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     let row = sqlx::query(
         "SELECT r.status, r.plan_edited, s.output_text, s.finished_at
          FROM runs r
@@ -2233,9 +2353,11 @@ struct PlanEdit {
 /// follows what's in front of it rather than what it remembers proposing.
 async fn edit_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
     Json(body): Json<PlanEdit>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     assert_parked(&state, run_id).await?;
     if body.content.trim().is_empty() {
         return Err((
@@ -2264,8 +2386,10 @@ async fn edit_plan(
 /// Start the work, from whatever the plan says now.
 async fn approve_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     eren_core::approvals::approve_task_plan(&state.orchestrator, run_id)
         .await
         .map_err(super::answer_refused)?;
@@ -2280,9 +2404,11 @@ struct Revise {
 /// Send the plan back for another pass, saying what was wrong with it.
 async fn revise_plan(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
     Json(body): Json<Revise>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     eren_core::approvals::revise_task_plan(&state.orchestrator, run_id, &body.note)
         .await
         .map_err(super::answer_refused)?;
@@ -2321,8 +2447,10 @@ async fn link_articles(state: &AppState, task_id: Uuid, ids: &[Uuid]) -> Result<
 
 async fn task_articles(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let rows = sqlx::query(
         "SELECT a.id, a.title, a.summary, a.status, a.origin
          FROM task_articles ta JOIN kb_articles a ON a.id = ta.article_id
@@ -2355,9 +2483,11 @@ struct ArticleLinks {
 /// server disagree about what is attached.
 async fn set_task_articles(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<ArticleLinks>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     link_articles(&state, id, &body.article_ids).await?;
     Ok(Json(json!({ "linked": body.article_ids.len() })))
 }

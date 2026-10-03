@@ -6,6 +6,7 @@
 //! what is waiting, what is blocked on you, and what the last week cost.
 
 use super::{internal, ApiError};
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
@@ -35,8 +36,11 @@ struct BudgetBody {
     cap_usd: Option<f64>,
 }
 
+/// The queue and its daily cap belong to the machine, not to a workspace, so
+/// these three are the admin's.
 async fn set_budget(
     State(state): State<AppState>,
+    _admin: Admin,
     headers: axum::http::HeaderMap,
     Json(body): Json<BudgetBody>,
 ) -> Result<Json<Value>, ApiError> {
@@ -67,7 +71,7 @@ async fn set_budget(
     ))
 }
 
-async fn pause(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn pause(State(state): State<AppState>, _admin: Admin) -> Result<Json<Value>, ApiError> {
     state
         .orchestrator
         .set_queue_paused(true)
@@ -76,7 +80,7 @@ async fn pause(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!({ "paused": true })))
 }
 
-async fn resume(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn resume(State(state): State<AppState>, _admin: Admin) -> Result<Json<Value>, ApiError> {
     state
         .orchestrator
         .set_queue_paused(false)
@@ -89,9 +93,11 @@ async fn resume(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
 /// is a dashboard, and five requests to paint one screen would be worse.
 async fn activity(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<Filter>,
 ) -> Result<Json<Value>, ApiError> {
-    let ws = filter.workspace_id;
+    // No workspace asked for is every one of the caller's, never the machine's.
+    let ws = caller.workspace_filter(&state, filter.workspace_id).await?;
 
     // Live and waiting runs, with enough context to name what they are.
     // The project join is via whichever of task/workflow/chat/org owns it.
@@ -115,8 +121,8 @@ async fn activity(
            -- A general chat or research has no project; its workspace lives
            -- on its own row. Without the COALESCE the filter nulls those runs
            -- out of the page entirely.
-           AND ($1::uuid IS NULL
-                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
+           AND ($1::uuid[] IS NULL
+                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = ANY($1))
          ORDER BY
              CASE r.status WHEN 'awaiting_approval' THEN 0
                            WHEN 'waiting_permission' THEN 1
@@ -125,7 +131,7 @@ async fn activity(
                            ELSE 4 END,
              r.created_at",
     )
-    .bind(ws)
+    .bind(&ws)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -213,20 +219,25 @@ async fn activity(
          LEFT JOIN projects p ON p.id = COALESCE(
              r.project_id, t.project_id, w.project_id, c.project_id, rs.project_id)
          WHERE COALESCE(r.finished_at, r.started_at, r.created_at) > now() - interval '14 days'
-           AND ($1::uuid IS NULL
-                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = $1)
+           AND ($1::uuid[] IS NULL
+                OR COALESCE(p.workspace_id, c.workspace_id, rs.workspace_id) = ANY($1))
          GROUP BY 1 ORDER BY 1",
     )
-    .bind(ws)
+    .bind(&ws)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
 
     // Who is spending it — measured per agent, a team run charged step by
     // step. See `spend::by_agent`.
-    let by_agent = eren_core::spend::by(&state.db, ws, 14, eren_core::spend::Dimension::Agent)
-        .await
-        .map_err(internal)?;
+    let by_agent = super::spend::by(
+        &state.db,
+        ws.as_deref(),
+        14,
+        eren_core::spend::Dimension::Agent,
+    )
+    .await
+    .map_err(internal)?;
 
     let today: f64 = daily
         .last()

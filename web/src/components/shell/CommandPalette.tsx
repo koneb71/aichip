@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, FolderPlus, Moon, Pause, Play, Search, Sun, Monitor } from "lucide-react";
 import { api, SearchResults } from "../../lib/api";
-import { NAV, searchRows, type SearchRow } from "../../lib/nav";
+import { searchRows, visibleNav, type SearchRow } from "../../lib/nav";
+import { useAuth } from "../../lib/auth";
 import { useTheme } from "../../lib/theme";
 import { useWorkspace } from "../../lib/workspace";
 import { useActivity } from "../../lib/activity";
@@ -23,6 +24,7 @@ import { toast } from "../ui/Toast";
 const EMPTY: SearchResults = { projects: [], tasks: [], agents: [], teams: [], workflows: [], goals: [] };
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const nav = visibleNav(useAuth().isAdmin);
   const navigate = useNavigate();
   const { active } = useWorkspace();
   const { choice, setChoice } = useTheme();
@@ -100,7 +102,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               ))}
 
               <Command.Group heading="Go to">
-                {NAV.map((n) => {
+                {nav.map((n) => {
                   const Icon = n.icon;
                   return (
                     <Item key={n.to} value={`go ${n.label} ${(n.keywords ?? []).join(" ")}`} onSelect={() => go(n.to)} icon={<Icon className="size-4" />}>

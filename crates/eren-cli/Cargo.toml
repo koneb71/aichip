@@ -21,3 +21,5 @@ clap = { version = "4", features = ["derive"] }
 axum = { workspace = true }
 postgresql_embedded = "0.19"
 rand = { workspace = true }
+# `eren admin`: ask for a password without echoing it.
+rpassword = "7"

@@ -1,9 +1,11 @@
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use eren_shared::workflow::{self, Workflow};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -76,16 +78,21 @@ struct ProjectFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<ProjectFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require_opt(&state, filter.project_id, Owned::Project)
+        .await?;
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let rows = sqlx::query(
         "SELECT w.* FROM workflows w JOIN projects p ON p.id = w.project_id
          WHERE ($1::uuid IS NULL OR w.project_id = $1)
-           AND ($2::uuid IS NULL OR p.workspace_id = $2)
+           AND ($2::uuid[] IS NULL OR p.workspace_id = ANY($2))
          ORDER BY w.created_at DESC",
     )
     .bind(filter.project_id)
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -102,8 +109,12 @@ struct CreateWorkflow {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<CreateWorkflow>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
     let wf = Workflow::from_yaml(&body.source_yaml)
         .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
     let row = upsert_workflow(&state, body.project_id, &wf, &body.source_yaml)
@@ -147,9 +158,11 @@ struct UpdateWorkflow {
 
 async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateWorkflow>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workflow(id)).await?;
     // Editing the YAML can change the name, description, or schedule, so
     // re-derive those rather than letting the row drift from its source.
     let parsed = match &body.source_yaml {
@@ -190,8 +203,10 @@ async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workflow(id)).await?;
     sqlx::query("DELETE FROM workflows WHERE id=$1")
         .bind(id)
         .execute(&state.db.pool)
@@ -204,9 +219,11 @@ async fn remove(
 /// separate call — a failed layout save must never block saving the work.
 async fn save_layout(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(layout): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workflow(id)).await?;
     sqlx::query("UPDATE workflows SET ui_layout = $1 WHERE id = $2")
         .bind(&layout)
         .bind(id)
@@ -216,7 +233,12 @@ async fn save_layout(
     Ok(Json(json!({ "saved": true })))
 }
 
-async fn run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+async fn run(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Workflow(id)).await?;
     let run_id = state
         .orchestrator
         .enqueue_workflow(id, "manual")
@@ -228,8 +250,10 @@ async fn run(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json
 /// Import every `.eren/workflows/*.yaml` in the project's repo.
 async fn sync_from_repo(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let path: String = sqlx::query("SELECT path FROM projects WHERE id=$1")
         .bind(project_id)
         .fetch_one(&state.db.pool)
@@ -280,8 +304,10 @@ async fn sync_from_repo(
 /// Step-by-step status of a workflow run — drives the run graph.
 async fn run_steps(
     State(state): State<AppState>,
+    caller: Caller,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Run(run_id)).await?;
     let rows = sqlx::query(
         "SELECT id, step_key, status, output_text, started_at, finished_at
          FROM steps WHERE run_id=$1 ORDER BY started_at ASC",
@@ -308,19 +334,24 @@ async fn run_steps(
 
 async fn list_runs(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<ProjectFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require_opt(&state, filter.project_id, Owned::Project)
+        .await?;
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let rows = sqlx::query(
         "SELECT r.id, r.status, r.trigger, r.cost_usd, r.created_at, r.error_reason,
                 w.name AS workflow_name, w.id AS workflow_id
          FROM runs r JOIN workflows w ON w.id = r.workflow_id
          JOIN projects p ON p.id = w.project_id
          WHERE ($1::uuid IS NULL OR w.project_id = $1)
-           AND ($2::uuid IS NULL OR p.workspace_id = $2)
+           AND ($2::uuid[] IS NULL OR p.workspace_id = ANY($2))
          ORDER BY r.created_at DESC LIMIT 50",
     )
     .bind(filter.project_id)
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -352,9 +383,14 @@ struct RunTeam {
 /// through the ordinary pipeline executor.
 async fn run_team(
     State(state): State<AppState>,
+    caller: Caller,
     Path(team_id): Path<Uuid>,
     Json(body): Json<RunTeam>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Team(team_id)).await?;
+    caller
+        .require(&state, Owned::Project(body.project_id))
+        .await?;
     if body.goal.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a goal is required".into()));
     }

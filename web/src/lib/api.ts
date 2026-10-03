@@ -2,6 +2,7 @@ import { TreePage } from "./kbTree";
 import type { OrgNode } from "./orgChart";
 export type { OrgNode };
 import type { Goal } from "./goals";
+import { SIGNED_OUT_EVENT } from "./accounts";
 export type { Goal };
 export type Tier = "easy" | "medium" | "complex";
 /**
@@ -1716,6 +1717,9 @@ export interface ResearchDetail {
 }
 
 async function json<T>(res: Response): Promise<T> {
+  // A session that ended (signed out elsewhere, a password reset, expiry):
+  // tell the auth provider, which puts the sign-in screen back.
+  if (res.status === 401) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
 }
@@ -1752,6 +1756,24 @@ const guarded = (method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?
     headers: { "Content-Type": "application/json", "X-Eren-Write": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+/** A signed-in account. Accounts are off until an admin exists. */
+export interface User {
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  mustChangePassword: boolean;
+  disabled: boolean;
+  createdAt: string;
+}
+
+export interface AuthStatus {
+  /** An admin exists, so every browser signs in. */
+  accounts: boolean;
+  /** Anyone who can reach the server may make an account. */
+  signup: boolean;
+  user: User | null;
+}
 
 /** One heartbeat: what an agent that pulls its own work did when it checked in. */
 export interface Beat {
@@ -1861,10 +1883,12 @@ export interface InboxItem {
 export interface AuditEntry {
   id: number;
   at: string;
-  /** "api" is anything through the dashboard's API — Eren has no login,
-   *  so it does not claim "a person". */
-  actorKind: "api" | "agent" | "system";
+  /** "user" is a signed-in account. "api" is anything through the API while
+   *  accounts are off — there is no login then, so it does not claim "a
+   *  person". */
+  actorKind: "api" | "user" | "agent" | "system";
   actorRunId: string | null;
+  actorUsername: string | null;
   action: string;
   entityKind: string | null;
   entityId: string | null;
@@ -1980,6 +2004,23 @@ export interface CostEstimate {
 }
 
 export const api = {
+  // accounts
+  authStatus: () => fetch("/api/auth/status").then((r) => json<AuthStatus>(r)),
+  login: (username: string, password: string) =>
+    guarded("POST", "/api/auth/login", { username, password }).then((r) => json<{ user: User }>(r)),
+  signup: (username: string, password: string) =>
+    guarded("POST", "/api/auth/signup", { username, password }).then((r) => json<{ user: User }>(r)),
+  logout: () => guarded("POST", "/api/auth/logout").then(json),
+  changePassword: (current: string, next: string) =>
+    guarded("POST", "/api/auth/password", { current, new: next }).then((r) => json<{ user: User }>(r)),
+  users: () => fetch("/api/auth/users").then((r) => json<{ users: User[] }>(r)),
+  setUserDisabled: (id: string, disabled: boolean) =>
+    guarded("PATCH", `/api/auth/users/${id}`, { disabled }).then(json),
+  /** A temporary password, shown once: it works only to choose a new one. */
+  resetPassword: (id: string) =>
+    guarded("POST", `/api/auth/users/${id}/reset-password`).then((r) => json<{ password: string }>(r)),
+  setSignupOpen: (open: boolean) => guarded("PUT", "/api/auth/signup-open", { open }).then(json),
+
   budgets: () =>
     fetch("/api/budgets").then((r) =>
       json<{ policies: BudgetStanding[]; unpricedEngines: string[] }>(r),

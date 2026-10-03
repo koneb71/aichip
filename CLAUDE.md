@@ -152,7 +152,7 @@ Everything waiting on a person is one list, `eren_core::inbox::list` — a query
 
 ### Audit log
 
-`audit_log` (migration 0079) is append-only and has exactly one writer, `eren_core::audit::record` — a source scan fails the build for any other `INSERT`/`UPDATE`/`DELETE` on it, and the only delete is its retention `prune` (agent and system rows after `RETENTION_DAYS`, 90; API rows kept). A failed audit write is logged and dropped, never failing the action it records. Three things feed it: the server's `audit_layer` on every mutating `/api` request (route template, path ids and status — **never the body**; the few read-only POSTs are listed in `audit_layer::QUIET`, each with its reason), the three MCP dispatches (tool name and outcome — **never the input**), and Eren's own actions (routine fires, sweeps, reaps, handoffs). It records `api`, not "a person": there is no login, and any local process can call the API. A card's merged story is `GET /tasks/{id}/timeline`.
+`audit_log` (migration 0079) is append-only and has exactly one writer, `eren_core::audit::record` — a source scan fails the build for any other `INSERT`/`UPDATE`/`DELETE` on it, and the only delete is its retention `prune` (agent and system rows after `RETENTION_DAYS`, 90; API rows kept). A failed audit write is logged and dropped, never failing the action it records. Three things feed it: the server's `audit_layer` on every mutating `/api` request (route template, path ids and status — **never the body**; the few read-only POSTs are listed in `audit_layer::QUIET`, each with its reason), the three MCP dispatches (tool name and outcome — **never the input**), and Eren's own actions (routine fires, sweeps, reaps, handoffs). With accounts on it records the signed-in `user`; with accounts off, `api`, not "a person": there is no login then, and any local process can call the API. A card's merged story is `GET /tasks/{id}/timeline`.
 
 ### Config revisions
 
@@ -168,7 +168,16 @@ A card's run also gets Eren's own toolbox on `/mcp/run/{run_id}` ([crates/eren-s
 
 ### Network access
 
-On loopback (the default) there is no login, and the only caller is this machine. A wide `EREN_BIND` turns on the access token (`eren_server::access`, the outermost layer): a caller whose **TCP peer** is loopback passes, every other caller presents the token — an access link (`/?access=…`) trades it for an `HttpOnly` cookie, scripts send a bearer header. `EREN_ALLOWED_HOSTS` adds the names the Host and Origin checks in `reject_non_local_callers` accept (names only, exact authority). Two rules: **"local" is decided by the peer address, never a header** (a header is whatever the caller says); and the token is one of `env_guard::OWN_SECRETS`, so no child sees it. `EREN_ACCESS_TOKEN=off` restores no-token behaviour, which a wide bind must then acknowledge with `EREN_TRUST_NETWORK` (`eren_server::exposure`).
+Until accounts are on (below), on loopback (the default) there is no login, and the only caller is this machine. A wide `EREN_BIND` turns on the access token (`eren_server::access`, the outermost layer): a caller whose **TCP peer** is loopback passes, every other caller presents the token — an access link (`/?access=…`) trades it for an `HttpOnly` cookie, scripts send a bearer header. `EREN_ALLOWED_HOSTS` adds the names the Host and Origin checks in `reject_non_local_callers` accept (names only, exact authority). Two rules: **"local" is decided by the peer address, never a header** (a header is whatever the caller says); and the token is one of `env_guard::OWN_SECRETS`, so no child sees it. `EREN_ACCESS_TOKEN=off` restores no-token behaviour, which a wide bind must then acknowledge with `EREN_TRUST_NETWORK` (`eren_server::exposure`).
+
+### Accounts
+
+Off until `eren admin create` makes the one admin (migration 0089, `eren_core::users`), who adopts every ownerless workspace. Then `eren_server::auth::require_session` asks every caller — loopback included — for a session cookie (`eren_core::sessions`), the token steps aside, and only the sign-in page's requests and `/mcp` from a loopback peer pass without one. Anyone who can reach the dashboard may sign up, until the admin closes it; each account gets a workspace and sees only the workspaces it owns. Two rules that are easy to break:
+
+- **Every route handler takes `Caller` or `Admin`** (`routes::tests::every_handler_takes_a_caller` fails the build otherwise) and **checks every id it is handed** — path, query *and body* — with `caller.require(&state, Owned::…)` before using it; a list uses `caller.workspace_filter`, never `$1 IS NULL OR workspace_id = $1`, which hands a signed-in user every workspace when the parameter is left off. `eren_core::scope::Owned` is the closed set of kinds and their fixed queries; add a variant there rather than a hand-rolled ownership query. Someone else's id is a 404.
+- **What belongs to the machine is `Admin`'s**: settings writes, the queue, machine-scope budgets, the audit log. With accounts off, `Caller::Local` passes every check, so nothing changes for a single-person install.
+
+Accounts separate cooperating people, not a hostile one: every account's agents share an OS user and a filesystem (SECURITY.md says so).
 
 ### Apps
 

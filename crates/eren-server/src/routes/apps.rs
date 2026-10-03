@@ -1,17 +1,20 @@
 //! The gallery's own endpoints.
 //!
 //! Everything here is a person acting through the dashboard, so it all sits
-//! behind the ordinary loopback checks like every other route. What an *app*
+//! behind the ordinary loopback checks like every other route, and touches
+//! only apps and projects in the caller's own workspaces. What an *app*
 //! may ask for is a different surface with a different gate, and does not live
 //! here.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use eren_core::apps;
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -102,11 +105,18 @@ pub struct WorkspaceFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
-    let apps = apps::list(&state.db, filter.workspace_id)
+    let only = caller.workspace_filter(&state, filter.workspace_id).await?;
+    // `apps::list` narrows to one workspace or none, so with no workspace asked
+    // for it answers every one; the caller's own set is applied here.
+    let apps: Vec<apps::App> = apps::list(&state.db, filter.workspace_id)
         .await
-        .map_err(internal)?;
+        .map_err(internal)?
+        .into_iter()
+        .filter(|a| only.as_ref().is_none_or(|ws| ws.contains(&a.workspace_id)))
+        .collect();
     Ok(Json(
         json!({ "apps": apps.iter().map(app_json).collect::<Vec<_>>() }),
     ))
@@ -119,8 +129,12 @@ async fn list(
 /// than the server has. A manifest that no longer parses still returns the app
 /// — with the error — because the way out of a broken manifest is the editor,
 /// and a 500 would take that away.
-async fn one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+async fn one(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let app = load(&state, &caller, id).await?;
     let mut body = app_json(&app);
     body["manifest"] = json!(app.manifest);
     match app.parsed() {
@@ -145,8 +159,12 @@ struct Install {
 
 async fn install(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<Install>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
     // Validated here as well as inside `install`, so a manifest an agent got
     // wrong comes back as a 400 naming the key rather than a 500 naming
     // nothing. The check inside is what makes the guarantee; this is what makes
@@ -179,6 +197,7 @@ struct Generate {
 /// than looking fine until the install button fails.
 async fn generate(
     State(state): State<AppState>,
+    _caller: Caller,
     Json(body): Json<Generate>,
 ) -> Result<Json<Value>, ApiError> {
     let description = body.description.trim();
@@ -229,14 +248,15 @@ struct SetManifest {
 
 async fn set_manifest(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<SetManifest>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let (_, outcome) = apps::set_manifest(&state.db, &app, &body.manifest)
         .await
         .map_err(bad_manifest)?;
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let mut out = app_json(&app);
     out["manifest"] = json!(app.manifest);
     // The caller needs to know whether the tables followed. A manifest that
@@ -265,9 +285,10 @@ fn build_json(b: &apps::build::Build, revertible: Option<Uuid>) -> Value {
 
 async fn builds(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
     let builds = apps::build::list(&state.db, id).await.map_err(internal)?;
     let revertible = apps::build::revertible(&builds);
     Ok(Json(json!({
@@ -289,10 +310,11 @@ struct Change {
 /// the automatic landing undoable.
 async fn change(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<Change>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let brief = body.brief.trim();
     if brief.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "say what should change".into()));
@@ -387,9 +409,20 @@ async fn change(
 /// Put the app back the way it was before its most recent change.
 async fn revert_build(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, build)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
+    // `revert` finds the app from the build, so a build of some other app
+    // would undo that one instead — and the check above would have been on
+    // the wrong app.
+    let owner = apps::build::get(&state.db, build)
+        .await
+        .map_err(internal)?
+        .map(|b| b.app_id);
+    if owner != Some(id) {
+        return Err((StatusCode::NOT_FOUND, "no such build".into()));
+    }
     let app = apps::build::revert(&state.db, build)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -410,10 +443,11 @@ struct PlanId {
 /// migration that replaced it while they read.
 async fn apply_schema(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<PlanId>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
     let applied = apps::apply_plan(&state.db, id, body.plan_id)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -422,10 +456,11 @@ async fn apply_schema(
 
 async fn discard_schema(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<PlanId>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
     apps::discard_plan(&state.db, id, body.plan_id)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -439,10 +474,11 @@ struct SetActive {
 
 async fn set_active(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<SetActive>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
     apps::set_active(&state.db, id, body.active)
         .await
         .map_err(internal)?;
@@ -456,8 +492,10 @@ async fn set_active(
 /// the dashboard asks before calling it.
 async fn uninstall(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::App(id)).await?;
     apps::uninstall(&state.db, id).await.map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -482,10 +520,11 @@ fn bad_data(e: impl std::fmt::Display) -> ApiError {
 /// on. See `apps::query` for why.
 async fn model_of(
     state: &AppState,
+    caller: &Caller,
     id: Uuid,
     model: &str,
 ) -> Result<(apps::App, apps::manifest::Model), ApiError> {
-    let app = load(state, id).await?;
+    let app = load(state, caller, id).await?;
     let parsed = app.parsed().map_err(bad_manifest)?;
     let model = apps::data::model_of(&parsed, model)
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?
@@ -514,10 +553,11 @@ fn raw_query(pairs: Vec<(String, String)>) -> apps::query::Raw {
 
 async fn rows(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, model)): Path<(Uuid, String)>,
     Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &model).await?;
+    let (app, model) = model_of(&state, &caller, id, &model).await?;
     let raw = raw_query(pairs);
     let rows = apps::data::list(&state.db, &app.schema, &model, &raw)
         .await
@@ -530,10 +570,11 @@ async fn rows(
 
 async fn add_row(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, model)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &model).await?;
+    let (app, model) = model_of(&state, &caller, id, &model).await?;
     apps::data::create(&state.db, &app.schema, &model, &body)
         .await
         .map(Json)
@@ -542,10 +583,11 @@ async fn add_row(
 
 async fn change_row(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, model, row)): Path<(Uuid, String, Uuid)>,
     Json(body): Json<serde_json::Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &model).await?;
+    let (app, model) = model_of(&state, &caller, id, &model).await?;
     apps::data::update(&state.db, &app.schema, &model, row, &body)
         .await
         .map_err(bad_data)?
@@ -555,9 +597,10 @@ async fn change_row(
 
 async fn drop_row(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, model, row)): Path<(Uuid, String, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &model).await?;
+    let (app, model) = model_of(&state, &caller, id, &model).await?;
     let gone = apps::data::delete(&state.db, &app.schema, &model, row)
         .await
         .map_err(bad_data)?;
@@ -574,10 +617,11 @@ async fn drop_row(
 /// twelve numbers, not a year of entries.
 async fn chart(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, view)): Path<(Uuid, String)>,
     Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let parsed = app.parsed().map_err(bad_manifest)?;
     let view = parsed
         .view(&view)
@@ -649,9 +693,10 @@ async fn docker_problem() -> Option<String> {
 /// Whether this app's container is up, and where.
 async fn container(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     container_app(&app)?;
     let preview = eren_core::previews::get_base(&state.db, app.project_id)
         .await
@@ -668,9 +713,10 @@ async fn container(
 /// Build and run it, or wake it if the image is still here.
 async fn start(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     container_app(&app)?;
     if !app.active {
         return Err((StatusCode::CONFLICT, "switch this app on first".into()));
@@ -686,9 +732,10 @@ async fn start(
 
 async fn stop(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     eren_core::previews::stop_base(&state.db, app.project_id)
         .await
         .map_err(internal)?;
@@ -698,10 +745,11 @@ async fn stop(
 /// The Dockerfile this app would build from, and whether it needs reading.
 async fn dockerfile(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     use eren_core::apps::runtime::{self, Build};
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     container_app(&app)?;
 
     let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
@@ -742,10 +790,11 @@ struct ApproveDockerfile {
 /// a preview recipe.
 async fn approve_dockerfile(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<ApproveDockerfile>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     container_app(&app)?;
     let committed = tokio::fs::read_to_string(app.path.join("Dockerfile"))
         .await
@@ -783,9 +832,10 @@ async fn approve_dockerfile(
 /// granted cannot show what is being asked for, and the question is the point.
 async fn grants(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let held = apps::grants::list(&state.db, id).await.map_err(internal)?;
     let requested = app.parsed().map(|m| m.scopes).unwrap_or_default();
 
@@ -811,10 +861,11 @@ struct SetGrants {
 
 async fn set_grants(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<SetGrants>,
 ) -> Result<Json<Value>, ApiError> {
-    load(&state, id).await?;
+    load(&state, &caller, id).await?;
     let mut scopes = Vec::new();
     for text in &body.scopes {
         // An unknown scope is refused rather than dropped: a client sending one
@@ -843,10 +894,11 @@ struct RunAction {
 /// an error about something the person is allowed to fix.
 async fn run_action(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<RunAction>,
 ) -> Result<Json<Value>, ApiError> {
-    let (app, model) = model_of(&state, id, &body.model).await?;
+    let (app, model) = model_of(&state, &caller, id, &body.model).await?;
     let manifest = app.parsed().map_err(bad_manifest)?;
 
     let out = apps::run::run(
@@ -884,10 +936,11 @@ pub struct ExportWhat {
 /// a person does next is send it to someone.
 async fn export(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Query(what): Query<ExportWhat>,
 ) -> Result<axum::response::Response, ApiError> {
-    let app = load(&state, id).await?;
+    let app = load(&state, &caller, id).await?;
     let text = apps::export(&state.db, &app, what.data)
         .await
         .map_err(internal)?;
@@ -913,8 +966,12 @@ struct Import {
 
 async fn import(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<Import>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
     let app = apps::import(&state.db, body.workspace_id, &body.bundle)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -924,8 +981,10 @@ async fn import(
 /// Apps a project offers under `.eren/apps/`.
 async fn repo_apps(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let row: Option<(String, Uuid)> =
         sqlx::query_as("SELECT path, workspace_id FROM projects WHERE id = $1")
             .bind(id)
@@ -956,9 +1015,11 @@ struct SyncOne {
 /// Install a repo app, or update the one already here.
 async fn sync_app(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<SyncOne>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let row: Option<(String, Uuid)> =
         sqlx::query_as("SELECT path, workspace_id FROM projects WHERE id = $1")
             .bind(id)
@@ -978,7 +1039,11 @@ async fn sync_app(
     Ok(Json(app_json(&app)))
 }
 
-async fn load(state: &AppState, id: Uuid) -> Result<apps::App, ApiError> {
+/// The app, once it is known to be the caller's: someone else's answers as a
+/// missing one. Every `/apps/{id}` route comes through here (or through
+/// `model_of`, which does), so none can skip the check.
+async fn load(state: &AppState, caller: &Caller, id: Uuid) -> Result<apps::App, ApiError> {
+    caller.require(state, Owned::App(id)).await?;
     apps::get(&state.db, id)
         .await
         .map_err(internal)?

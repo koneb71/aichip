@@ -7,6 +7,7 @@
 //! typing come from the parser that decides, not a lookalike in JS.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -15,6 +16,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use croner::Cron;
 use eren_core::routines;
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -56,8 +58,12 @@ fn next_occurrences(expr: &str, n: usize) -> Vec<DateTime<Local>> {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     let rows = sqlx::query(
         "SELECT rt.id, rt.name, rt.kind, rt.project_id, p.name AS project_name, rt.prompt,
                 rt.cron_expr, rt.catch_up, rt.enabled, rt.engine, rt.model_tier, rt.effort,
@@ -214,9 +220,16 @@ fn vet_tools(
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<RoutineBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
+    caller
+        .require_opt(&state, body.project_id, Owned::Project)
+        .await?;
     vet(&body)?;
     if let Some(engine) = &body.engine {
         if state.orchestrator.engine(engine).is_none() {
@@ -266,9 +279,11 @@ pub(crate) struct UpdateBody {
 
 pub(crate) async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Routine(id)).await?;
     if let Some(expr) = &body.cron_expr {
         if Cron::from_str(expr).is_err() {
             return Err((
@@ -350,8 +365,10 @@ pub(crate) async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Routine(id)).await?;
     // The standing chat thread and everything the routine produced stay:
     // deleting a schedule must not delete its answers.
     eren_core::revisions::keep(
@@ -373,8 +390,10 @@ async fn remove(
 /// must not shift when the next scheduled one happens.
 async fn run_now(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Routine(id)).await?;
     routines::fire(&state.db, &state.orchestrator, id, "manual")
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -387,7 +406,7 @@ struct PreviewBody {
     cron_expr: String,
 }
 
-async fn preview(Json(body): Json<PreviewBody>) -> Result<Json<Value>, ApiError> {
+async fn preview(_caller: Caller, Json(body): Json<PreviewBody>) -> Result<Json<Value>, ApiError> {
     if Cron::from_str(&body.cron_expr).is_err() {
         return Ok(Json(json!({ "valid": false, "next": [] })));
     }
@@ -400,8 +419,10 @@ async fn preview(Json(body): Json<PreviewBody>) -> Result<Json<Value>, ApiError>
 
 async fn history(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Routine(id)).await?;
     let rows = sqlx::query(
         "SELECT rr.id, rr.fired_at, rr.trigger, rr.error,
                 rr.run_id, rr.research_id, rr.task_id, rr.chat_id,

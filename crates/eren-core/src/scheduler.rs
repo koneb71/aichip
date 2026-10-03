@@ -114,6 +114,9 @@ impl Scheduler {
             if let Err(e) = crate::audit::prune(&self.db).await {
                 tracing::warn!(error = %e, "could not prune the audit ledger");
             }
+            if let Err(e) = crate::sessions::prune(&self.db).await {
+                tracing::warn!(error = %e, "could not prune expired sessions");
+            }
         }
     }
 

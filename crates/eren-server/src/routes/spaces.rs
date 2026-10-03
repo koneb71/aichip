@@ -9,11 +9,13 @@
 use std::path::PathBuf;
 
 use super::{attachments::sanitize_filename, internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -88,8 +90,10 @@ async fn list_rows(state: &AppState, project_id: Uuid) -> Result<Vec<Value>, Api
 /// panel is what keeps the index honest about files added outside the app.
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let dir = space_path(&state, project_id).await?;
     let docs = list_rows(&state, project_id).await?;
     let db = state.db.clone();
@@ -103,9 +107,11 @@ async fn list(
 
 async fn upload(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let dir = space_path(&state, project_id).await?;
 
     let mut stored = 0usize;
@@ -187,8 +193,10 @@ async fn upload(
 /// "did it work", so it returns the report.
 async fn reindex(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let dir = space_path(&state, project_id).await?;
     let report = eren_core::rag::index::reconcile(&state.db, project_id, &dir)
         .await
@@ -198,8 +206,10 @@ async fn reindex(
 
 async fn status(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     space_path(&state, project_id).await?;
     let rows = sqlx::query(
         "SELECT status, count(*) AS n FROM project_documents WHERE project_id=$1 GROUP BY status",
@@ -220,8 +230,12 @@ async fn status(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path((project_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
+    // The document is looked up within this project, so the project's check
+    // covers it.
+    caller.require(&state, Owned::Project(project_id)).await?;
     let dir = space_path(&state, project_id).await?;
     let rel: String =
         sqlx::query_scalar("SELECT rel_path FROM project_documents WHERE id=$1 AND project_id=$2")

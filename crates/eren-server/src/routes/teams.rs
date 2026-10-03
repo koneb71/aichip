@@ -1,9 +1,11 @@
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -14,7 +16,7 @@ const PATTERNS: &[&str] = &["pipeline", "debate", "swarm", "org"];
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/teams", get(list).post(create))
-        .route("/teams/{id}", patch(update).delete(remove))
+        .route("/teams/{id}", patch(patch_team).delete(remove))
         .route("/teams/{id}/estimate", get(estimate))
 }
 
@@ -25,8 +27,10 @@ pub fn router() -> Router<AppState> {
 /// runaway run shouldn't set the expectation for the next ten.
 async fn estimate(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Team(id)).await?;
     let row = sqlx::query(
         "SELECT COUNT(*) AS runs,
                 percentile_cont(0.5) WITHIN GROUP (ORDER BY cost_usd) AS median,
@@ -67,12 +71,15 @@ struct WsFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<WsFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     let rows = sqlx::query(
-        "SELECT * FROM teams WHERE $1::uuid IS NULL OR workspace_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM teams WHERE $1::uuid[] IS NULL OR workspace_id = ANY($1)
+          ORDER BY created_at ASC",
     )
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -94,10 +101,28 @@ struct TeamBody {
     engine: Option<String>,
 }
 
+/// Every agent a definition names must be the caller's: a team runs its
+/// members, so naming someone else's agent would put it to work.
+async fn require_members(
+    caller: &Caller,
+    state: &AppState,
+    definition: &Value,
+) -> Result<(), ApiError> {
+    for agent in eren_core::agents::team_agent_ids(definition) {
+        caller.require(state, Owned::Agent(agent)).await?;
+    }
+    Ok(())
+}
+
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<TeamBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
+    require_members(&caller, &state, &body.definition).await?;
     if body.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
     }
@@ -140,6 +165,21 @@ where
     serde::Deserialize::deserialize(de).map(Some)
 }
 
+/// The route's door to [`update`], which a revision restore also calls once it
+/// has checked the team itself.
+async fn patch_team(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<TeamPatch>,
+) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Team(id)).await?;
+    if let Some(definition) = &body.definition {
+        require_members(&caller, &state, definition).await?;
+    }
+    update(State(state), Path(id), Json(body)).await
+}
+
 pub(crate) async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -179,8 +219,10 @@ pub(crate) async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Team(id)).await?;
     eren_core::revisions::keep(
         &state.db,
         eren_core::revisions::EntityKind::Team,

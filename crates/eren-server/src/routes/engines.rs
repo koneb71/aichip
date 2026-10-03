@@ -8,6 +8,7 @@
 //! Capabilities travel with each engine so the UI can *disable* an option and
 //! say why, instead of letting the server refuse it after the click.
 
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::State;
 use axum::routing::get;
@@ -23,7 +24,7 @@ pub fn router() -> Router<AppState> {
         .route("/local-models", get(local_models).put(set_local_hosts))
 }
 
-async fn list(State(state): State<AppState>) -> Json<Value> {
+async fn list(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let engines = state
         .orchestrator
         .engines()
@@ -61,7 +62,7 @@ async fn list(State(state): State<AppState>) -> Json<Value> {
 /// Answers with an empty list rather than an error when nothing is running,
 /// which is the common case — a settings page must not look broken because a
 /// thing the user never installed is not listening.
-async fn local_models(State(state): State<AppState>) -> Json<Value> {
+async fn local_models(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     Json(json!({
         "models": eren_core::local_models::discover(&state.db).await,
         // The addresses it looked at, so a page showing nothing can say where
@@ -78,8 +79,10 @@ struct HostsBody {
 }
 
 /// Point the probe somewhere else. An empty string resets to the default.
+/// The addresses are the machine's, so only the admin moves them.
 async fn set_local_hosts(
     State(state): State<AppState>,
+    _admin: Admin,
     Json(body): Json<HostsBody>,
 ) -> Result<Json<Value>, super::ApiError> {
     eren_core::local_models::set_hosts(&state.db, body.ollama.as_deref(), body.lmstudio.as_deref())
