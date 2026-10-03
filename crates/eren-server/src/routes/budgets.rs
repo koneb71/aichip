@@ -8,12 +8,14 @@
 //! there to stop spending.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use eren_core::budgets::{self, Policy, ScopeKind, WindowKind};
+use eren_core::scope::{budget_scope, Owned};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -31,8 +33,10 @@ pub fn router() -> Router<AppState> {
 /// What starting this card is likely to cost, from similar runs.
 async fn task_estimate(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let estimate = eren_core::estimate::for_card(&state.db, task_id)
         .await
         .map_err(internal)?;
@@ -50,8 +54,10 @@ struct EstimateQuery {
 /// exists.
 async fn estimate(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Query(q): axum::extract::Query<EstimateQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(q.project_id)).await?;
     let engine = q
         .engine
         .unwrap_or_else(|| state.orchestrator.default_engine());
@@ -66,11 +72,71 @@ fn require_write_header(headers: &HeaderMap) -> Result<(), ApiError> {
     super::require_write(headers, "this changes a budget")
 }
 
+fn machine_is_the_admins() -> ApiError {
+    (
+        StatusCode::FORBIDDEN,
+        "Only the admin can change a machine budget; it binds everyone.".into(),
+    )
+}
+
+/// May `caller` cover this scope with a budget? A machine budget binds every
+/// account, so only the admin sets one; anything else is its owner's.
+async fn require_scope(
+    state: &AppState,
+    caller: &Caller,
+    kind: ScopeKind,
+    id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    match (kind, id) {
+        (ScopeKind::Machine, _) if !caller.is_admin() => Err(machine_is_the_admins()),
+        (ScopeKind::Machine, _) | (_, None) => Ok(()),
+        (kind, Some(id)) => match budget_scope(kind.as_str(), id) {
+            Some(what) => caller.require(state, what).await,
+            None => Err((StatusCode::NOT_FOUND, "not found".into())),
+        },
+    }
+}
+
+/// May `caller` act on policy `id`? A machine policy is everyone's to read —
+/// it holds everyone's work — and only the admin's to change; any other
+/// resolves through its scope. Also the check a restore from history makes.
+pub(crate) async fn require_policy(
+    state: &AppState,
+    caller: &Caller,
+    id: Uuid,
+    write: bool,
+) -> Result<(), ApiError> {
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT scope_kind FROM budget_policies WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    match kind.as_deref() {
+        Some("machine") if write && !caller.is_admin() => Err(machine_is_the_admins()),
+        Some("machine") => Ok(()),
+        _ => caller.require(state, Owned::Budget(id)).await,
+    }
+}
+
 /// Every policy with where it stands this window, and the engines a dollar
 /// cap cannot see.
-async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn list(State(state): State<AppState>, caller: Caller) -> Result<Json<Value>, ApiError> {
+    let mine = caller.workspaces(&state).await?;
     let mut out = vec![];
     for policy in budgets::list(&state.db).await.map_err(internal)? {
+        // Machine policies bind everyone, so everyone sees them; any other
+        // only when its scope is in one of the caller's workspaces.
+        if let Some(mine) = &mine {
+            if policy.scope_kind != ScopeKind::Machine {
+                let ws = eren_core::scope::workspace_of(&state.db, Owned::Budget(policy.id))
+                    .await
+                    .map_err(internal)?;
+                if !ws.is_some_and(|ws| mine.contains(&ws)) {
+                    continue;
+                }
+            }
+        }
         let scope = scope_label(&state, policy.scope_kind, policy.scope_id).await?;
         let standing = budgets::standing(&state.db, policy)
             .await
@@ -177,7 +243,7 @@ struct Valid {
     body: Body,
 }
 
-async fn validate(state: &AppState, body: Body) -> Result<Valid, ApiError> {
+async fn validate(state: &AppState, caller: &Caller, body: Body) -> Result<Valid, ApiError> {
     let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
     let name = body.name.trim().to_string();
     if name.is_empty() {
@@ -191,9 +257,12 @@ async fn validate(state: &AppState, body: Body) -> Result<Valid, ApiError> {
         (ScopeKind::Machine, Some(_)) => {
             return Err(bad("scope_id: a machine budget covers no one thing"))
         }
-        (ScopeKind::Machine, None) => {}
+        (ScopeKind::Machine, None) => require_scope(state, caller, scope_kind, None).await?,
         (_, None) => return Err(bad("scope_id: say which one this budget covers")),
         (kind, Some(_)) => {
+            // Before the existence check, so someone else's id answers as
+            // one that does not exist rather than as "taken".
+            require_scope(state, caller, kind, body.scope_id).await?;
             if scope_label(state, kind, body.scope_id)
                 .await?
                 .ends_with("(deleted)")
@@ -235,11 +304,12 @@ async fn validate(state: &AppState, body: Body) -> Result<Valid, ApiError> {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     headers: HeaderMap,
     Json(body): Json<Body>,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
-    let v = validate(&state, body).await?;
+    let v = validate(&state, &caller, body).await?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO budget_policies
             (name, scope_kind, scope_id, window_kind, cap_usd, cap_output_tokens, cap_runs,
@@ -267,12 +337,15 @@ async fn create(
 /// would only add ways to leave it half-changed.
 pub(crate) async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<Body>,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
-    let v = validate(&state, body).await?;
+    // Both ends: the policy as it is, and the scope it is being moved to.
+    require_policy(&state, &caller, id, true).await?;
+    let v = validate(&state, &caller, body).await?;
     eren_core::revisions::keep(
         &state.db,
         eren_core::revisions::EntityKind::BudgetPolicy,
@@ -314,10 +387,12 @@ pub(crate) async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
+    require_policy(&state, &caller, id, true).await?;
     eren_core::revisions::keep(
         &state.db,
         eren_core::revisions::EntityKind::BudgetPolicy,
@@ -349,11 +424,13 @@ struct Override {
 /// unchanged: next window it is the same budget again.
 async fn override_budget(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<Override>,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers)?;
+    require_policy(&state, &caller, id, true).await?;
     let positive = body.usd.is_some_and(|v| v > 0.0)
         || body.tokens.is_some_and(|v| v > 0)
         || body.runs.is_some_and(|v| v > 0);
@@ -391,8 +468,10 @@ async fn override_budget(
 
 async fn incidents(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    require_policy(&state, &caller, id, false).await?;
     let rows: Vec<(
         String,
         chrono::DateTime<chrono::Utc>,

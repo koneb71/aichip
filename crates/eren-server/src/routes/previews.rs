@@ -8,11 +8,13 @@
 //! hangs for them is a button people press twice.
 
 use super::{internal, ApiError};
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -40,7 +42,7 @@ pub fn router() -> Router<AppState> {
 /// Probed live, not cached at boot, for the same reason `/api/github` is:
 /// Docker Desktop gets started after Eren just as often as before it, and
 /// the point of showing this is to say "go and start it".
-async fn docker_status() -> Json<Value> {
+async fn docker_status(_caller: Caller) -> Json<Value> {
     match eren_core::previews::docker::detect().await {
         None => Json(json!({
             "installed": false,
@@ -69,8 +71,10 @@ async fn docker_status() -> Json<Value> {
 /// refused to serve — which is the case the tail on the card cannot show.
 async fn logs(
     State(state): State<AppState>,
+    caller: Caller,
     Path(preview_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Preview(preview_id)).await?;
     let (build, runtime) = eren_core::previews::logs(&state.db, preview_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -79,7 +83,10 @@ async fn logs(
 
 /// The two numbers that decide whether previews are safe to forget about,
 /// alongside what they are currently costing.
-async fn get_limits(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn get_limits(
+    State(state): State<AppState>,
+    _caller: Caller,
+) -> Result<Json<Value>, ApiError> {
     let limits = eren_core::previews::limits(&state.db).await;
     let live: i64 =
         sqlx::query_scalar("SELECT count(*) FROM previews WHERE status IN ('building','running')")
@@ -100,8 +107,10 @@ struct LimitsBody {
     idle_minutes: i64,
 }
 
+/// The admin's: the cap is the machine's, shared by every account's previews.
 async fn set_limits(
     State(state): State<AppState>,
+    _admin: Admin,
     Json(body): Json<LimitsBody>,
 ) -> Result<Json<Value>, ApiError> {
     // Clamped in the core rather than rejected here: a slider that refuses is
@@ -125,14 +134,16 @@ async fn set_limits(
     })))
 }
 
-async fn disk(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+async fn disk(State(state): State<AppState>, _caller: Caller) -> Result<Json<Value>, ApiError> {
     let (bytes, reclaimable) = eren_core::previews::disk(&state.db)
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "bytes": bytes, "reclaimable": reclaimable })))
 }
 
-async fn reclaim(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+/// The admin's: it drops kept images from every workspace's previews, not
+/// just the caller's.
+async fn reclaim(State(state): State<AppState>, _admin: Admin) -> Result<Json<Value>, ApiError> {
     let freed = eren_core::previews::reclaim_disk(&state.db)
         .await
         .map_err(internal)?;
@@ -142,8 +153,10 @@ async fn reclaim(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
 /// The project's recipe and whether anyone has approved it.
 async fn get_recipe(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let row = sqlx::query(
         "SELECT dockerfile, kind, status, edited FROM preview_recipes WHERE project_id = $1",
     )
@@ -164,8 +177,10 @@ async fn get_recipe(
 /// Ask an agent to write one. Stored as a proposal — never built.
 async fn propose_recipe(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let path: String = sqlx::query_scalar("SELECT path FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&state.db.pool)
@@ -250,9 +265,11 @@ struct ApproveBody {
 
 async fn approve_recipe(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ApproveBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let text = body.dockerfile.trim().to_string();
     // Re-derived from the text being approved rather than taken from the
     // proposal: a person may have rewritten a Dockerfile into a stack, and what
@@ -298,8 +315,10 @@ async fn approve_recipe(
 /// Everything this project has running, plus what it is costing.
 async fn list_for_project(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let previews = eren_core::previews::list_for_project(&state.db, project_id)
         .await
         .map_err(internal)?;
@@ -325,8 +344,10 @@ async fn list_for_project(
 /// The project's base-branch preview — what a card's changes are compared to.
 async fn current_base(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let preview = eren_core::previews::get_base(&state.db, project_id)
         .await
         .map_err(internal)?;
@@ -335,8 +356,10 @@ async fn current_base(
 
 async fn start_base(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     if !docker_ready(&state).await {
         return Err((
             StatusCode::PRECONDITION_FAILED,
@@ -351,8 +374,10 @@ async fn start_base(
 
 async fn stop_base(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let stopped = eren_core::previews::stop_base(&state.db, project_id)
         .await
         .map_err(internal)?;
@@ -365,8 +390,10 @@ async fn docker_ready(_state: &AppState) -> bool {
 
 async fn current(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let preview = eren_core::previews::get(&state.db, task_id)
         .await
         .map_err(internal)?;
@@ -375,8 +402,10 @@ async fn current(
 
 async fn start(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     // Checked here rather than left to fail inside the build, so "you have no
     // Docker" is an immediate answer instead of a failed row.
     match eren_core::previews::docker::detect().await {
@@ -405,8 +434,10 @@ async fn start(
 
 async fn stop(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let stopped = eren_core::previews::stop(&state.db, task_id)
         .await
         .map_err(internal)?;

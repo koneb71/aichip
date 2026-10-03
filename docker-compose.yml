@@ -139,11 +139,13 @@ services:
       EREN_ALLOWED_HOSTS: ${EREN_ALLOWED_HOSTS:-}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     ports:
-      # Loopback on the host, whatever the container binds inside. Eren has
-      # no authentication, so reach it from elsewhere over an SSH tunnel, or
-      # drop the 127.0.0.1 knowing that anyone who can reach the port can
-      # drive it.
-      - "127.0.0.1:${EREN_PORT:-${AICHIP_PORT:-4820}}:4820"
+      # Loopback on the host unless EREN_PUBLISH_IP says otherwise, whatever
+      # the container binds inside. To reach it from other devices, set
+      # EREN_PUBLISH_IP=0.0.0.0 and EREN_ALLOWED_HOSTS to the address you use,
+      # and turn accounts on (`docker compose exec eren eren admin create
+      # --username <name>`) so every browser signs in — without them, anyone
+      # who can reach the port can drive it.
+      - "${EREN_PUBLISH_IP:-127.0.0.1}:${EREN_PORT:-${AICHIP_PORT:-4820}}:4820"
     volumes:
       # Mounted at the *same absolute path* on both sides. A git worktree
       # records absolute paths in .git, so a repo checked out at one path on

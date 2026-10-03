@@ -9,6 +9,7 @@
 //! reasoning is at the top of `eren_core::checks`.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -16,6 +17,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::checks::{self, Check};
 use eren_core::runs::follow_up::FollowUp;
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -35,8 +37,14 @@ fn require_write_header(headers: &HeaderMap, what: &str) -> Result<(), ApiError>
 
 async fn get_config(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
+    read_config(&state, project_id).await
+}
+
+async fn read_config(state: &AppState, project_id: Uuid) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query(
         "SELECT commands, timeout_secs, auto_fix_attempts FROM project_checks WHERE project_id = $1",
     )
@@ -63,10 +71,12 @@ pub(crate) struct ConfigBody {
 
 pub(crate) async fn put_config(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<ConfigBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     require_write_header(&headers, "stores commands this machine will run")?;
     let kind: String = sqlx::query_scalar("SELECT kind FROM projects WHERE id = $1")
         .bind(project_id)
@@ -104,14 +114,16 @@ pub(crate) async fn put_config(
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
-    get_config(State(state), Path(project_id)).await
+    read_config(&state, project_id).await
 }
 
 /// The card's newest check run, in full — results, output and all.
 async fn latest(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let configured: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM project_checks pc JOIN tasks t ON t.project_id = pc.project_id
                          WHERE t.id = $1 AND jsonb_array_length(pc.commands) > 0)",
@@ -148,10 +160,12 @@ async fn latest(
 /// mode short of Full Auto never gave on its own.
 async fn run_now(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     require_write_header(&headers, "runs this project's commands")?;
+    caller.require(&state, Owned::Task(task_id)).await?;
     let card = sqlx::query(
         "SELECT t.project_id, t.worktree_path,
                 (SELECT id FROM runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1) AS run_id,
@@ -213,8 +227,10 @@ async fn run_now(
 /// what failed.
 async fn fix(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let check_run_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM check_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1",
     )

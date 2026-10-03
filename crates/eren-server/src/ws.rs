@@ -1,12 +1,21 @@
 //! WebSocket event streaming with replay. Clients connect with
 //! `/ws?run_id=<uuid>&after_seq=<n>`; the server replays persisted events
-//! past `after_seq` from the DB, then switches to live bus fan-out. Omitting
-//! `run_id` streams live events for all runs (the board's activity tickers).
+//! past `after_seq` from the DB, then switches to live bus fan-out.
+//!
+//! `run_id` is required, and the caller must own the run's workspace before
+//! the socket opens. There used to be a no-`run_id` form that streamed every
+//! event of every run; once a machine serves more than one account that is
+//! everyone's prompts and transcripts to anyone signed in, and the dashboard
+//! never used it — every stream it opens names its run.
 
+use crate::auth::Caller;
+use crate::routes::ApiError;
 use crate::AppState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::Response;
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
@@ -25,25 +34,35 @@ fn default_after_seq() -> i64 {
 }
 
 pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    Query(params): Query<WsParams>,
     State(state): State<AppState>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle(socket, params, state))
+    caller: Caller,
+    Query(params): Query<WsParams>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    // Optional in the type so a missing one is answered in words, not with
+    // the query parser's message.
+    let Some(run_id) = params.run_id else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "run_id is required: a stream follows one run".into(),
+        ));
+    };
+    // Before the upgrade: once the socket is open, the replay is sent.
+    caller.require(&state, Owned::Run(run_id)).await?;
+    let after_seq = params.after_seq;
+    Ok(ws.on_upgrade(move |socket| handle(socket, run_id, after_seq, state)))
 }
 
-async fn handle(mut socket: WebSocket, params: WsParams, state: AppState) {
+async fn handle(mut socket: WebSocket, run_id: Uuid, after_seq: i64, state: AppState) {
     // Subscribe BEFORE replaying so no events fall in the gap.
     let mut live = state.bus.subscribe();
-    let mut last_seq = params.after_seq;
+    let mut last_seq = after_seq;
 
-    if let Some(run_id) = params.run_id {
-        if replay_since(&mut socket, &state, run_id, &mut last_seq)
-            .await
-            .is_err()
-        {
-            return;
-        }
+    if replay_since(&mut socket, &state, run_id, &mut last_seq)
+        .await
+        .is_err()
+    {
+        return;
     }
 
     loop {
@@ -59,34 +78,30 @@ async fn handle(mut socket: WebSocket, params: WsParams, state: AppState) {
                     // is published, so the log already holds what the ring
                     // dropped. Catch up from it and carry on.
                     Err(RecvError::Lagged(skipped)) => {
-                        tracing::debug!(skipped, run_id = ?params.run_id, "ws lagged; replaying from the log");
-                        if let Some(run_id) = params.run_id {
-                            if replay_since(&mut socket, &state, run_id, &mut last_seq)
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
+                        tracing::debug!(skipped, %run_id, "ws lagged; replaying from the log");
+                        if replay_since(&mut socket, &state, run_id, &mut last_seq)
+                            .await
+                            .is_err()
+                        {
+                            break;
                         }
                         continue;
                     }
                     Err(RecvError::Closed) => break,
                 };
-                if let Some(run_id) = params.run_id {
-                    if envelope.run_id != run_id {
-                        continue;
-                    }
-                    // Skip events already delivered during replay (permission
-                    // events use seq -1 and always pass through).
-                    if envelope.seq >= 0 && envelope.seq <= last_seq {
-                        continue;
-                    }
-                    // `last_seq` is deliberately not advanced here. Steps of
-                    // one run share an allocator but publish independently,
-                    // so seq 11 can arrive before seq 10; a watermark moved by
-                    // the live tail would drop 10. Only a replay — which reads
-                    // the log in order — may move it.
+                if envelope.run_id != run_id {
+                    continue;
                 }
+                // Skip events already delivered during replay (permission
+                // events use seq -1 and always pass through).
+                if envelope.seq >= 0 && envelope.seq <= last_seq {
+                    continue;
+                }
+                // `last_seq` is deliberately not advanced here. Steps of one
+                // run share an allocator but publish independently, so seq 11
+                // can arrive before seq 10; a watermark moved by the live tail
+                // would drop 10. Only a replay — which reads the log in order
+                // — may move it.
                 let Ok(text) = serde_json::to_string(&envelope) else { continue };
                 if socket.send(Message::text(text)).await.is_err() {
                     break;

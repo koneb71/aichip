@@ -6,13 +6,15 @@
 //! the *same* function the matching button calls, never a second copy.
 
 use super::{answer_refused, internal, require_write, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::decisions::Effect;
-use eren_core::inbox::{self, parse_key};
+use eren_core::inbox::{self, parse_key, Key};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -35,8 +37,12 @@ struct ListQuery {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(q.workspace_id))
+        .await?;
     let items = inbox::list(&state.db, q.workspace_id, q.all)
         .await
         .map_err(internal)?;
@@ -61,13 +67,84 @@ fn bad(msg: impl Into<String>) -> ApiError {
     (StatusCode::BAD_REQUEST, msg.into())
 }
 
+fn gone() -> ApiError {
+    (StatusCode::NOT_FOUND, "not found".to_string())
+}
+
+/// The parent a row hangs off, by one fixed query with `$1` the id.
+async fn parent<T>(state: &AppState, sql: &'static str, id: T) -> Result<Uuid, ApiError>
+where
+    T: for<'q> sqlx::Encode<'q, sqlx::Postgres> + sqlx::Type<sqlx::Postgres> + Send,
+{
+    sqlx::query_scalar::<_, Uuid>(sql)
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(internal)?
+        .ok_or_else(gone)
+}
+
+/// Refuse unless the thing a key names lives in one of the caller's
+/// workspaces. A key is only text — anyone can type one — so every kind is
+/// traced to the row that owns it before anything reads or answers it. A kind
+/// this does not know is refused, never let through: a new kind of waiting
+/// thing must say whose it is here first.
+async fn require_key(state: &AppState, caller: &Caller, key: &Key) -> Result<(), ApiError> {
+    if matches!(caller, Caller::Local) {
+        return Ok(());
+    }
+    let id = |i: usize| key.uuid(i).ok_or_else(gone);
+    let what = match key.kind.as_str() {
+        "plan" | "team_plan" | "permission_expired" => Owned::Run(id(0)?),
+        // The broker's request id is text, not a uuid.
+        "permission" => Owned::Run(
+            parent(
+                state,
+                "SELECT run_id FROM permission_requests WHERE id = $1",
+                key.ids[0].clone(),
+            )
+            .await?,
+        ),
+        "question" => Owned::Task(
+            parent(
+                state,
+                "SELECT task_id FROM run_questions WHERE id = $1",
+                id(0)?,
+            )
+            .await?,
+        ),
+        "review" => Owned::Task(
+            parent(
+                state,
+                "SELECT task_id FROM review_decisions WHERE id = $1",
+                id(0)?,
+            )
+            .await?,
+        ),
+        "decision" => Owned::Decision(id(0)?),
+        "chat_question" | "chat_plan" => {
+            // The message as well as the chat: one could pair a chat of
+            // one's own with someone else's message.
+            caller.require(state, Owned::ChatMessage(id(1)?)).await?;
+            Owned::Chat(id(0)?)
+        }
+        "schema" => Owned::App(id(0)?),
+        "kb_revision" => Owned::KbArticle(id(0)?),
+        "recipe" => Owned::Project(id(0)?),
+        _ => return Err(gone()),
+    };
+    caller.require(state, what).await
+}
+
 async fn resolve(
     State(state): State<AppState>,
+    caller: Caller,
     headers: HeaderMap,
     Json(body): Json<Resolve>,
 ) -> Result<Json<Value>, ApiError> {
     require_write(&headers, "this answers something on your behalf")?;
     let key = parse_key(&body.key).ok_or_else(|| bad("not an inbox key"))?;
+    require_key(&state, &caller, &key).await?;
     let id = |i: usize| key.uuid(i).ok_or_else(|| bad("not an inbox key"));
     let text = body.text.as_deref().unwrap_or("").trim();
     let orch = &state.orchestrator;
@@ -112,8 +189,12 @@ async fn resolve(
             json!(body.action)
         }
         ("permission_expired", "resume") => {
-            let Json(v) =
-                super::tasks::resume_run(State(state.clone()), axum::extract::Path(id(0)?)).await?;
+            let Json(v) = super::tasks::resume_run(
+                State(state.clone()),
+                caller.clone(),
+                axum::extract::Path(id(0)?),
+            )
+            .await?;
             v
         }
         ("question", "answer") => {
@@ -128,7 +209,9 @@ async fn resolve(
                 .map_err(answer_refused)?;
             json!("dismissed")
         }
-        ("decision", "approve") => decide(&state, id(0)?, body.acknowledge_forecast).await?,
+        ("decision", "approve") => {
+            decide(&state, &caller, id(0)?, body.acknowledge_forecast).await?
+        }
         ("review", "review_again") => {
             let task: Uuid =
                 sqlx::query_scalar("SELECT task_id FROM review_decisions WHERE id = $1")
@@ -229,8 +312,14 @@ async fn resolve(
 /// A refusal the person can answer — a 409: the card is blocked for now, the
 /// start wants its cost acknowledged — puts the proposal back as it was, so
 /// approving again later works. Only a real failure is recorded as one.
-async fn decide(state: &AppState, id: Uuid, acknowledge_forecast: bool) -> Result<Value, ApiError> {
+async fn decide(
+    state: &AppState,
+    caller: &Caller,
+    id: Uuid,
+    acknowledge_forecast: bool,
+) -> Result<Value, ApiError> {
     let state = state.clone();
+    let caller = caller.clone();
     tokio::spawn(async move {
         let effect = eren_core::decisions::claim(&state.db, id, "approved")
             .await
@@ -239,7 +328,7 @@ async fn decide(state: &AppState, id: Uuid, acknowledge_forecast: bool) -> Resul
                 StatusCode::CONFLICT,
                 "that proposal has already been decided".to_string(),
             ))?;
-        let result = apply(&state, id, &effect, acknowledge_forecast).await;
+        let result = apply(&state, &caller, id, &effect, acknowledge_forecast).await;
         match &result {
             Err((StatusCode::CONFLICT, _)) => eren_core::decisions::reopen(&state.db, id).await,
             _ => {
@@ -254,8 +343,12 @@ async fn decide(state: &AppState, id: Uuid, acknowledge_forecast: bool) -> Resul
     .map_err(internal)?
 }
 
+/// The effect goes through the person's own doors with the person as the
+/// caller, so a proposal naming a card outside their workspaces is refused
+/// there exactly as their own click would be.
 async fn apply(
     state: &AppState,
+    caller: &Caller,
     decision: Uuid,
     effect: &Effect,
     acknowledge_forecast: bool,
@@ -283,16 +376,22 @@ async fn apply(
             let body = super::tasks::StartBody {
                 acknowledge_forecast,
             };
-            let Json(v) =
-                super::tasks::start(State(state.clone()), Path(*card_id), Some(Json(body))).await?;
+            let Json(v) = super::tasks::start(
+                State(state.clone()),
+                caller.clone(),
+                Path(*card_id),
+                Some(Json(body)),
+            )
+            .await?;
             Ok(format!(
                 "started run {}",
                 v["runId"].as_str().unwrap_or("?")
             ))
         }
         Effect::MoveCard { card_id, column } => {
-            let Json(_) = super::tasks::move_task(
+            let Json(_) = super::tasks::move_task_route(
                 State(state.clone()),
+                caller.clone(),
                 Path(*card_id),
                 Json(super::tasks::MoveTask::to_column(column)),
             )
@@ -301,8 +400,9 @@ async fn apply(
         }
         Effect::AssignCard { card_id, agent } => {
             let id = agent_id(agent.clone()).await?;
-            let Json(_) = super::tasks::move_task(
+            let Json(_) = super::tasks::move_task_route(
                 State(state.clone()),
+                caller.clone(),
                 Path(*card_id),
                 Json(super::tasks::MoveTask::assign(id)),
             )
@@ -313,6 +413,8 @@ async fn apply(
             card_id,
             blocked_by,
         } => {
+            caller.require(state, Owned::Task(*card_id)).await?;
+            caller.require(state, Owned::Task(*blocked_by)).await?;
             eren_core::landing::add_blocker(&state.db, *card_id, *blocked_by)
                 .await
                 .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
@@ -337,11 +439,13 @@ struct KeyBody {
 
 async fn read(
     State(state): State<AppState>,
+    caller: Caller,
     headers: HeaderMap,
     Json(body): Json<KeyBody>,
 ) -> Result<Json<Value>, ApiError> {
     require_write(&headers, "this marks your inbox")?;
-    parse_key(&body.key).ok_or_else(|| bad("not an inbox key"))?;
+    let key = parse_key(&body.key).ok_or_else(|| bad("not an inbox key"))?;
+    require_key(&state, &caller, &key).await?;
     inbox::mark_read(&state.db, &body.key)
         .await
         .map_err(internal)?;
@@ -357,11 +461,13 @@ struct SnoozeBody {
 
 async fn snooze(
     State(state): State<AppState>,
+    caller: Caller,
     headers: HeaderMap,
     Json(body): Json<SnoozeBody>,
 ) -> Result<Json<Value>, ApiError> {
     require_write(&headers, "this marks your inbox")?;
-    parse_key(&body.key).ok_or_else(|| bad("not an inbox key"))?;
+    let key = parse_key(&body.key).ok_or_else(|| bad("not an inbox key"))?;
+    require_key(&state, &caller, &key).await?;
     if !(1..=720).contains(&body.hours) {
         return Err(bad("hours must be between 1 and 720"));
     }

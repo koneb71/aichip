@@ -5,6 +5,7 @@
 //! last run — which is stated, because a figure with no age on it invites being
 //! read as live.
 
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::State;
 use axum::routing::get;
@@ -22,7 +23,9 @@ pub fn router() -> Router<AppState> {
 /// The chip answers "can I start something now"; this answers "is this window
 /// a wall I meet every week". Separate route because the chip polls on a timer
 /// and has no use for two hundred rows of history.
-async fn history(State(state): State<AppState>) -> Json<Value> {
+///
+/// Machine-wide, like the chip: one login's limits, whoever's run met them.
+async fn history(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     const DAYS: i64 = 30;
     let events = eren_core::usage::history(&state.db, DAYS)
         .await
@@ -37,7 +40,7 @@ async fn history(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-async fn current(State(state): State<AppState>) -> Json<Value> {
+async fn current(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let limits = eren_core::usage::all(&state.db).await.unwrap_or_default();
     let now = chrono::Utc::now();
     // A window that has already refilled says nothing about now.

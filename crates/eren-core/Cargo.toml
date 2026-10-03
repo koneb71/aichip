@@ -47,6 +47,9 @@ ammonia = "4"
 # "is this agent rewrite correct?" decision is exactly where a wrong diff
 # gets approved, so this is one small pure-Rust dependency worth having.
 similar = "2"
+# Password hashing for accounts. argon2id with the crate's defaults: a
+# memory-hard hash, so a copy of the users table is not a list of passwords.
+argon2 = { version = "0.5", features = ["std"] }
 serde_yaml = "0.9"
 pdf-extract = "0.12"
 # Document text extraction for the space index, all local: pdf-extract for

@@ -7,12 +7,14 @@
 //! header, and never from anything an agent can call.
 
 use super::{internal, require_write, run_refused, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use eren_core::review::{self, Policy, Start};
+use eren_core::scope::Owned;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -28,8 +30,14 @@ pub fn router() -> Router<AppState> {
 
 async fn get_policy(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
+    read_policy(&state, project_id).await
+}
+
+async fn read_policy(state: &AppState, project_id: Uuid) -> Result<Json<Value>, ApiError> {
     let p = review::policy(&state.db, project_id)
         .await
         .map_err(internal)?;
@@ -38,10 +46,12 @@ async fn get_policy(
 
 pub(crate) async fn put_policy(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<Policy>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     require_write(&headers, "this decides what a merge requires")?;
     let (kind, workspace): (String, Uuid) =
         sqlx::query_as("SELECT kind, workspace_id FROM projects WHERE id = $1")
@@ -101,7 +111,7 @@ pub(crate) async fn put_policy(
     .execute(&state.db.pool)
     .await
     .map_err(internal)?;
-    get_policy(State(state), Path(project_id)).await
+    read_policy(&state, project_id).await
 }
 
 /// A reviewer that exists in this workspace, can still be given work, and —
@@ -142,8 +152,10 @@ async fn vet_reviewer(state: &AppState, reviewer: Uuid, workspace: Uuid) -> Resu
 /// the gate still wants.
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let project: Uuid = sqlx::query_scalar("SELECT project_id FROM tasks WHERE id = $1")
         .bind(task_id)
         .fetch_optional(&state.db.pool)
@@ -193,8 +205,10 @@ async fn list(
 /// what runs unattended, not what a person asks for.
 async fn start(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     match review::start(&state.orchestrator, task_id, Start::Person)
         .await
         .map_err(run_refused)?

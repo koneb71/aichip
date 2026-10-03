@@ -2,12 +2,14 @@
 //! one before it does real work.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use eren_core::runs::utility::utility_run;
+use eren_core::scope::Owned;
 use eren_shared::{ModelTier, ReasoningEffort};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,8 +34,12 @@ struct WorkspaceFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(q): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(q.workspace_id))
+        .await?;
     let skills = eren_core::skills::list(&state.db, q.workspace_id)
         .await
         .map_err(internal)?;
@@ -66,12 +72,16 @@ fn no_secrets(body: &SkillBody) -> Result<(), ApiError> {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<SkillBody>,
 ) -> Result<Json<Value>, ApiError> {
     let workspace_id = body.workspace_id.ok_or((
         StatusCode::BAD_REQUEST,
         "workspace_id is required".to_string(),
     ))?;
+    caller
+        .require(&state, Owned::Workspace(workspace_id))
+        .await?;
     let name = body.name.as_deref().unwrap_or("").trim().to_string();
     no_secrets(&body)?;
 
@@ -104,9 +114,11 @@ async fn create(
 
 pub(crate) async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<SkillBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Skill(id)).await?;
     no_secrets(&body)?;
 
     if let Some(name) = body.name.as_deref().map(str::trim) {
@@ -155,8 +167,10 @@ pub(crate) async fn update(
 
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Skill(id)).await?;
     eren_core::revisions::keep(
         &state.db,
         eren_core::revisions::EntityKind::Skill,
@@ -200,9 +214,11 @@ struct TryBody {
 /// skill *reads*, not what it would do to your files.
 async fn try_it(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     Json(body): Json<TryBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Skill(id)).await?;
     if body.prompt.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -259,9 +275,11 @@ struct InstallBody {
 /// pretending to be quick and the person pressing it twice.
 async fn install(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     Json(body): Json<InstallBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let out = eren_core::skills::install::install(&state.db, project_id, &body.reference)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;

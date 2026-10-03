@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Globe, Bot, Cpu } from "lucide-react";
+import { Download, Globe, Bot, Cpu, UserRound } from "lucide-react";
 import { api, AuditEntry, AuditQuery } from "../lib/api";
 import { Page } from "../components/ui/Surface";
 import { EmptyState, PageHeader, Table, Toolbar } from "../components/ui/Layout";
@@ -10,8 +10,10 @@ import { Select } from "../components/ui/Field";
 /**
  * The ledger: what was done, by what, to what. Append-only on the server.
  *
- * "API" is honest rather than flattering: Eren has no login, so a request
- * through the dashboard's API is anything on this machine that made one.
+ * With accounts on, a request is made by a person, and the ledger names them.
+ * With accounts off, "API" is honest rather than flattering: there is no
+ * login, so a request through the dashboard's API is anything on this machine
+ * that made one.
  */
 export default function AuditPage() {
   const [filter, setFilter] = useState<AuditQuery>({});
@@ -65,6 +67,7 @@ export default function AuditPage() {
             aria-label="Who"
           >
             <option value="">Everyone</option>
+            <option value="user">People</option>
             <option value="api">Through the API</option>
             <option value="agent">Agents</option>
             <option value="system">Eren itself</option>
@@ -137,6 +140,7 @@ export default function AuditPage() {
 
 const ACTOR: Record<AuditEntry["actorKind"], { label: string; tone: Tone; icon: React.ReactNode }> = {
   api: { label: "API", tone: "neutral", icon: <Globe className="size-3" /> },
+  user: { label: "Person", tone: "accent", icon: <UserRound className="size-3" /> },
   agent: { label: "Agent", tone: "complex", icon: <Bot className="size-3" /> },
   system: { label: "eren", tone: "info", icon: <Cpu className="size-3" /> },
 };
@@ -145,7 +149,7 @@ function Actor({ e }: { e: AuditEntry }) {
   const a = ACTOR[e.actorKind];
   return (
     <Badge tone={a.tone} icon={a.icon} title={e.actorRunId ? `run ${e.actorRunId}` : undefined}>
-      {a.label}
+      {e.actorUsername ?? a.label}
     </Badge>
   );
 }

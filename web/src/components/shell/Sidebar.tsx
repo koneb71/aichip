@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ChevronsUpDown, Check, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
+import { ChevronsUpDown, Check, KeyRound, LogOut, PanelLeftClose, PanelLeftOpen, Plus, UserRound } from "lucide-react";
 import { api, App, Project } from "../../lib/api";
-import { GROUPS, NAV, type NavItem } from "../../lib/nav";
+import { GROUPS, visibleNav, type NavItem } from "../../lib/nav";
+import { useAuth } from "../../lib/auth";
+import { Dialog } from "../ui/Dialog";
+import { ChangePasswordForm } from "./SignIn";
+import { toast } from "../ui/Toast";
 import { useActivity } from "../../lib/activity";
 import { isWorking } from "../../lib/runStatus";
 import { useWorkspace } from "../../lib/workspace";
@@ -30,6 +34,8 @@ export function Sidebar({
   onNavigate?: () => void;
 }) {
   const { active } = useWorkspace();
+  const { isAdmin } = useAuth();
+  const nav = visibleNav(isAdmin);
   const [recent, setRecent] = useState<Project[]>([]);
   const [apps, setApps] = useState<App[]>([]);
   const location = useLocation();
@@ -78,7 +84,7 @@ export function Sidebar({
 
       <nav className={cn("flex min-h-0 flex-1 flex-col overflow-y-auto pb-2", collapsed && "items-center")} aria-label="Main">
         {GROUPS.map((group) => {
-          const items = NAV.filter((n) => n.group === group);
+          const items = nav.filter((n) => n.group === group);
           return (
             <div key={group} className={cn("flex flex-col gap-px", collapsed ? "mt-2 items-center" : "mt-3")}>
               {collapsed ? (
@@ -155,6 +161,7 @@ export function Sidebar({
 
       {!collapsed && (
         <div className="shrink-0 pb-3">
+          <AccountMenu />
           <UsageChip />
           <p className="px-2 text-[11px] leading-relaxed text-fg-muted">Runs on your own CLI logins. No API keys, ever.</p>
         </div>
@@ -238,6 +245,44 @@ function ActivityBadge({ collapsed }: { collapsed: boolean }) {
     return <span className={cn(pos, "size-1.5 animate-pulse rounded-full bg-accent")} />;
   }
   return null;
+}
+
+/** Who is signed in: change the password, or sign out. Absent while accounts are off. */
+function AccountMenu() {
+  const { user, signOut } = useAuth();
+  const [changing, setChanging] = useState(false);
+  if (!user) return null;
+  return (
+    <>
+      <Menu
+        align="start"
+        label="Account"
+        trigger={
+          <button
+            type="button"
+            className="ring-focus mb-1 flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-fg-muted hover:bg-panel-2 hover:text-fg"
+          >
+            <UserRound className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{user.username}</span>
+            {user.isAdmin && <span className="text-[11px] text-fg-subtle">admin</span>}
+          </button>
+        }
+        items={[
+          { label: "Change password", icon: <KeyRound className="size-3.5" />, onSelect: () => setChanging(true) },
+          null,
+          { label: "Sign out", icon: <LogOut className="size-3.5" />, onSelect: () => void signOut() },
+        ]}
+      />
+      <Dialog open={changing} onOpenChange={setChanging} dismissible={false} title="Change password" description="Every other browser signed in as you is signed out.">
+        <ChangePasswordForm
+          onChanged={() => {
+            setChanging(false);
+            toast("Password changed", { tone: "success" });
+          }}
+        />
+      </Dialog>
+    </>
+  );
 }
 
 /** The workspace, as a menu: switch, or make a new one inline. */

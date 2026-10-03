@@ -141,9 +141,40 @@ design, and their only gate is the one above:
   runs `git checkout` and `git merge` in that repo), the tree must be one Eren is allowed to
   write, a content hash must match what is on disk, and the request must carry the write header.
 
-Eren is not hardened as a multi-tenant service, and the workspace/team structures in the data
-model are organisational, not a security boundary. Do not expose it to a shared network, and do
-not treat "different workspace" as isolation.
+### Accounts
+
+`eren admin create` turns accounts on (`crates/eren-core/src/users.rs`,
+`crates/eren-server/src/auth.rs`). From then on a session cookie replaces the access token for
+every caller, loopback included; the only requests that pass without one are the sign-in page's
+own (the dashboard's static files and `/api/auth/{status,login,signup,logout}`) and `/mcp` from
+a loopback peer — the agent CLIs, identified by the live run in their URL as before.
+
+- Passwords are argon2id hashes (`argon2`, its defaults); an unknown username is checked
+  against a dummy hash so timing does not say which names exist, and a wrong name and a wrong
+  password get one answer. Failed sign-ins are throttled per name and address, doubling after
+  five, in memory.
+- A session is 32 random bytes in an `HttpOnly`, `SameSite=Lax` cookie; the table keeps only
+  their SHA-256. It slides out to 30 days of disuse. A password change, an admin's reset or a
+  disable deletes every session of that account.
+- Every route handler takes the caller (a source scan in `routes/mod.rs` fails the build for
+  one that does not) and checks that each id it is handed — in the path, the query or the
+  body — lives in a workspace that caller owns (`eren_core::scope`), answering 404 rather
+  than 403 so ids cannot be probed. Machine-wide settings, the queue, machine-scope budgets and
+  the audit log are the admin's alone.
+- Sign-up is open to anyone who can reach the dashboard until the admin closes it.
+
+**What accounts do not isolate.** Every account's agents and terminals run as the same OS user
+in the same filesystem, with the same database credentials in reach. An account that can run
+an agent with a shell — Full Auto on its own project, or `/ws/terminal` — can read other
+accounts' checkouts and worktrees, and through the database password everything else. Accounts
+separate people who are cooperating; they are not a boundary against one who is not. Preview
+and app hostnames (`*.preview.localhost`, `*.app.localhost`) are reachable only from this
+machine and are not tied to an account.
+
+Apart from that, Eren is not hardened as a multi-tenant service. Without accounts, the
+workspace/team structures in the data model are organisational, not a security boundary. Do not
+expose it to a shared network you do not trust, and do not treat "different workspace" as
+isolation from someone with a shell.
 
 ## What Eren deliberately never does
 
@@ -264,8 +295,9 @@ What it records:
 - **Eren's own actions**: a routine fired, a stalled run stopped or resumed, and a merge past
   the review policy, whose summary is the note the person gave for overriding it.
 
-It records `api`, not "a person": there is no login, and any local process can call the API as
-well as a browser can. It is a ledger kept by the application, not a tamper-proof one — anyone
+With accounts on it records the signed-in `user`; with accounts off it records `api`, not "a
+person": there is no login then, and any local process can call the API as well as a browser
+can. It is a ledger kept by the application, not a tamper-proof one — anyone
 with write access to the database can edit it.
 
 ## Prompt injection

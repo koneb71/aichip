@@ -2,6 +2,7 @@
 //! story — comments, runs, checks and what was done to it — in one timeline.
 
 use super::{internal, ApiError};
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
@@ -9,6 +10,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use eren_core::audit::{self, Filter};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -42,7 +44,13 @@ impl Q {
     }
 }
 
-async fn list(State(state): State<AppState>, Query(q): Query<Q>) -> Result<Json<Value>, ApiError> {
+/// The ledger and its export are the admin's: an entry names an entity by
+/// kind and id and carries no workspace, so there is nothing to narrow it by.
+async fn list(
+    State(state): State<AppState>,
+    _admin: Admin,
+    Query(q): Query<Q>,
+) -> Result<Json<Value>, ApiError> {
     let rows = audit::list(&state.db, &q.filter(100))
         .await
         .map_err(internal)?;
@@ -54,6 +62,7 @@ async fn list(State(state): State<AppState>, Query(q): Query<Q>) -> Result<Json<
 
 async fn export(
     State(state): State<AppState>,
+    _admin: Admin,
     Query(q): Query<Q>,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut f = q.filter(1000);
@@ -76,8 +85,10 @@ async fn export(
 /// action on it. One list, so "what happened here overnight" is one read.
 async fn timeline(
     State(state): State<AppState>,
+    caller: Caller,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(task_id)).await?;
     let mut events: Vec<(chrono::DateTime<chrono::Utc>, Value)> = vec![];
 
     for r in sqlx::query(

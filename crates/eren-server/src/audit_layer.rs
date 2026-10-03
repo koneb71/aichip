@@ -107,10 +107,15 @@ pub async fn record(State(state): State<AppState>, req: Request, next: Next) -> 
         return next.run(req).await;
     }
     let path = req.uri().path().to_string();
+    let actor = req
+        .extensions()
+        .get::<crate::auth::Caller>()
+        .map(|c| c.actor())
+        .unwrap_or(Actor::Api);
     let res = next.run(req).await;
     let status = res.status();
     let (kind, id, params) = entity(&template, &path);
-    let mut e = Entry::new(Actor::Api, format!("{method} {template}"))
+    let mut e = Entry::new(actor, format!("{method} {template}"))
         .summary(format!(
             "{method} {} → {}",
             template.strip_prefix("/api").unwrap_or(&template),

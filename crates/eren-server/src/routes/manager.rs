@@ -12,6 +12,7 @@
 //! did it do while I was asleep", which is `manager_actions`.
 
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -20,6 +21,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local, Utc};
 use croner::Cron;
 use eren_core::manager;
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -71,8 +73,10 @@ fn next_at(expr: &str, enabled: bool) -> Option<String> {
 
 async fn read(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let Some(r) = manager_row(&state, project_id).await? else {
         return Ok(Json(json!({ "manager": Value::Null })));
     };
@@ -154,9 +158,17 @@ async fn manager_id(state: &AppState, project_id: Uuid) -> Result<Option<Uuid>, 
 
 pub(crate) async fn upsert(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ManagerBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
+    caller
+        .require_opt(&state, body.agent_id, Owned::Agent)
+        .await?;
+    caller
+        .require_opt(&state, body.goal_id.flatten(), Owned::Goal)
+        .await?;
     // Everything that can be wrong is wrong now, not at 9am tomorrow when
     // nobody is watching — the rule the routines editor already follows.
     if Cron::from_str(&body.cron_expr).is_err() {
@@ -304,8 +316,10 @@ pub(crate) async fn upsert(
 /// manager is being dismissed, not its work undone.
 async fn remove(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     if let Some(existing) = manager_id(&state, project_id).await? {
         eren_core::revisions::keep(
             &state.db,
@@ -325,8 +339,10 @@ async fn remove(
 /// Run a pass now, without waiting for the schedule.
 async fn run_now(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let row = manager_row(&state, project_id).await?.ok_or((
         StatusCode::NOT_FOUND,
         "this project has no manager".to_string(),
@@ -344,8 +360,10 @@ async fn run_now(
 /// What the manager has done, pass by pass.
 async fn passes(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(project_id)).await?;
     let rows = sqlx::query(
         "SELECT rr.id, rr.fired_at, rr.trigger, rr.error, rr.run_id,
                 r.status AS run_status, r.cost_usd

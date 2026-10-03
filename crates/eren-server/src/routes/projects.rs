@@ -1,9 +1,11 @@
 use super::{internal, ApiError};
+use crate::auth::Caller;
 use crate::AppState;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use eren_core::worktrees::manager::{self, ensure_repo_state, Vcs};
 use eren_shared::{ReasoningEffort, TierChoice};
 use serde::Deserialize;
@@ -63,8 +65,10 @@ fn project_json(r: &sqlx::postgres::PgRow) -> Value {
 /// defaulted, which is what happened while this route did not exist.
 async fn one(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let row = sqlx::query(&format!(
         "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = $1"
     ))
@@ -101,8 +105,10 @@ async fn one(
 /// the sidebar forever.
 async fn unload(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     // Same shape as deleting a card: a live agent owns its worktree, and
     // pulling the project row out from under a running process leaves it
     // writing into a directory nothing will ever look at.
@@ -159,8 +165,10 @@ async fn unload(
 /// The project's Brain — the standing context every run in it starts with.
 async fn get_brain(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let brain = eren_core::brain::load(&state.db, id)
         .await
         .map_err(internal)?;
@@ -191,9 +199,11 @@ fn yes() -> bool {
 
 async fn put_brain(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<BrainBody>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     use eren_core::brain::SaveError;
     match eren_core::brain::save(
         &state.db,
@@ -227,8 +237,10 @@ async fn put_brain(
 
 async fn brain_revisions(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let rows = eren_core::brain::revisions(&state.db, id)
         .await
         .map_err(internal)?;
@@ -252,8 +264,10 @@ async fn brain_revisions(
 /// make, so this page cannot disagree with them.
 async fn storage(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let held = held_for(&state, id).await.unwrap_or_default();
 
     // Preview rows for this project, with what each is holding. Images are
@@ -328,8 +342,10 @@ async fn storage(
 /// to a card that had already landed.
 async fn worktrees(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let held = held_for(&state, id).await?;
 
     // Which card each directory belongs to, so the list reads as work rather
@@ -380,8 +396,10 @@ async fn worktrees(
 /// frees behind you.
 async fn reclaim_worktrees(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let (path, _) = git_project(&state, id).await?;
     let repo = std::path::PathBuf::from(&path);
     let held = held_for(&state, id).await?;
@@ -477,8 +495,10 @@ async fn held_for(
 /// guard does, so the two cannot disagree about which files count.
 async fn checkout(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let (path, vcs) = git_project(&state, id).await?;
     if !vcs {
         // Not an error: a project that edits in place has no merge to block,
@@ -509,8 +529,10 @@ async fn checkout(
 /// Set the checkout's changes aside. Reversible, and the response says how.
 async fn stash_checkout(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let path = dirty_git_project(&state, id).await?;
     let repo = std::path::Path::new(&path);
     manager::stash(repo, "eren: set aside so a card could merge")
@@ -528,9 +550,11 @@ async fn stash_checkout(
 /// whole reason the merge refuses in the first place.
 async fn commit_checkout(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     body: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let path = dirty_git_project(&state, id).await?;
     let repo = std::path::Path::new(&path);
     // The editor's commit box sends a message; the older merge-unblock button
@@ -557,8 +581,10 @@ async fn commit_checkout(
 /// verbatim — whose history wins is not a button's decision.
 async fn pull_checkout(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let (path, vcs) = git_project(&state, id).await?;
     if !vcs {
         return Err((
@@ -575,8 +601,10 @@ async fn pull_checkout(
 /// Push the current branch, publishing it if it has never been pushed.
 async fn push_checkout(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let (path, vcs) = git_project(&state, id).await?;
     if !vcs {
         return Err((
@@ -637,8 +665,10 @@ pub struct WorkspaceFilter {
 
 async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Query(filter): Query<WorkspaceFilter>,
 ) -> Result<Json<Value>, ApiError> {
+    let workspaces = caller.workspace_filter(&state, filter.workspace_id).await?;
     // Apps are projects too — that is what gives them worktrees, diffs and
     // previews — but they belong in the gallery, not in a list of the
     // repositories someone works in. Spaces are the third kind: document
@@ -656,10 +686,10 @@ async fn list(
     };
     let rows = sqlx::query(&format!(
         "SELECT {PROJECT_COLUMNS} FROM projects
-         WHERE kind IN {kinds} AND ($1::uuid IS NULL OR workspace_id = $1)
+         WHERE kind IN {kinds} AND ($1::uuid[] IS NULL OR workspace_id = ANY($1))
          ORDER BY created_at DESC"
     ))
-    .bind(filter.workspace_id)
+    .bind(workspaces)
     .fetch_all(&state.db.pool)
     .await
     .map_err(internal)?;
@@ -684,8 +714,12 @@ struct CreateSpace {
 /// drop files in, ask questions about them.
 async fn create_space(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<CreateSpace>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a space needs a name".into()));
@@ -741,14 +775,41 @@ struct CreateProject {
 
 async fn create(
     State(state): State<AppState>,
+    caller: Caller,
     Json(body): Json<CreateProject>,
 ) -> Result<Json<Value>, ApiError> {
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
     let path = std::path::Path::new(&body.path);
     if !path.is_dir() {
         return Err((
             StatusCode::BAD_REQUEST,
             format!("{} is not a directory", body.path),
         ));
+    }
+    let mine = caller.workspaces(&state).await?;
+    let taken_elsewhere = || {
+        (
+            StatusCode::CONFLICT,
+            format!(
+                "{} is already a project in another account — a folder can belong to one account only",
+                body.path
+            ),
+        )
+    };
+    // Asked before anything touches the folder (initializing a repository
+    // below), not only by the insert's guard, which is what closes the race.
+    let owner: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM projects WHERE path = $1")
+            .bind(&body.path)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(internal)?;
+    if let (Some(owner), Some(mine)) = (owner, &mine) {
+        if !mine.contains(&owner) {
+            return Err(taken_elsewhere());
+        }
     }
     let default_branch = body.default_branch.unwrap_or_else(|| "main".into());
 
@@ -770,12 +831,19 @@ async fn create(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "project".into())
     });
+    // Loading a folder that is already a project moves it here — but only
+    // from one of the caller's own workspaces. `path` is unique across the
+    // machine, so without the `WHERE` loading another account's folder would
+    // take their project, cards and all. That case updates nothing and returns
+    // no row, answered in words rather than as a 404: the person is looking at
+    // the folder on disk and needs to know why it will not load.
     let row = sqlx::query(
         "INSERT INTO projects (workspace_id, path, name, default_branch, vcs, vcs_note)
          VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name,
              workspace_id = EXCLUDED.workspace_id,
              vcs = EXCLUDED.vcs, vcs_note = EXCLUDED.vcs_note
+         WHERE $7::uuid[] IS NULL OR projects.workspace_id = ANY($7)
          RETURNING id",
     )
     .bind(body.workspace_id)
@@ -784,9 +852,11 @@ async fn create(
     .bind(&default_branch)
     .bind(vcs)
     .bind(&vcs_note)
-    .fetch_one(&state.db.pool)
+    .bind(&mine)
+    .fetch_optional(&state.db.pool)
     .await
-    .map_err(internal)?;
+    .map_err(internal)?
+    .ok_or_else(taken_elsewhere)?;
     Ok(Json(json!({
         "id": row.get::<Uuid, _>("id"),
         "name": name,
@@ -835,9 +905,11 @@ where
 
 async fn update(
     State(state): State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateProject>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     // Rejected rather than trimmed to nothing: a project with a blank name is
     // an unclickable row in the sidebar.
     let name = match body.name.as_deref().map(str::trim) {

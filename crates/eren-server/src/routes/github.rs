@@ -9,9 +9,11 @@
 //! another terminal while Eren is running — and the whole reason to show this
 //! is to tell someone to go and do exactly that.
 
+use crate::auth::{Admin, Caller};
 use crate::AppState;
 use axum::routing::get;
 use axum::{Json, Router};
+use eren_core::scope::Owned;
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
@@ -49,10 +51,15 @@ struct CloneRepo {
 
 async fn clone(
     axum::extract::State(state): axum::extract::State<AppState>,
+    caller: Caller,
     Json(body): Json<CloneRepo>,
 ) -> Result<Json<Value>, crate::routes::ApiError> {
     use axum::http::StatusCode;
     use eren_core::github::repo;
+    // The project it becomes lands in this workspace.
+    caller
+        .require(&state, Owned::Workspace(body.workspace_id))
+        .await?;
 
     let parsed = repo::parse_repo_ref(&body.repo).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
@@ -106,21 +113,26 @@ async fn clone(
     let (id, destination) = repo::start_clone(&parsed, &parent, &name, body.workspace_id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    let _ = &state;
     Ok(Json(
         json!({ "id": id, "destination": destination.to_string_lossy() }),
     ))
 }
 
+/// The id is a clone job's, held in memory and handed back only to whoever
+/// started it — nothing a workspace owns.
 async fn clone_status(
     axum::extract::State(state): axum::extract::State<AppState>,
+    _caller: Caller,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Json<Value> {
     let progress = eren_core::github::repo::poll_clone(&state.db, id).await;
     Json(serde_json::to_value(progress).unwrap_or(Value::Null))
 }
 
-async fn cancel_clone(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) -> Json<Value> {
+async fn cancel_clone(
+    _caller: Caller,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Json<Value> {
     eren_core::github::repo::cancel_clone(id).await;
     Json(json!({ "cancelled": true }))
 }
@@ -130,7 +142,7 @@ async fn cancel_clone(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) 
 /// The required set is `gh`'s, not ours — it refuses to go below `repo`,
 /// `read:org` and `gist`. Stating that is more useful than a switch that
 /// pretends otherwise.
-async fn scopes() -> Json<Value> {
+async fn scopes(_caller: Caller) -> Json<Value> {
     use eren_core::github::connect::{OPTIONAL_SCOPES, REQUIRED_SCOPES};
     Json(json!({
         "required": REQUIRED_SCOPES,
@@ -159,7 +171,12 @@ struct ConnectBody {
     scopes: Vec<String>,
 }
 
-async fn connect(body: Option<Json<ConnectBody>>) -> Result<Json<Value>, super::ApiError> {
+/// The admin's: `gh` is signed in once for the whole machine, and every
+/// account's pushes and pull requests then go out as whoever it names.
+async fn connect(
+    _admin: Admin,
+    body: Option<Json<ConnectBody>>,
+) -> Result<Json<Value>, super::ApiError> {
     let scopes = body.map(|Json(b)| b.scopes).unwrap_or_default();
     let started = eren_core::github::connect::start(&scopes)
         .await
@@ -167,17 +184,23 @@ async fn connect(body: Option<Json<ConnectBody>>) -> Result<Json<Value>, super::
     Ok(Json(serde_json::to_value(started).unwrap_or(Value::Null)))
 }
 
-async fn connect_status(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) -> Json<Value> {
+async fn connect_status(
+    _admin: Admin,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Json<Value> {
     let progress = eren_core::github::connect::poll(id).await;
     Json(serde_json::to_value(progress).unwrap_or(Value::Null))
 }
 
-async fn cancel_connect(axum::extract::Path(id): axum::extract::Path<uuid::Uuid>) -> Json<Value> {
+async fn cancel_connect(
+    _admin: Admin,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Json<Value> {
     eren_core::github::connect::cancel(id).await;
     Json(json!({ "cancelled": true }))
 }
 
-async fn status() -> Json<Value> {
+async fn status(_caller: Caller) -> Json<Value> {
     let Some(info) = eren_core::github::detect().await else {
         return Json(json!({
             "installed": false,
@@ -216,9 +239,11 @@ struct PublishBody {
 
 async fn publish_project(
     axum::extract::State(state): axum::extract::State<AppState>,
+    caller: Caller,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Json(body): Json<PublishBody>,
 ) -> Result<Json<Value>, super::ApiError> {
+    caller.require(&state, Owned::Project(id)).await?;
     let visibility = eren_core::github::publish::Visibility::parse(&body.visibility).ok_or((
         axum::http::StatusCode::BAD_REQUEST,
         "visibility must be \"private\" or \"public\"".to_string(),

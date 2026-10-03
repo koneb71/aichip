@@ -11,12 +11,14 @@
 //! 409 at the click, which is how this codebase refuses everywhere else: at
 //! the moment somebody asked, never by silently doing something lesser.
 
+use crate::auth::Caller;
 use crate::routes::{internal, ApiError};
 use crate::AppState;
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use eren_core::github::{self, pr, GhError};
+use eren_core::scope::Owned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -139,8 +141,10 @@ async fn refusal(state: &AppState, card: &Card) -> Option<String> {
 /// What the drawer renders.
 async fn show(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let row = sqlx::query(
         "SELECT pr_url, pr_number, pr_state, pr_checks, pr_review, pr_synced_at
            FROM tasks WHERE id = $1",
@@ -198,9 +202,11 @@ struct OpenBody {
 /// branch. One button, two readings, both correct.
 async fn open(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
     body: Option<Json<OpenBody>>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let force = body.map(|b| b.0.force).unwrap_or(false);
     let card = card(&state, id).await?;
     if let Some(why) = refusal(&state, &card).await {
@@ -259,8 +265,10 @@ async fn open(
 /// Re-read a pull request Eren already knows about.
 async fn refresh(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    caller.require(&state, Owned::Task(id)).await?;
     let card = card(&state, id).await?;
     let Some(number) = card.pr_number else {
         return Err((
@@ -362,9 +370,11 @@ async fn store(state: &AppState, id: Uuid, pull: &pr::PullRequest) -> Result<(),
 /// link to the card it became.
 pub async fn list_issues(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     use eren_core::github;
+    caller.require(&state, Owned::Project(project_id)).await?;
 
     let Some(repo) = github::repo::resolve(&state.db, project_id).await else {
         return Ok(Json(json!({
@@ -448,11 +458,13 @@ struct ImportIssues {
 /// stand is exactly there.
 pub async fn import_issues(
     State(state): State<AppState>,
+    caller: Caller,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ImportIssues>,
 ) -> Result<Json<Value>, ApiError> {
     use eren_core::github;
     use eren_core::tasks::{create_imported, NewImportedTask};
+    caller.require(&state, Owned::Project(project_id)).await?;
 
     let repo = github::repo::resolve(&state.db, project_id).await.ok_or((
         axum::http::StatusCode::CONFLICT,

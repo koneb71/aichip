@@ -37,6 +37,30 @@ enum Cmd {
     },
     /// Check that required tools (git, claude CLI) are installed and usable.
     Doctor,
+    /// Manage accounts: make the admin, reset a password.
+    #[command(subcommand)]
+    Admin(AdminCmd),
+}
+
+#[derive(Subcommand)]
+enum AdminCmd {
+    /// Make the one admin, turning accounts on: from then on every browser
+    /// signs in, and the admin owns every workspace made before.
+    Create {
+        #[arg(long)]
+        username: String,
+        /// Read the password from standard input instead of asking twice.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    /// Set a new password for an account (the admin's included) and sign it
+    /// out everywhere.
+    ResetPassword {
+        username: String,
+        /// Read the password from standard input instead of asking twice.
+        #[arg(long)]
+        password_stdin: bool,
+    },
 }
 
 #[tokio::main]
@@ -55,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
     }) {
         Cmd::Serve { port, headless } => serve(port, headless).await,
         Cmd::Doctor => doctor().await,
+        Cmd::Admin(cmd) => admin(cmd).await,
     }
 }
 
@@ -370,6 +395,16 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         )
     };
 
+    let accounts = Arc::new(eren_server::auth::Accounts::load(&db).await?);
+    if accounts.is_on(&db).await {
+        tracing::info!("accounts are on: every browser signs in");
+    } else if !bind.is_loopback() {
+        tracing::info!(
+            "accounts are off; to have everyone sign in with an account of their own, \
+             run `eren admin create --username <name>`"
+        );
+    }
+
     let state = eren_server::AppState {
         db,
         bus: bus.clone(),
@@ -378,6 +413,7 @@ async fn serve(port: u16, headless: bool) -> anyhow::Result<()> {
         storage,
         file_writes: Default::default(),
         access: access.clone(),
+        accounts: accounts.clone(),
     };
     let app = eren_server::app(state);
 
@@ -507,6 +543,112 @@ fn adopt_legacy_state() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `eren admin …`: account changes made from this machine's shell, which is
+/// how the first admin comes to exist and how a lost admin password is
+/// recovered. Talks to the same database `serve` does.
+async fn admin(cmd: AdminCmd) -> anyhow::Result<()> {
+    let (db, _embedded) = admin_database().await?;
+    match cmd {
+        AdminCmd::Create {
+            username,
+            password_stdin,
+        } => {
+            if eren_core::users::accounts_on(&db).await? {
+                anyhow::bail!(
+                    "an admin already exists; there is only ever one \
+                     (`eren admin reset-password <name>` if its password is lost)"
+                );
+            }
+            let password = read_password(password_stdin)?;
+            let user = eren_core::users::create_admin(&db, &username, &password)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "✓ {} is the admin. Accounts are on: every browser now signs in, and \
+                 the workspaces made so far belong to {}.",
+                user.username, user.username
+            );
+        }
+        AdminCmd::ResetPassword {
+            username,
+            password_stdin,
+        } => {
+            let Some(user) = eren_core::users::by_username(&db, &username).await? else {
+                anyhow::bail!("there is no account called {username}");
+            };
+            let password = read_password(password_stdin)?;
+            eren_core::users::set_password(&db, user.id, &password, false)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "✓ new password set for {}; it is signed out everywhere",
+                user.username
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The password, typed twice without echo — or one line from stdin, for a
+/// script (`docker compose exec -T eren eren admin create … --password-stdin`).
+fn read_password(from_stdin: bool) -> anyhow::Result<String> {
+    if from_stdin {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let password = line.trim_end_matches(['\r', '\n']).to_string();
+        eren_core::users::check_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
+        return Ok(password);
+    }
+    loop {
+        let first = rpassword::prompt_password("Password: ")?;
+        if let Err(e) = eren_core::users::check_password(&first) {
+            eprintln!("{e}");
+            continue;
+        }
+        let again = rpassword::prompt_password("Again: ")?;
+        if first == again {
+            return Ok(first);
+        }
+        eprintln!("those differ; once more");
+    }
+}
+
+/// The database `serve` uses: `DATABASE_URL` when set (the container's
+/// case); else the managed Postgres a running server left its port for; else
+/// the managed Postgres started here, for a server that is not running.
+async fn admin_database() -> anyhow::Result<(Db, Option<postgresql_embedded::PostgreSQL>)> {
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        return Ok((Db::connect(&url).await?, None));
+    }
+    adopt_legacy_state()?;
+    let home = eren_shared::brand::home();
+    let running = async {
+        let port: u16 = tokio::fs::read_to_string(home.join("pg_port"))
+            .await
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let password = tokio::fs::read_to_string(home.join("pg_password"))
+            .await
+            .ok()?;
+        let settings = postgresql_embedded::Settings {
+            port,
+            password: password.trim().to_string(),
+            ..postgresql_embedded::Settings::default()
+        };
+        Db::connect(&settings.url(eren_shared::brand::DATABASE))
+            .await
+            .ok()
+    };
+    if let Some(db) = running.await {
+        return Ok((db, None));
+    }
+    let pg = start_embedded_postgres(&home).await?;
+    let db = Db::connect(&pg.settings().url(eren_shared::brand::DATABASE)).await?;
+    Ok((db, Some(pg)))
+}
+
 async fn start_embedded_postgres(
     home: &std::path::Path,
 ) -> anyhow::Result<postgresql_embedded::PostgreSQL> {
@@ -555,6 +697,11 @@ async fn start_embedded_postgres(
     if !pg.database_exists(database).await? {
         pg.create_database(database).await?;
     }
+    // For `eren admin` while this server runs: the port is chosen fresh each
+    // boot and a second instance cannot open the same data directory, so the
+    // CLI needs to be told where this one is. Not a secret — the password
+    // beside it is, and stays 0600.
+    let _ = tokio::fs::write(home.join("pg_port"), pg.settings().port.to_string()).await;
     tracing::info!(port = pg.settings().port, "embedded postgres up");
     Ok(pg)
 }

@@ -3,6 +3,7 @@ pub mod agents;
 pub mod apps;
 pub mod attachments;
 pub mod audit;
+pub mod auth;
 pub mod budgets;
 pub mod chat;
 pub mod checks;
@@ -118,6 +119,7 @@ pub fn internal(e: impl std::fmt::Display) -> ApiError {
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .merge(auth::router())
         .merge(workspaces::router())
         .merge(projects::router())
         .merge(apps::router())
@@ -174,5 +176,115 @@ mod tests {
             assert!(require_write(&headers, "x").is_ok(), "{name}");
         }
         assert!(require_write(&axum::http::HeaderMap::new(), "x").is_err());
+    }
+
+    /// Handlers reachable with no session while accounts are on — the ones
+    /// `crate::auth::open_path` lets through — each with its reason.
+    const PUBLIC: &[(&str, &str)] = &[
+        ("health", "says the server is up and its name; nothing else"),
+        ("status", "tells the sign-in page whether accounts are on"),
+        ("login", "how a session starts"),
+        ("signup", "how an account starts"),
+        ("logout", "ends the session the cookie names, if any"),
+    ];
+
+    /// The handler names a module registers with `.route(…)`.
+    fn handlers(src: &str) -> Vec<String> {
+        let mut out = vec![];
+        let mut rest = src;
+        while let Some(at) = rest.find(".route(") {
+            rest = &rest[at + ".route(".len()..];
+            // The registration runs to the paren that closes `.route(`.
+            let mut depth = 1;
+            let end = rest
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(rest.len());
+            let reg = &rest[..end];
+            for method in ["get(", "post(", "put(", "patch(", "delete(", "any("] {
+                let mut r = reg;
+                while let Some(i) = r.find(method) {
+                    let before = r[..i].chars().last();
+                    r = &r[i + method.len()..];
+                    if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                        continue;
+                    }
+                    let name: String = r
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                        .collect();
+                    if let Some(last) = name.rsplit("::").next().filter(|n| !n.is_empty()) {
+                        out.push(last.to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Every route handler says who is calling. With accounts on, a handler
+    /// that takes neither a `Caller` nor an `Admin` cannot check whose
+    /// workspace it is touching — so it is a hole, whatever its query does.
+    #[test]
+    fn every_handler_takes_a_caller() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes");
+        let mut missing = vec![];
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            // Whole files — a test module can sit between two handlers — but
+            // not this one's tests, which register made-up handlers.
+            let mut shipped = std::fs::read_to_string(&path).unwrap();
+            if path.ends_with("routes/mod.rs") {
+                shipped.truncate(shipped.find("#[cfg(test)]").unwrap_or(shipped.len()));
+            }
+            for name in handlers(&shipped) {
+                if PUBLIC.iter().any(|(n, _)| *n == name) {
+                    continue;
+                }
+                let Some(at) = shipped.find(&format!("fn {name}(")) else {
+                    missing.push(format!(
+                        "{}: {name} (not found)",
+                        path.file_name().unwrap().to_string_lossy()
+                    ));
+                    continue;
+                };
+                let sig = &shipped[at..];
+                let sig = &sig[..sig.find('{').unwrap_or(sig.len())];
+                if !(sig.contains("Caller") || sig.contains("Admin")) {
+                    missing.push(format!(
+                        "{}: {name}",
+                        path.file_name().unwrap().to_string_lossy()
+                    ));
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "{} handlers take neither a Caller nor an Admin:\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_scan_finds_handlers_however_they_are_registered() {
+        let src = r#"
+            .route("/a/{id}", get(one).post(super::x::two).delete(three))
+            .route("/b", axum::routing::post(four).layer(DefaultBodyLimit::max(MAX)))
+        "#;
+        assert_eq!(handlers(src), ["one", "two", "three", "four"]);
     }
 }

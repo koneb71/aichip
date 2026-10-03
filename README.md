@@ -440,8 +440,9 @@ for any other write to the table. Three things feed it:
   the input**;
 - Eren's own actions: a routine firing, a run reaped, a hand-over, an automatic check.
 
-It records `api`, not "a person": there is no login — on this machine any local process can
-call the API, and from another device anything holding the
+With [accounts](#accounts) on it names the person who signed in, and only the admin can read
+it. Without them it records `api`, not "a person": there is no login — on this machine any
+local process can call the API, and from another device anything holding the
 [access token](#using-eren-from-other-devices) can.
 Agent and system entries are pruned after 90 days; API entries are kept. The page filters
 and exports CSV (`GET /api/audit.csv`). A single card's merged story — runs, comments,
@@ -1228,6 +1229,7 @@ profile from before the rename keeps working; when both are set, the Eren name w
 `eren serve` logs a warning at boot for every old name still set.
 
 Compose reads a few more, which Eren itself does not read: `EREN_PROJECTS_DIR`, `EREN_PORT`,
+`EREN_PUBLISH_IP`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `UID`, `GID`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
 `POSTGRES_PORT`, `S3_PORT` and `S3_CONSOLE_PORT` (`MINIO_PORT` and `MINIO_CONSOLE_PORT` are
 still read). See
@@ -1259,6 +1261,41 @@ then on. Bookmark `http://192.168.1.20:4820` rather than the link.
   can read it. That is fine on a home network you trust. On anything else, or to reach it away
   from home, put Eren behind a private network such as Tailscale (and allow the name it gives
   this machine), or use an SSH tunnel and leave `EREN_BIND` alone.
+
+### Accounts
+
+The access token lets devices in; it does not tell people apart. For a server several people
+use — a home server, a shared box — turn on accounts:
+
+```bash
+eren admin create --username alice          # in Docker: docker compose exec eren eren admin create --username alice
+```
+
+It asks for a password twice (`--password-stdin` reads one line instead) and makes the one
+**admin**. From then on:
+
+- **Every browser signs in**, this machine's included, and the access token is no longer
+  consulted. The agent CLIs Eren starts still reach `/mcp` over loopback without one.
+- **Anyone who can reach the dashboard can create an account**, and starts with a workspace of
+  their own. The admin closes sign-up under **Users** once everyone who should have an account
+  has one.
+- **Each account sees only its own workspaces** and everything in them: projects, cards, runs,
+  agents, chats, the knowledge base, budgets, the inbox. Everything made before accounts were
+  turned on belongs to the admin.
+- **The admin** resets a password (the account gets a temporary one, is signed out everywhere,
+  and must choose a new one at its next sign-in), disables an account, and is the only one who
+  can change what belongs to the whole machine: Settings, the queue, machine-wide budgets and
+  the audit log. A lost admin password is reset from this machine's shell:
+  `eren admin reset-password alice`.
+- Accounts take effect within a few seconds of `eren admin create`; there is nothing to restart,
+  and nothing turns them off again.
+
+**What an account does not buy.** Every account's agents run as the same user on the same
+machine. Someone who can run an agent with a shell — Full Auto on a project of their own, or the
+project terminal — can read what is on disk, other accounts' checkouts included. Accounts keep
+people out of each other's boards, runs and chats; they do not make a shared Eren safe from
+someone you would not trust with a shell on it. The same goes for a session cookie over plain
+HTTP as for the token above.
 
 ### Variables Eren sets on processes it starts
 
@@ -1414,9 +1451,11 @@ on the host. Inside the container Eren binds `0.0.0.0` (the image sets `EREN_BIN
 actually reachable is decided by the port mapping. Your browser reaches the container through
 Docker's gateway rather than from its loopback, so the compose file turns the access token
 off (`EREN_ACCESS_TOKEN=off`) — the `127.0.0.1` mapping is what keeps it private. To use it
-from other devices, publish the port wider, set `EREN_ACCESS_TOKEN` (or leave it unset to
-have one generated inside the container's state volume) and `EREN_ALLOWED_HOSTS`, and open
-the access link from `docker compose logs eren`.
+from other devices, set `EREN_PUBLISH_IP=0.0.0.0` and `EREN_ALLOWED_HOSTS` to the address you
+reach it by, then either turn [accounts](#accounts) on —
+`docker compose exec eren eren admin create --username <name>` — or set `EREN_ACCESS_TOKEN` to
+a token of your own (16+ characters; compose turns an unset one into `off`) and open the
+access link from `docker compose logs eren`.
 
 **Know what you're trading.** The token is a real credential sitting in a file, valid
 until you revoke it, rather than a keychain entry scoped to your machine. Eren itself

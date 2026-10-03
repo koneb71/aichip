@@ -15,6 +15,7 @@ import {
   Settings,
   Sparkles,
   Telescope,
+  UserRound,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +41,8 @@ export interface NavItem {
   end?: boolean;
   /** Extra words the palette should match, e.g. "board" for Projects. */
   keywords?: string[];
+  /** Only the admin sees it (everyone does while accounts are off). */
+  adminOnly?: boolean;
 }
 
 export const GROUPS: NavGroup[] = ["Work", "Organization", "Knowledge", "System"];
@@ -60,9 +63,15 @@ export const NAV: NavItem[] = [
   { to: "/apps", label: "Apps", icon: LayoutGrid, group: "Knowledge" },
   { to: "/skills", label: "Skills", icon: Sparkles, group: "Knowledge" },
   { to: "/connections", label: "Connections", icon: Plug, group: "System", keywords: ["mcp", "github", "servers"] },
-  { to: "/audit", label: "Audit log", icon: ScrollText, group: "System", keywords: ["history", "ledger", "who", "what happened"] },
+  { to: "/users", label: "Users", icon: UserRound, group: "System", keywords: ["accounts", "people", "password", "sign up"], adminOnly: true },
+  { to: "/audit", label: "Audit log", icon: ScrollText, group: "System", keywords: ["history", "ledger", "who", "what happened"], adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, group: "System", keywords: ["models", "permissions", "theme"] },
 ];
+
+/** What this person may see: everything, or everything but the admin's pages. */
+export function visibleNav(isAdmin: boolean, items: NavItem[] = NAV): NavItem[] {
+  return isAdmin ? items : items.filter((n) => !n.adminOnly);
+}
 
 /** The nav entry a path belongs to: the longest `to` that prefixes it. */
 export function sectionFor(pathname: string, items: NavItem[] = NAV): NavItem | undefined {
