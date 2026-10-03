@@ -101,6 +101,25 @@ echo "→ starting"
 # --no-build: use what was pulled, never fall back to building from source.
 docker compose "${PROFILES[@]}" up -d --no-build --wait
 
-PORT="$(setting EREN_PORT)"
-echo "✓ Eren $EREN_IMAGE:$EREN_TAG is running on http://127.0.0.1:${PORT:-4820}"
+# Where Docker actually published it, not where it was meant to be: a
+# compose file from before EREN_PUBLISH_IP existed still says 127.0.0.1.
+PUBLISHED="$(docker compose "${PROFILES[@]}" port eren 4820 2>/dev/null | head -n 1)"
+PUBLISHED="${PUBLISHED:-127.0.0.1:$(setting EREN_PORT)}"
+PORT="${PUBLISHED##*:}"
+case "$PUBLISHED" in
+    127.0.0.1:* | "[::1]:"*)
+        echo "✓ Eren $EREN_IMAGE:$EREN_TAG is running on http://127.0.0.1:$PORT (this machine only)"
+        echo "  To reach it from other devices: EREN_PUBLISH_IP=0.0.0.0 and EREN_ALLOWED_HOSTS=<this machine's address> in .env,"
+        echo "  then run this again. If the port above still says 127.0.0.1, docker-compose.yml predates EREN_PUBLISH_IP."
+        ;;
+    *)
+        echo "✓ Eren $EREN_IMAGE:$EREN_TAG is published on $PUBLISHED"
+        HOSTS="$(setting EREN_ALLOWED_HOSTS)"
+        if [ -n "$HOSTS" ]; then
+            for host in ${HOSTS//,/ }; do echo "  open http://$host:$PORT"; done
+        else
+            echo "! EREN_ALLOWED_HOSTS is not set: other devices are refused by name until it lists the address they use."
+        fi
+        ;;
+esac
 echo "  logs: docker compose logs -f eren"

@@ -51,7 +51,7 @@ services:
       # on the network of anyone who followed the one-line setup. Whoever can
       # write to it can register an MCP server or an attention hook, both of
       # which Eren runs as commands.
-      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+      - "0.0.0.0:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - aichip-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -84,15 +84,15 @@ services:
     ports:
       # 9100/9101 on the host, so an S3 server you already run on 9000 keeps
       # working. MINIO_* are the names these had before.
-      - "127.0.0.1:${S3_PORT:-${MINIO_PORT:-9100}}:9000"
-      - "127.0.0.1:${S3_CONSOLE_PORT:-${MINIO_CONSOLE_PORT:-9101}}:9001"
+      - "0.0.0.0:${S3_PORT:-${MINIO_PORT:-9100}}:9000"
+      - "0.0.0.0:${S3_CONSOLE_PORT:-${MINIO_CONSOLE_PORT:-9101}}:9001"
     volumes:
       # A new volume, not MinIO's `aichip-minio`: that holds MinIO's own
       # on-disk format. It is left exactly as it was — see README.md for
       # moving old attachments across.
       - eren-objects:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      test: ["CMD", "curl", "-fsS", "http://0.0.0.0:9000/health"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -145,7 +145,7 @@ services:
       # and turn accounts on (`docker compose exec eren eren admin create
       # --username <name>`) so every browser signs in — without them, anyone
       # who can reach the port can drive it.
-      - "${EREN_PUBLISH_IP:-127.0.0.1}:${EREN_PORT:-${AICHIP_PORT:-4820}}:4820"
+      - "${EREN_PUBLISH_IP:-0.0.0.0}:${EREN_PORT:-${AICHIP_PORT:-4820}}:4820"
     volumes:
       # Mounted at the *same absolute path* on both sides. A git worktree
       # records absolute paths in .git, so a repo checked out at one path on
